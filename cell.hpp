@@ -99,6 +99,7 @@ public:
     bool is_fan() const { return cell_state == State::Fan; }
     bool is_intake() const { return cell_state == State::Intake; }
     bool is_exhaust() const { return cell_state == State::Exhaust; }
+    bool is_vent() const { return cell_state == State::Vent; }
 
     State get_state() const { return cell_state; }
 
