@@ -51,21 +51,18 @@ int main(int argc, char* argv[]) {
   // ==================================
   // UNIT TEST
   // ==================================
-  UnitTest tester;
-  tester.run();
+  // UnitTest tester;
+  // tester.run();
 
+  Environment env(30.0, 5800.0, 20.0, 1005.0, 0.02587, 0.000018, 0.71, 1.225);
   
   double dx = 0.04445;   // 1U
   double dy = 0.04445;   // 1U
   double dz = 0.04445/2.0;   // 1U
-  double sim_length = 2; 
-  double dt = 0.1;
+  double sim_length = 5.0; 
+  double dt = 0.05;
   double mu = 1.8e-5;  // air at atmospheric pressure and temp
   double pr = 0.71;    // air at atmospheric pressure and temp
-
-  double humidity_pct = 30.0;
-  double elevation_ft = 6000.0;
-  Environment env(humidity_pct, elevation_ft);  
 
   Rack rack = Rack::from_rack_units(
       10.0,     // height (U)
@@ -107,8 +104,9 @@ int main(int argc, char* argv[]) {
       {0.0, 1.0, 0.0}
   );
 
-  Mesh mesh = Mesh().build_mesh(rack, dx, dy, dz, mu, pr);
+  Mesh mesh = Mesh().build_mesh(rack, dx, dy, dz, env);
   // mesh.print_mesh();
+
 
   Component server1 = Component::from_rack_units(1.0, 8.75, 8.75, "S-1"); // u in in
   server1.set_coords_rack_units(0,0,1); // in in u
@@ -118,6 +116,16 @@ int main(int argc, char* argv[]) {
   server1.set_t(20.0);           // °C
   server1.set_watts(1000);      // W
 
+  //component x y z  {0.22225, 0.22225, 0.04445} 
+  InternalRegion air_channel({server1.get_width_m() / 2.0, server1.get_depth_m(), server1.get_height_m()}, {0.0, 0.0, 0.0}); 
+  server1.add_region(air_channel);
+
+  //===================================ERROR=============================================================================
+  // InternalRegion metal_bar({server1.get_width_m() / 4.0, server1.get_depth_m() / 2.0, server1.get_height_m() / 2.0}, 
+  // {server1.get_width_m() / 4.0, server1.get_height_m() / 2.0, 0.0}, 897.0, 2170.0, 237.0, 200.0); 
+  // server1.add_region(metal_bar);
+  //=====================================================================================================================
+
   //  Component server2 = Component::from_rack_units(1.0, 8.75, 8.75, "S-2"); // u in in
   //  server2.set_coords_rack_units(0,0,2); // in in u
   //  server2.set_k_solid(100.0);    // W/(m·K)
@@ -125,7 +133,6 @@ int main(int argc, char* argv[]) {
   //  server2.set_rho_solid(2100.0); // kg/m^3
   //  server2.set_t(90.0);           // °C
   //  server2.set_watts(10000);      // W
-
   Grapher grapher(rack, dx, dy, dz);
   grapher.add_component(server1);
   //  grapher.add_component(server2);
@@ -139,6 +146,7 @@ int main(int argc, char* argv[]) {
   grapher.export_to_file("output.txt");
 
   double vent_discharge_coeff = 0.5;
+  server1.order_internal_regions();
   mesh.stamp_component(server1);
   mesh.stamp_fan(top_fan);
   mesh.stamp_fan(mid_fan);
@@ -148,11 +156,11 @@ int main(int argc, char* argv[]) {
   // mesh.print_mesh();
   
   double resistivity = 4.5;
-  double tolerance = 1e-10;
+  double tolerance = 1e-9;
   int max_iterations = 2000;
   double sor_omega = 1.1;
 
-  FlowSolver flow_solver(mesh, resistivity, vent_discharge_coeff, tolerance, max_iterations, sor_omega, 60, 1e-3);
+  FlowSolver flow_solver(mesh, resistivity, vent_discharge_coeff, tolerance, max_iterations, sor_omega, 10, 1e-3);
   flow_solver.solve(); // pre populate all velocity cells
 
   Solver solver(mesh, dt, sim_length);
