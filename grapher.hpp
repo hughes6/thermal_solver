@@ -12,6 +12,7 @@
 #include "rack.hpp"
 #include "component.hpp"
 #include "fan.hpp"
+#include "vent.hpp"
 
 class Grapher {
 public:
@@ -27,7 +28,8 @@ public:
           ny(static_cast<int>(std::ceil(rack.get_depth_m()  / dy))),
           nz(static_cast<int>(std::ceil(rack.get_height_m() / dz))),
           component_exist(nx, ny, nz),
-          fan_exist(nx, ny, nz)
+          fan_exist(nx, ny, nz),
+          vent_exist(nx, ny, nz)
     {}
 
     void add_component(const Component& c) {
@@ -38,6 +40,11 @@ public:
     void add_fan(const Fan& f) {
         validate_bounds(f);
         fans.push_back(&f);
+    }
+
+    void add_vent(const Vent& v) {
+        validate_bounds(v);
+        vents.push_back(&v);
     }
 
     void stamp_components() {
@@ -52,6 +59,12 @@ public:
         }
     }
 
+    void stamp_vents() {
+        for(const Vent* v : vents) {
+            vent_exist.populate_vent(*v, dx, dy, dz);
+        }
+    }
+
     void print_bitmap() const {
         for(int z = 0; z < nz; ++z) {
             std::cout << "Layer z = " << z << ":\n";
@@ -60,6 +73,7 @@ public:
                 for(int x = 0; x < nx; ++x) {
                     bool comp = component_exist.at(x, y, z);
                     bool fan  = fan_exist.at(x, y, z);
+                    bool vent = vent_exist.at(x, y, z);
 
                     if(comp && fan) {
                         std::cout << "X ";
@@ -70,6 +84,9 @@ public:
                     else if(fan) {
                         std::cout << "F ";
                     }
+                    else if(vent) {
+                        std::cout << "V";
+                    } 
                     else {
                         std::cout << ". ";
                     }
@@ -142,20 +159,44 @@ public:
 
         ctr = 1;
         for(const Fan* f: fans) {
+            std::cout<< "x";
             auto center = f->get_center();
             fout << "Fan " << ctr << ": " << f->get_name() << "\n";
             fout << "  type: " << f->get_type() << "\n";
+            fout << "  shape: " << f->get_shape() << "\n";
             fout << "  cfm: " << f->get_cfm() << "\n";
             fout << "  diameter: " << f->get_diameter() << " m\n";
-            fout << "  center: " << f->get_center()[0] << " " <<
+            fout << "  f_size: " << f->get_size()[0] << " " <<
+                                  f->get_size()[1] << " " <<
+                                  f->get_size()[2] << " m\n";
+            fout << "  f_center: " << f->get_center()[0] << " " <<
                                   f->get_center()[1] << " " <<
                                   f->get_center()[2] << " m\n";
-            fout << "  direction: " << f->get_velocity_dir()[0] << " " <<
+            fout << "  f_direction: " << f->get_velocity_dir()[0] << " " <<
                                      f->get_velocity_dir()[1] << " " << 
                                      f->get_velocity_dir()[2] << "\n";
             fout << "\n";
             ctr++;
         }
+        ctr = 1;
+        fout << "Vents: \n";
+        for(const Vent* v: vents) {
+            auto center = v->get_center();
+            fout << "Vent " << ctr << ": " << v->get_name() << "\n";
+            fout << "  Free area ratio: " << v->get_free_area_ratio() << "\n";
+            fout << "  size: " << v->get_size()[0] << " " <<
+                                  v->get_size()[1] << " " <<
+                                  v->get_size()[2] << " m\n";
+            fout << "  v_center: " << v->get_center()[0] << " " <<
+                                  v->get_center()[1] << " " <<
+                                  v->get_center()[2] << " m\n";
+            fout << "  v_direction: " << v->get_direction()[0] << " " <<
+                                     v->get_direction()[1] << " " << 
+                                     v->get_direction()[2] << "\n";
+            fout << "\n";
+            ctr++;
+        }
+
     }
 
     const std::vector<const Component*>& get_components() const {
@@ -169,6 +210,7 @@ private:
 
     std::vector<const Component*> components;
     std::vector<const Fan*> fans;
+    std::vector<const Vent*> vents;
 
     struct Bitmap {
         Bitmap(int nx, int ny, int nz)
@@ -229,6 +271,7 @@ private:
                         double dz) {
             auto [cx_m, cy_m, cz_m] = f.get_center();
             auto [vx, vy, vz] = f.get_velocity_dir();
+            bool is_circular = f.is_circular();
 
             double r = f.get_diameter() / 2.0;
 
@@ -238,23 +281,144 @@ private:
 
             // Fan normal mostly x: opening plane is y-z
             if(ax >= ay && ax >= az) {
+                double w = f.get_size()[1] / 2.0;
+                double h = f.get_size()[2] / 2.0;
+
                 int x = static_cast<int>(std::floor(cx_m / dx));
+                int y0 = static_cast<int>(std::floor((cy_m - w) / dy));
+                int y1 = static_cast<int>(std::ceil ((cy_m + w) / dy));
+                int z0 = static_cast<int>(std::floor((cz_m - h) / dz));
+                int z1 = static_cast<int>(std::ceil ((cz_m + h) / dz));
 
-                int y0 = static_cast<int>(std::floor((cy_m - r) / dy));
-                int y1 = static_cast<int>(std::ceil ((cy_m + r) / dy));
-
-                int z0 = static_cast<int>(std::floor((cz_m - r) / dz));
-                int z1 = static_cast<int>(std::ceil ((cz_m + r) / dz));
+                if(is_circular) {
+                    y0 = static_cast<int>(std::floor((cy_m - r) / dy));
+                    y1 = static_cast<int>(std::ceil ((cy_m + r) / dy));
+                    z0 = static_cast<int>(std::floor((cz_m - r) / dz));
+                    z1 = static_cast<int>(std::ceil ((cz_m + r) / dz));
+                }
 
                 for(int y = y0; y < y1; ++y) {
                     for(int z = z0; z < z1; ++z) {
-                        double yc = (y + 0.5) * dy;
-                        double zc = (z + 0.5) * dz;
+                        if(!is_circular && in_bounds(x, y, z)) {
+                            at(x, y, z) = 1;
+                        } else {
+                            double yc = (y + 0.5) * dy;
+                            double zc = (z + 0.5) * dz;
 
-                        double dist2 = (yc - cy_m) * (yc - cy_m)
-                                    + (zc - cz_m) * (zc - cz_m);
+                            double dist2 = (yc - cy_m) * (yc - cy_m)
+                                        + (zc - cz_m) * (zc - cz_m);
 
-                        if(dist2 <= r * r && in_bounds(x, y, z)) {
+                            if(dist2 <= r * r && in_bounds(x, y, z)) {
+                                at(x, y, z) = 1;
+                            }
+                        }
+                    }
+                }
+            }
+
+            // Fan normal mostly y: opening plane is x-z
+            else if(ay >= ax && ay >= az) {
+
+                double w = f.get_size()[0] / 2.0;
+                double h = f.get_size()[2] / 2.0;
+
+                int y = static_cast<int>(std::floor(cy_m / dy));
+                int x0 = static_cast<int>(std::floor((cx_m - w) / dx));
+                int x1 = static_cast<int>(std::ceil ((cx_m + w) / dx));
+                int z0 = static_cast<int>(std::floor((cz_m - h) / dz));
+                int z1 = static_cast<int>(std::ceil ((cz_m + h) / dz));
+
+                if (is_circular) {
+                    x0 = static_cast<int>(std::floor((cx_m - r) / dx));
+                    x1 = static_cast<int>(std::ceil ((cx_m + r) / dx));
+                    z0 = static_cast<int>(std::floor((cz_m - r) / dz));
+                    z1 = static_cast<int>(std::ceil ((cz_m + r) / dz));
+                }
+
+                for(int x = x0; x < x1; ++x) {
+                    for(int z = z0; z < z1; ++z) {
+                       if(!is_circular && in_bounds(x, y, z)) {
+                            at(x, y, z) = 1;
+                        } else {
+                            double xc = (x + 0.5) * dx;
+                            double zc = (z + 0.5) * dz;
+
+                            double dist2 = (xc - cx_m) * (xc - cx_m)
+                                        + (zc - cz_m) * (zc - cz_m);
+
+                            if(dist2 <= r * r && in_bounds(x, y, z)) {
+                                at(x, y, z) = 1;
+                            }
+                        }
+                    }
+                }
+            }
+
+            // Fan normal mostly z: opening plane is x-y
+            else {
+
+                double w = f.get_size()[0] / 2.0;
+                double h = f.get_size()[1] / 2.0;
+
+                int z = static_cast<int>(std::floor(cz_m / dz));
+                int x0 = static_cast<int>(std::floor((cx_m - w) / dx));
+                int x1 = static_cast<int>(std::ceil ((cx_m + w) / dx));
+                int y0 = static_cast<int>(std::floor((cy_m - h) / dy));
+                int y1 = static_cast<int>(std::ceil ((cy_m + h) / dy));
+                
+                if (is_circular) {
+                    x0 = static_cast<int>(std::floor((cx_m - r) / dx));
+                    x1 = static_cast<int>(std::ceil ((cx_m + r) / dx));
+                    y0 = static_cast<int>(std::floor((cy_m - r) / dy));
+                    y1 = static_cast<int>(std::ceil ((cy_m + r) / dy));
+                }
+
+                for(int x = x0; x < x1; ++x) {
+                    for(int y = y0; y < y1; ++y) {
+                       if(!is_circular && in_bounds(x, y, z)) {
+                            at(x, y, z) = 1;
+                        } else {
+                            double xc = (x + 0.5) * dx;
+                            double yc = (y + 0.5) * dy;
+
+                            double dist2 = (xc - cx_m) * (xc - cx_m)
+                                        + (yc - cy_m) * (yc - cy_m);
+
+                            if(dist2 <= r * r && in_bounds(x, y, z)) {
+                                at(x, y, z) = 1;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        void populate_vent(const Vent& v,
+                        double dx,
+                        double dy,
+                        double dz) {
+            auto [cx_m, cy_m, cz_m] = v.get_center();
+            auto [vx, vy, vz] = v.get_direction();
+
+            double ax = std::abs(vx);
+            double ay = std::abs(vy);
+            double az = std::abs(vz);
+
+            // Fan normal mostly x: opening plane is y-z
+            if(ax >= ay && ax >= az) {
+                int x = static_cast<int>(std::floor(cx_m / dx));
+
+                double w = v.get_size()[1] / 2.0;
+                int y0 = static_cast<int>(std::floor((cy_m - w) / dy));
+                int y1 = static_cast<int>(std::ceil ((cy_m + w) / dy));
+
+                double h = v.get_size()[2] / 2.0;
+                int z0 = static_cast<int>(std::floor((cz_m - h) / dz));
+                int z1 = static_cast<int>(std::ceil ((cz_m + h) / dz));
+
+                for(int y = y0; y < y1; ++y) {
+                    for(int z = z0; z < z1; ++z) {
+                        if(in_bounds(x, y, z)) {
                             at(x, y, z) = 1;
                         }
                     }
@@ -265,21 +429,17 @@ private:
             else if(ay >= ax && ay >= az) {
                 int y = static_cast<int>(std::floor(cy_m / dy));
 
-                int x0 = static_cast<int>(std::floor((cx_m - r) / dx));
-                int x1 = static_cast<int>(std::ceil ((cx_m + r) / dx));
+                double w = v.get_size()[0] / 2.0;
+                int x0 = static_cast<int>(std::floor((cx_m - w) / dx));
+                int x1 = static_cast<int>(std::ceil ((cx_m + w) / dx));
 
-                int z0 = static_cast<int>(std::floor((cz_m - r) / dz));
-                int z1 = static_cast<int>(std::ceil ((cz_m + r) / dz));
+                double h = v.get_size()[2] / 2.0;
+                int z0 = static_cast<int>(std::floor((cz_m - h) / dz));
+                int z1 = static_cast<int>(std::ceil ((cz_m + h) / dz));
 
                 for(int x = x0; x < x1; ++x) {
                     for(int z = z0; z < z1; ++z) {
-                        double xc = (x + 0.5) * dx;
-                        double zc = (z + 0.5) * dz;
-
-                        double dist2 = (xc - cx_m) * (xc - cx_m)
-                                    + (zc - cz_m) * (zc - cz_m);
-
-                        if(dist2 <= r * r && in_bounds(x, y, z)) {
+                        if(in_bounds(x, y, z)) {
                             at(x, y, z) = 1;
                         }
                     }
@@ -290,21 +450,17 @@ private:
             else {
                 int z = static_cast<int>(std::floor(cz_m / dz));
 
-                int x0 = static_cast<int>(std::floor((cx_m - r) / dx));
-                int x1 = static_cast<int>(std::ceil ((cx_m + r) / dx));
+                double w = v.get_size()[0] / 2.0;
+                int x0 = static_cast<int>(std::floor((cx_m - w) / dx));
+                int x1 = static_cast<int>(std::ceil ((cx_m + w) / dx));
 
-                int y0 = static_cast<int>(std::floor((cy_m - r) / dy));
-                int y1 = static_cast<int>(std::ceil ((cy_m + r) / dy));
+                double h = v.get_size()[1] / 2.0;
+                int y0 = static_cast<int>(std::floor((cy_m - h) / dy));
+                int y1 = static_cast<int>(std::ceil ((cy_m + h) / dy));
 
                 for(int x = x0; x < x1; ++x) {
                     for(int y = y0; y < y1; ++y) {
-                        double xc = (x + 0.5) * dx;
-                        double yc = (y + 0.5) * dy;
-
-                        double dist2 = (xc - cx_m) * (xc - cx_m)
-                                    + (yc - cy_m) * (yc - cy_m);
-
-                        if(dist2 <= r * r && in_bounds(x, y, z)) {
+                        if(in_bounds(x, y, z)) {
                             at(x, y, z) = 1;
                         }
                     }
@@ -333,6 +489,7 @@ private:
 
     Bitmap component_exist;
     Bitmap fan_exist;
+    Bitmap vent_exist;
 
     void validate_bounds(const Component& c) const {
         auto [x, y, z] = c.get_coords();
@@ -349,6 +506,7 @@ private:
         auto[x, y, z] = f.get_center();
         double r = f.get_diameter() / 2.0;
         auto[vx, vy, vz] = f.get_velocity_dir();
+        bool is_circular = f.is_circular();
 
         double rack_w = rack.get_width_m();
         double rack_d = rack.get_depth_m();
@@ -362,20 +520,85 @@ private:
         double az = std::abs(vz);
         // Fan normal mostly x: fan opening plane is y-z
         if(ax >= ay && ax >= az) {
-            if(y - r < 0.0 || y + r > rack_d || z - r < 0.0 || z + r > rack_h) {
-                throw std::out_of_range("Fan '" + f.get_name() + "' disk out of rack bounds");
+            if(is_circular) {
+                if(y - r < 0.0 || y + r > rack_d || z - r < 0.0 || z + r > rack_h) {
+                    throw std::out_of_range("Fan '" + f.get_name() + "' disk out of rack bounds");
+                }
+            } else {
+                double w = f.get_size()[1] / 2.0;
+                double h = f.get_size()[2] / 2.0;
+                if(y - w < 0.0 || y + w > rack_d || z - h < 0.0 || z + h > rack_h) {
+                    throw std::out_of_range("Fan " + f.get_name() + " box out of bounds");
+                }
             }
+
         }
         // Fan normal mostly y: fan opening plane is x-z
         else if(ay >= ax && ay >= az) {
-            if(x - r < 0.0 || x + r > rack_w || z - r < 0.0 || z + r > rack_h) {
-                throw std::out_of_range("Fan '" + f.get_name() + "' disk out of rack bounds");
+            if(is_circular) {
+                if(x - r < 0.0 || x + r > rack_w || z - r < 0.0 || z + r > rack_h) {
+                    throw std::out_of_range("Fan '" + f.get_name() + "' disk out of rack bounds");
+                }
+            } else {
+                double w = f.get_size()[0] / 2.0;
+                double h = f.get_size()[2] / 2.0;
+                if(x - w < 0.0 || x + w > rack_w || z - h < 0.0 || z + h > rack_h) {
+                    throw std::out_of_range("Fan " + f.get_name() + " box out of bounds");
+                }
             }
         }
         // Fan normal mostly z: fan opening plane is x-y
         else {
-            if(x - r < 0.0 || x + r > rack_w || y - r < 0.0 || y + r > rack_d) {
-                throw std::out_of_range("Fan '" + f.get_name() + "' disk out of rack bounds");
+            if(is_circular) {
+                if(x - r < 0.0 || x + r > rack_w || y - r < 0.0 || y + r > rack_d) {
+                    throw std::out_of_range("Fan '" + f.get_name() + "' disk out of rack bounds");
+                }
+            } else {
+                double w = f.get_size()[0] / 2.0;
+                double h = f.get_size()[1] / 2.0;
+                if(x - w < 0.0 || x + w > rack_w || y - h < 0.0 || y + h > rack_d) {
+                    throw std::out_of_range("Fan " + f.get_name() + " box out of bounds");
+                }
+            }
+        }
+    }
+
+    void validate_bounds(const Vent& v) const {
+        auto[x, y, z] = v.get_center();
+        auto[vx, vy, vz] = v.get_direction();
+
+        double rack_w = rack.get_width_m();
+        double rack_d = rack.get_depth_m();
+        double rack_h = rack.get_height_m();
+
+        if(x < 0.0 || x > rack_w || y < 0.0 || y > rack_d || z < 0.0 || z > rack_h) {
+            throw std::out_of_range("Fan '" + v.get_name() + "' center out of rack bounds");
+        }
+        double ax = std::abs(vx);
+        double ay = std::abs(vy);
+        double az = std::abs(vz);
+        // Fan normal mostly x: fan opening plane is y-z
+        if(ax >= ay && ax >= az) {
+            double w = v.get_size()[1] / 2.0;
+            double h = v.get_size()[2] / 2.0;
+            if(y - w < 0.0 || y + w > rack_d || z - h < 0.0 || z + h > rack_h) {
+                throw std::out_of_range("Fan '" + v.get_name() + "' disk out of rack bounds");
+            }
+        }
+        // Fan normal mostly y: fan opening plane is x-z
+        else if(ay >= ax && ay >= az) {
+            double w = v.get_size()[0] / 2.0;
+            double h = v.get_size()[2] / 2.0;
+            if(x - w < 0.0 || x + w > rack_w || z - h < 0.0 || z + h > rack_h) {
+                throw std::out_of_range("Fan '" + v.get_name() + "' disk out of rack bounds");
+            }
+        }
+        // Fan normal mostly z: fan opening plane is x-y
+        else {
+            double w = v.get_size()[0] / 2.0;
+            double h = v.get_size()[1] / 2.0;
+            if(x - w < 0.0 || x + w > rack_w || y - h < 0.0 || y + h > rack_d) {
+                throw std::out_of_range("Fan '" + v.get_name() + "' disk out of rack bounds");
             }
         }
     }
