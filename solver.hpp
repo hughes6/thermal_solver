@@ -124,6 +124,17 @@ private:
         const Cell& c = current.at(x, y, z);
         double T = c.get_T();
         double Qcond = 0.0, Qconv = 0.0, Qgen = 0.0;
+        /*
+        if (cell is solid) {
+            compute conduction
+            compute heat generation
+        } else if (cell is fluid - fluid interface) {
+            compute advection
+            fluid energe exchange
+        } else if (cell is fluid - solid interface ) {
+            compute convection 
+        }
+        */
         Qcond = compute_conduction(x, y, z);
         Qgen  = c.get_qdot() * current.cell_volume();
         Qconv = compute_convection(x, y, z);
