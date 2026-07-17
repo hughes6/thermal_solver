@@ -5,6 +5,7 @@ import pandas as pd
 import numpy as np
 import re
 from mpl_toolkits.mplot3d import art3d
+from mpl_toolkits.mplot3d.art3d import Poly3DCollection
 import argparse
 
 anim = False
@@ -20,10 +21,17 @@ component_names = []
 component_dims = []
 component_coords = []
 fan_names = []
+fan_sizes = []
 fan_types = []
+fan_shapes = []
 fan_diams = []
 fan_centers = []
 fan_velocity_dirs = []
+vent_names = []
+vent_centers = []
+vent_fars = []
+vent_directions = []
+vent_sizes = []
 
 try:
     with open(filename, "r") as f:
@@ -35,7 +43,6 @@ except FileNotFoundError:
 # =========================
 # PARSE NEW output.txt FORMAT
 # =========================
-
 i = 0
 while i < len(lines):
     line = lines[i]
@@ -57,7 +64,7 @@ while i < len(lines):
 
         j = i + 1
         while j < len(lines):
-            if lines[j].startswith("Component ") or lines[j].startswith("Fan "):
+            if lines[j].startswith(("Component ", "Fan ", "Vent ")):
                 break
 
             if lines[j].startswith("dimensions:"):
@@ -93,10 +100,12 @@ while i < len(lines):
         diam_line = None
         center_line = None
         dir_line = None
+        f_size_line = None
+        f_shape_line = None
 
         j = i + 1
         while j < len(lines):
-            if re.match(r"^Fan\s+\d+:", lines[j]) or lines[j].startswith("Component "):
+            if re.match(r"^Fan\s+\d+:", lines[j]) or lines[j].startswith(("Component ", "Vent")):
                 break
 
             if lines[j].startswith("type:"):
@@ -105,23 +114,31 @@ while i < len(lines):
                 cfm_line = lines[j]
             elif lines[j].startswith("diameter:"):
                 diam_line = lines[j]
-            elif lines[j].startswith("center:"):
+            elif lines[j].startswith("f_center:"):
                 center_line = lines[j]
-            elif lines[j].startswith("direction:"):
+            elif lines[j].startswith("f_direction:"):
                 dir_line = lines[j]
+            elif lines[j].startswith("shape"):
+                f_shape_line = lines[j]
+            elif lines[j].startswith("f_size"):
+                f_size_line = lines[j]
 
             j += 1
 
-        if type_line is None or diam_line is None or center_line is None or dir_line is None:
+        if type_line is None or diam_line is None or center_line is None or dir_line is None or f_shape_line is None or f_size_line is None:
             raise ValueError(f"Could not find fan data for {name}")
 
         type_text = type_line.split(":", 1)[1].strip()
+        shape_text = f_shape_line.split(":", 1)[1].strip()
 
         diam_text = diam_line.split(":", 1)[1].replace("m", "").strip()
         diameter = float(diam_text)
 
         center_text = center_line.split(":", 1)[1].replace("m", "").strip()
         center = [float(v.strip()) for v in center_text.split()]
+
+        f_size_text = f_size_line.split(":", 1)[1].replace("m", "").strip()
+        size = [float(v.strip()) for v in f_size_text.split()]
 
         dir_text = dir_line.split(":", 1)[1].strip()
         direction = [float(v.strip()) for v in dir_text.split()]
@@ -131,6 +148,54 @@ while i < len(lines):
         fan_diams.append(diameter)
         fan_centers.append(center)
         fan_velocity_dirs.append(direction)
+        fan_sizes.append(size)
+        fan_shapes.append(shape_text)
+
+        i = j - 1
+
+    elif line.startswith("Vent "):
+        v_name = line.split(":", 1)[1].strip()
+
+        far_line = None
+        v_size_line = None
+        v_center_line = None
+        v_dir_line = None
+
+        j = i + 1
+        while j < len(lines):
+            if re.match(r"^Vent\s+\d+:", lines[j]) or lines[j].startswith(("Component ", "Fan ")):
+                break
+
+            if lines[j].startswith("Free area ratio:"):
+                far_line = lines[j]
+            elif lines[j].startswith("size:"):
+                v_size_line = lines[j]
+            elif lines[j].startswith("v_center:"):
+                v_center_line = lines[j]
+            elif lines[j].startswith("v_direction:"):
+                v_dir_line = lines[j]
+
+            j += 1
+
+        if far_line is None or v_size_line is None or v_center_line is None or v_dir_line is None:
+            raise ValueError(f"Could not find vent data for {name}")
+
+        far_text = far_line.split(":", 1)[1].strip()
+
+        v_size_text = v_size_line.split(":", 1)[1].replace("m", "").strip()
+        v_size = [float(v.strip()) for v in v_size_text.split()]
+
+        v_center_text = v_center_line.split(":", 1)[1].replace("m", "").strip()
+        v_center = [float(v.strip()) for v in v_center_text.split()]
+
+        v_dir_text = v_dir_line.split(":", 1)[1].strip()
+        v_direction = [float(v.strip()) for v in v_dir_text.split()]
+
+        vent_names.append(v_name)
+        vent_fars.append(far_text)
+        vent_sizes.append(v_size)
+        vent_centers.append(v_center)
+        vent_directions.append(v_direction)
 
         i = j - 1
 
@@ -194,6 +259,14 @@ for i in range(len(component_coords)):
         )
     )
 
+# print(fan_centers)
+# print(fan_diams)
+# print(fan_names)
+# print(fan_shapes)
+# print(fan_sizes)
+# print(fan_velocity_dirs)
+
+# print(rack_dim)
 for i in range(len(fan_centers)):
     color = next(colors)
 
@@ -204,35 +277,62 @@ for i in range(len(fan_centers)):
 
     n = fan_names[i]
     t = fan_types[i]
-    legend_name = f"Fan: {n}, Type: {t}"
-
+    s = fan_shapes[i]
+    legend_name = f"Fan: {n}, Type: {t}, Shape: {s}"
     # -------------------------
     # draw fan disk
     # -------------------------
 
     # mostly z-normal: fan lies in XY plane
     if abs(vz) >= abs(vx) and abs(vz) >= abs(vy):
-        circle = plt.Circle((x, y), r, color=color, alpha=0.35)
-        ax.add_patch(circle)
-        art3d.pathpatch_2d_to_3d(circle, z=z, zdir="z")
+        if s == "Circular":
+            circle = plt.Circle((x, y), r, color=color, alpha=0.35)
+            ax.add_patch(circle)
+            art3d.pathpatch_2d_to_3d(circle, z=z, zdir="z")
+        elif s == "Rectangular":
+            w, h, nn = fan_sizes[i]
+            x0 = x - w/2
+            y0 = y - h/2
+            rect = plt.Rectangle((x0, y0), w, h, color=color, alpha=0.35)
+            ax.add_patch(rect)
+            art3d.pathpatch_2d_to_3d(rect, z=z, zdir="z")
 
     # mostly y-normal: fan lies in XZ plane
     elif abs(vy) >= abs(vx) and abs(vy) >= abs(vz):
-        circle = plt.Circle((x, z), r, color=color, alpha=0.35)
-        ax.add_patch(circle)
-        art3d.pathpatch_2d_to_3d(circle, z=y, zdir="y")
+        if s == "Circular":
+            circle = plt.Circle((x, z), r, color=color, alpha=0.35)
+            ax.add_patch(circle)
+            art3d.pathpatch_2d_to_3d(circle, z=y, zdir="y")
+        elif s == "Rectangular":
+            w, nn, h = fan_sizes[i]
+            x0 = x - w/2
+            z0 = z - h/2
+            rect = plt.Rectangle((x0, z0), w, h, color=color, alpha=0.35)
+            ax.add_patch(rect)
+            art3d.pathpatch_2d_to_3d(rect, z=y, zdir="y")
 
     # mostly x-normal: fan lies in YZ plane
     else:
-        circle = plt.Circle((y, z), r, color=color, alpha=0.35)
-        ax.add_patch(circle)
-        art3d.pathpatch_2d_to_3d(circle, z=x, zdir="x")
+        if s == "Circular":
+            circle = plt.Circle((y, z), r, color=color, alpha=0.35)
+            ax.add_patch(circle)
+            art3d.pathpatch_2d_to_3d(circle, z=x, zdir="x")
+        elif s == "Rectangular":
+            nn, w, h = fan_sizes[i]
+            y0 = y - w/2
+            z0 = z - h/2
+            rect = plt.Rectangle((y0, z0), w, h, color=color, alpha=0.35)
+            ax.add_patch(rect)
+            art3d.pathpatch_2d_to_3d(rect, z=x, zdir="x")
 
     # -------------------------
     # draw velocity arrow
     # -------------------------
 
-    arrow_len = max(r * 1.5, 0.02)
+    if s == "Circular":
+        arrow_len = max(r * 1.5, 0.02)
+    else:
+        arrow_len = max(w, h, 0.02)
 
     ax.quiver(
         x, y, z,
@@ -243,6 +343,55 @@ for i in range(len(fan_centers)):
         linewidth=2,
         arrow_length_ratio=0.25
     )
+
+    # Legend entry
+    legend_handles.append(
+        mpatches.Patch(
+            color=color,
+            alpha=0.65,
+            label=legend_name
+        )
+    )
+
+for i in range(len(vent_centers)):
+    color = next(colors)
+
+    x, y, z = vent_centers[i]
+    vx, vy, vz = vent_directions[i]
+    n = vent_names[i]
+    f = vent_fars[i]
+    legend_name = f"Vent: {n}, FAR: {f}"
+
+    # -------------------------
+    # draw vent rect
+    # -------------------------
+
+    # mostly z-normal: vent lies in XY plane
+    if abs(vz) >= abs(vx) and abs(vz) >= abs(vy):
+        w, h, n = vent_sizes[i]
+        x0 = x - w/2
+        y0 = y - h/2
+        rect = plt.Rectangle((x0, y0), w, h, color=color, alpha=0.35)
+        ax.add_patch(rect)
+        art3d.pathpatch_2d_to_3d(rect, z=z, zdir="z")
+
+    # mostly y-normal: vent lies in XZ plane
+    elif abs(vy) >= abs(vx) and abs(vy) >= abs(vz):
+        w, n, h = vent_sizes[i]
+        x0 = x - w/2
+        z0 = z - h/2
+        rect = plt.Rectangle((x0, z0), w, h, color=color, alpha=0.35)
+        ax.add_patch(rect)
+        art3d.pathpatch_2d_to_3d(rect, z=y, zdir="y")
+
+    # mostly x-normal: vent lies in YZ plane
+    else:
+        n, w, h = vent_sizes[i]
+        y0 = x - w/2
+        z0 = z - h/2
+        rect = plt.Rectangle((y0, z0), w, h, color=color, alpha=0.35)
+        ax.add_patch(rect)
+        art3d.pathpatch_2d_to_3d(rect, z=x, zdir="x")
 
     legend_handles.append(
         mpatches.Patch(
