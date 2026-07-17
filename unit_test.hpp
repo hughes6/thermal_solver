@@ -77,8 +77,8 @@ public:
         test_heat_generation_increases_temperature();
 
         test_flow_solver_keeps_stagnant_rack_at_zero_velocity();
-        // test_flow_solver_creates_nonzero_fan_to_vent_flow();
-        // test_flow_solver_rejects_source_without_vent();
+        test_flow_solver_creates_nonzero_fan_to_vent_flow();
+        test_flow_solver_rejects_source_without_vent();
 
         std::cout << "========== ALL UNIT TESTS PASSED ==========\n\n";
     }
@@ -86,8 +86,9 @@ public:
     // Existing whole-rack scaffold test: uniform rack with no heat source
     // should remain uniform and stationary.
     void test1() {
+        Environment env(30.0, 5800.0, 20.0, 1005.0, 0.02587, 0.000018, 0.71, 1.225);
         Rack rack = make_air_rack(0.1, 0.1, 0.1, T);
-        Mesh mesh = Mesh().build_mesh(rack, dx, dy, dz, mu, pr);
+        Mesh mesh = Mesh().build_mesh(rack, dx, dy, dz, env);
 
         FlowSolver flow_solver(mesh);
         flow_solver.solve();
@@ -114,8 +115,9 @@ public:
 
     // Existing whole-rack scaffold test at a different initial temperature.
     void test2() {
+        Environment env(30.0, 5800.0, 40.0, 1005.0, 0.02587, 0.000018, 0.71, 1.225);
         Rack rack = make_air_rack(0.1, 0.1, 0.1, 40.0);
-        Mesh mesh = Mesh().build_mesh(rack, 0.05, 0.05, 0.05, mu, pr);
+        Mesh mesh = Mesh().build_mesh(rack, 0.05, 0.05, 0.05, env);
 
         FlowSolver flow_solver(mesh);
         flow_solver.solve();
@@ -259,8 +261,9 @@ public:
     }
 
     void test_component_stamping_sets_material_and_qdot() {
+        Environment env(30.0, 5800.0, 20.0, 1005.0, 0.02587, 0.000018, 0.71, 1.225);
         Rack rack = make_air_rack(0.10, 0.10, 0.10, 20.0);
-        Mesh mesh = Mesh().build_mesh(rack, 0.05, 0.05, 0.05, mu, pr);
+        Mesh mesh = Mesh().build_mesh(rack, 0.05, 0.05, 0.05, env);
 
         Component component(0.05, 0.05, 0.05, "Test block");
         component.set_coords_m(0.0, 0.0, 0.0);
@@ -282,8 +285,9 @@ public:
     }
 
     void test_heat_generation_increases_temperature() {
+        Environment env(30.0, 5800.0, 20.0, 1005.0, 0.02587, 0.000018, 0.71, 1.225);
         Rack rack = make_air_rack(0.10, 0.10, 0.10, 20.0);
-        Mesh mesh = Mesh().build_mesh(rack, 0.05, 0.05, 0.05, mu, pr);
+        Mesh mesh = Mesh().build_mesh(rack, 0.05, 0.05, 0.05, env);
 
         Component component(0.05, 0.05, 0.05, "Heater");
         component.set_coords_m(0.0, 0.0, 0.0);
@@ -308,8 +312,9 @@ public:
     }
 
     void test_flow_solver_keeps_stagnant_rack_at_zero_velocity() {
+        Environment env(30.0, 5800.0, 20.0, 1005.0, 0.02587, 0.000018, 0.71, 1.225);
         Rack rack = make_air_rack(0.10, 0.10, 0.10, 20.0);
-        Mesh mesh = Mesh().build_mesh(rack, 0.05, 0.05, 0.05, mu, pr);
+        Mesh mesh = Mesh().build_mesh(rack, 0.05, 0.05, 0.05, env);
 
         FlowSolver flow_solver(mesh);
         flow_solver.solve();
@@ -324,8 +329,9 @@ public:
     }
 
     void test_flow_solver_creates_nonzero_fan_to_vent_flow() {
+        Environment env(30.0, 5800.0, 20.0, 1005.0, 0.02587, 0.000018, 0.71, 1.225);
         Rack rack = make_air_rack(0.10, 0.10, 0.20, 20.0);
-        Mesh mesh = Mesh().build_mesh(rack, 0.05, 0.05, 0.05, mu, pr);
+        Mesh mesh = Mesh().build_mesh(rack, 0.05, 0.05, 0.05, env);
 
         Fan intake(
             "Intake", 1.0, 0.0,
@@ -337,9 +343,9 @@ public:
 
         Vent outlet(
             "Outlet", {0.0, 0.10, 0.10}, 1.0,
-            {0.20, 0.05, 0.05},
+            {0.10, 0.05, 0.05},
             {1.0, 0.0, 0.0});
-
+        
         mesh.stamp_fan(intake);
         mesh.stamp_vent(outlet, 0.6);
 
@@ -375,8 +381,9 @@ public:
     }
 
     void test_flow_solver_rejects_source_without_vent() {
+        Environment env(30.0, 5800.0, 20.0, 1005.0, 0.02587, 0.000018, 0.71, 1.225);
         Rack rack = make_air_rack(0.10, 0.10, 0.10, 20.0);
-        Mesh mesh = Mesh().build_mesh(rack, 0.05, 0.05, 0.05, mu, pr);
+        Mesh mesh = Mesh().build_mesh(rack, 0.05, 0.05, 0.05, env);
 
         Fan intake(
             "Unvented intake", 1.0, 0.0,
