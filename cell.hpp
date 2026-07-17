@@ -27,7 +27,12 @@ public:
           dz(0.0),
           vx(0.0),
           vy(0.0),
-          vz(0.0)
+          vz(0.0),
+          pressure(0.0),
+          flow_source(0.0),
+          vent_conductance(0.0),
+          mu(0.0),
+          pr(0.0)
     {}
 
     Cell(double T,
@@ -39,7 +44,9 @@ public:
          State s,
          double dx,
          double dy,
-         double dz)
+         double dz,
+         double mu,
+         double pr)
         : T(T),
           rho(rho),
           cp(cp),
@@ -52,7 +59,12 @@ public:
           dz(dz),
           vx(0.0),
           vy(0.0),
-          vz(0.0)
+          vz(0.0),
+          pressure(0.0),
+          flow_source(0.0),
+          vent_conductance(0.0),
+          mu(mu),
+          pr(pr)
     {}
 
     //========================
@@ -66,6 +78,10 @@ public:
     double get_h() const { return h; }
     double get_qdot() const { return qdot; }
 
+    double get_pressure() const { return pressure; }
+    double get_flow_source() const { return flow_source; }
+    double get_vent_conductance() const { return vent_conductance; }
+
     double get_dx() const { return dx; }
     double get_dy() const { return dy; }
     double get_dz() const { return dz; }
@@ -73,10 +89,11 @@ public:
     double get_vx() const { return vx; }
     double get_vy() const { return vy; }
     double get_vz() const { return vz; }
+    double get_mu() const { return mu; }
     
     bool is_fluid() const { return cell_state == State::Air || cell_state == State::Fan ||
                                    cell_state == State::Exhaust || cell_state == State::Intake ||
-                                   cell_state == State::Vent || cell_state == State::Wall; }
+                                   cell_state == State::Vent; }
     bool is_air() const { return cell_state == State::Air; }
     bool is_solid() const { return cell_state == State::Component || cell_state == State::Wall; }
     bool is_fan() const { return cell_state == State::Fan; }
@@ -96,6 +113,10 @@ public:
     void set_h(double hh) { h = hh; }
     void set_qdot(double q) { qdot = q; }
 
+    void set_pressure(double p) { pressure = p; }
+    void set_flow_source(double f) { flow_source = f; }
+    void set_vent_conductance(double c) { vent_conductance = c; }
+
     void set_dx(double x) { dx = x; }
     void set_dy(double y) { dy = y; }
     void set_dz(double z) { dz = z; }
@@ -104,6 +125,7 @@ public:
     void set_vy(double y) { vy = y; }
     void set_vz(double z) { vz = z; }
 
+    void set_mu(double mu_) { mu = mu_; }
     void set_state(State s) { cell_state = s; }
 
     //========================
@@ -117,28 +139,33 @@ public:
 private:
 
     // Thermal state
-    double T;          // Temperature (°C)
-    double rho;        // Density (kg/m^3)
-    double cp;         // Specific heat (J/kg-K)
-    double k;          // Thermal conductivity (W/m-K)
-    double h;          // Convection coefficient (W/m^2-K)
-    double qdot;       // Heat generation (W/m^3)
+    double T;                  // Temperature (°C)
+    double rho;                // Density (kg/m^3)
+    double cp;                 // Specific heat (J/kg-K)
+    double k;                  // Thermal conductivity (W/m-K)
+    double h;                  // Convection coefficient (W/m^2-K)
+    double qdot;               // Heat generation (W/m^3)
 
-    bool is_component;
-
-    // Component state
-    State cell_state;
+    // Flow state
+    double pressure;           // P_i, (Pa) 
+    double flow_source;        // S_i (m^3/s) += intake -= exh
+    double vent_conductance;   // C_v (m^3/(s*Pa)). 0 unless vent cell
 
     // Cell dimensions (m)
     double dx;
     double dy;
-    double dz;
+    double dz;  
 
     // Air velocity (m/s)
-    // Currently unused but ready for advection.
     double vx;
     double vy;
     double vz;
+
+    double mu;
+    double pr;
+
+    // Component state
+    State cell_state;
 };
 
 #endif
