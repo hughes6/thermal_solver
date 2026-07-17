@@ -1,10 +1,13 @@
 #ifndef SOLVER_HPP
 #define SOLVER_HPP
 
+#include "convection.hpp"
 #include "mesh.hpp"
 
 class Solver {
 public:
+    Solver() {}
+    
     Solver(Mesh initial_mesh, double dt, double sim_length)
         : current(std::move(initial_mesh)),
           next(current),
@@ -34,23 +37,6 @@ public:
         next = current;
     }
 
-    void solve() {
-        check_advection_stability();
-        int steps = static_cast<int>(sim_length / dt);
-        log_state(0);
-        for(int step = 0; step < steps; step++) {
-            for(int x = 0; x < current.get_nx(); x++) {
-                for(int y = 0; y < current.get_ny(); y++) {
-                    for(int z = 0; z < current.get_nz(); z++) {
-                        double T_new = compute_t_next(x,y,z);
-                        next.at(x,y,z).set_T(T_new);
-                    }
-                }
-            }
-            std::swap(current, next);
-            log_state(step);
-        }
-    }
 
     void check_advection_stability() const {
         // C = vz * dt / dz
@@ -73,10 +59,53 @@ public:
         std::cout << "Advection CFL max = " << max_C << '\n';
     }
 
+    void check_conduction_stability() const {
+        // C = a * dt / dx     a = k / (rho * cp)
+        double max_C = 0.0;
+        for(const Cell c : current.get_cells()) {
+            if(!c.is_solid()) continue;
+            double a = c.get_k() / (c.get_rho() * c.get_cp());
+            double Cx = (a * dt) / (current.get_dx()*current.get_dx());
+            double Cy = (a * dt) / (current.get_dy()*current.get_dy());
+            double Cz = (a * dt) / (current.get_dz()*current.get_dz());
+            double C = Cx + Cy + Cz;
+            if(C > max_C) {
+                max_C = C;
+            }
+            if(C > 0.5) {
+                std::cerr << "WARNING: condection unstable. CFL = "
+                          << C << " > 0.5\n";
+                return;
+            }
+        }
+        std::cout << "Conduction CFL max = " << max_C << '\n';
+    }
+
     const Mesh& get_mesh() const {
         return current;
     }
 
+    
+    void solve() {
+        check_advection_stability();
+        check_conduction_stability();
+
+        int steps = static_cast<int>(sim_length / dt);
+        log_state(0);
+        
+        for(int step = 0; step < steps; step++) {
+            for(int x = 0; x < current.get_nx(); x++) {
+                for(int y = 0; y < current.get_ny(); y++) {
+                    for(int z = 0; z < current.get_nz(); z++) {
+                        double T_new = compute_t_next(x,y,z);
+                        next.at(x,y,z).set_T(T_new);
+                    }
+                }
+            }
+            std::swap(current, next);
+            log_state(step);
+        }
+    }
 private:
     Mesh current;
     Mesh next;
@@ -100,6 +129,7 @@ private:
 
         double dTdt = (Qcond + Qconv + Qgen) / denom;
         double dTdt_advection = compute_advection(x, y, z);
+        dTdt_advection = 0.0;
         return T + dt * (dTdt + dTdt_advection);
     }
 
@@ -181,11 +211,10 @@ private:
 
     double compute_convection(int x, int y, int z) {
         const Cell& c = current.at(x, y, z);
-        double h = c.get_h();
         double T = c.get_T();
         double Q = 0.0;
 
-        auto add_neighbor = [&](int nx, int ny, int nz, double area) {
+        auto add_neighbor = [&](int nx, int ny, int nz, double area, double char_length) {
             if(!current.in_bounds(nx, ny, nz)) {
                 return;
             }
@@ -195,25 +224,36 @@ private:
             bool c_solid = c.is_solid();
             bool n_solid = n.is_solid();
 
-            // Only convection across solid-air interfaces
-            if(c_solid == n_solid) {
-                return;
-            }
+            // Only convection across solid-air interfaces or air-air
+            if(c_solid == n_solid) { return; }
 
-            Q += h * area * (n.get_T() - T);
+            const Cell& air_cell = c_solid ? n : c;
+            const Cell& solid_cell = c_solid ? c : n;
+
+            double vmag = std::sqrt(air_cell.get_vx() * air_cell.get_vx() + 
+                                    air_cell.get_vy() * air_cell.get_vy() +
+                                    air_cell.get_vz() + air_cell.get_vz());
+            double delta_T = std::abs(solid_cell.get_T() - air_cell.get_T());
+            double t_film_k = (solid_cell.get_T() + air_cell.get_T()) / 2.0 + 273.15;
+
+            double h_c = Convection::compute_local_h(vmag, char_length, Convection::AIR_RHO, Convection::AIR_MU, Convection::AIR_K, Convection::AIR_PR, delta_T, t_film_k);
+            double h_n = Convection::compute_local_h(vmag, char_length, Convection::AIR_RHO, Convection::AIR_MU, Convection::AIR_K, Convection::AIR_PR, delta_T, t_film_k);
+
+            double h_face = (h_c + h_n > 0.0) ? (2.0 * h_c * h_n / (h_c + h_n)) : 0.0;
+            Q += h_face * area * (n.get_T() - T);
         };
 
-        add_neighbor(x + 1, y, z, current.area_x());
-        add_neighbor(x - 1, y, z, current.area_x());
+        add_neighbor(x + 1, y, z, current.area_x(), current.get_dx());
+        add_neighbor(x - 1, y, z, current.area_x(), current.get_dx());
 
-        add_neighbor(x, y + 1, z, current.area_y());
-        add_neighbor(x, y - 1, z, current.area_y());
+        add_neighbor(x, y + 1, z, current.area_y(), current.get_dy());
+        add_neighbor(x, y - 1, z, current.area_y(), current.get_dy());
 
-        add_neighbor(x, y, z + 1, current.area_z());
-        add_neighbor(x, y, z - 1, current.area_z());
+        add_neighbor(x, y, z + 1, current.area_z(), current.get_dz());
+        add_neighbor(x, y, z - 1, current.area_z(), current.get_dz());
 
         return Q;
-}
+    }
 
     void log_state(int step) {
         double time = step * dt;
