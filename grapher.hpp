@@ -159,7 +159,6 @@ public:
 
         ctr = 1;
         for(const Fan* f: fans) {
-            std::cout<< "x";
             auto center = f->get_center();
             fout << "Fan " << ctr << ": " << f->get_name() << "\n";
             fout << "  type: " << f->get_type() << "\n";
@@ -512,6 +511,7 @@ private:
         double rack_d = rack.get_depth_m();
         double rack_h = rack.get_height_m();
 
+
         if(x < 0.0 || x > rack_w || y < 0.0 || y > rack_d || z < 0.0 || z > rack_h) {
             throw std::out_of_range("Fan '" + f.get_name() + "' center out of rack bounds");
         }
@@ -572,7 +572,7 @@ private:
         double rack_h = rack.get_height_m();
 
         if(x < 0.0 || x > rack_w || y < 0.0 || y > rack_d || z < 0.0 || z > rack_h) {
-            throw std::out_of_range("Fan '" + v.get_name() + "' center out of rack bounds");
+            throw std::out_of_range("Vent '" + v.get_name() + "' center out of rack bounds");
         }
         double ax = std::abs(vx);
         double ay = std::abs(vy);
@@ -582,7 +582,7 @@ private:
             double w = v.get_size()[1] / 2.0;
             double h = v.get_size()[2] / 2.0;
             if(y - w < 0.0 || y + w > rack_d || z - h < 0.0 || z + h > rack_h) {
-                throw std::out_of_range("Fan '" + v.get_name() + "' disk out of rack bounds");
+                throw std::out_of_range("Vent '" + v.get_name() + "' disk out of rack bounds");
             }
         }
         // Fan normal mostly y: fan opening plane is x-z
