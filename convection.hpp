@@ -13,23 +13,23 @@ constexpr double AIR_K                = 0.025;
 constexpr double AIR_PR               = 0.71;
 
 inline double local_reynolds(double velocity_mag, double char_length, double rho, double mu) {
-    if (mu < 0.0 || char_length < 0.0) return 0.0;
+    if (mu <= 0.0 || char_length <= 0.0) return 0.0;
     return (rho * velocity_mag * char_length) / mu;
 }
 
 inline double local_grashoff(double delta_T, double char_length, double t_film_K, double nu_kin) {
-    if(t_film_K < 0.0 || nu_kin < 0.0) return 0.0;
+    if(t_film_K <= 0.0 || nu_kin <= 0.0) return 0.0;
     double beta = 1.0 / t_film_K;
     double L3 = char_length * char_length * char_length;
-    return (G_ACCEL * beta * delta_T * L3) / (nu_kin, nu_kin);
+    return (G_ACCEL * beta * delta_T * L3) / (nu_kin * nu_kin);
 }
 
 inline double local_nusselt(double Re, double Pr, double Gr, bool heating = true) {
     // natural convection
     if (Re < RE_NATURAL_THRESHOLD) {
         double Ra = Gr * Pr;
-        // no velocity or temp diff no change
-        if (Ra < 0.0) return 1.0;
+        // no velocity or temp diff -> no driving force for convection at all
+        if (Ra <= 0.0) return 1.0;
 
         if (Ra < 1.0e9) {
             return 0.59 * std::pow(Ra, 0.25);
@@ -38,7 +38,7 @@ inline double local_nusselt(double Re, double Pr, double Gr, bool heating = true
         }
     }
     // turbulent
-    if (Re > RE_TURBULENT) {
+    if (Re >= RE_TURBULENT) {
         double n = heating ? 0.4 : 0.3;
         return 0.023 * std::pow(Re, 0.8) * std::pow(Pr, n);
     }
@@ -48,7 +48,7 @@ inline double local_nusselt(double Re, double Pr, double Gr, bool heating = true
 }
 
 inline double local_h(double Nu, double k_air, double char_length) {
-    if (char_length < 0.0) return 0.0;
+    if (char_length <= 0.0) return 0.0;
     return Nu * k_air / char_length;
 }
 

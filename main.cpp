@@ -51,8 +51,8 @@ int main(int argc, char* argv[]) {
   // ==================================
   // UNIT TEST
   // ==================================
-  // UnitTest tester;
-  // tester.run();
+  UnitTest tester;
+  tester.run();
 
   
   double dx = 0.04445;   // 1U
@@ -148,11 +148,11 @@ int main(int argc, char* argv[]) {
   // mesh.print_mesh();
   
   double resistivity = 4.5;
-  double tolerance = 1e-6;
-  int max_iterations = 1000;
-  double sor_omega = 1.2;
+  double tolerance = 1e-10;
+  int max_iterations = 2000;
+  double sor_omega = 1.1;
 
-  FlowSolver flow_solver(mesh, resistivity, vent_discharge_coeff, tolerance, max_iterations, sor_omega);
+  FlowSolver flow_solver(mesh, resistivity, vent_discharge_coeff, tolerance, max_iterations, sor_omega, 60, 1e-3);
   flow_solver.solve(); // pre populate all velocity cells
 
   Solver solver(mesh, dt, sim_length);

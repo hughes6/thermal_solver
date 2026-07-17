@@ -1,425 +1,308 @@
-import matplotlib.pyplot as plt
-import matplotlib.patches as mpatches
-from matplotlib.animation import FuncAnimation
-import pandas as pd
-from mpl_toolkits.mplot3d import art3d
-import numpy as np
+"""Animate the 3-D rack temperature field with exported rack geometry.
+
+Usage:
+  python heat_animation_fixed.py --sim simulation.csv --rack output.txt
+  python heat_animation_fixed.py --sim simulation.csv --rack output.txt --save
+"""
+from __future__ import annotations
+
 import argparse
 import itertools
 import re
+from dataclasses import dataclass, field
+from pathlib import Path
+
+import matplotlib.pyplot as plt
+import matplotlib.patches as mpatches
+from matplotlib.animation import FuncAnimation
+from mpl_toolkits.mplot3d import art3d
+import numpy as np
+import pandas as pd
 
 
-parser = argparse.ArgumentParser()
-parser.add_argument("-s", "--save", action="store_true")
-parser.add_argument("--sim", default="simulation.csv")
-parser.add_argument("--rack", default="output.txt")
-parser.add_argument("--fps", type=int, default=15)
-parser.add_argument("--skip", type=int, default=1)
-args = parser.parse_args()
+@dataclass
+class ComponentGeom:
+    name: str
+    # Export order is height, width, depth.
+    height: float
+    width: float
+    depth: float
+    origin: tuple[float, float, float]
 
 
-def parse_rack_file(filename):
-    with open(filename) as f:
-        lines = [line.strip() for line in f if line.strip()]
+@dataclass
+class OpeningGeom:
+    name: str
+    kind: str
+    center: tuple[float, float, float]
+    direction: tuple[float, float, float]
+    size: tuple[float, float, float] = (0.0, 0.0, 0.0)
+    shape: str = "Rectangular"
+    diameter: float = 0.0
+    label_detail: str = ""
+
+
+@dataclass
+class RackGeom:
+    width: float
+    depth: float
+    height: float
+    components: list[ComponentGeom] = field(default_factory=list)
+    openings: list[OpeningGeom] = field(default_factory=list)
+
+
+def first_float(text: str) -> float:
+    match = re.search(r"[-+]?\d*\.?\d+(?:[eE][-+]?\d+)?", text)
+    if not match:
+        raise ValueError(f"No numeric value in: {text}")
+    return float(match.group())
+
+
+def three_floats(text: str) -> tuple[float, float, float]:
+    vals = re.findall(r"[-+]?\d*\.?\d+(?:[eE][-+]?\d+)?", text)
+    if len(vals) < 3:
+        raise ValueError(f"Expected three values in: {text}")
+    return tuple(float(v) for v in vals[:3])
+
+
+def parse_block(lines: list[str], start: int) -> tuple[dict[str, str], int]:
+    values: dict[str, str] = {}
+    i = start + 1
+    while i < len(lines):
+        line = lines[i]
+        if re.match(r"^(Component|Fan|Vent)\s+\d+:", line):
+            break
+        if ":" in line:
+            key, value = line.split(":", 1)
+            values[key.strip().lower()] = value.strip()
+        i += 1
+    return values, i
+
+
+def parse_rack_file(filename: str) -> RackGeom:
+    lines = [line.strip() for line in Path(filename).read_text().splitlines() if line.strip()]
 
     rack_h = rack_w = rack_d = None
-    component_names = []
-    component_dims = []
-    component_coords = []
-    fan_names = []
-    fan_types = []
-    fan_diams = []
-    fan_centers = []
-    fan_velocity_dirs = []
+    for line in lines:
+        if line.startswith("height:"):
+            rack_h = first_float(line.split(":", 1)[1])
+        elif line.startswith("width:"):
+            rack_w = first_float(line.split(":", 1)[1])
+        elif line.startswith("depth:"):
+            rack_d = first_float(line.split(":", 1)[1])
 
+    if rack_h is None or rack_w is None or rack_d is None:
+        raise ValueError("Could not parse rack height, width, and depth")
+
+    rack = RackGeom(width=rack_w, depth=rack_d, height=rack_h)
     i = 0
     while i < len(lines):
         line = lines[i]
 
-        if line.startswith("height:"):
-            rack_h = float(line.split()[1])
+        match = re.match(r"^Component\s+\d+:\s*(.*)$", line)
+        if match:
+            values, next_i = parse_block(lines, i)
+            dims = [float(v) for v in re.findall(r"[-+]?\d*\.?\d+(?:[eE][-+]?\d+)?", values["dimensions"])[:3]]
+            if len(dims) != 3:
+                raise ValueError(f"Bad component dimensions for {match.group(1)}")
+            rack.components.append(ComponentGeom(
+                name=match.group(1),
+                height=dims[0], width=dims[1], depth=dims[2],
+                origin=three_floats(values["coordinates"]),
+            ))
+            i = next_i
+            continue
 
-        elif line.startswith("width:"):
-            rack_w = float(line.split()[1])
+        match = re.match(r"^Fan\s+\d+:\s*(.*)$", line)
+        if match:
+            values, next_i = parse_block(lines, i)
+            rack.openings.append(OpeningGeom(
+                name=match.group(1),
+                kind="Fan",
+                center=three_floats(values.get("f_center", values.get("center", ""))),
+                direction=three_floats(values.get("f_direction", values.get("direction", ""))),
+                size=three_floats(values.get("f_size", "0 0 0")),
+                shape=values.get("shape", "Circular").strip(),
+                diameter=first_float(values.get("diameter", "0")),
+                label_detail=values.get("type", ""),
+            ))
+            i = next_i
+            continue
 
-        elif line.startswith("depth:"):
-            rack_d = float(line.split()[1])
-
-        elif line.startswith("Component "):
-            name = line.split(":", 1)[1].strip()
-
-            dim_line = None
-            coord_line = None
-
-            j = i + 1
-            while j < len(lines):
-                if lines[j].startswith("Component ") or lines[j].startswith("Fan "):
-                    break
-
-                if lines[j].startswith("dimensions:"):
-                    dim_line = lines[j]
-
-                elif lines[j].startswith("coordinates:"):
-                    coord_line = lines[j]
-
-                j += 1
-
-            if dim_line is None or coord_line is None:
-                raise ValueError(f"Missing dimensions/coordinates for {name}")
-
-            dims_text = dim_line.split(":", 1)[1].replace("m", "").strip()
-            dims = [float(v.strip()) for v in dims_text.split("x")]
-
-            coords_text = coord_line.split(":", 1)[1].replace("m", "").strip()
-            coords = [float(v.strip()) for v in coords_text.split()]
-
-            component_names.append(name)
-            component_dims.append(dims)
-            component_coords.append(coords)
-
-            i = j - 1
-        elif line.startswith("Fan "):
-            name = line.split(":", 1)[1].strip()
-
-            type_line = None
-            cfm_line = None
-            diam_line = None 
-            center_line = None
-            dir_line = None 
-
-            j = i + 1
-            while j < len(lines):
-                if re.match(r"^Fan\s+\d+:", lines[j]) or lines[j].startswith("Component "):
-                    break
-
-                if lines[j].startswith("type:"):
-                    type_line = lines[j]
-                elif lines[j].startswith("cfm:"):
-                    cfm_line = lines[j]
-                elif lines[j].startswith("diameter:"):
-                    diam_line = lines[j]
-                elif lines[j].startswith("center:"):
-                    center_line = lines[j]
-                elif lines[j].startswith("direction:"):
-                    dir_line = lines[j]
-
-                j += 1
-
-            if type_line is None or diam_line is None or center_line is None or dir_line is None:
-                raise ValueError(f"Could not find fan data for {name}")
-
-            type_text = type_line.split(":", 1)[1].strip()
-
-            diam_text = diam_line.split(":", 1)[1].replace("m", "").strip()
-            diameter = float(diam_text)
-
-            center_text = center_line.split(":", 1)[1].replace("m", "").strip()
-            center = [float(v.strip()) for v in center_text.split()]
-
-            dir_text = dir_line.split(":", 1)[1].strip()
-            direction = [float(v.strip()) for v in dir_text.split()]
-
-            fan_names.append(name)
-            fan_types.append(type_text)
-            fan_diams.append(diameter)
-            fan_centers.append(center)
-            fan_velocity_dirs.append(direction)
-
-            i = j - 1
+        match = re.match(r"^Vent\s+\d+:\s*(.*)$", line)
+        if match:
+            values, next_i = parse_block(lines, i)
+            rack.openings.append(OpeningGeom(
+                name=match.group(1),
+                kind="Vent",
+                center=three_floats(values["v_center"]),
+                direction=three_floats(values["v_direction"]),
+                size=three_floats(values["size"]),
+                shape="Rectangular",
+                label_detail=f"FAR={values.get('free area ratio', '?')}",
+            ))
+            i = next_i
+            continue
 
         i += 1
 
-    if rack_w is None or rack_d is None or rack_h is None:
-        raise ValueError("Could not parse rack dimensions")
-
-    return [rack_w, rack_d, rack_h], component_names, component_dims, component_coords, fan_names, fan_types, fan_diams, fan_centers, fan_velocity_dirs
+    return rack
 
 
-# =========================
-# READ MESH SPACING
-# =========================
-
-with open(args.sim, "r") as f:
-    header = f.readline().strip()
-    spacing_line = f.readline().strip()
-
-parts = spacing_line.split(",")
-
-dx = float(parts[1])
-dy = float(parts[3])
-dz = float(parts[5])
-
-print(f"Mesh spacing: dx={dx}, dy={dy}, dz={dz}")
+def read_spacing(filename: str) -> tuple[float, float, float]:
+    with open(filename, "r", encoding="utf-8") as stream:
+        stream.readline()
+        parts = stream.readline().strip().split(",")
+    if len(parts) < 6:
+        raise ValueError("Second CSV line must contain dx,value,dy,value,dz,value")
+    return float(parts[1]), float(parts[3]), float(parts[5])
 
 
-# =========================
-# READ SIM CSV
-# =========================
-
-df = pd.read_csv(args.sim, skiprows=[1])
-
-print("Temperature range:", df["T"].min(), df["T"].max())
-print("Initial max:", df[df["step"] == df["step"].min()]["T"].max())
-print("Final max:", df[df["step"] == df["step"].max()]["T"].max())
-
-
-# =========================
-# READ RACK GEOMETRY
-# =========================
-
-try:
-    rack_dim, component_names, component_dims, component_coords, fan_names, fan_types, fan_diams, fan_centers, fan_velocity_dirs = parse_rack_file(args.rack)
-
-except FileNotFoundError:
-    print(f"Warning: {args.rack} not found. Inferring rack size from mesh.")
-    rack_dim = [
-        (int(df["x"].max()) + 1) * dx,
-        (int(df["y"].max()) + 1) * dy,
-        (int(df["z"].max()) + 1) * dz,
-    ]
-    component_names = []
-    component_dims = []
-    component_coords = []
-    fan_names = []
-    fan_types = []
-    fan_diams = []
-    fan_centers = []
-    fan_velocity_dirs = []
-
-except Exception as e:
-    print(f"Warning: could not parse {args.rack}: {e}")
-    print("Inferring rack size from mesh.")
-    rack_dim = [
-        (int(df["x"].max()) + 1) * dx,
-        (int(df["y"].max()) + 1) * dy,
-        (int(df["z"].max()) + 1) * dz,
-    ]
-    component_names = []
-    component_dims = []
-    component_coords = []
-    fan_names = []
-    fan_types = []
-    fan_diams = []
-    fan_centers = []
-    fan_velocity_dirs = []
-
-
-rack_x, rack_y, rack_z = rack_dim
-
-steps = sorted(df["step"].unique())
-steps = steps[::max(1, args.skip)]
-
-vmin = df["T"].min()
-vmax = df["T"].max()
-
-if abs(vmax - vmin) < 1e-9:
-    vmax = vmin + 1.0
-
-
-# =========================
-# FIGURE SETUP
-# =========================
-
-fig = plt.figure(figsize=(11, 8))
-ax = fig.add_subplot(111, projection="3d")
-fig.patch.set_facecolor("#f5f5f5")
-
-
-def draw_rack_geometry(ax):
-    ax.bar3d(
-        0, 0, 0,
-        rack_x, rack_y, rack_z,
-        color="black",
-        edgecolor="black",
-        alpha=0.08,
-        shade=True
+def infer_rack(df: pd.DataFrame, dx: float, dy: float, dz: float) -> RackGeom:
+    return RackGeom(
+        width=(int(df["x"].max()) + 1) * dx,
+        depth=(int(df["y"].max()) + 1) * dy,
+        height=(int(df["z"].max()) + 1) * dz,
     )
 
-    colors = itertools.cycle(plt.rcParams["axes.prop_cycle"].by_key()["color"])
 
-    legend_handles = [
-        mpatches.Patch(
-            color="black",
-            alpha=0.2,
-            label="Rack"
-        )
-    ]
+def draw_box_edges(ax, origin, size, **kwargs):
+    x0, y0, z0 = origin
+    sx, sy, sz = size
+    corners = np.array([
+        [x0, y0, z0], [x0 + sx, y0, z0], [x0 + sx, y0 + sy, z0], [x0, y0 + sy, z0],
+        [x0, y0, z0 + sz], [x0 + sx, y0, z0 + sz], [x0 + sx, y0 + sy, z0 + sz], [x0, y0 + sy, z0 + sz],
+    ])
+    edges = [(0,1),(1,2),(2,3),(3,0),(4,5),(5,6),(6,7),(7,4),(0,4),(1,5),(2,6),(3,7)]
+    for a, b in edges:
+        ax.plot(*zip(corners[a], corners[b]), **kwargs)
 
-    for name, dim, coord in zip(component_names, component_dims, component_coords):
-        color = next(colors)
 
-        # C++ exports dimensions as: height x width x depth
-        # matplotlib bar3d wants: dx, dy, dz = width, depth, height
-        h, w, d = dim
+def dominant_axis(direction) -> int:
+    return int(np.argmax(np.abs(np.asarray(direction, dtype=float))))
 
-        ax.bar3d(
-            coord[0], coord[1], coord[2],
-            w, d, h,
-            color=color,
-            edgecolor=color,
-            alpha=0.25,
-            shade=True
-        )
 
-        legend_handles.append(
-            mpatches.Patch(
-                color=color,
-                alpha=0.85,
-                label=f"Component: name"
-            )
-        )
+def draw_opening(ax, opening: OpeningGeom, color):
+    x, y, z = opening.center
+    direction = np.asarray(opening.direction, dtype=float)
+    norm = np.linalg.norm(direction)
+    if norm > 0:
+        direction /= norm
+    axis = dominant_axis(direction)
 
-    for i in range(len(fan_centers)):
-        color = next(colors)
-
-        x, y, z = fan_centers[i]
-        vx, vy, vz = fan_velocity_dirs[i]
-        d = fan_diams[i]
-        r = d / 2.0
-
-        n = fan_names[i]
-        t = fan_types[i]
-        legend_name = f"Fan: {n}, Type: {t}"
-
-        # -------------------------
-        # draw fan disk
-        # -------------------------
-
-        # mostly z-normal: fan lies in XY plane
-        if abs(vz) >= abs(vx) and abs(vz) >= abs(vy):
-            circle = plt.Circle((x, y), r, color=color, alpha=0.35)
-            ax.add_patch(circle)
-            art3d.pathpatch_2d_to_3d(circle, z=z, zdir="z")
-
-        # mostly y-normal: fan lies in XZ plane
-        elif abs(vy) >= abs(vx) and abs(vy) >= abs(vz):
-            circle = plt.Circle((x, z), r, color=color, alpha=0.35)
-            ax.add_patch(circle)
-            art3d.pathpatch_2d_to_3d(circle, z=y, zdir="y")
-
-        # mostly x-normal: fan lies in YZ plane
+    circular = opening.shape.lower().startswith("circular") and opening.diameter > 0
+    if circular:
+        radius = opening.diameter / 2.0
+        if axis == 0:       # yz plane
+            patch = plt.Circle((y, z), radius, fill=False, color=color, linewidth=2)
+            ax.add_patch(patch); art3d.pathpatch_2d_to_3d(patch, z=x, zdir="x")
+        elif axis == 1:     # xz plane
+            patch = plt.Circle((x, z), radius, fill=False, color=color, linewidth=2)
+            ax.add_patch(patch); art3d.pathpatch_2d_to_3d(patch, z=y, zdir="y")
+        else:               # xy plane
+            patch = plt.Circle((x, y), radius, fill=False, color=color, linewidth=2)
+            ax.add_patch(patch); art3d.pathpatch_2d_to_3d(patch, z=z, zdir="z")
+        scale = max(opening.diameter, 0.02)
+    else:
+        sx, sy, sz = opening.size
+        if axis == 0:
+            patch = plt.Rectangle((y - sy/2, z - sz/2), sy, sz, fill=False, color=color, linewidth=2)
+            ax.add_patch(patch); art3d.pathpatch_2d_to_3d(patch, z=x, zdir="x")
+            scale = max(sy, sz, 0.02)
+        elif axis == 1:
+            patch = plt.Rectangle((x - sx/2, z - sz/2), sx, sz, fill=False, color=color, linewidth=2)
+            ax.add_patch(patch); art3d.pathpatch_2d_to_3d(patch, z=y, zdir="y")
+            scale = max(sx, sz, 0.02)
         else:
-            circle = plt.Circle((y, z), r, color=color, alpha=0.35)
-            ax.add_patch(circle)
-            art3d.pathpatch_2d_to_3d(circle, z=x, zdir="x")
+            patch = plt.Rectangle((x - sx/2, y - sy/2), sx, sy, fill=False, color=color, linewidth=2)
+            ax.add_patch(patch); art3d.pathpatch_2d_to_3d(patch, z=z, zdir="z")
+            scale = max(sx, sy, 0.02)
 
-        # -------------------------
-        # draw velocity arrow
-        # -------------------------
-
-        arrow_len = max(r * 1.5, 0.02)
-
-        ax.quiver(
-            x, y, z,
-            vx * arrow_len,
-            vy * arrow_len,
-            vz * arrow_len,
-            color=color,
-            linewidth=2,
-            arrow_length_ratio=0.25
-        )
-
-        legend_handles.append(
-            mpatches.Patch(
-                color=color,
-                alpha=0.65,
-                label=legend_name
-            )
-        )
-
-    return legend_handles
+    ax.quiver(x, y, z, *(direction * scale * 0.8), color=color, linewidth=2, arrow_length_ratio=0.25)
 
 
-def update(step):
-    ax.clear()
+def main() -> None:
+    parser = argparse.ArgumentParser()
+    parser.add_argument("-s", "--save", action="store_true")
+    parser.add_argument("--sim", default="simulation.csv")
+    parser.add_argument("--rack", default="output.txt")
+    parser.add_argument("--fps", type=int, default=15)
+    parser.add_argument("--skip", type=int, default=1)
+    parser.add_argument("--output", default="rack_temperature_animation.mp4")
+    parser.add_argument("--stride", type=int, default=1, help="Plot every Nth cell")
+    args = parser.parse_args()
 
-    legend_handles = draw_rack_geometry(ax)
+    dx, dy, dz = read_spacing(args.sim)
+    df = pd.read_csv(args.sim, skiprows=[1])
 
-    frame = df[df["step"] == step]
+    try:
+        rack = parse_rack_file(args.rack)
+    except (FileNotFoundError, ValueError) as exc:
+        print(f"Warning: {exc}; inferring rack dimensions from the CSV")
+        rack = infer_rack(df, dx, dy, dz)
 
-    x = frame["x"].to_numpy() * dx + dx / 2.0
-    y = frame["y"].to_numpy() * dy + dy / 2.0
-    z = frame["z"].to_numpy() * dz + dz / 2.0
+    steps = sorted(df["step"].unique())[::max(1, args.skip)]
+    tmin, tmax = float(df["T"].min()), float(df["T"].max())
+    if np.isclose(tmin, tmax):
+        tmax = tmin + 1.0
 
-    T = frame["T"].to_numpy()
-    is_component = frame["is_component"].to_numpy()
+    fig = plt.figure(figsize=(12, 8))
+    ax = fig.add_subplot(111, projection="3d")
+    fig.subplots_adjust(right=0.82)
 
-    sizes = np.where(is_component == 1, 100, 60)
+    scalar = plt.cm.ScalarMappable(cmap="inferno", norm=plt.Normalize(tmin, tmax))
+    cbar = fig.colorbar(scalar, ax=ax, shrink=0.68, pad=0.08)
+    cbar.set_label("Temperature (°C)")
 
-    scatter = ax.scatter(
-        x, y, z,
-        c=T,
-        s=sizes,
-        cmap="inferno",
-        vmin=vmin,
-        vmax=vmax,
-        marker="s",
-        alpha=0.83,
-        edgecolors="none"
-    )
+    geom_colors = itertools.cycle(plt.rcParams["axes.prop_cycle"].by_key()["color"])
+    component_colors = [next(geom_colors) for _ in rack.components]
+    opening_colors = [next(geom_colors) for _ in rack.openings]
 
-    time = frame["time"].iloc[0]
+    def draw_geometry():
+        draw_box_edges(ax, (0, 0, 0), (rack.width, rack.depth, rack.height), color="black", linewidth=1.5)
+        handles = [mpatches.Patch(facecolor="none", edgecolor="black", label="Rack")]
 
-    ax.set_xlim(0, rack_x)
-    ax.set_ylim(0, rack_y)
-    ax.set_zlim(0, rack_z)
-    ax.set_box_aspect((rack_x, rack_y, rack_z))
+        for comp, color in zip(rack.components, component_colors):
+            draw_box_edges(ax, comp.origin, (comp.width, comp.depth, comp.height), color=color, linewidth=2)
+            handles.append(mpatches.Patch(facecolor="none", edgecolor=color, label=f"Component: {comp.name}"))
 
-    ax.set_xlabel("Width (m)", labelpad=8)
-    ax.set_ylabel("Depth (m)", labelpad=8)
-    ax.set_zlabel("Height (m)", labelpad=10)
+        for opening, color in zip(rack.openings, opening_colors):
+            draw_opening(ax, opening, color)
+            details = f", {opening.label_detail}" if opening.label_detail else ""
+            handles.append(mpatches.Patch(facecolor="none", edgecolor=color,
+                                          label=f"{opening.kind}: {opening.name}{details}"))
+        return handles
 
-    ax.set_title(
-        f"Rack Thermal Simulation\nstep = {step}, time = {time:.3f}",
-        pad=18
-    )
+    def update(step):
+        ax.clear()
+        frame = df[df["step"] == step].iloc[::max(1, args.stride)]
+        x = (frame["x"].to_numpy() + 0.5) * dx
+        y = (frame["y"].to_numpy() + 0.5) * dy
+        z = (frame["z"].to_numpy() + 0.5) * dz
+        temperatures = frame["T"].to_numpy()
+        is_component = frame["is_component"].to_numpy().astype(bool)
 
-    ax.view_init(elev=24, azim=35 + 0.15 * step)
-    ax.grid(True)
+        sizes = np.where(is_component, 70.0, 32.0)
+        ax.scatter(x, y, z, c=temperatures, cmap="inferno", vmin=tmin, vmax=tmax,
+                   marker="s", s=sizes, alpha=0.72, edgecolors="none")
 
-    ax.legend(
-        handles=legend_handles,
-        loc="upper left",
-        bbox_to_anchor=(1.02, 1.0)
-    )
+        handles = draw_geometry()
+        time_value = float(frame["time"].iloc[0])
+        ax.set_xlim(0, rack.width); ax.set_ylim(0, rack.depth); ax.set_zlim(0, rack.height)
+        ax.set_box_aspect((rack.width, rack.depth, rack.height))
+        ax.set_xlabel("Width, x (m)"); ax.set_ylabel("Depth, y (m)"); ax.set_zlabel("Height, z (m)")
+        ax.set_title(f"Rack temperature field — step {step}, time {time_value:.3f} s")
+        ax.view_init(elev=24, azim=35)
+        ax.legend(handles=handles, loc="upper left", bbox_to_anchor=(1.02, 1.0), fontsize=8)
+        return ()
 
-    return scatter,
-
-
-# =========================
-# COLORBAR
-# =========================
-
-first_frame = df[df["step"] == steps[0]]
-
-dummy = ax.scatter(
-    first_frame["x"].to_numpy() * dx + dx / 2.0,
-    first_frame["y"].to_numpy() * dy + dy / 2.0,
-    first_frame["z"].to_numpy() * dz + dz / 2.0,
-    c=first_frame["T"].to_numpy(),
-    cmap="inferno",
-    vmin=vmin,
-    vmax=vmax
-)
-
-cbar = fig.colorbar(dummy, ax=ax, shrink=0.65, pad=0.12)
-cbar.set_label("Temperature (°C)")
+    animation = FuncAnimation(fig, update, frames=steps, interval=1000 / max(1, args.fps), blit=False)
+    if args.save:
+        animation.save(args.output, fps=args.fps, dpi=180)
+        print(f"Saved: {args.output}")
+    else:
+        plt.show()
 
 
-# =========================
-# ANIMATION
-# =========================
-
-animation = FuncAnimation(
-    fig,
-    update,
-    frames=steps,
-    interval=1000 / args.fps,
-    blit=False
-)
-
-if args.save:
-    animation.save("rack_temperature_animation.mp4", fps=args.fps, dpi=180)
-    print("Saved: rack_temperature_animation.mp4")
-else:
-    plt.show()
+if __name__ == "__main__":
+    main()

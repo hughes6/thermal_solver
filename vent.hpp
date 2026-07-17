@@ -8,8 +8,6 @@
 
 struct Vent {
     std::string name;
-    double width_m;
-    double height_m;
     double free_area_ratio; // 0.0 to 1.0
 
     std::array<double, 3> size;      // m
@@ -52,7 +50,15 @@ struct Vent {
     std::array<double, 3> get_direction() const { return direction; }
 
     // helpers
-    double gross_area() const { return width_m * height_m; }
+    double gross_area() const {
+        const double ax = std::abs(direction[0]);
+        const double ay = std::abs(direction[1]);
+        const double az = std::abs(direction[2]);
+
+        if (az >= ax && az >= ay) return size[0] * size[1]; // XY plane
+        if (ay >= ax && ay >= az) return size[0] * size[2]; // XZ plane
+        return size[1] * size[2];                           // YZ plane
+    }
     double free_area() const { return gross_area() * free_area_ratio; }   
 };
 

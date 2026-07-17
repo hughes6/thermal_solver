@@ -14,7 +14,7 @@ public:
           dt(dt),
           sim_length(sim_length),
           logfile("simulation.csv")
-    { logfile << "step,time,x,y,z,T,qdot,is_component,k,rho,cp\n";
+    { logfile << "step,time,x,y,z,T,qdot,is_component,k,rho,cp,vx,vy,vz,h\n";
       logfile << "dx," << current.get_dx()
         << ",dy," << current.get_dy()
         << ",dz," << current.get_dz()
@@ -61,9 +61,14 @@ public:
 
     void check_conduction_stability() const {
         // C = a * dt / dx     a = k / (rho * cp)
+        // Checked across ALL cells with valid material properties, not
+        // just solids -- air's diffusivity can exceed a dense component's
+        // depending on the rho/cp/k values chosen (e.g. low-rho, low-cp
+        // air vs. high-k metal), so restricting this to is_solid() can
+        // miss the actually-limiting cell type.
         double max_C = 0.0;
         for(const Cell c : current.get_cells()) {
-            if(!c.is_solid()) continue;
+            if(c.get_rho() <= 0.0 || c.get_cp() <= 0.0) continue;
             double a = c.get_k() / (c.get_rho() * c.get_cp());
             double Cx = (a * dt) / (current.get_dx()*current.get_dx());
             double Cy = (a * dt) / (current.get_dy()*current.get_dy());
@@ -129,7 +134,6 @@ private:
 
         double dTdt = (Qcond + Qconv + Qgen) / denom;
         double dTdt_advection = compute_advection(x, y, z);
-        dTdt_advection = 0.0;
         return T + dt * (dTdt + dTdt_advection);
     }
 
@@ -210,9 +214,11 @@ private:
     }
 
     double compute_convection(int x, int y, int z) {
-        const Cell& c = current.at(x, y, z);
+        Cell& c = current.at(x, y, z);
         double T = c.get_T();
         double Q = 0.0;
+        double h_sum = 0.0;
+        int h_count = 0;
 
         auto add_neighbor = [&](int nx, int ny, int nz, double area, double char_length) {
             if(!current.in_bounds(nx, ny, nz)) {
@@ -232,15 +238,23 @@ private:
 
             double vmag = std::sqrt(air_cell.get_vx() * air_cell.get_vx() + 
                                     air_cell.get_vy() * air_cell.get_vy() +
-                                    air_cell.get_vz() + air_cell.get_vz());
+                                    air_cell.get_vz() * air_cell.get_vz());
             double delta_T = std::abs(solid_cell.get_T() - air_cell.get_T());
             double t_film_k = (solid_cell.get_T() + air_cell.get_T()) / 2.0 + 273.15;
 
-            double h_c = Convection::compute_local_h(vmag, char_length, Convection::AIR_RHO, Convection::AIR_MU, Convection::AIR_K, Convection::AIR_PR, delta_T, t_film_k);
-            double h_n = Convection::compute_local_h(vmag, char_length, Convection::AIR_RHO, Convection::AIR_MU, Convection::AIR_K, Convection::AIR_PR, delta_T, t_film_k);
-
-            double h_face = (h_c + h_n > 0.0) ? (2.0 * h_c * h_n / (h_c + h_n)) : 0.0;
+            // Note: unlike the conduction harmonic-mean (which genuinely
+            // blends two different materials' k), h here describes one
+            // fluid film at one solid-air interface, so there's only one
+            // physical value to compute -- not two cell-owned values to
+            // average. Computing it "twice" from the same air/solid pair
+            // would always produce identical numbers, so it's computed once.
+            double h_face = Convection::compute_local_h(vmag, char_length,
+                                Convection::AIR_RHO, Convection::AIR_MU,
+                                Convection::AIR_K, Convection::AIR_PR,
+                                delta_T, t_film_k);
             Q += h_face * area * (n.get_T() - T);
+            h_sum += h_face;
+            h_count++;
         };
 
         add_neighbor(x + 1, y, z, current.area_x(), current.get_dx());
@@ -251,6 +265,13 @@ private:
 
         add_neighbor(x, y, z + 1, current.area_z(), current.get_dz());
         add_neighbor(x, y, z - 1, current.area_z(), current.get_dz());
+
+        // Cache the average computed h onto the cell purely for
+        // logging/plotting -- it isn't read back anywhere else this
+        // timestep, so overwriting it mid-solve is safe.
+        if (h_count > 0) {
+            c.set_h(h_sum / h_count);
+        }
 
         return Q;
     }
@@ -272,7 +293,11 @@ private:
                         << cell.is_solid() << ','
                         << cell.get_k() << ','
                         << cell.get_rho() << ','
-                        << cell.get_cp()
+                        << cell.get_cp() << ','
+                        << cell.get_vx() << ','
+                        << cell.get_vy() << ','
+                        << cell.get_vz() << ','
+                        << cell.get_h()
                         << '\n';
                 }
             }
