@@ -1,8 +1,8 @@
 """Animate the 3-D rack temperature field with exported rack geometry.
 
 Usage:
-  python heat_animation_fixed.py --sim simulation.csv --rack output.txt
-  python heat_animation_fixed.py --sim simulation.csv --rack output.txt --save
+  python heat_animation.py --sim simulation.csv --rack output.txt
+  python heat_animation.py --sim simulation.csv --rack output.txt --save
 """
 from __future__ import annotations
 
@@ -21,13 +21,20 @@ import pandas as pd
 
 
 @dataclass
+class InternalRegionGeom:
+    kind: str
+    size: tuple[float, float, float]
+    origin: tuple[float, float, float]
+
+
+@dataclass
 class ComponentGeom:
     name: str
-    # Export order is height, width, depth.
     height: float
     width: float
     depth: float
     origin: tuple[float, float, float]
+    regions: list[InternalRegionGeom] = field(default_factory=list)
 
 
 @dataclass
@@ -65,18 +72,63 @@ def three_floats(text: str) -> tuple[float, float, float]:
     return tuple(float(v) for v in vals[:3])
 
 
-def parse_block(lines: list[str], start: int) -> tuple[dict[str, str], int]:
+def parse_simple_block(lines: list[str], start: int) -> tuple[dict[str, str], int]:
     values: dict[str, str] = {}
     i = start + 1
+    while i < len(lines):
+        if re.match(r"^(Component|Fan|Vent)\s+\d+:", lines[i]):
+            break
+        if ":" in lines[i]:
+            key, value = lines[i].split(":", 1)
+            values[key.strip().lower()] = value.strip()
+        i += 1
+    return values, i
+
+
+def parse_component(lines: list[str], start: int, name: str) -> tuple[ComponentGeom, int]:
+    values: dict[str, str] = {}
+    regions: list[InternalRegionGeom] = []
+    i = start + 1
+
     while i < len(lines):
         line = lines[i]
         if re.match(r"^(Component|Fan|Vent)\s+\d+:", line):
             break
+
+        region_match = re.match(r"^Internal Region\s+\d+:$", line)
+        if region_match:
+            region_values: dict[str, str] = {}
+            i += 1
+            while i < len(lines):
+                nested = lines[i]
+                if (re.match(r"^Internal Region\s+\d+:$", nested)
+                        or re.match(r"^(Component|Fan|Vent)\s+\d+:", nested)):
+                    break
+                if ":" in nested:
+                    key, value = nested.split(":", 1)
+                    region_values[key.strip().lower()] = value.strip()
+                i += 1
+
+            if {"type", "size", "global_position"} <= region_values.keys():
+                regions.append(InternalRegionGeom(
+                    kind=region_values["type"],
+                    size=three_floats(region_values["size"]),
+                    origin=three_floats(region_values["global_position"]),
+                ))
+            continue
+
         if ":" in line:
             key, value = line.split(":", 1)
             values[key.strip().lower()] = value.strip()
         i += 1
-    return values, i
+
+    dims = three_floats(values["dimensions"])  # width, depth, height
+    return ComponentGeom(
+        name=name,
+        width=dims[0], depth=dims[1], height=dims[2],
+        origin=three_floats(values["coordinates"]),
+        regions=regions,
+    ), i
 
 
 def parse_rack_file(filename: str) -> RackGeom:
@@ -98,27 +150,17 @@ def parse_rack_file(filename: str) -> RackGeom:
     i = 0
     while i < len(lines):
         line = lines[i]
-
         match = re.match(r"^Component\s+\d+:\s*(.*)$", line)
         if match:
-            values, next_i = parse_block(lines, i)
-            dims = [float(v) for v in re.findall(r"[-+]?\d*\.?\d+(?:[eE][-+]?\d+)?", values["dimensions"])[:3]]
-            if len(dims) != 3:
-                raise ValueError(f"Bad component dimensions for {match.group(1)}")
-            rack.components.append(ComponentGeom(
-                name=match.group(1),
-                height=dims[0], width=dims[1], depth=dims[2],
-                origin=three_floats(values["coordinates"]),
-            ))
-            i = next_i
+            comp, i = parse_component(lines, i, match.group(1))
+            rack.components.append(comp)
             continue
 
         match = re.match(r"^Fan\s+\d+:\s*(.*)$", line)
         if match:
-            values, next_i = parse_block(lines, i)
+            values, i = parse_simple_block(lines, i)
             rack.openings.append(OpeningGeom(
-                name=match.group(1),
-                kind="Fan",
+                name=match.group(1), kind="Fan",
                 center=three_floats(values.get("f_center", values.get("center", ""))),
                 direction=three_floats(values.get("f_direction", values.get("direction", ""))),
                 size=three_floats(values.get("f_size", "0 0 0")),
@@ -126,26 +168,21 @@ def parse_rack_file(filename: str) -> RackGeom:
                 diameter=first_float(values.get("diameter", "0")),
                 label_detail=values.get("type", ""),
             ))
-            i = next_i
             continue
 
         match = re.match(r"^Vent\s+\d+:\s*(.*)$", line)
         if match:
-            values, next_i = parse_block(lines, i)
+            values, i = parse_simple_block(lines, i)
             rack.openings.append(OpeningGeom(
-                name=match.group(1),
-                kind="Vent",
+                name=match.group(1), kind="Vent",
                 center=three_floats(values["v_center"]),
                 direction=three_floats(values["v_direction"]),
                 size=three_floats(values["size"]),
                 shape="Rectangular",
                 label_detail=f"FAR={values.get('free area ratio', '?')}",
             ))
-            i = next_i
             continue
-
         i += 1
-
     return rack
 
 
@@ -193,13 +230,13 @@ def draw_opening(ax, opening: OpeningGeom, color):
     circular = opening.shape.lower().startswith("circular") and opening.diameter > 0
     if circular:
         radius = opening.diameter / 2.0
-        if axis == 0:       # yz plane
+        if axis == 0:
             patch = plt.Circle((y, z), radius, fill=False, color=color, linewidth=2)
             ax.add_patch(patch); art3d.pathpatch_2d_to_3d(patch, z=x, zdir="x")
-        elif axis == 1:     # xz plane
+        elif axis == 1:
             patch = plt.Circle((x, z), radius, fill=False, color=color, linewidth=2)
             ax.add_patch(patch); art3d.pathpatch_2d_to_3d(patch, z=y, zdir="y")
-        else:               # xy plane
+        else:
             patch = plt.Circle((x, y), radius, fill=False, color=color, linewidth=2)
             ax.add_patch(patch); art3d.pathpatch_2d_to_3d(patch, z=z, zdir="z")
         scale = max(opening.diameter, 0.02)
@@ -217,7 +254,6 @@ def draw_opening(ax, opening: OpeningGeom, color):
             patch = plt.Rectangle((x - sx/2, y - sy/2), sx, sy, fill=False, color=color, linewidth=2)
             ax.add_patch(patch); art3d.pathpatch_2d_to_3d(patch, z=z, zdir="z")
             scale = max(sx, sy, 0.02)
-
     ax.quiver(x, y, z, *(direction * scale * 0.8), color=color, linewidth=2, arrow_length_ratio=0.25)
 
 
@@ -234,7 +270,6 @@ def main() -> None:
 
     dx, dy, dz = read_spacing(args.sim)
     df = pd.read_csv(args.sim, skiprows=[1])
-
     try:
         rack = parse_rack_file(args.rack)
     except (FileNotFoundError, ValueError) as exc:
@@ -249,7 +284,6 @@ def main() -> None:
     fig = plt.figure(figsize=(12, 8))
     ax = fig.add_subplot(111, projection="3d")
     fig.subplots_adjust(right=0.82)
-
     scalar = plt.cm.ScalarMappable(cmap="inferno", norm=plt.Normalize(tmin, tmax))
     cbar = fig.colorbar(scalar, ax=ax, shrink=0.68, pad=0.08)
     cbar.set_label("Temperature (°C)")
@@ -261,10 +295,19 @@ def main() -> None:
     def draw_geometry():
         draw_box_edges(ax, (0, 0, 0), (rack.width, rack.depth, rack.height), color="black", linewidth=1.5)
         handles = [mpatches.Patch(facecolor="none", edgecolor="black", label="Rack")]
+        seen_region_types: set[str] = set()
 
         for comp, color in zip(rack.components, component_colors):
             draw_box_edges(ax, comp.origin, (comp.width, comp.depth, comp.height), color=color, linewidth=2)
             handles.append(mpatches.Patch(facecolor="none", edgecolor=color, label=f"Component: {comp.name}"))
+            for region in comp.regions:
+                kind = region.kind.lower()
+                region_color = "deepskyblue" if kind == "air" else "orangered" if kind == "heatsource" else "limegreen"
+                draw_box_edges(ax, region.origin, region.size, color=region_color, linewidth=2.2, linestyle="--")
+                if kind not in seen_region_types:
+                    handles.append(mpatches.Patch(facecolor="none", edgecolor=region_color,
+                                                  linestyle="--", label=f"Internal region: {region.kind}"))
+                    seen_region_types.add(kind)
 
         for opening, color in zip(rack.openings, opening_colors):
             draw_opening(ax, opening, color)

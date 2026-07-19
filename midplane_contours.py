@@ -16,12 +16,72 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import re
+from dataclasses import dataclass
 from pathlib import Path
 
 import matplotlib.pyplot as plt
 from matplotlib.animation import FuncAnimation
 import numpy as np
 import pandas as pd
+
+
+
+@dataclass
+class InternalRegion:
+    kind: str
+    origin: tuple[float, float, float]
+    size: tuple[float, float, float]
+
+
+def _numbers(text: str) -> list[float]:
+    return [float(v) for v in re.findall(r"[-+]?\d*\.?\d+(?:[eE][-+]?\d+)?", text)]
+
+
+def read_internal_regions(filename: str) -> list[InternalRegion]:
+    lines = [line.strip() for line in Path(filename).read_text().splitlines() if line.strip()]
+    regions: list[InternalRegion] = []
+    i = 0
+    while i < len(lines):
+        if not re.match(r"^Internal Region\s+\d+:$", lines[i]):
+            i += 1
+            continue
+        values: dict[str, str] = {}
+        i += 1
+        while i < len(lines) and not re.match(
+            r"^(Internal Region\s+\d+:|Component\s+\d+:|Fan\s+\d+:|Vent\s+\d+:)", lines[i]
+        ):
+            if ":" in lines[i]:
+                key, value = lines[i].split(":", 1)
+                values[key.strip().lower()] = value.strip()
+            i += 1
+        if {"type", "size", "global_position"} <= values.keys():
+            regions.append(InternalRegion(
+                values["type"],
+                tuple(_numbers(values["global_position"])[:3]),
+                tuple(_numbers(values["size"])[:3]),
+            ))
+    return regions
+
+
+def draw_region_intersections(ax, regions, fixed_axis, fixed_position, horizontal, vertical):
+    axis_index = {"x": 0, "y": 1, "z": 2}
+    fi, hi, vi = axis_index[fixed_axis], axis_index[horizontal], axis_index[vertical]
+    used = set()
+    for region in regions:
+        lo = region.origin[fi]
+        hi_fixed = lo + region.size[fi]
+        if not (lo <= fixed_position <= hi_fixed):
+            continue
+        color = "deepskyblue" if region.kind.lower() == "air" else "orangered" if region.kind.lower() == "heatsource" else "limegreen"
+        rect = plt.Rectangle(
+            (region.origin[hi], region.origin[vi]),
+            region.size[hi], region.size[vi],
+            fill=False, edgecolor=color, linewidth=2.0, linestyle="--",
+            label=f"Internal {region.kind}" if region.kind not in used else None,
+        )
+        ax.add_patch(rect)
+        used.add(region.kind)
 
 
 def read_spacing(filename: str) -> tuple[float, float, float]:
@@ -61,6 +121,7 @@ def edges_from_centers(centers: np.ndarray, spacing: float) -> np.ndarray:
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--sim", default="simulation.csv")
+    parser.add_argument("--rack", default="output.txt", help="Geometry export containing internal regions")
     parser.add_argument("--fps", type=int, default=12)
     parser.add_argument("--skip", type=int, default=1, help="Use every Nth simulation step")
     parser.add_argument("--arrow-stride", type=int, default=1)
@@ -72,6 +133,11 @@ def main() -> None:
 
     dx, dy, dz = read_spacing(args.sim)
     df = pd.read_csv(args.sim, skiprows=[1])
+    try:
+        internal_regions = read_internal_regions(args.rack)
+    except (FileNotFoundError, ValueError) as exc:
+        print(f"Warning: {exc}; internal-region outlines will be omitted")
+        internal_regions = []
     required = {"step", "time", "x", "y", "z", "T", "vx", "vy", "vz", "is_component"}
     missing = required - set(df.columns)
     if missing:
@@ -166,6 +232,8 @@ def main() -> None:
                 ax.set_xlabel(plane["xlabel"]); ax.set_ylabel(plane["ylabel"])
 
             fixed_position = (plane["index"] + 0.5) * {"x": dx, "y": dy, "z": dz}[plane["fixed"]]
+            draw_region_intersections(temp_ax, internal_regions, plane["fixed"], fixed_position, plane["h"], plane["v"])
+            draw_region_intersections(vel_ax, internal_regions, plane["fixed"], fixed_position, plane["h"], plane["v"])
             temp_ax.set_title(f"Temperature — {plane['name']}\n{plane['fixed']}={fixed_position:.4f} m")
             vel_ax.set_title(f"Speed and in-plane vectors — {plane['name']}")
 

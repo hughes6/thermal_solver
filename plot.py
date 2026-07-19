@@ -20,6 +20,10 @@ rack_dim = []
 component_names = []
 component_dims = []
 component_coords = []
+internal_region_parent = []
+internal_region_types = []
+internal_region_sizes = []
+internal_region_global_positions = []
 fan_names = []
 fan_sizes = []
 fan_types = []
@@ -58,40 +62,60 @@ while i < len(lines):
 
     elif line.startswith("Component "):
         name = line.split(":", 1)[1].strip()
-
         dim_line = None
         coord_line = None
+        regions_for_component = []
 
         j = i + 1
         while j < len(lines):
             if lines[j].startswith(("Component ", "Fan ", "Vent ")):
                 break
-
             if lines[j].startswith("dimensions:"):
                 dim_line = lines[j]
-
-            if lines[j].startswith("coordinates:"):
+            elif lines[j].startswith("coordinates:"):
                 coord_line = lines[j]
-
+            elif lines[j].startswith("Internal Region "):
+                region_type = None
+                region_size = None
+                region_global = None
+                k = j + 1
+                while k < len(lines):
+                    if lines[k].startswith("Internal Region ") or lines[k].startswith(("Component ", "Fan ", "Vent ")):
+                        break
+                    if lines[k].startswith("type:"):
+                        region_type = lines[k].split(":", 1)[1].strip()
+                    elif lines[k].startswith("size:"):
+                        text = lines[k].split(":", 1)[1].replace("m", "").strip()
+                        region_size = [float(v) for v in text.split()]
+                    elif lines[k].startswith("global_position:"):
+                        text = lines[k].split(":", 1)[1].replace("m", "").strip()
+                        region_global = [float(v) for v in text.split()]
+                    k += 1
+                if region_type is not None and region_size is not None and region_global is not None:
+                    regions_for_component.append((region_type, region_size, region_global))
+                j = k
+                continue
             j += 1
 
         if dim_line is None or coord_line is None:
             raise ValueError(f"Could not find dimensions/coordinates for {name}")
 
-        dims_text = dim_line.split(":", 1)[1]
-        dims_text = dims_text.replace("m", "").strip()
+        dims_text = dim_line.split(":", 1)[1].replace("m", "").strip()
         dims = [float(v.strip()) for v in dims_text.split("x")]
-
-        coords_text = coord_line.split(":", 1)[1]
-        coords_text = coords_text.replace("m", "").strip()
+        coords_text = coord_line.split(":", 1)[1].replace("m", "").strip()
         coords = [float(v.strip()) for v in coords_text.split()]
 
         component_names.append(name)
         component_dims.append(dims)
         component_coords.append(coords)
+        for region_type, region_size, region_global in regions_for_component:
+            internal_region_parent.append(name)
+            internal_region_types.append(region_type)
+            internal_region_sizes.append(region_size)
+            internal_region_global_positions.append(region_global)
 
         i = j - 1
-    
+
     elif line.startswith("Fan "):
         name = line.split(":", 1)[1].strip()
 
@@ -239,8 +263,8 @@ for i in range(len(component_coords)):
 
     x, y, z = component_coords[i]
 
-    # export order was height, width, depth
-    h, w, d = component_dims[i]
+    # Canonical project/export order: width, depth, height
+    w, d, h = component_dims[i]
 
     ax.bar3d(
         x, y, z,
@@ -248,7 +272,7 @@ for i in range(len(component_coords)):
         color=color,
         shade=True,
         edgecolor=color,
-        alpha=0.5
+        alpha=0.1
     )
 
     legend_handles.append(
@@ -256,6 +280,35 @@ for i in range(len(component_coords)):
             color=color,
             alpha=0.5,
             label=f"Component: {component_names[i]}"
+        )
+    )
+
+start_alpha = 0.2
+# Internal regions are added to the existing rack axes; no new plot or layout is created.
+for i in range(len(internal_region_global_positions)):
+    color = next(colors)
+    x, y, z = internal_region_global_positions[i]
+    sx, sy, sz = internal_region_sizes[i]
+    region_type = internal_region_types[i]
+    parent = internal_region_parent[i]
+    alpha = start_alpha + (i * 0.1)
+    if alpha >= 1:
+        alpha = 0.95
+
+    ax.bar3d(
+        x, y, z,
+        sx, sy, sz,
+        color=color,
+        shade=True,
+        edgecolor=color,
+        linewidth=1.5,
+        alpha=alpha
+    )
+    legend_handles.append(
+        mpatches.Patch(
+            color=color,
+            alpha=alpha,
+            label=f"Internal region ({parent}): {region_type}"
         )
     )
 

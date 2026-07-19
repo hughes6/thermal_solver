@@ -90,6 +90,7 @@ public:
     double get_vy() const { return vy; }
     double get_vz() const { return vz; }
     double get_mu() const { return mu; }
+    double get_pr() const { return pr; }
     
     bool is_fluid() const { return cell_state == State::Air || cell_state == State::Fan ||
                                    cell_state == State::Exhaust || cell_state == State::Intake ||
@@ -127,6 +128,7 @@ public:
     void set_vz(double z) { vz = z; }
 
     void set_mu(double mu_) { mu = mu_; }
+    void set_pr(double pr_) { pr = pr_; }
     void set_state(State s) { cell_state = s; }
 
     //========================

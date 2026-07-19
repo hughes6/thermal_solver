@@ -65,7 +65,6 @@ public:
     
     FlowSolver(Mesh& mesh_, 
                double linear_resistivity_ = 5.0,
-               double vent_discharge_coeff_ = 0.6,
                double tolerance_ = 1e-6,
                int max_iters_ = 20000,
                double sor_omega_ = 1.3,
@@ -73,7 +72,6 @@ public:
                double flow_tolerance_ = 1e-4) :
                mesh(mesh_),
                linear_resistivity(linear_resistivity_),
-               vent_discharge_coeff(vent_discharge_coeff_),
                pressure_tolerance(tolerance_),
                max_pressure_iters(max_iters_),
                omega(sor_omega_),
@@ -142,7 +140,6 @@ private:
 
     Mesh& mesh;
     double linear_resistivity;
-    double vent_discharge_coeff; // retained as constructor API; Cd*A is stamped
     double pressure_tolerance;   // absolute continuity residual, m^3/s
     int max_pressure_iters;
     double omega;

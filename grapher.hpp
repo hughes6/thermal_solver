@@ -142,10 +142,11 @@ public:
             auto coords = c->get_coords();
 
             fout << "Component " << ctr << ": " << c->get_name() << "\n";
+            // Canonical project order: width, depth, height.
             fout << "  dimensions: "
-                 << c->get_height_m() << " x "
                  << c->get_width_m()  << " x "
-                 << c->get_depth_m()  << " m\n";
+                 << c->get_depth_m()  << " x "
+                 << c->get_height_m() << " m\n";
 
             fout << "  coordinates: "
                  << coords[0] << " "
@@ -153,6 +154,35 @@ public:
                  << coords[2] << " m\n";
 
             fout << "  watts: " << c->get_watts() << " W\n";
+
+            int region_ctr = 1;
+            for(const InternalRegion& region : c->get_regions()) {
+                const auto size = region.get_size_m();
+                const auto local = region.get_local_position();
+                const auto global = region.get_global_position();
+
+                const char* type = "Uninitialized";
+                switch(region.get_region_type()) {
+                    case RegionType::Air:        type = "Air"; break;
+                    case RegionType::HeatSource: type = "HeatSource"; break;
+                    case RegionType::Vent:       type = "Vent"; break;
+                    case RegionType::Fan:        type = "Fan"; break;
+                    case RegionType::Uninitialized: break;
+                }
+
+                fout << "  Internal Region " << region_ctr << ":\n";
+                fout << "    type: " << type << "\n";
+                fout << "    size: " << size[0] << " " << size[1] << " " << size[2] << " m\n";
+                fout << "    local_position: " << local[0] << " " << local[1] << " " << local[2] << " m\n";
+                fout << "    global_position: " << global[0] << " " << global[1] << " " << global[2] << " m\n";
+                if(region.get_region_type() == RegionType::HeatSource) {
+                    fout << "    watts: " << region.get_watts() << " W\n";
+                    fout << "    k: " << region.get_k() << " W/m-K\n";
+                    fout << "    rho: " << region.get_rho() << " kg/m^3\n";
+                    fout << "    cp: " << region.get_cp() << " J/kg-K\n";
+                }
+                ++region_ctr;
+            }
             ++ctr;
         }
         fout << "\n" << "Fans: \n";
@@ -165,9 +195,9 @@ public:
             fout << "  shape: " << f->get_shape() << "\n";
             fout << "  cfm: " << f->get_cfm() << "\n";
             fout << "  diameter: " << f->get_diameter() << " m\n";
-            fout << "  f_size: " << f->get_size()[0] << " " <<
-                                  f->get_size()[1] << " " <<
-                                  f->get_size()[2] << " m\n";
+            fout << "  f_size: " << f->get_size_m()[0] << " " <<
+                                  f->get_size_m()[1] << " " <<
+                                  f->get_size_m()[2] << " m\n";
             fout << "  f_center: " << f->get_center()[0] << " " <<
                                   f->get_center()[1] << " " <<
                                   f->get_center()[2] << " m\n";
@@ -183,9 +213,9 @@ public:
             auto center = v->get_center();
             fout << "Vent " << ctr << ": " << v->get_name() << "\n";
             fout << "  Free area ratio: " << v->get_free_area_ratio() << "\n";
-            fout << "  size: " << v->get_size()[0] << " " <<
-                                  v->get_size()[1] << " " <<
-                                  v->get_size()[2] << " m\n";
+            fout << "  size: " << v->get_size_m()[0] << " " <<
+                                  v->get_size_m()[1] << " " <<
+                                  v->get_size_m()[2] << " m\n";
             fout << "  v_center: " << v->get_center()[0] << " " <<
                                   v->get_center()[1] << " " <<
                                   v->get_center()[2] << " m\n";
@@ -280,8 +310,8 @@ private:
 
             // Fan normal mostly x: opening plane is y-z
             if(ax >= ay && ax >= az) {
-                double w = f.get_size()[1] / 2.0;
-                double h = f.get_size()[2] / 2.0;
+                double w = f.get_size_m()[1] / 2.0;
+                double h = f.get_size_m()[2] / 2.0;
 
                 int x = static_cast<int>(std::floor(cx_m / dx));
                 int y0 = static_cast<int>(std::floor((cy_m - w) / dy));
@@ -318,8 +348,8 @@ private:
             // Fan normal mostly y: opening plane is x-z
             else if(ay >= ax && ay >= az) {
 
-                double w = f.get_size()[0] / 2.0;
-                double h = f.get_size()[2] / 2.0;
+                double w = f.get_size_m()[0] / 2.0;
+                double h = f.get_size_m()[2] / 2.0;
 
                 int y = static_cast<int>(std::floor(cy_m / dy));
                 int x0 = static_cast<int>(std::floor((cx_m - w) / dx));
@@ -356,8 +386,8 @@ private:
             // Fan normal mostly z: opening plane is x-y
             else {
 
-                double w = f.get_size()[0] / 2.0;
-                double h = f.get_size()[1] / 2.0;
+                double w = f.get_size_m()[0] / 2.0;
+                double h = f.get_size_m()[1] / 2.0;
 
                 int z = static_cast<int>(std::floor(cz_m / dz));
                 int x0 = static_cast<int>(std::floor((cx_m - w) / dx));
@@ -407,11 +437,11 @@ private:
             if(ax >= ay && ax >= az) {
                 int x = static_cast<int>(std::floor(cx_m / dx));
 
-                double w = v.get_size()[1] / 2.0;
+                double w = v.get_size_m()[1] / 2.0;
                 int y0 = static_cast<int>(std::floor((cy_m - w) / dy));
                 int y1 = static_cast<int>(std::ceil ((cy_m + w) / dy));
 
-                double h = v.get_size()[2] / 2.0;
+                double h = v.get_size_m()[2] / 2.0;
                 int z0 = static_cast<int>(std::floor((cz_m - h) / dz));
                 int z1 = static_cast<int>(std::ceil ((cz_m + h) / dz));
 
@@ -428,11 +458,11 @@ private:
             else if(ay >= ax && ay >= az) {
                 int y = static_cast<int>(std::floor(cy_m / dy));
 
-                double w = v.get_size()[0] / 2.0;
+                double w = v.get_size_m()[0] / 2.0;
                 int x0 = static_cast<int>(std::floor((cx_m - w) / dx));
                 int x1 = static_cast<int>(std::ceil ((cx_m + w) / dx));
 
-                double h = v.get_size()[2] / 2.0;
+                double h = v.get_size_m()[2] / 2.0;
                 int z0 = static_cast<int>(std::floor((cz_m - h) / dz));
                 int z1 = static_cast<int>(std::ceil ((cz_m + h) / dz));
 
@@ -449,11 +479,11 @@ private:
             else {
                 int z = static_cast<int>(std::floor(cz_m / dz));
 
-                double w = v.get_size()[0] / 2.0;
+                double w = v.get_size_m()[0] / 2.0;
                 int x0 = static_cast<int>(std::floor((cx_m - w) / dx));
                 int x1 = static_cast<int>(std::ceil ((cx_m + w) / dx));
 
-                double h = v.get_size()[1] / 2.0;
+                double h = v.get_size_m()[1] / 2.0;
                 int y0 = static_cast<int>(std::floor((cy_m - h) / dy));
                 int y1 = static_cast<int>(std::ceil ((cy_m + h) / dy));
 
@@ -525,8 +555,8 @@ private:
                     throw std::out_of_range("Fan '" + f.get_name() + "' disk out of rack bounds");
                 }
             } else {
-                double w = f.get_size()[1] / 2.0;
-                double h = f.get_size()[2] / 2.0;
+                double w = f.get_size_m()[1] / 2.0;
+                double h = f.get_size_m()[2] / 2.0;
                 if(y - w < 0.0 || y + w > rack_d || z - h < 0.0 || z + h > rack_h) {
                     throw std::out_of_range("Fan " + f.get_name() + " box out of bounds");
                 }
@@ -540,8 +570,8 @@ private:
                     throw std::out_of_range("Fan '" + f.get_name() + "' disk out of rack bounds");
                 }
             } else {
-                double w = f.get_size()[0] / 2.0;
-                double h = f.get_size()[2] / 2.0;
+                double w = f.get_size_m()[0] / 2.0;
+                double h = f.get_size_m()[2] / 2.0;
                 if(x - w < 0.0 || x + w > rack_w || z - h < 0.0 || z + h > rack_h) {
                     throw std::out_of_range("Fan " + f.get_name() + " box out of bounds");
                 }
@@ -554,8 +584,8 @@ private:
                     throw std::out_of_range("Fan '" + f.get_name() + "' disk out of rack bounds");
                 }
             } else {
-                double w = f.get_size()[0] / 2.0;
-                double h = f.get_size()[1] / 2.0;
+                double w = f.get_size_m()[0] / 2.0;
+                double h = f.get_size_m()[1] / 2.0;
                 if(x - w < 0.0 || x + w > rack_w || y - h < 0.0 || y + h > rack_d) {
                     throw std::out_of_range("Fan " + f.get_name() + " box out of bounds");
                 }
@@ -579,24 +609,24 @@ private:
         double az = std::abs(vz);
         // Fan normal mostly x: fan opening plane is y-z
         if(ax >= ay && ax >= az) {
-            double w = v.get_size()[1] / 2.0;
-            double h = v.get_size()[2] / 2.0;
+            double w = v.get_size_m()[1] / 2.0;
+            double h = v.get_size_m()[2] / 2.0;
             if(y - w < 0.0 || y + w > rack_d || z - h < 0.0 || z + h > rack_h) {
                 throw std::out_of_range("Vent '" + v.get_name() + "' disk out of rack bounds");
             }
         }
         // Fan normal mostly y: fan opening plane is x-z
         else if(ay >= ax && ay >= az) {
-            double w = v.get_size()[0] / 2.0;
-            double h = v.get_size()[2] / 2.0;
+            double w = v.get_size_m()[0] / 2.0;
+            double h = v.get_size_m()[2] / 2.0;
             if(x - w < 0.0 || x + w > rack_w || z - h < 0.0 || z + h > rack_h) {
                 throw std::out_of_range("Fan '" + v.get_name() + "' disk out of rack bounds");
             }
         }
         // Fan normal mostly z: fan opening plane is x-y
         else {
-            double w = v.get_size()[0] / 2.0;
-            double h = v.get_size()[1] / 2.0;
+            double w = v.get_size_m()[0] / 2.0;
+            double h = v.get_size_m()[1] / 2.0;
             if(x - w < 0.0 || x + w > rack_w || y - h < 0.0 || y + h > rack_d) {
                 throw std::out_of_range("Fan '" + v.get_name() + "' disk out of rack bounds");
             }

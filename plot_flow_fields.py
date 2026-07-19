@@ -1,123 +1,187 @@
-"""
-Plots the velocity field (quiver) and local convection coefficient (h)
-field from simulation.csv.
-
-Requires the CSV to include vx, vy, vz, and h columns -- add these to
-Solver::log_state() the same way qdot/k/rho/cp are already logged:
-
-    logfile << ... << ',' << cell.get_vx() << ',' << cell.get_vy()
-            << ',' << cell.get_vz() << ',' << cell.get_h() << '\n';
-
-and add matching headers to the CSV header line.
+"""Plot the 3-D velocity and local convection-coefficient fields.
 
 Usage:
-    python plot_flow_fields.py --sim simulation.csv --step 0
-    python plot_flow_fields.py --sim simulation.csv --step -1   # last step
+  python plot_flow_fields.py --sim simulation.csv --rack output.txt --step 0
+  python plot_flow_fields.py --sim simulation.csv --rack output.txt --step -1
 """
+from __future__ import annotations
 
 import argparse
-import pandas as pd
-import numpy as np
+import re
+from dataclasses import dataclass, field
+from pathlib import Path
+
 import matplotlib.pyplot as plt
-from mpl_toolkits.mplot3d import Axes3D  # noqa: F401 (registers 3d proj)
+import matplotlib.patches as mpatches
+import numpy as np
+import pandas as pd
 
-parser = argparse.ArgumentParser()
-parser.add_argument("--sim", default="simulation.csv")
-parser.add_argument("--step", type=int, default=0,
-                     help="Step index to plot. -1 = last available step.")
-parser.add_argument("--stride", type=int, default=1,
-                     help="Only plot every Nth cell's arrow (quiver gets "
-                          "cluttered fast on dense meshes).")
-args = parser.parse_args()
 
-with open(args.sim, "r") as f:
-    header = f.readline().strip()
-    spacing_line = f.readline().strip()
+@dataclass
+class Region:
+    kind: str
+    origin: tuple[float, float, float]
+    size: tuple[float, float, float]
 
-parts = spacing_line.split(",")
-dx, dy, dz = float(parts[1]), float(parts[3]), float(parts[5])
 
-df = pd.read_csv(args.sim, skiprows=[1])
+@dataclass
+class Component:
+    name: str
+    origin: tuple[float, float, float]
+    size: tuple[float, float, float]
+    regions: list[Region] = field(default_factory=list)
 
-required = {"vx", "vy", "vz", "h"}
-missing = required - set(df.columns)
-if missing:
-    raise SystemExit(
-        f"simulation.csv is missing columns: {missing}. "
-        "Add vx,vy,vz,h to Solver::log_state() first (see docstring)."
-    )
 
-steps = sorted(df["step"].unique())
-step = steps[args.step] if args.step >= 0 else steps[args.step]
-frame = df[df["step"] == step].iloc[::args.stride]
+@dataclass
+class Rack:
+    width: float
+    depth: float
+    height: float
+    components: list[Component] = field(default_factory=list)
 
-x = frame["x"].to_numpy() * dx + dx / 2.0
-y = frame["y"].to_numpy() * dy + dy / 2.0
-z = frame["z"].to_numpy() * dz + dz / 2.0
 
-vx = frame["vx"].to_numpy()
-vy = frame["vy"].to_numpy()
-vz = frame["vz"].to_numpy()
-h = frame["h"].to_numpy()
-is_component = frame["is_component"].to_numpy()
+def floats(text: str) -> list[float]:
+    return [float(v) for v in re.findall(r"[-+]?\d*\.?\d+(?:[eE][-+]?\d+)?", text)]
 
-speed = np.sqrt(vx**2 + vy**2 + vz**2)
 
-# =========================
-# Figure 1: velocity quiver
-# =========================
-fig1 = plt.figure(figsize=(10, 7))
-ax1 = fig1.add_subplot(111, projection="3d")
+def parse_rack(path: str) -> Rack:
+    lines = [line.strip() for line in Path(path).read_text().splitlines() if line.strip()]
+    width = depth = height = None
+    for line in lines:
+        if line.startswith("width:"): width = floats(line)[0]
+        elif line.startswith("depth:"): depth = floats(line)[0]
+        elif line.startswith("height:"): height = floats(line)[0]
+    if None in (width, depth, height):
+        raise ValueError("Rack dimensions were not found in output.txt")
 
-ax1.scatter(
-    x[is_component == 1], y[is_component == 1], z[is_component == 1],
-    color="black", alpha=0.3, s=60, marker="s", label="Component"
-)
+    rack = Rack(width, depth, height)
+    i = 0
+    while i < len(lines):
+        match = re.match(r"^Component\s+\d+:\s*(.*)$", lines[i])
+        if not match:
+            i += 1
+            continue
+        name = match.group(1)
+        values = {}
+        regions = []
+        i += 1
+        while i < len(lines) and not re.match(r"^(Component|Fan|Vent)\s+\d+:", lines[i]):
+            if re.match(r"^Internal Region\s+\d+:$", lines[i]):
+                rv = {}
+                i += 1
+                while i < len(lines) and not re.match(r"^(Internal Region\s+\d+:|Component\s+\d+:|Fan\s+\d+:|Vent\s+\d+:)", lines[i]):
+                    if ":" in lines[i]:
+                        k, v = lines[i].split(":", 1); rv[k.strip().lower()] = v.strip()
+                    i += 1
+                if {"type", "size", "global_position"} <= rv.keys():
+                    regions.append(Region(rv["type"], tuple(floats(rv["global_position"])[:3]), tuple(floats(rv["size"])[:3])))
+                continue
+            if ":" in lines[i]:
+                k, v = lines[i].split(":", 1); values[k.strip().lower()] = v.strip()
+            i += 1
+        dims = floats(values["dimensions"])
+        if len(dims) < 3:
+            raise ValueError(f"Component {name} dimensions must contain width, depth, height")
+        rack.components.append(Component(
+            name,
+            tuple(floats(values["coordinates"])[:3]),
+            tuple(dims[:3]),  # width, depth, height
+            regions,
+        ))
+    return rack
 
-# normalize arrow length for readability -- raw velocities in a rack
-# duct can vary by orders of magnitude between near-fan and stagnant
-# regions, which makes a literal-scale quiver mostly invisible arrows.
-max_speed = speed.max() if speed.max() > 0 else 1.0
-arrow_scale = 0.5 * dx / max_speed
 
-# Axes3D.quiver does NOT accept a data array + cmap the way 2D quiver
-# does -- it only takes X,Y,Z,U,V,W positionally, plus keyword args.
-# To color arrows by speed, map speed -> RGBA colors ourselves, then
-# repeat each color 3x: matplotlib draws every 3D arrow as 3 line
-# segments (the shaft, plus two short strokes for the arrowhead), and
-# `colors` must have one entry per segment, in that repeated order.
-norm = plt.Normalize(vmin=speed.min(), vmax=speed.max())
-arrow_colors = plt.cm.viridis(norm(speed))
-arrow_colors_repeated = np.repeat(arrow_colors, 3, axis=0)
+def read_spacing(path: str) -> tuple[float, float, float]:
+    with open(path, "r", encoding="utf-8") as f:
+        f.readline(); parts = f.readline().strip().split(",")
+    return float(parts[1]), float(parts[3]), float(parts[5])
 
-q = ax1.quiver(
-    x, y, z,
-    vx * arrow_scale, vy * arrow_scale, vz * arrow_scale,
-    colors=arrow_colors_repeated, length=1.0, normalize=False
-)
 
-ax1.set_xlabel("Width (m)")
-ax1.set_ylabel("Depth (m)")
-ax1.set_zlabel("Height (m)")
-ax1.set_title(f"Velocity field, step={step}")
-fig1.colorbar(plt.cm.ScalarMappable(cmap="viridis",
-              norm=plt.Normalize(vmin=speed.min(), vmax=speed.max())),
-              ax=ax1, shrink=0.6, label="|v| (m/s)")
+def box_edges(ax, origin, size, **kwargs):
+    x, y, z = origin; sx, sy, sz = size
+    p = np.array([[x,y,z],[x+sx,y,z],[x+sx,y+sy,z],[x,y+sy,z],
+                  [x,y,z+sz],[x+sx,y,z+sz],[x+sx,y+sy,z+sz],[x,y+sy,z+sz]])
+    for a,b in [(0,1),(1,2),(2,3),(3,0),(4,5),(5,6),(6,7),(7,4),(0,4),(1,5),(2,6),(3,7)]:
+        ax.plot(*zip(p[a], p[b]), **kwargs)
 
-# =========================
-# Figure 2: h (convection coefficient) field
-# =========================
-fig2 = plt.figure(figsize=(10, 7))
-ax2 = fig2.add_subplot(111, projection="3d")
 
-sc = ax2.scatter(
-    x, y, z, c=h, cmap="inferno", s=60, marker="s", alpha=0.85
-)
+def draw_geometry(ax, rack: Rack):
+    box_edges(ax, (0,0,0), (rack.width,rack.depth,rack.height), color="black", linewidth=1.5)
+    for comp in rack.components:
+        box_edges(ax, comp.origin, comp.size, color="dimgray", linewidth=1.5)
+        for region in comp.regions:
+            color = "deepskyblue" if region.kind.lower() == "air" else "orangered"
+            box_edges(ax, region.origin, region.size, color=color, linewidth=2, linestyle="--")
 
-ax2.set_xlabel("Width (m)")
-ax2.set_ylabel("Depth (m)")
-ax2.set_zlabel("Height (m)")
-ax2.set_title(f"Local convection coefficient h, step={step}")
-fig2.colorbar(sc, ax=ax2, shrink=0.6, label="h (W/m^2-K)")
 
-plt.show()
+def set_rack_axes(ax, rack: Rack):
+    ax.set_xlim(0, rack.width); ax.set_ylim(0, rack.depth); ax.set_zlim(0, rack.height)
+    ax.set_box_aspect((rack.width, rack.depth, rack.height))
+    ax.set_xlabel("Width (m)"); ax.set_ylabel("Depth (m)"); ax.set_zlabel("Height (m)")
+
+
+def main():
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--sim", default="simulation.csv")
+    parser.add_argument("--rack", default="output.txt")
+    parser.add_argument("--step", type=int, default=0, help="Step value; -1 selects final step")
+    parser.add_argument("--stride", type=int, default=1, help="Plot every Nth cell in each direction")
+    args = parser.parse_args()
+
+    dx, dy, dz = read_spacing(args.sim)
+    df = pd.read_csv(args.sim, skiprows=[1])
+    required = {"step","x","y","z","vx","vy","vz","h","is_component"}
+    missing = required - set(df.columns)
+    if missing:
+        raise SystemExit(f"simulation.csv is missing columns: {sorted(missing)}")
+
+    df = df.drop_duplicates(subset=["step","x","y","z"], keep="last")
+    steps = sorted(df["step"].unique())
+    step = steps[-1] if args.step == -1 else args.step
+    if step not in steps:
+        raise SystemExit(f"Step {step} is not present. Available range: {steps[0]} to {steps[-1]}")
+    frame = df[df["step"] == step].copy()
+
+    try:
+        rack = parse_rack(args.rack)
+    except (FileNotFoundError, ValueError) as exc:
+        print(f"Warning: {exc}; using mesh extents")
+        rack = Rack((int(df.x.max())+1)*dx, (int(df.y.max())+1)*dy, (int(df.z.max())+1)*dz)
+
+    stride = max(1, args.stride)
+    spatial = ((frame.x % stride == 0) & (frame.y % stride == 0) & (frame.z % stride == 0))
+    fluid = frame.is_component.astype(int) == 0
+    moving = np.sqrt(frame.vx**2 + frame.vy**2 + frame.vz**2) > 0
+    arrows = frame[spatial & fluid & moving].copy()
+    arrows["speed"] = np.sqrt(arrows.vx**2 + arrows.vy**2 + arrows.vz**2)
+
+    fig1 = plt.figure(figsize=(11, 8)); ax1 = fig1.add_subplot(111, projection="3d")
+    draw_geometry(ax1, rack)
+    if not arrows.empty:
+        x=(arrows.x.to_numpy()+0.5)*dx; y=(arrows.y.to_numpy()+0.5)*dy; z=(arrows.z.to_numpy()+0.5)*dz
+        speed=arrows.speed.to_numpy(); vmax=max(float(speed.max()), 1e-12)
+        target=0.65*min(dx,dy,dz)
+        u=arrows.vx.to_numpy()*target/vmax; v=arrows.vy.to_numpy()*target/vmax; w=arrows.vz.to_numpy()*target/vmax
+        norm=plt.Normalize(0, vmax); colors=np.repeat(plt.cm.viridis(norm(speed)), 3, axis=0)
+        ax1.quiver(x,y,z,u,v,w,colors=colors,length=1.0,normalize=False,arrow_length_ratio=0.35,linewidth=1.1)
+        fig1.colorbar(plt.cm.ScalarMappable(norm=norm,cmap="viridis"), ax=ax1, shrink=0.62, pad=0.08, label="|v| (m/s)")
+    else:
+        ax1.text2D(0.03,0.95,"No nonzero fluid velocities at this step",transform=ax1.transAxes)
+    set_rack_axes(ax1,rack); ax1.set_title(f"Velocity field, step={step}"); ax1.view_init(elev=24,azim=35)
+
+    hframe = frame[spatial & (frame.h > 0)].copy()
+    fig2 = plt.figure(figsize=(11, 8)); ax2 = fig2.add_subplot(111, projection="3d")
+    draw_geometry(ax2,rack)
+    if not hframe.empty:
+        x=(hframe.x.to_numpy()+0.5)*dx; y=(hframe.y.to_numpy()+0.5)*dy; z=(hframe.z.to_numpy()+0.5)*dz
+        h=hframe.h.to_numpy(); hmax=max(float(h.max()),1e-12)
+        sc=ax2.scatter(x,y,z,c=h,cmap="inferno",vmin=0,vmax=hmax,s=42,marker="s",alpha=0.9,edgecolors="none")
+        fig2.colorbar(sc,ax=ax2,shrink=0.62,pad=0.08,label="h (W/m²·K)")
+    else:
+        ax2.text2D(0.03,0.95,"No positive convection coefficients at this step",transform=ax2.transAxes)
+    set_rack_axes(ax2,rack); ax2.set_title(f"Local convection coefficient h, step={step}"); ax2.view_init(elev=24,azim=35)
+    plt.show()
+
+
+if __name__ == "__main__":
+    main()

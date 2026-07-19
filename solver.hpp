@@ -1,24 +1,62 @@
 #ifndef SOLVER_HPP
 #define SOLVER_HPP
 
+#include <stdexcept>
+
 #include "convection.hpp"
 #include "mesh.hpp"
+#include "workload.hpp"
 
 class Solver {
 public:
     Solver() {}
     
-    Solver(Mesh initial_mesh, double dt, double sim_length)
+    Solver(Mesh initial_mesh, double dt_, double sim_length_, bool print_convections_, int output_interval_)
         : current(std::move(initial_mesh)),
           next(current),
-          dt(dt),
-          sim_length(sim_length),
+          dt(dt_),
+          sim_length(sim_length_),
+          print_convections(print_convections_),
+          output_interval(output_interval_),
           logfile("simulation.csv")
-    { logfile << "step,time,x,y,z,T,qdot,is_component,k,rho,cp,vx,vy,vz,h\n";
+    { 
+      load = current.get_load();
+      validate_computational_workload();
+      logfile << "step,time,x,y,z,T,qdot,is_component,k,rho,cp,vx,vy,vz,h\n";
       logfile << "dx," << current.get_dx()
         << ",dy," << current.get_dy()
         << ",dz," << current.get_dz()
-        << '\n'; }
+        << '\n';
+    }
+
+    void validate_computational_workload() {
+        std::size_t timesteps = get_timestep_count(); // sim length / dt;   5.0/0.1 = 50
+        std::size_t cell_updates = get_total_cell_updates();  // timesteps * n cells;  50 * 100 = 5000
+        std::size_t MAX_TIMESTEPS = load.get_max_timesteps();
+        std::size_t MAX_CELL_UPATES = load.get_max_cell_updates();
+        std::cout << "Number of timesteps: " << timesteps << std::endl;
+        std::string timestep_msg = "Solver: timesteps exceed the max of " + std::to_string(MAX_TIMESTEPS);
+        if(timesteps > MAX_TIMESTEPS) {
+            throw std::invalid_argument(timestep_msg);
+        }
+        std::string update_msg = "Solver: cell updates exceed the max of " + std::to_string(MAX_CELL_UPATES);
+        std::cout << "Number of cell updates: " << cell_updates << std::endl;
+        if(cell_updates > MAX_CELL_UPATES) {
+            throw std::invalid_argument(update_msg);
+        }
+        int writes = (static_cast<int>(std::ceil(timesteps/output_interval)) + 1) * static_cast<int>(current.get_cell_count());
+        std::cout << "Number of writes to csv file: " << writes << std::endl;
+        if(output_interval > timesteps) {
+            throw std::invalid_argument("Solver: output interval is larger than timesteps.");
+        }
+    }   
+
+    std::size_t get_timestep_count() const {
+        return static_cast<std::size_t>(std::ceil(sim_length / dt));
+    }
+    std::size_t get_total_cell_updates() const {
+        return current.get_cell_count() * get_timestep_count();
+    }
 
     void apply_bulk_velocity(double vx, double vy, double vz) {
         for(int x = 0; x < current.get_nx(); ++x) {
@@ -94,11 +132,11 @@ public:
     void solve() {
         check_advection_stability();
         check_conduction_stability();
-
         int steps = static_cast<int>(sim_length / dt);
         log_state(0);
-        
         for(int step = 0; step < steps; step++) {
+            timestep_h_sum = 0.0;
+            timestep_h_count = 0;
             for(int x = 0; x < current.get_nx(); x++) {
                 for(int y = 0; y < current.get_ny(); y++) {
                     for(int z = 0; z < current.get_nz(); z++) {
@@ -107,17 +145,35 @@ public:
                     }
                 }
             }
+            const double average_h =
+            timestep_h_count > 0
+                ? timestep_h_sum /
+                    static_cast<double>(timestep_h_count)
+                : 0.0;
+
+            if(print_convections) {
+                std::cout << "Step " << step << ": convection faces = " << timestep_h_count
+                << ", average h = " << average_h << " W/(m^2 K)\n";
+            }
+
             std::swap(current, next);
-            log_state(step);
+            if(step % output_interval == 0) {
+                log_state(step + 1);
+            }
         }
     }
+
 private:
     Mesh current;
     Mesh next;
-
+    Workload load;
+    bool print_convections = false;
     double dt;
     double sim_length;
-    
+    double timestep_h_sum = 0.0;
+    int timestep_h_count = 0;
+    int output_interval = 0;
+
     std::ofstream logfile;
 
     double compute_t_next(int x, int y, int z) {
@@ -241,7 +297,7 @@ private:
             bool c_solid = c.is_solid();
             bool n_solid = n.is_solid();
 
-            // Only convection across solid-air interfaces or air-air
+            // Only convection across solid-air interfaces
             if(c_solid == n_solid) { return; }
 
             const Cell& air_cell = c_solid ? n : c;
@@ -266,6 +322,8 @@ private:
             Q += h_face * area * (n.get_T() - T);
             h_sum += h_face;
             h_count++;
+            timestep_h_sum += h_face;
+            ++timestep_h_count;
         };
 
         add_neighbor(x + 1, y, z, current.area_x(), current.get_dx());
@@ -280,9 +338,12 @@ private:
         // Cache the average computed h onto the cell purely for
         // logging/plotting -- it isn't read back anywhere else this
         // timestep, so overwriting it mid-solve is safe.
-        if (h_count > 0) {
-            c.set_h(h_sum / h_count);
-        }
+        const double h_average =
+            h_count > 0
+                ? h_sum / static_cast<double>(h_count)
+                : 0.0;
+
+        next.at(x, y, z).set_h(h_average);
 
         return Q;
     }

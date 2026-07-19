@@ -1,6 +1,7 @@
 #ifndef MESH_HPP
 #define MESH_HPP
 
+#include <algorithm>
 #include <cmath>
 #include <vector>
 #include <memory>
@@ -14,26 +15,61 @@
 #include "fan.hpp"
 #include "rack.hpp"
 #include "vent.hpp"
+#include "workload.hpp"
 
 class Mesh {
 public:
     Mesh() = default;
     
     Mesh(int nx_, int ny_, int nz_,
-         double dx_, double dy_, double dz_, Environment env_)
+         double dx_, double dy_, double dz_, Environment env_, Workload load_)
         : nx(nx_),
           ny(ny_),
           nz(nz_),
           dx(dx_),
           dy(dy_),
           dz(dz_),
-          env(env_)
+          env(env_),
+          load(load_)
     {
         cells.resize(
             static_cast<size_t>(nx) *
             static_cast<size_t>(ny) *
             static_cast<size_t>(nz)
         );
+        validate_mesh_density();
+    }
+
+    void validate_mesh_density() {
+        int CELL_COUNT_THRESHOLD = load.get_cell_count_threshold();
+        int MEGABYTE_THRESHOLD = load.get_megabyte_threshold();// 4 Mb
+        int cell_count = get_cell_count();
+        int byte_count = get_memory_byte() * 2;// current and next mesh are both used 
+        std::cout << "Mesh cell count: " << cell_count << " cells." << std::endl;
+        std::cout << "Memory from cell count: " << byte_count << " bytes." << std::endl;
+        std::string cell_count_msg = "Mesh: cell count exceeds the max of " + std::to_string(CELL_COUNT_THRESHOLD);
+        if(cell_count > CELL_COUNT_THRESHOLD) {
+            throw std::invalid_argument(cell_count_msg);
+        }
+        std::string byte_count_msg = "Mesh: cell memory exceeds the max of " + std::to_string(MEGABYTE_THRESHOLD);
+        if(byte_count > MEGABYTE_THRESHOLD) {
+            throw std::invalid_argument(byte_count_msg);
+        }
+    }
+
+    Workload get_load() const { 
+        return load;
+    }
+
+    double get_memory_byte() const {
+        const std::size_t bytes = get_cell_count() * sizeof(Cell);
+        return static_cast<double>(bytes);
+    }
+
+    std::size_t get_cell_count() const {
+        return static_cast<std::size_t>(nx)
+            * static_cast<std::size_t>(ny)
+            * static_cast<std::size_t>(nz);
     }
 
     const std::vector<Cell>& get_cells() const { return cells; }
@@ -83,11 +119,11 @@ public:
     double area_y() const { return dx * dz; }
     double area_z() const { return dx * dy; }
 
-    Mesh build_mesh(const Rack& rack, double dx, double dy, double dz, Environment env){
+    Mesh build_mesh(const Rack& rack, double dx, double dy, double dz, Environment env, Workload load){
         int nx = std::ceil(rack.get_width_m()  / dx);
         int ny = std::ceil(rack.get_depth_m()  / dy);
         int nz = std::ceil(rack.get_height_m() / dz);
-        Mesh mesh(nx, ny, nz, dx, dy, dz, env);
+        Mesh mesh(nx, ny, nz, dx, dy, dz, env, load);
         for(int i=0;i<nx;i++)
         {
             for(int j=0;j<ny;j++)
@@ -149,7 +185,7 @@ public:
         for(InternalRegion r : c.get_regions()) {
             if(r.get_region_type() == RegionType::Air) {
                 auto[air_x, air_y, air_z] = r.get_global_position();
-                auto[air_size_x, air_size_y, air_size_z] = r.get_size();
+                auto[air_size_x, air_size_y, air_size_z] = r.get_size_m();
                 // start coord converted to mesh units
                 int air_mx = static_cast<int>(std::floor(air_x / dx));
                 int air_my = static_cast<int>(std::floor(air_y / dy));
@@ -164,11 +200,15 @@ public:
                         for(int k = air_mz; k < air_mz + air_sz; k++) {
                             Cell& cell = at(i, j, k);
                             // collision detection done in component.hpp already
+                            if(!in_bounds(i, j, k)) {
+                                throw std::runtime_error("Internal air region extends outside mesh");
+                            }   
                             cell.set_T(env.get_T_ambient());
                             cell.set_rho(env.get_rho());
                             cell.set_cp(env.get_cp());
                             cell.set_k(env.get_k());
                             cell.set_mu(env.get_mu());
+                            cell.set_qdot(0.0);
                             cell.set_state(Cell::State::Air);
                         }
                     }
@@ -177,7 +217,7 @@ public:
             }
             if(r.get_region_type() == RegionType::HeatSource) {
                 auto[hs_x, hs_y, hs_z] = r.get_global_position();
-                auto[hs_size_x, hs_size_y, hs_size_z] = r.get_size();
+                auto[hs_size_x, hs_size_y, hs_size_z] = r.get_size_m();
                 // start coord converted to mesh units
                 int hs_mx = static_cast<int>(std::floor(hs_x / dx));
                 int hs_my = static_cast<int>(std::floor(hs_y / dy));
@@ -186,31 +226,278 @@ public:
                 int hs_sx = std::ceil(hs_size_x / dx);
                 int hs_sy = std::ceil(hs_size_y / dy);
                 int hs_sz = std::ceil(hs_size_z / dz);
+
+                const int hs_i0 = std::max(hs_mx, mx);
+                const int hs_j0 = std::max(hs_my, my);
+                const int hs_k0 = std::max(hs_mz, mz);
+                const int hs_i1 = std::min({hs_mx + hs_sx, mx + cnx, nx});
+                const int hs_j1 = std::min({hs_my + hs_sy, my + cny, ny});
+                const int hs_k1 = std::min({hs_mz + hs_sz, mz + cnz, nz});
+                const int stamped_nx = std::max(0, hs_i1 - hs_i0);
+                const int stamped_ny = std::max(0, hs_j1 - hs_j0);
+                const int stamped_nz = std::max(0, hs_k1 - hs_k0);
+                const std::size_t stamped_cells =
+                    static_cast<std::size_t>(stamped_nx) *
+                    static_cast<std::size_t>(stamped_ny) *
+                    static_cast<std::size_t>(stamped_nz);
+                // Conserve the requested total power after discretization:
+                // sum(qdot * cell_volume) over all stamped cells == region watts.
+                const double discrete_qdot =
+                    r.get_watts() /
+                    (static_cast<double>(stamped_cells) * cell_volume());
                 // stamp all air cells in their size space
-                for(int i = hs_mx; i < hs_mx + hs_sx; i++) {
-                    for(int j = hs_my; j < hs_my + hs_sy; j++) {
-                        for(int k = hs_mz; k < hs_mz + hs_sz; k++) {
+                for(int i = hs_i0; i < hs_i1; ++i) {
+                    for(int j = hs_j0; j < hs_j1; ++j) {
+                        for(int k = hs_k0; k < hs_k1; ++k) {
                             Cell& cell = at(i, j, k);
-                            // collision detection done in component.hpp already
+                            if(!in_bounds(i, j, k)) {
+                                throw std::runtime_error("Internal air region extends outside mesh");
+                            }                           
                             cell.set_T(env.get_T_ambient());
                             cell.set_rho(r.get_rho());
                             cell.set_cp(r.get_cp());
                             cell.set_k(r.get_k());
                             cell.set_mu(0.0);
-                            cell.set_qdot(r.watt_density());
+                            cell.set_h(0.0);
+                            cell.set_pr(env.get_pr());
+                            cell.set_vx(0.0);
+                            cell.set_vy(0.0);
+                            cell.set_vz(0.0);
+                            cell.set_flow_source(0.0);
+                            cell.set_qdot(discrete_qdot);
                             cell.set_state(Cell::State::Component);
                         }
                     }
                 }
             }          
             if(r.get_region_type() == RegionType::Vent) {
-                // stamp vent
+                auto [cx, cy, cz] = r.get_global_position();
+                auto [nnx, nny, nnz] = r.get_direction();
+
+                std::vector<std::array<int, 3>> covered;
+
+                double ax = std::abs(nnx);
+                double ay = std::abs(nny);
+                double az = std::abs(nnz);
+
+                auto stamp_cell = [&](int i, int j, int k, std::array<bool, 3> wall) {
+                    if(!v_in_bounds(i, j, k, wall)) return;
+                    if(wall[0] && i == nx) i -= 1;
+                    if(wall[1] && j == ny) j -= 1;
+                    if(wall[2] && k == nz) k -= 1;
+                    covered.push_back({i, j, k});
+                };
+
+                // lies in the XY plane
+                if(az >= ax && az >= ay) {
+                    double w = r.get_size_m()[0] / 2.0;
+                    double h = r.get_size_m()[1] / 2.0;
+                    int k = static_cast<int>(std::floor(cz / dz));
+                    int i0 = static_cast<int>(std::floor((cx-w)/dx));
+                    int i1 = static_cast<int>(std::ceil ((cx+w)/dx));
+                    int j0 = static_cast<int>(std::floor((cy-h)/dy));
+                    int j1 = static_cast<int>(std::ceil ((cy+h)/dy));
+                    for(int i = i0; i < i1; ++i) {
+                        for(int j = j0; j < j1; ++j) {
+                            stamp_cell(i, j, k, {false, false, true});
+                        }
+                    }
+                }
+                // lies in the XZ plane
+                if(ay >= ax && ay >= az) {
+                    double w = r.get_size_m()[0] / 2.0;
+                    double h = r.get_size_m()[2] / 2.0;
+                    int k = static_cast<int>(std::floor(cy / dy));
+                    int i0 = static_cast<int>(std::floor((cx-w)/dx));
+                    int i1 = static_cast<int>(std::ceil ((cx+w)/dx));
+                    int j0 = static_cast<int>(std::floor((cz-h)/dz));
+                    int j1 = static_cast<int>(std::ceil ((cz+h)/dz));
+                    for(int i = i0; i < i1; ++i) {
+                        for(int j = j0; j < j1; ++j) {
+                            stamp_cell(i, j, k, {false, true, false});
+                        }
+                    }
+                }
+                // lies in the YZ plane
+                if(ax >= ay && ax >= az) {
+                    double w = r.get_size_m()[1] / 2.0;
+                    double h = r.get_size_m()[2] / 2.0;
+                    int k = static_cast<int>(std::floor(cx / dx));
+                    int i0 = static_cast<int>(std::floor((cy-w)/dy));
+                    int i1 = static_cast<int>(std::ceil ((cy+w)/dy));
+                    int j0 = static_cast<int>(std::floor((cz-h)/dz));
+                    int j1 = static_cast<int>(std::ceil ((cz+h)/dz));
+                    for(int i = i0; i < i1; ++i) {
+                        for(int j = j0; j < j1; ++j) {
+                            stamp_cell(i, j, k, {true, false, false});
+                        }
+                    }
+                }
+                // apply vent conductance
+                double C_total = r.get_cd() * r.free_area();
+                double C_per_cell = covered.empty() ? 0.0 : C_total / covered.size();
+                for(auto& [i, j, k] : covered) {
+                    Cell& cell = at(i, j, k);
+                    if(cell.get_state() == Cell::State::Component) {
+                        throw std::runtime_error("Vent overlaps component.");
+                    } else if(cell.get_state() == Cell::State::Fan ||
+                            cell.get_state() == Cell::State::Intake ||
+                            cell.get_state() == Cell::State::Exhaust) {
+                        throw std::runtime_error("Vent overlaps fan/intake/exhaust");
+                    } else {
+                        cell.set_state(Cell::State::Vent);
+                    }
+
+                    cell.set_vent_conductance(C_per_cell);
+                }
+
             }
             if(r.get_region_type() == RegionType::Fan) {
-                // stamp fan
+                auto [cx, cy, cz] = r.get_global_position();
+                auto [nnx, nny, nnz] = r.get_velocity_direction();
+                bool is_circular = r.is_circular();
+
+                double rad = r.get_diameter() / 2.0;
+                std::vector<std::array<int, 3>> covered;
+
+                auto stamp_cell = [&](int i, int j, int k) {
+                    if(!in_bounds(i, j, k)) return;
+                    covered.push_back({i, j, k});
+                };
+                double ax = std::abs(nnx);
+                double ay = std::abs(nny);
+                double az = std::abs(nnz);
+
+                // lies in XY plane
+                if(az >= ax && az >= ay) {
+                    double w = r.get_size_m()[0] / 2.0;
+                    double h = r.get_size_m()[1] / 2.0;
+
+                    int k = static_cast<int>(std::floor(cz / dz));
+                    int i0 = static_cast<int>(std::floor((cx-w)/dx));
+                    int i1 = static_cast<int>(std::ceil ((cx+w)/dx));
+                    int j0 = static_cast<int>(std::floor((cy-h)/dy));
+                    int j1 = static_cast<int>(std::ceil ((cy+h)/dy));
+
+                    if(is_circular) {
+                        i0 = static_cast<int>(std::floor((cx-rad)/dx));
+                        i1 = static_cast<int>(std::ceil ((cx+rad)/dx));
+                        j0 = static_cast<int>(std::floor((cy-rad)/dy));
+                        j1 = static_cast<int>(std::ceil ((cy+rad)/dy));
+                    } 
+
+                    for(int i=i0;i<i1;i++) {
+                        for(int j=j0;j<j1;j++) {
+                            if(!is_circular) {
+                                stamp_cell(i, j, k);
+                            } else {
+                                double xc = (i+0.5)*dx;
+                                double yc = (j+0.5)*dy;
+
+                                double dist2 =
+                                    (xc-cx)*(xc-cx) +
+                                    (yc-cy)*(yc-cy);
+
+                                if(dist2 <= rad*rad)
+                                    stamp_cell(i,j,k);
+                            }
+                        }
+                    }
+                }
+                // lies in XZ plane
+                if(ay >= ax && ay >= az) {
+                    double w = r.get_size_m()[0] / 2.0;
+                    double h = r.get_size_m()[2] / 2.0;
+
+                    int k = static_cast<int>(std::floor(cy / dy));
+                    int i0 = static_cast<int>(std::floor((cx-w)/dx));
+                    int i1 = static_cast<int>(std::ceil ((cx+w)/dx));
+                    int j0 = static_cast<int>(std::floor((cz-h)/dz));
+                    int j1 = static_cast<int>(std::ceil ((cz+h)/dz));
+
+                    if(is_circular) {
+                        i0 = static_cast<int>(std::floor((cx-rad)/dx));
+                        i1 = static_cast<int>(std::ceil ((cx+rad)/dx));
+                        j0 = static_cast<int>(std::floor((cz-rad)/dz));
+                        j1 = static_cast<int>(std::ceil ((cz+rad)/dz));
+                    } 
+
+                    for(int i=i0;i<i1;i++) {
+                        for(int j=j0;j<j1;j++) {
+                            if(!is_circular) {
+                                stamp_cell(i, j, k);
+                            } else {
+                                double xc = (i+0.5)*dx;
+                                double yc = (j+0.5)*dy;
+
+                                double dist2 =
+                                    (xc-cx)*(xc-cx) +
+                                    (yc-cy)*(yc-cy);
+
+                                if(dist2 <= rad*rad)
+                                    stamp_cell(i,j,k);
+                            }
+                        }
+                    }
+                }
+                // lies in YZ plane
+                if(ax >= ay && ax >= az) {
+                    double w = r.get_size_m()[1] / 2.0;
+                    double h = r.get_size_m()[2] / 2.0;
+
+                    int k = static_cast<int>(std::floor(cx / dx));
+                    int i0 = static_cast<int>(std::floor((cy-w)/dy));
+                    int i1 = static_cast<int>(std::ceil ((cy+w)/dy));
+                    int j0 = static_cast<int>(std::floor((cz-h)/dz));
+                    int j1 = static_cast<int>(std::ceil ((cz+h)/dz));
+
+                    if(is_circular) {
+                        i0 = static_cast<int>(std::floor((cy-rad)/dy));
+                        i1 = static_cast<int>(std::ceil ((cy+rad)/dy));
+                        j0 = static_cast<int>(std::floor((cz-rad)/dz));
+                        j1 = static_cast<int>(std::ceil ((cz+rad)/dz));
+                    } 
+
+                    for(int i=i0;i<i1;i++) {
+                        for(int j=j0;j<j1;j++) {
+                            if(!is_circular) {
+                                stamp_cell(i, j, k);
+                            } else {
+                                double xc = (i+0.5)*dx;
+                                double yc = (j+0.5)*dy;
+
+                                double dist2 =
+                                    (xc-cx)*(xc-cx) +
+                                    (yc-cy)*(yc-cy);
+
+                                if(dist2 <= rad*rad)
+                                    stamp_cell(i,j,k);
+                            }
+                        }
+                    }
+                }
+                // apply init velocities
+                double Q_total = r.flow_m3s();
+                double Q_per_cell = covered.empty() ? 0.0 : Q_total / covered.size();
+                double sign = (r.get_flow_type() == FlowType::Intake) ? +1.0 : -1.0;
+                for (auto& [i, j,k ] : covered) {
+                    Cell& cell = at(i, j, k);
+                    if(cell.get_state() == Cell::State::Component) {
+                        throw std::runtime_error("Fan overlaps component.");
+                    } else {
+                        cell.set_state(
+                            r.get_flow_type() == FlowType::Intake ?
+                            Cell::State::Intake :
+                            Cell::State::Exhaust
+                        );
+                    }
+                    cell.set_vx(r.velocity_x());
+                    cell.set_vy(r.velocity_y());
+                    cell.set_vz(r.velocity_z());
+                    cell.set_flow_source(sign * Q_per_cell);
+                }
             }
         }
-
     }
  
     void stamp_fan(const Fan& f) {
@@ -234,8 +521,8 @@ public:
         // Fan normal in +Z/-Z (disk lies in XY plane)
         //====================================================
         if(az >= ax && az >= ay) {
-            double w = f.get_size()[0] / 2.0;
-            double h = f.get_size()[1] / 2.0;
+            double w = f.get_size_m()[0] / 2.0;
+            double h = f.get_size_m()[1] / 2.0;
 
             int k = static_cast<int>(std::floor(cz / dz));
             int i0 = static_cast<int>(std::floor((cx-w)/dx));
@@ -273,8 +560,8 @@ public:
         // Fan normal in +Y/-Y (disk lies in XZ plane)
         //====================================================
         else if(ay >= ax && ay >= az) {
-            double w = f.get_size()[0] / 2.0;
-            double h = f.get_size()[2] / 2.0;
+            double w = f.get_size_m()[0] / 2.0;
+            double h = f.get_size_m()[2] / 2.0;
 
             int j = static_cast<int>(std::floor(cy / dy));
             int i0 = static_cast<int>(std::floor((cx-w)/dx));
@@ -306,17 +593,14 @@ public:
                     }
                 }
             }
-            // stamping init fluid velocites
-            std::vector<std::array<int, 3>> covered;
-
         }
 
         //====================================================
         // Fan normal in +X/-X (disk lies in YZ plane)
         //====================================================
         else {
-            double w = f.get_size()[1] / 2.0;
-            double h = f.get_size()[2] / 2.0;
+            double w = f.get_size_m()[1] / 2.0;
+            double h = f.get_size_m()[2] / 2.0;
 
             int i = static_cast<int>(std::floor(cx / dx));
             int j0 = static_cast<int>(std::floor((cy-w)/dy));
@@ -358,6 +642,7 @@ public:
         for (auto& [i, j,k ] : covered) {
             Cell& cell = at(i, j, k);
             if(cell.get_state() == Cell::State::Component) {
+                std::cout << i << " " << j << " " << k << std::endl;
                 throw std::runtime_error("Fan overlaps component.");
             } else {
                 cell.set_state(
@@ -375,7 +660,7 @@ public:
 
 
 
-    void stamp_vent(const Vent& v, double Cd = 0.6) {
+    void stamp_vent(const Vent& v) {
         auto [cx, cy, cz] = v.get_center();
         auto [nnx, nny, nnz] = v.get_direction();
 
@@ -400,11 +685,11 @@ public:
 
             int k = static_cast<int>(std::floor(cz / dz));
 
-            double w = v.get_size()[0] / 2.0; // get x component of size
+            double w = v.get_size_m()[0] / 2.0; // get x component of size
             int i0 = static_cast<int>(std::floor((cx-w)/dx));
             int i1 = static_cast<int>(std::ceil ((cx+w)/dx));
 
-            double h = v.get_size()[1] / 2.0; // get y component of size
+            double h = v.get_size_m()[1] / 2.0; // get y component of size
             int j0 = static_cast<int>(std::floor((cy-h)/dy));
             int j1 = static_cast<int>(std::ceil ((cy+h)/dy));
 
@@ -422,11 +707,11 @@ public:
 
             int j = static_cast<int>(std::floor(cy / dy));
 
-            double w = v.get_size()[0] / 2.0; //get x component of size
+            double w = v.get_size_m()[0] / 2.0; //get x component of size
             int i0 = static_cast<int>(std::floor((cx-w)/dx));
             int i1 = static_cast<int>(std::ceil ((cx+w)/dx));
 
-            double h = v.get_size()[2] / 2.0; // get z component of size
+            double h = v.get_size_m()[2] / 2.0; // get z component of size
             int k0 = static_cast<int>(std::floor((cz-h)/dz));
             int k1 = static_cast<int>(std::ceil ((cz+h)/dz));
 
@@ -444,11 +729,11 @@ public:
 
             int i = static_cast<int>(std::floor(cx / dx));
 
-            double w = v.get_size()[1] / 2.0; // get y component of size
+            double w = v.get_size_m()[1] / 2.0; // get y component of size
             int j0 = static_cast<int>(std::floor((cy-w)/dy));
             int j1 = static_cast<int>(std::ceil ((cy+w)/dy));
 
-            double h = v.get_size()[2] / 2.0; // get z component of size
+            double h = v.get_size_m()[2] / 2.0; // get z component of size
             int k0 = static_cast<int>(std::floor((cz-h)/dz));
             int k1 = static_cast<int>(std::ceil ((cz+h)/dz));
             for(int j=j0;j<j1;j++) {
@@ -461,7 +746,7 @@ public:
         }
 
         // apply vent conductance
-        double C_total = Cd * v.free_area();
+        double C_total = v.get_cd() * v.free_area();
         double C_per_cell = covered.empty() ? 0.0 : C_total / covered.size();
         for(auto& [i, j, k] : covered) {
             Cell& cell = at(i, j, k);
@@ -539,6 +824,7 @@ private:
     int nx, ny, nz;
     double dx, dy, dz;
     Environment env;
+    Workload load;
 
     std::vector<Cell> cells;
 };

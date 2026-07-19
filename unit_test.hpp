@@ -41,16 +41,36 @@ private:
                std::max(absolute_tolerance, relative_tolerance * scale);
     }
 
-    Rack make_air_rack(double height,
-                       double width,
+    Rack make_air_rack(double width,
                        double depth,
+                       double height,
                        double temperature = 20.0) const {
-        Rack rack = Rack::from_meters(height, width, depth);
+        Rack rack = Rack::from_meters(width, depth, height);
         rack.set_t(temperature);
         rack.set_cp(1005.0);
         rack.set_k(0.02587);
         rack.set_rho(1.225);
         return rack;
+    }
+
+    Component make_test_component() const {
+        // Component constructor order:
+        // height, width, depth, name
+        Component component(
+            0.04,
+            0.04,
+            0.04,
+            "Internal-region test component"
+        );
+
+        component.set_coords_m(0.02, 0.02, 0.02);
+        component.set_t(50.0);
+        component.set_rho_solid(2700.0);
+        component.set_cp(900.0);
+        component.set_k_solid(200.0);
+        component.set_watts(0.0);
+
+        return component;
     }
 
 public:
@@ -61,6 +81,14 @@ public:
 
         test1();
         test2();
+
+        test_workload_init_limits();
+        
+        test_mesh_density_limit();
+        test_mesh_memory_limit();
+        test_solver_timestep_limit();
+        test_solver_cell_updates_limit();
+        test_solver_output_interval_limit();
 
         test_natural_convection_used_when_stagnant();
         test_turbulent_regime_selected();
@@ -80,6 +108,40 @@ public:
         test_flow_solver_creates_nonzero_fan_to_vent_flow();
         test_flow_solver_rejects_source_without_vent();
 
+        test_internal_air_region_stamps_as_air();
+
+        test_internal_heat_source_stamps_properties();
+        test_internal_heat_source_conserves_total_watts();
+
+        test_internal_region_local_to_global_position();
+        test_internal_region_exact_bounds_allowed();
+
+        test_internal_region_negative_x_rejected();
+        test_internal_region_negative_y_rejected();
+        test_internal_region_negative_z_rejected();
+
+        test_internal_region_x_overflow_rejected();
+        test_internal_region_y_overflow_rejected();
+        test_internal_region_z_overflow_rejected();
+
+        test_uninitialized_internal_region_rejected_when_ordering();
+        test_internal_region_ordering();
+
+        test_valid_internal_vent_on_component_face();
+        test_internal_vent_not_on_face_rejected();
+        test_internal_vent_touching_two_faces_rejected();
+        test_internal_vent_free_area_ratio_bounds();
+        test_internal_vent_free_area_ratio_endpoints_allowed();
+
+        test_valid_internal_rectangular_fan_on_face();
+        test_internal_rectangular_fan_with_diameter_rejected();
+        test_internal_fan_negative_cfm_rejected();
+        test_internal_fan_cfm_conversion();
+        test_internal_rectangular_fan_area();
+        // test_internal_fan_uses_velocity_direction();
+
+        // test_internal_vent_on_offset_component_face();
+
         std::cout << "========== ALL UNIT TESTS PASSED ==========\n\n";
     }
 
@@ -87,12 +149,13 @@ public:
     // should remain uniform and stationary.
     void test1() {
         Environment env(30.0, 5800.0, 20.0, 1005.0, 0.02587, 0.000018, 0.71, 1.225);
+        Workload load(100'000, 1'000'000, 100'000, 4);
         Rack rack = make_air_rack(0.1, 0.1, 0.1, T);
-        Mesh mesh = Mesh().build_mesh(rack, dx, dy, dz, env);
+        Mesh mesh = Mesh().build_mesh(rack, dx, dy, dz, env, load);
 
         FlowSolver flow_solver(mesh);
         flow_solver.solve();
-        Solver solver(mesh, dt, sim_length);
+        Solver solver(mesh, dt, sim_length, false, 10);
         solver.solve();
 
         const Mesh& final_mesh = solver.get_mesh();
@@ -116,12 +179,13 @@ public:
     // Existing whole-rack scaffold test at a different initial temperature.
     void test2() {
         Environment env(30.0, 5800.0, 40.0, 1005.0, 0.02587, 0.000018, 0.71, 1.225);
+        Workload load(100'000, 1'000'000, 100'000, 4);
         Rack rack = make_air_rack(0.1, 0.1, 0.1, 40.0);
-        Mesh mesh = Mesh().build_mesh(rack, 0.05, 0.05, 0.05, env);
+        Mesh mesh = Mesh().build_mesh(rack, 0.05, 0.05, 0.05, env, load);
 
         FlowSolver flow_solver(mesh);
         flow_solver.solve();
-        Solver solver(mesh, dt, sim_length);
+        Solver solver(mesh, dt, sim_length, false, 10);
         solver.solve();
 
         const Mesh& final_mesh = solver.get_mesh();
@@ -133,6 +197,127 @@ public:
         }
 
         std::cout << "test2 uniform 40 C stagnant rack PASSED\n";
+    }
+
+    void test_workload_init_limits() {
+        bool threw1 = false;
+        try {
+            Workload load(0, 1, 1, 1);
+        } catch (const std::invalid_argument&) {
+            threw1 = true;
+        }
+        assert(threw1);
+        std::cout << "test_workload_init_limits - (0, 1, 1, 1) PASSED\n";
+
+        bool threw2 = false;
+        try {
+            Workload load(1, 0, 1, 1);
+        } catch (const std::invalid_argument&) {
+            threw2 = true;
+        }
+        assert(threw2);
+        std::cout << "test_workload_init_limits - (1, 0, 1, 1) PASSED\n";
+
+        bool threw3 = false;
+        try {
+            Workload load(1, 1, 0, 1);
+        } catch (const std::invalid_argument&) {
+            threw3 = true;
+        }
+        assert(threw3);
+        std::cout << "test_workload_init_limits - (1, 1, 0, 1) PASSED\n";
+
+        bool threw4 = false;
+        try {
+            Workload load(1, 1, 1, 0);
+        } catch (const std::invalid_argument&) {
+            threw4 = true;
+        }
+        assert(threw4);
+        std::cout << "test_workload_init_limits - (1, 1, 1, 0) PASSED\n";
+    }
+
+    void test_mesh_density_limit() {
+        Environment env(30.0, 5800.0, 20.0, 1005.0, 0.02587, 0.000018, 0.71, 1.225);
+        Workload load(1'000'00, 10'000'000, 1'000'000, 4);
+        Rack rack = make_air_rack(1.0, 1.0, 1.001, 20.0);
+
+        bool threw = false;
+        try {
+        Mesh mesh = Mesh().build_mesh(rack, 0.01, 0.01, 0.01, env, load);
+        } catch (const std::invalid_argument&) {
+            threw = true;
+        }
+
+        assert(threw);
+        std::cout << "test_mesh_density_limit PASSED\n";
+    }
+
+    void test_mesh_memory_limit() {
+        Environment env(30.0, 5800.0, 20.0, 1005.0, 0.02587, 0.000018, 0.71, 1.225);
+        Workload load(1'000'000, 10'000'000, 1'000'000, 1);
+        Rack rack = make_air_rack(1.0, 1.0, 1.0, 20.0);
+
+        bool threw = false;
+        try {
+        Mesh mesh = Mesh().build_mesh(rack, 0.01, 0.01, 0.01, env, load);
+        } catch (const std::invalid_argument&) {
+            threw = true;
+        }
+
+        assert(threw);
+        std::cout << "test_mesh_memory_limit PASSED\n";
+    }
+
+    void test_solver_timestep_limit() {
+        Environment env(30.0, 5800.0, 20.0, 1005.0, 0.02587, 0.000018, 0.71, 1.225);
+        Workload load(1'000'00, 10'000'000, 1'000'000, 4);
+        Rack rack = make_air_rack(1.0, 1.0, 1.0, 20.0);
+        Mesh mesh = Mesh().build_mesh(rack, 0.5, 0.5, 0.5, env, load);
+
+        bool threw = false;
+        try {
+            Solver solver(mesh, 0.000001, 10.0, false, 10);
+        } catch (const std::invalid_argument&) {
+            threw = true;
+        }
+
+        assert(threw);
+        std::cout << "test_solver_timestep_limit PASSED\n";
+    }
+
+    void test_solver_cell_updates_limit() {
+        Environment env(30.0, 5800.0, 20.0, 1005.0, 0.02587, 0.000018, 0.71, 1.225);
+        Workload load(1'000'00, 10'000'000, 1'000'000, 4);
+        Rack rack = make_air_rack(1.0, 1.0, 1.0, 20.0);
+        Mesh mesh = Mesh().build_mesh(rack, 0.1, 0.1, 0.1, env, load);
+
+        bool threw = false;
+        try {
+            Solver solver(mesh, 0.0001, 10.0, false, 10);
+        } catch (const std::invalid_argument&) {
+            threw = true;
+        }
+
+        assert(threw && "Solver: cell updates exceed the max of 10000000");
+        std::cout << "    void test_solver_cell_updates_limit PASSED\n";
+    }
+
+    void test_solver_output_interval_limit() {
+        Environment env(30.0, 5800.0, 20.0, 1005.0, 0.02587, 0.000018, 0.71, 1.225);
+        Workload load(100'00, 1'000'000, 100'000, 4);
+        Rack rack = make_air_rack(1.0, 1.0, 1.0, 20.0);
+        Mesh mesh = Mesh().build_mesh(rack, 0.5, 0.5, 0.5, env, load);
+
+        bool threw = false;
+        try {
+            Solver solver(mesh, 1.0, 10.0, false, 100);
+        } catch (const std::invalid_argument&) {
+            threw = true;
+        }
+
+        assert(threw && "Solver: output interval is larger than timesteps.");
+        std::cout << "    void test_solver_output_interval_limit PASSED\n";
     }
 
     void test_natural_convection_used_when_stagnant() {
@@ -231,14 +416,14 @@ public:
 
     void test_vent_area_uses_plane_dimensions() {
         Vent vent_y_normal(
-            "XZ vent", {0.10, 0.0, 0.20}, 0.50,
+            "XZ vent", {0.10, 0.0, 0.20}, 0.50, 0.5,
             {0.0, 0.0, 0.0}, {0.0, 1.0, 0.0});
 
         assert(nearly_equal(vent_y_normal.gross_area(), 0.02));
         assert(nearly_equal(vent_y_normal.free_area(), 0.01));
 
         Vent vent_z_normal(
-            "XY vent", {0.10, 0.20, 0.0}, 0.25,
+            "XY vent", {0.10, 0.20, 0.0}, 0.25, 0.5,
             {0.0, 0.0, 0.0}, {0.0, 0.0, 1.0});
 
         assert(nearly_equal(vent_z_normal.gross_area(), 0.02));
@@ -250,7 +435,7 @@ public:
         bool threw = false;
         try {
             Vent invalid(
-                "Invalid vent", {0.10, 0.0, 0.10}, 1.2,
+                "Invalid vent", {0.10, 0.0, 0.10}, 1.2, 0.5,
                 {0.0, 0.0, 0.0}, {0.0, 1.0, 0.0});
         } catch (const std::invalid_argument&) {
             threw = true;
@@ -262,8 +447,9 @@ public:
 
     void test_component_stamping_sets_material_and_qdot() {
         Environment env(30.0, 5800.0, 20.0, 1005.0, 0.02587, 0.000018, 0.71, 1.225);
+        Workload load(100'00, 1'000'000, 100'000, 4);
         Rack rack = make_air_rack(0.10, 0.10, 0.10, 20.0);
-        Mesh mesh = Mesh().build_mesh(rack, 0.05, 0.05, 0.05, env);
+        Mesh mesh = Mesh().build_mesh(rack, 0.05, 0.05, 0.05, env, load);
 
         Component component(0.05, 0.05, 0.05, "Test block");
         component.set_coords_m(0.0, 0.0, 0.0);
@@ -286,8 +472,9 @@ public:
 
     void test_heat_generation_increases_temperature() {
         Environment env(30.0, 5800.0, 20.0, 1005.0, 0.02587, 0.000018, 0.71, 1.225);
+        Workload load(100'00, 1'000'000, 100'000, 4);
         Rack rack = make_air_rack(0.10, 0.10, 0.10, 20.0);
-        Mesh mesh = Mesh().build_mesh(rack, 0.05, 0.05, 0.05, env);
+        Mesh mesh = Mesh().build_mesh(rack, 0.05, 0.05, 0.05, env, load);
 
         Component component(0.05, 0.05, 0.05, "Heater");
         component.set_coords_m(0.0, 0.0, 0.0);
@@ -301,7 +488,7 @@ public:
         FlowSolver flow_solver(mesh);
         flow_solver.solve();
 
-        Solver solver(mesh, /*dt=*/0.01, /*sim_length=*/0.02);
+        Solver solver(mesh, /*dt=*/0.01, /*sim_length=*/0.02, false, 1);
         solver.solve();
 
         const double final_temperature = solver.get_mesh().at(0, 0, 0).get_T();
@@ -313,8 +500,9 @@ public:
 
     void test_flow_solver_keeps_stagnant_rack_at_zero_velocity() {
         Environment env(30.0, 5800.0, 20.0, 1005.0, 0.02587, 0.000018, 0.71, 1.225);
+        Workload load(100'00, 1'000'000, 100'000, 4);
         Rack rack = make_air_rack(0.10, 0.10, 0.10, 20.0);
-        Mesh mesh = Mesh().build_mesh(rack, 0.05, 0.05, 0.05, env);
+        Mesh mesh = Mesh().build_mesh(rack, 0.05, 0.05, 0.05, env, load);
 
         FlowSolver flow_solver(mesh);
         flow_solver.solve();
@@ -330,8 +518,9 @@ public:
 
     void test_flow_solver_creates_nonzero_fan_to_vent_flow() {
         Environment env(30.0, 5800.0, 20.0, 1005.0, 0.02587, 0.000018, 0.71, 1.225);
+        Workload load(100'00, 1'000'000, 100'000, 4);
         Rack rack = make_air_rack(0.10, 0.10, 0.20, 20.0);
-        Mesh mesh = Mesh().build_mesh(rack, 0.05, 0.05, 0.05, env);
+        Mesh mesh = Mesh().build_mesh(rack, 0.05, 0.05, 0.05, env, load);
 
         Fan intake(
             "Intake", 1.0, 0.0,
@@ -342,17 +531,16 @@ public:
             ShapeType::Rectangular);
 
         Vent outlet(
-            "Outlet", {0.0, 0.10, 0.10}, 1.0,
+            "Outlet", {0.0, 0.10, 0.10}, 1.0, 0.5,
             {0.10, 0.05, 0.05},
             {1.0, 0.0, 0.0});
         
         mesh.stamp_fan(intake);
-        mesh.stamp_vent(outlet, 0.6);
+        mesh.stamp_vent(outlet);
 
         FlowSolver flow_solver(
             mesh,
             /*linear_resistivity=*/4.5,
-            /*vent_discharge_coeff=*/0.6,
             /*pressure_tolerance=*/1e-10,
             /*max_pressure_iters=*/20000,
             /*sor_omega=*/1.1,
@@ -382,8 +570,9 @@ public:
 
     void test_flow_solver_rejects_source_without_vent() {
         Environment env(30.0, 5800.0, 20.0, 1005.0, 0.02587, 0.000018, 0.71, 1.225);
+        Workload load(100'00, 1'000'000, 100'000, 4);
         Rack rack = make_air_rack(0.10, 0.10, 0.10, 20.0);
-        Mesh mesh = Mesh().build_mesh(rack, 0.05, 0.05, 0.05, env);
+        Mesh mesh = Mesh().build_mesh(rack, 0.05, 0.05, 0.05, env, load);
 
         Fan intake(
             "Unvented intake", 1.0, 0.0,
@@ -429,6 +618,1044 @@ public:
         }
         return {T_passed, v_passed, qdot_passed};
     }
+
+    void test_internal_air_region_stamps_as_air() {
+        Environment env(30.0, 5800.0, 20.0, 1005.0, 0.02587, 0.000018, 0.71, 1.225);
+        Workload load(100'00, 1'000'000, 100'000, 4);
+        Rack rack = make_air_rack(0.10, 0.10, 0.10, 20.0);
+        Mesh mesh = Mesh().build_mesh(rack, 0.01, 0.01, 0.01, env, load);
+        Component component = make_test_component();
+
+        InternalRegion air_region(
+            "air",
+            /*size=*/{0.02, 0.02, 0.02},
+            /*local position=*/{0.01, 0.01, 0.01}
+        );
+
+        component.add_region(air_region);
+        component.order_internal_regions();
+        mesh.stamp_component(component);
+
+        int air_region_cells = 0;
+        int solid_component_cells = 0;
+
+        // Component globally occupies indices [2, 6)
+        for(int i = 2; i < 6; ++i) {
+            for(int j = 2; j < 6; ++j) {
+                for(int k = 2; k < 6; ++k) {
+                    const Cell& cell = mesh.at(i, j, k);
+
+                    // Internal air region occupies indices [3, 5)
+                    const bool inside_air_region =
+                        i >= 3 && i < 5 &&
+                        j >= 3 && j < 5 &&
+                        k >= 3 && k < 5;
+
+                    if(inside_air_region) {
+                        assert(cell.get_state() == Cell::State::Air);
+                        assert(nearly_equal(
+                            cell.get_T(),
+                            env.get_T_ambient()
+                        ));
+                        assert(nearly_equal(
+                            cell.get_rho(),
+                            env.get_rho()
+                        ));
+                        assert(nearly_equal(
+                            cell.get_cp(),
+                            env.get_cp()
+                        ));
+                        assert(nearly_equal(
+                            cell.get_k(),
+                            env.get_k()
+                        ));
+                        assert(nearly_equal(
+                            cell.get_qdot(),
+                            0.0
+                        ));
+
+                        ++air_region_cells;
+                    } else {
+                        assert(
+                            cell.get_state() ==
+                            Cell::State::Component
+                        );
+
+                        ++solid_component_cells;
+                    }
+                }
+            }
+        }
+
+        assert(air_region_cells == 8);
+        assert(solid_component_cells == 56);
+
+        std::cout
+            << "test_internal_air_region_stamps_as_air PASSED\n";
+    }
+
+
+    // ============================================================
+    // INTERNAL HEAT-SOURCE TESTS
+    // ============================================================
+
+    void test_internal_heat_source_stamps_properties() {
+        Environment env(30.0, 5800.0, 20.0, 1005.0, 0.02587, 0.000018, 0.71, 1.225);
+        Workload load(100'00, 1'000'000, 100'000, 4);
+        Rack rack = make_air_rack(0.10, 0.10, 0.10, 20.0);
+        Mesh mesh = Mesh().build_mesh(rack, 0.01, 0.01, 0.01, env, load);
+        Component component = make_test_component();
+
+        constexpr double source_cp = 500.0;
+        constexpr double source_rho = 8000.0;
+        constexpr double source_k = 15.0;
+        constexpr double source_watts = 80.0;
+
+        InternalRegion heat_source(
+            "heat",
+            /*size=*/{0.02, 0.02, 0.02},
+            /*local position=*/{0.01, 0.01, 0.01},
+            source_cp,
+            source_rho,
+            source_k,
+            source_watts
+        );
+
+        component.add_region(heat_source);
+        component.order_internal_regions();
+        mesh.stamp_component(component);
+
+        int heat_source_cells = 0;
+
+        for(int i = 3; i < 5; ++i) {
+            for(int j = 3; j < 5; ++j) {
+                for(int k = 3; k < 5; ++k) {
+                    const Cell& cell = mesh.at(i, j, k);
+
+                    assert(
+                        cell.get_state() ==
+                        Cell::State::Component
+                    );
+
+                    assert(nearly_equal(
+                        cell.get_cp(),
+                        source_cp
+                    ));
+
+                    assert(nearly_equal(
+                        cell.get_rho(),
+                        source_rho
+                    ));
+
+                    assert(nearly_equal(
+                        cell.get_k(),
+                        source_k
+                    ));
+
+                    assert(cell.get_qdot() > 0.0);
+
+                    ++heat_source_cells;
+                }
+            }
+        }
+
+        assert(heat_source_cells == 8);
+
+        std::cout
+            << "test_internal_heat_source_stamps_properties PASSED\n";
+    }
+
+
+    void test_internal_heat_source_conserves_total_watts() {
+        Environment env(30.0, 5800.0, 20.0, 1005.0, 0.02587, 0.000018, 0.71, 1.225);
+        Workload load(100'00, 1'000'000, 100'000, 4);
+        Rack rack = make_air_rack(0.10, 0.10, 0.10, 20.0);
+        Mesh mesh = Mesh().build_mesh(rack, 0.01, 0.01, 0.01, env, load);
+        Component component = make_test_component();
+
+        constexpr double requested_watts = 80.0;
+
+        InternalRegion heat_source(
+            "heat",
+            {0.02, 0.02, 0.02},
+            {0.01, 0.01, 0.01},
+            /*cp=*/500.0,
+            /*rho=*/8000.0,
+            /*k=*/15.0,
+            requested_watts
+        );
+
+        component.add_region(heat_source);
+        component.order_internal_regions();
+        mesh.stamp_component(component);
+
+        double integrated_watts = 0.0;
+
+        for(int i = 3; i < 5; ++i) {
+            for(int j = 3; j < 5; ++j) {
+                for(int k = 3; k < 5; ++k) {
+                    integrated_watts +=
+                        mesh.at(i, j, k).get_qdot() *
+                        mesh.cell_volume();
+                }
+            }
+        }
+
+        assert(
+            nearly_equal(
+                integrated_watts,
+                requested_watts
+            ) &&
+            "Internal heat-source qdot must integrate "
+            "to the requested wattage."
+        );
+
+        std::cout
+            << "test_internal_heat_source_conserves_total_watts "
+            << "PASSED (integrated watts = "
+            << integrated_watts << ")\n";
+    }
+
+
+    // ============================================================
+    // LOCAL/GLOBAL POSITION TESTS
+    // ============================================================
+
+    void test_internal_region_local_to_global_position() {
+        Component component = make_test_component();
+        // 0.02, 0.02, 0.02 bot left corner
+        // size 0.04, 0.04, 0.04
+        InternalRegion region(
+            "air",
+            /*size=*/{0.01, 0.01, 0.01},
+            /*local position=*/{0.01, 0.02, 0.03}
+        );
+
+        component.add_region(region);
+
+        const std::vector<InternalRegion> regions =
+            component.get_regions();
+
+        assert(regions.size() == 1);
+
+        const auto global =
+            regions.front().get_global_position();
+
+        assert(nearly_equal(global[0], 0.03));
+        assert(nearly_equal(global[1], 0.04));
+        assert(nearly_equal(global[2], 0.05));
+
+        std::cout
+            << "test_internal_region_local_to_global_position "
+            << "PASSED\n";
+    }
+
+
+    void test_internal_region_exact_bounds_allowed() {
+        Component component = make_test_component();
+
+        bool threw = false;
+
+        try {
+            InternalRegion region(
+                "air",
+                /*size=*/{0.02, 0.02, 0.02},
+                /*local position=*/{0.02, 0.02, 0.02}
+            );
+
+            component.add_region(region);
+        }
+        catch(const std::invalid_argument&) {
+            threw = true;
+        }
+
+        assert(
+            !threw &&
+            "A region ending exactly at the component boundary "
+            "should be accepted."
+        );
+
+        std::cout
+            << "test_internal_region_exact_bounds_allowed PASSED\n";
+    }
+
+
+    // ============================================================
+    // NEGATIVE LOCAL COORDINATE TESTS
+    // ============================================================
+
+    void test_internal_region_negative_x_rejected() {
+        Component component = make_test_component();
+
+        bool threw = false;
+
+        try {
+            InternalRegion region(
+                "air",
+                {0.01, 0.01, 0.01},
+                {-0.001, 0.01, 0.01}
+            );
+
+            component.add_region(region);
+        }
+        catch(const std::invalid_argument&) {
+            threw = true;
+        }
+
+        assert(
+            threw &&
+            "Negative internal-region x must be rejected."
+        );
+
+        std::cout
+            << "test_internal_region_negative_x_rejected PASSED\n";
+    }
+
+
+    void test_internal_region_negative_y_rejected() {
+        Component component = make_test_component();
+
+        bool threw = false;
+
+        try {
+            InternalRegion region(
+                "air",
+                {0.01, 0.01, 0.01},
+                {0.01, -0.001, 0.01}
+            );
+
+            component.add_region(region);
+        }
+        catch(const std::invalid_argument&) {
+            threw = true;
+        }
+
+        assert(
+            threw &&
+            "Negative internal-region y must be rejected."
+        );
+
+        std::cout
+            << "test_internal_region_negative_y_rejected PASSED\n";
+    }
+
+
+    void test_internal_region_negative_z_rejected() {
+        Component component = make_test_component();
+
+        bool threw = false;
+
+        try {
+            InternalRegion region(
+                "air",
+                {0.01, 0.01, 0.01},
+                {0.01, 0.01, -0.001}
+            );
+
+            component.add_region(region);
+        }
+        catch(const std::invalid_argument&) {
+            threw = true;
+        }
+
+        assert(
+            threw &&
+            "Negative internal-region z must be rejected."
+        );
+
+        std::cout
+            << "test_internal_region_negative_z_rejected PASSED\n";
+    }
+
+
+    // ============================================================
+    // POSITIVE BOUNDS OVERFLOW TESTS
+    // ============================================================
+
+    void test_internal_region_x_overflow_rejected() {
+        Component component = make_test_component();
+
+        bool threw = false;
+
+        try {
+            InternalRegion region(
+                "air",
+                {0.02, 0.01, 0.01},
+                {0.021, 0.01, 0.01}
+            );
+
+            component.add_region(region);
+        }
+        catch(const std::invalid_argument& e) {
+            threw = true;
+
+            assert(
+                std::string(e.what()).find("x bounds") !=
+                std::string::npos
+            );
+        }
+
+        assert(
+            threw &&
+            "An x-overflowing region must be rejected."
+        );
+
+        std::cout
+            << "test_internal_region_x_overflow_rejected PASSED\n";
+    }
+
+
+    void test_internal_region_y_overflow_rejected() {
+        Component component = make_test_component();
+
+        bool threw = false;
+
+        try {
+            InternalRegion region(
+                "air",
+                {0.01, 0.02, 0.01},
+                {0.01, 0.021, 0.01}
+            );
+
+            component.add_region(region);
+        }
+        catch(const std::invalid_argument& e) {
+            threw = true;
+
+            assert(
+                std::string(e.what()).find("y bounds") !=
+                std::string::npos
+            );
+        }
+
+        assert(
+            threw &&
+            "A y-overflowing region must be rejected."
+        );
+
+        std::cout
+            << "test_internal_region_y_overflow_rejected PASSED\n";
+    }
+
+
+    void test_internal_region_z_overflow_rejected() {
+        Component component = make_test_component();
+
+        bool threw = false;
+
+        try {
+            InternalRegion region(
+                "air",
+                {0.01, 0.01, 0.02},
+                {0.01, 0.01, 0.021}
+            );
+
+            component.add_region(region);
+        }
+        catch(const std::invalid_argument& e) {
+            threw = true;
+
+            assert(
+                std::string(e.what()).find("z bounds") !=
+                std::string::npos
+            );
+        }
+
+        assert(
+            threw &&
+            "A z-overflowing region must be rejected."
+        );
+
+        std::cout
+            << "test_internal_region_z_overflow_rejected PASSED\n";
+    }
+
+
+    // ============================================================
+    // INTERNAL REGION VALIDATION AND ORDERING
+    // ============================================================
+
+    void test_uninitialized_internal_region_rejected_when_ordering() {
+        Component component = make_test_component();
+
+        InternalRegion uninitialized_region;
+
+        component.add_region(uninitialized_region);
+
+        bool threw = false;
+
+        try {
+            component.order_internal_regions();
+        }
+        catch(const std::invalid_argument&) {
+            threw = true;
+        }
+
+        assert(
+            threw &&
+            "An uninitialized region must be rejected."
+        );
+
+        std::cout
+            << "test_uninitialized_internal_region_rejected_"
+            << "when_ordering PASSED\n";
+    }
+
+
+    void test_internal_region_ordering() {
+        Component component = make_test_component();
+
+        InternalRegion heat_source(
+            "heat",
+            {0.01, 0.01, 0.01},
+            {0.02, 0.02, 0.02},
+            /*cp=*/500.0,
+            /*rho=*/8000.0,
+            /*k=*/15.0,
+            /*watts=*/20.0
+        );
+
+        InternalRegion air_region(
+            "air",
+            {0.01, 0.01, 0.01},
+            {0.01, 0.01, 0.01}
+        );
+
+        // Deliberately add in the wrong order.
+        component.add_region(heat_source);
+        component.add_region(air_region);
+
+        component.order_internal_regions();
+
+        const auto regions = component.get_regions();
+
+        assert(regions.size() == 2);
+
+        assert(
+            regions[0].get_region_type() ==
+            RegionType::Air
+        );
+
+        assert(
+            regions[1].get_region_type() ==
+            RegionType::HeatSource
+        );
+
+        std::cout
+            << "test_internal_region_ordering PASSED\n";
+    }
+
+
+    // ============================================================
+    // INTERNAL VENT TESTS
+    // ============================================================
+
+    void test_valid_internal_vent_on_component_face() {
+        Component component(0.04, 0.04, 0.04, "Vent test component");
+
+        component.set_coords_m(0.0, 0.0, 0.0);
+
+        InternalRegion vent(
+            "vent",
+            /*size=*/{0.02, 0.0, 0.02},
+            /*local position=*/{0.01, 0.0, 0.01},
+            /*direction=*/{0.0, 1.0, 0.0},
+            /*free area ratio=*/0.60,
+            /*discharge coefficient=*/0.65
+        );
+
+        bool threw = false;
+
+        try {
+            component.add_region(vent);
+        }
+        catch(const std::invalid_argument&) {
+            threw = true;
+        }
+
+        assert(
+            !threw &&
+            "A valid internal vent on one component face "
+            "should be accepted."
+        );
+
+        const auto regions = component.get_regions();
+
+        assert(regions.size() == 1);
+
+        const InternalRegion& stored = regions.front();
+
+        assert(
+            stored.get_region_type() ==
+            RegionType::Vent
+        );
+
+        assert(nearly_equal(stored.get_far(), 0.60));
+        assert(nearly_equal(stored.get_cd(), 0.65));
+
+        const double expected_free_area =
+            0.02 * 0.02 * 0.60;
+
+        assert(nearly_equal(
+            stored.free_area(),
+            expected_free_area
+        ));
+
+        std::cout
+            << "test_valid_internal_vent_on_component_face PASSED\n";
+    }
+
+
+    void test_internal_vent_not_on_face_rejected() {
+        Component component(0.04, 0.04, 0.04, "Vent test component");
+
+        component.set_coords_m(0.0, 0.0, 0.0);
+
+        InternalRegion vent(
+            "vent",
+            /*size=*/{0.02, 0.0, 0.02},
+            /*local position=*/{0.01, 0.02, 0.01},
+            /*direction=*/{0.0, 1.0, 0.0},
+            /*free area ratio=*/0.60,
+            /*discharge coefficient=*/0.65
+        );
+
+        bool threw = false;
+
+        try {
+            component.add_region(vent);
+        }
+        catch(const std::invalid_argument& e) {
+            threw = true;
+
+            assert(
+                std::string(e.what()).find(
+                    "does not intercept any component face"
+                ) != std::string::npos
+            );
+        }
+
+        assert(
+            threw &&
+            "An internal vent not touching a component face "
+            "must be rejected."
+        );
+
+        std::cout
+            << "test_internal_vent_not_on_face_rejected PASSED\n";
+    }
+
+
+    void test_internal_vent_touching_two_faces_rejected() {
+        Component component(0.04, 0.04, 0.04, "Vent test component");
+
+        component.set_coords_m(0.0, 0.0, 0.0);
+
+        InternalRegion vent(
+            "vent",
+            /*size=*/{0.02, 0.0, 0.02},
+            /*local position=*/{0.0, 0.0, 0.01},
+            /*direction=*/{0.0, 1.0, 0.0},
+            /*free area ratio=*/0.60,
+            /*discharge coefficient=*/0.65
+        );
+
+        bool threw = false;
+
+        try {
+            component.add_region(vent);
+        }
+        catch(const std::invalid_argument& e) {
+            threw = true;
+
+            assert(
+                std::string(e.what()).find(
+                    "intercepts more than 1 face"
+                ) != std::string::npos
+            );
+        }
+
+        assert(
+            threw &&
+            "A vent intersecting multiple component faces "
+            "must be rejected."
+        );
+
+        std::cout
+            << "test_internal_vent_touching_two_faces_rejected "
+            << "PASSED\n";
+    }
+
+
+    void test_internal_vent_free_area_ratio_bounds() {
+        bool low_threw = false;
+        bool high_threw = false;
+
+        try {
+            InternalRegion vent(
+                "vent",
+                {0.02, 0.0, 0.02},
+                {0.01, 0.0, 0.01},
+                {0.0, 1.0, 0.0},
+                /*invalid FAR=*/-0.01,
+                /*Cd=*/0.65
+            );
+        }
+        catch(const std::invalid_argument&) {
+            low_threw = true;
+        }
+
+        try {
+            InternalRegion vent(
+                "vent",
+                {0.02, 0.0, 0.02},
+                {0.01, 0.0, 0.01},
+                {0.0, 1.0, 0.0},
+                /*invalid FAR=*/1.01,
+                /*Cd=*/0.65
+            );
+        }
+        catch(const std::invalid_argument&) {
+            high_threw = true;
+        }
+
+        assert(
+            low_threw &&
+            "A negative vent free-area ratio must be rejected."
+        );
+
+        assert(
+            high_threw &&
+            "A vent free-area ratio greater than one "
+            "must be rejected."
+        );
+
+        std::cout
+            << "test_internal_vent_free_area_ratio_bounds PASSED\n";
+    }
+
+
+    void test_internal_vent_free_area_ratio_endpoints_allowed() {
+        bool threw = false;
+
+        try {
+            InternalRegion fully_closed(
+                "vent",
+                {0.02, 0.0, 0.02},
+                {0.01, 0.0, 0.01},
+                {0.0, 1.0, 0.0},
+                /*FAR=*/0.0,
+                /*Cd=*/0.65
+            );
+
+            InternalRegion fully_open(
+                "vent1",
+                {0.02, 0.0, 0.02},
+                {0.01, 0.0, 0.01},
+                {0.0, 1.0, 0.0},
+                /*FAR=*/1.0,
+                /*Cd=*/0.65
+            );
+        }
+        catch(const std::invalid_argument&) {
+            threw = true;
+        }
+
+        assert(
+            !threw &&
+            "Free-area-ratio endpoints zero and one "
+            "should be accepted by the current validation."
+        );
+
+        std::cout
+            << "test_internal_vent_free_area_ratio_"
+            << "endpoints_allowed PASSED\n";
+    }
+
+
+    // ============================================================
+    // INTERNAL FAN TESTS
+    // ============================================================
+
+    void test_valid_internal_rectangular_fan_on_face() {
+        Component component(0.04, 0.04, 0.04, "Fan test component");
+
+        component.set_coords_m(0.0, 0.0, 0.0);
+
+        InternalRegion fan(
+            "fan",
+            /*size=*/{0.02, 0.0, 0.02},
+            /*local position=*/{0.01, 0.0, 0.01},
+            /*face direction=*/{0.0, 1.0, 0.0},
+            /*velocity direction=*/{0.0, 1.0, 0.0},
+            /*diameter=*/0.0,
+            /*cfm=*/10.0,
+            FlowType::Intake,
+            ShapeType::Rectangular
+        );
+
+        component.add_region(fan);
+
+        const auto regions = component.get_regions();
+
+        assert(regions.size() == 1);
+
+        const InternalRegion& stored = regions.front();
+
+        assert(
+            stored.get_region_type() ==
+            RegionType::Fan
+        );
+
+        assert(
+            stored.get_shape_type() ==
+            ShapeType::Rectangular
+        );
+
+        assert(
+            stored.get_flow_type() ==
+            FlowType::Intake
+        );
+
+        assert(nearly_equal(
+            stored.get_cfm(),
+            10.0
+        ));
+
+        const auto velocity_direction =
+            stored.get_velocity_direction();
+
+        assert(nearly_equal(
+            velocity_direction[0],
+            0.0
+        ));
+
+        assert(nearly_equal(
+            velocity_direction[1],
+            1.0
+        ));
+
+        assert(nearly_equal(
+            velocity_direction[2],
+            0.0
+        ));
+
+        std::cout
+            << "test_valid_internal_rectangular_fan_on_face "
+            << "PASSED\n";
+    }
+
+
+    void test_internal_rectangular_fan_with_diameter_rejected() {
+        bool threw = false;
+
+        try {
+            InternalRegion fan(
+                "fan",
+                {0.02, 0.0, 0.02},
+                {0.01, 0.0, 0.01},
+                {0.0, 1.0, 0.0},
+                {0.0, 1.0, 0.0},
+                /*invalid diameter=*/0.01,
+                /*cfm=*/10.0,
+                FlowType::Intake,
+                ShapeType::Rectangular
+            );
+        }
+        catch(const std::invalid_argument& e) {
+            threw = true;
+
+            assert(
+                std::string(e.what()).find(
+                    "rectangular fan has diameter defined"
+                ) != std::string::npos
+            );
+        }
+
+        assert(
+            threw &&
+            "A rectangular fan with a diameter must be rejected."
+        );
+
+        std::cout
+            << "test_internal_rectangular_fan_with_diameter_"
+            << "rejected PASSED\n";
+    }
+
+
+    void test_internal_fan_negative_cfm_rejected() {
+        bool threw = false;
+
+        try {
+            InternalRegion fan(
+                "fan",
+                {0.02, 0.0, 0.02},
+                {0.01, 0.0, 0.01},
+                {0.0, 1.0, 0.0},
+                {0.0, 1.0, 0.0},
+                /*diameter=*/0.0,
+                /*invalid CFM=*/-1.0,
+                FlowType::Intake,
+                ShapeType::Rectangular
+            );
+        }
+        catch(const std::invalid_argument&) {
+            threw = true;
+        }
+
+        assert(
+            threw &&
+            "Negative internal-fan CFM must be rejected."
+        );
+
+        std::cout
+            << "test_internal_fan_negative_cfm_rejected PASSED\n";
+    }
+
+
+    void test_internal_fan_cfm_conversion() {
+        InternalRegion fan(
+            "fan",
+            {0.02, 0.0, 0.02},
+            {0.01, 0.0, 0.01},
+            {0.0, 1.0, 0.0},
+            {0.0, 1.0, 0.0},
+            /*diameter=*/0.0,
+            /*cfm=*/10.0,
+            FlowType::Intake,
+            ShapeType::Rectangular
+        );
+
+        const double expected_flow =
+            10.0 * 0.00047194745;
+
+        assert(nearly_equal(
+            fan.flow_m3s(),
+            expected_flow
+        ));
+
+        std::cout
+            << "test_internal_fan_cfm_conversion PASSED\n";
+    }
+
+
+    void test_internal_rectangular_fan_area() {
+        InternalRegion fan(
+            "fan",
+            {0.02, 0.0, 0.03},
+            {0.01, 0.0, 0.005},
+            {0.0, 1.0, 0.0},
+            {0.0, 1.0, 0.0},
+            /*diameter=*/0.0,
+            /*cfm=*/10.0,
+            FlowType::Intake,
+            ShapeType::Rectangular
+        );
+
+        const double expected_area =
+            0.02 * 0.03;
+
+        assert(nearly_equal(
+            fan.area(),
+            expected_area
+        ));
+
+        std::cout
+            << "test_internal_rectangular_fan_area PASSED\n";
+    }
+
+
+    void test_internal_fan_uses_velocity_direction() {
+        InternalRegion fan(
+            "fan",
+            {0.02, 0.0, 0.02},
+            {0.01, 0.0, 0.01},
+
+            // Geometric face normal
+            {0.0, 1.0, 0.0},
+
+            // Actual airflow direction
+            {0.0, -1.0, 0.0},
+
+            /*diameter=*/0.0,
+            /*cfm=*/10.0,
+            FlowType::Exhaust,
+            ShapeType::Rectangular
+        );
+
+        assert(nearly_equal(
+            fan.velocity_x(),
+            0.0
+        ));
+
+        assert(
+            fan.velocity_y() < 0.0 &&
+            "Fan velocity should follow velocity_direction."
+        );
+
+        assert(nearly_equal(
+            fan.velocity_z(),
+            0.0
+        ));
+
+        std::cout
+            << "test_internal_fan_uses_velocity_direction PASSED\n";
+    }
+
+
+    // ============================================================
+    // OFFSET COMPONENT FAN/VENT TEST
+    // ============================================================
+
+    void test_internal_vent_on_offset_component_face() {
+        Component component(0.04, 0.04, 0.04, "Offset component");
+
+        component.set_coords_m(
+            0.20,
+            0.30,
+            0.40
+        );
+
+        InternalRegion vent(
+            "fan",
+            {0.02, 0.0, 0.02},
+            {0.01, 0.0, 0.01},
+            {0.0, 1.0, 0.0},
+            /*free-area ratio=*/0.60,
+            /*Cd=*/0.65
+        );
+
+        bool threw = false;
+
+        try {
+            component.add_region(vent);
+        }
+        catch(const std::invalid_argument&) {
+            threw = true;
+        }
+
+        assert(
+            !threw &&
+            "A valid vent on an offset component face "
+            "must be accepted."
+        );
+
+        const auto regions = component.get_regions();
+
+        assert(regions.size() == 1);
+
+        const auto global =
+            regions.front().get_global_position();
+
+        assert(nearly_equal(global[0], 0.21));
+        assert(nearly_equal(global[1], 0.30));
+        assert(nearly_equal(global[2], 0.41));
+
+        std::cout
+            << "test_internal_vent_on_offset_component_face "
+            << "PASSED\n";
+    }
+
 };
 
 #endif
