@@ -82,7 +82,7 @@ struct Fan {
         if(shape == ShapeType::Circular) {
             return PI * diameter_m* diameter_m / 4.0;
         } else {
-            gross_area(); 
+            return gross_area(); 
         }
     }
     double gross_area() const {
