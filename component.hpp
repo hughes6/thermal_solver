@@ -189,7 +189,7 @@ struct InternalRegion {
         if(shape_type == ShapeType::Circular) {
             return PI * diameter * diameter / 4.0;
         } else {
-            gross_area(); 
+            return gross_area(); 
         }
     }
     double velocity_mag() const { return area() > 0.0 ? flow_m3s() / area() : 0.0; }
