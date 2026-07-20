@@ -39,6 +39,7 @@ struct Vent {
 
     // setters
     void set_name(std::string n) { name = n; }
+    void set_center(std::array<double, 3> c) { center = c; }
     void set_size_m(std::array<double, 3> s) {
         size_m = s;
     }
