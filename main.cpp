@@ -21,8 +21,7 @@
 /* 
 =========================================================
 TODO
- - get coordinate systems consistent, mostly rack then
-   add coordinate conversions to other structs
+ - input yaml fil
  - adaptive meshing
 =========================================================
 */
