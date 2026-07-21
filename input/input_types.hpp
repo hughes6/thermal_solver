@@ -38,11 +38,21 @@ struct SimulationInput {
     double dt = 0.0;
     double duration = 0.0;
     int output_interval = 0.0;
-    bool enable_flow_solver = false;
     int max_timesteps = 0;
     int max_updates = 0;
     int max_cell_count = 0;
     int max_megabyte_usage = 0;
+    std::optional<int> update_flow_interval = 0;
+};
+
+struct FlowSolverInput {
+    bool enable_flow_solver = false;
+    std::optional<double> resistivity = 0.0;
+    std::optional<double> tolerance = 0.0;
+    std::optional<int> max_iterations = 0;
+    std::optional<double> sor_omega = 0.0;
+    std::optional<int> max_outer_iters = 0;
+    std::optional<double> flow_tolerance = 0.0;
 };
 
 
@@ -184,6 +194,7 @@ struct ModelInput {
 
     SimulationInput simulation;
     EnvironmentInput environment;
+    FlowSolverInput flow_solver;
     MeshInput mesh;
     RackInput rack;
 
