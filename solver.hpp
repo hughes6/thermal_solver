@@ -5,12 +5,35 @@
 
 #include "convection.hpp"
 #include "mesh.hpp"
+#include "flow_solver.hpp"
 #include "workload.hpp"
 
 class Solver {
 public:
-    Solver() {}
     
+    Solver(Mesh initial_mesh, double dt_, double sim_length_, bool print_convections_, int output_interval_, 
+           int update_flow_interval_, double resistivity, double tolerance, double max_iterations, double sor_omega, int max_outer_iterations, double flow_tolerance)
+        : current(std::move(initial_mesh)),
+          next(current),
+          dt(dt_),
+          sim_length(sim_length_),
+          print_convections(print_convections_),
+          output_interval(output_interval_),
+          update_flow_interval(update_flow_interval_),
+          logfile("simulation.csv"),        
+          flow_solver(current, resistivity, tolerance, max_iterations,
+                  sor_omega, max_outer_iterations, flow_tolerance)
+
+    { 
+      load = current.get_load();
+      validate_computational_workload();
+      logfile << "step,time,x,y,z,T,qdot,is_component,k,rho,cp,vx,vy,vz,h\n";
+      logfile << "dx," << current.get_dx()
+        << ",dy," << current.get_dy()
+        << ",dz," << current.get_dz()
+        << '\n';
+    }
+
     Solver(Mesh initial_mesh, double dt_, double sim_length_, bool print_convections_, int output_interval_)
         : current(std::move(initial_mesh)),
           next(current),
@@ -18,7 +41,10 @@ public:
           sim_length(sim_length_),
           print_convections(print_convections_),
           output_interval(output_interval_),
-          logfile("simulation.csv")
+          update_flow_interval(-1),
+          logfile("simulation.csv"),        
+          flow_solver(initial_mesh, 5.0, 1e-3, 10, 1.3, 2, 1e-2)
+
     { 
       load = current.get_load();
       validate_computational_workload();
@@ -137,6 +163,12 @@ public:
         for(int step = 0; step < steps; step++) {
             timestep_h_sum = 0.0;
             timestep_h_count = 0;
+            if(update_flow_interval != -1) {
+                if(step % update_flow_interval || step == 0) {
+                    flow_solver.solve(current);
+                }
+            }
+
             for(int x = 0; x < current.get_nx(); x++) {
                 for(int y = 0; y < current.get_ny(); y++) {
                     for(int z = 0; z < current.get_nz(); z++) {
@@ -167,12 +199,14 @@ private:
     Mesh current;
     Mesh next;
     Workload load;
+    FlowSolver flow_solver;
     bool print_convections = false;
     double dt;
     double sim_length;
     double timestep_h_sum = 0.0;
     int timestep_h_count = 0;
     int output_interval = 0;
+    int update_flow_interval = 0;
 
     std::ofstream logfile;
 
