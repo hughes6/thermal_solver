@@ -46,6 +46,12 @@ struct Fan {
             direction{0.0, 0.0, 1.0},
             size_m{0.0, 0.0, 0.0} {}
 
+    // explicit copy constructor
+    Fan clone() const {
+        return Fan(*this);
+    }
+
+
     Fan(std::string name_,
         double cfm_,
         double diameter_m_,
@@ -146,6 +152,30 @@ struct Fan {
         size_m[2] = height_mm * MM_TO_M;
     }
 
+    void set_center_rack_units(double width_u, double depth_u, double height_u) {
+        center[0]  = width_u  * U_TO_M;
+        center[1]  = depth_u  * U_TO_M;
+        center[2]  = height_u * U_TO_M;
+    }
+
+    void set_center_meters(double width_m, double depth_m, double height_m) {
+        center[0] = width_m;
+        center[1] = depth_m;
+        center[2] = height_m;
+    }
+
+    void set_center_inches(double width_in, double depth_in, double height_in) {
+        center[0] = width_in  * IN_TO_M;
+        center[1] = depth_in  * IN_TO_M;
+        center[2] = height_in * IN_TO_M;
+    }
+
+    void set_center_mm(double width_mm, double depth_mm, double height_mm) {
+        center[0] = width_mm  * MM_TO_M;
+        center[1] = depth_mm  * MM_TO_M;
+        center[2] = height_mm * MM_TO_M;
+    }
+    
     double get_width_m()  const { return size_m[0]; }
     double get_depth_m()  const { return size_m[1]; }
     double get_height_m() const { return size_m[2]; }
