@@ -296,6 +296,12 @@ struct Component {
 
     Component() = default;
 
+    // explicit copy constructor
+    Component clone() const {
+        return Component(*this);
+    }
+
+
     // Size directly in meters
     Component(double width_m_, double depth_m_, double height_m_, std::string n = "Uninitialized")
         : name(std::move(n)),
@@ -360,10 +366,10 @@ struct Component {
         bot_left_corner_coords = {x, y, z};
     }
 
-    void set_coords_rack_units(double x_in, double y_in, double z_u) {
+    void set_coords_rack_units(double x_u, double y_u, double z_u) {
         bot_left_corner_coords = {
-            x_in * IN_TO_M,
-            y_in * IN_TO_M,
+            x_u * U_TO_M,
+            y_u * U_TO_M,
             z_u * U_TO_M
         };
     }
