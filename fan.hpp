@@ -44,13 +44,15 @@ struct Fan {
             diameter_m(0.0),
             center{0.0, 0.0, 0.0},
             direction{0.0, 0.0, 1.0},
-            size_m{0.0, 0.0, 0.0} {}
+            size_m{0.0, 0.0, 0.0},
+            curve_a(0.0),
+            curve_b(0.0),
+            curve_c(0.0) {}
 
     // explicit copy constructor
     Fan clone() const {
         return Fan(*this);
     }
-
 
     Fan(std::string name_,
         double cfm_,
@@ -192,12 +194,28 @@ struct Fan {
     void set_name(std::string s) { name = s; }
     void set_cfm(double cfm_) { cfm = cfm_; }
     void set_diameter(double diameter_) { diameter_m = diameter_; }
+    void set_diameter_meters(double diameter_) { diameter_m = diameter_; }
+    void set_diameter_rack_units(double diameter_) { diameter_m = diameter_ * U_TO_M; }
+    void set_diameter_inches(double diameter_) { diameter_m = diameter_ * IN_TO_M; }
+    void set_diameter_mm(double diameter_) { diameter_m = diameter_ * MM_TO_M; }
     void set_size(std::array<double, 3> size_) { size_m = size_; }
     void set_center(std::array<double, 3> center_) { center = center_; }
     void set_velocity_dir(std::array<double, 3> direction_) { direction = direction_; }
     void set_type(FlowType type_) { type = type_; }
     void set_shape(ShapeType shape_) { shape = shape_; }
+    void set_rho_rated(double rho) { rho_rated = rho; }
+    void set_curve_a(double a) { curve_a = a; }
+    void set_curve_b(double b) { curve_b = b; }
+    void set_curve_c(double c) { curve_c = c; }
+    void set_curve(double a, double b, double c, double rho_rated_ = 1.2) {
+        curve_a = a; curve_b = b; curve_c = c; rho_rated = rho_rated_;
+    }
 
+    bool has_curve() const { return curve_a > 0.0; }
+    double get_rho_rated() const { return rho_rated; }
+    double get_curve_a() const { return curve_a; }
+    double get_curve_b() const { return curve_b; }
+    double get_curve_c() const { return curve_c; }
     double flow_m3s() const { return cfm * CFM_TO_M3S; }
     double velocity_mag() const { return area() > 0.0 ? flow_m3s() / area() : 0.0; }
     std::array<double, 3> get_center() const { return center; }
@@ -211,6 +229,18 @@ struct Fan {
     FlowType get_type_t() const { return type; }
     ShapeType get_shape_t() const { return shape; }
     bool is_circular() const { return shape == ShapeType::Circular; }
+
+    double curve_a = 0.0;      // Pa, shutoff pressure at rho_rated
+    double curve_b = 0.0;      // Pa per (m^3/s)
+    double curve_c = 0.0;      // Pa per (m^3/s)^2
+    double rho_rated = 1.2;    // kg/m^3, density the curve was measured at
+
+    // Density-corrected available pressure at a candidate flow rate.
+    double curve_pressure(double Q, double rho_local) const {
+        double dP = curve_a - curve_b * Q - curve_c * Q * Q;
+        dP = std::max(dP, 0.0); // curve shouldn't go negative
+        return dP * (rho_local / rho_rated);
+    }
 };
 
 #endif

@@ -71,7 +71,8 @@ public:
             * static_cast<std::size_t>(ny)
             * static_cast<std::size_t>(nz);
     }
-
+    
+    const Environment& get_env() const { return env; }
     const std::vector<Cell>& get_cells() const { return cells; }
 
     size_t idx(int x, int y, int z) const {
@@ -615,7 +616,6 @@ public:
                 k1 = static_cast<int>(std::ceil ((cz+r)/dz));
             }
 
-
             for(int j=j0;j<j1;j++) {
                 for(int k=k0;k<k1;k++) {
                     if(!is_circular) {
@@ -639,6 +639,7 @@ public:
         double Q_total = f.flow_m3s();
         double Q_per_cell = covered.empty() ? 0.0 : Q_total / covered.size();
         double sign = (f.get_type_t() == FlowType::Intake) ? +1.0 : -1.0;
+        double area_per_cell = covered.empty() ? 0.0 : f.area() / covered.size();
         for (auto& [i, j,k ] : covered) {
             Cell& cell = at(i, j, k);
             if(cell.get_state() == Cell::State::Component) {
@@ -654,7 +655,19 @@ public:
             cell.set_vx(f.velocity_x());
             cell.set_vy(f.velocity_y());
             cell.set_vz(f.velocity_z());
-            cell.set_flow_source(sign * Q_per_cell);
+            if (f.has_curve()) {
+                // Curve-driven fan: FlowSolver derives flow from the network's
+                // backpressure each outer iteration. Do NOT set flow_source --
+                // that path is mutually exclusive with the curve network element.
+                cell.set_fan_curve(f.curve_a, f.curve_b, f.curve_c, f.rho_rated);
+                cell.set_fan_Q_ref(Q_per_cell);   // free-air CFM as initial guess
+                cell.set_fan_dir(f.get_velocity_dir()[0], f.get_velocity_dir()[1], f.get_velocity_dir()[2]);
+                cell.set_fan_area(area_per_cell);
+                cell.set_flow_source(0.0);
+            } else {
+                // Old behavior, unchanged.
+                cell.set_flow_source(sign * Q_per_cell);
+            }
         }
     }
 
@@ -663,7 +676,9 @@ public:
     void stamp_vent(const Vent& v) {
         auto [cx, cy, cz] = v.get_center();
         auto [nnx, nny, nnz] = v.get_direction();
+        bool is_circular = v.is_circular();
 
+        double r = v.get_diameter() / 2.0;
         std::vector<std::array<int, 3>> covered;
 
         auto stamp_cell = [&](int i, int j, int k, std::array<bool,3> wall) {
@@ -682,20 +697,37 @@ public:
         // Vent normal in +Z/-Z (rect lies in XY plane)
         //====================================================
         if(az >= ax && az >= ay) {
+            double w = v.get_size_m()[0] / 2.0; // get x component of size
+            double h = v.get_size_m()[1] / 2.0; // get y component of size
 
             int k = static_cast<int>(std::floor(cz / dz));
-
-            double w = v.get_size_m()[0] / 2.0; // get x component of size
             int i0 = static_cast<int>(std::floor((cx-w)/dx));
             int i1 = static_cast<int>(std::ceil ((cx+w)/dx));
-
-            double h = v.get_size_m()[1] / 2.0; // get y component of size
             int j0 = static_cast<int>(std::floor((cy-h)/dy));
             int j1 = static_cast<int>(std::ceil ((cy+h)/dy));
 
+            if(is_circular) {
+                i0 = static_cast<int>(std::floor((cx-r)/dx));
+                i1 = static_cast<int>(std::ceil ((cx+r)/dx));
+                j0 = static_cast<int>(std::floor((cy-r)/dy));
+                j1 = static_cast<int>(std::ceil ((cy+r)/dy));
+            }
+
             for(int i=i0;i<i1;i++) {
                 for(int j=j0;j<j1;j++) {
-                    stamp_cell(i,j,k,{false,false,true});
+                    if(!is_circular) {
+                        stamp_cell(i,j,k,{false,false,true});
+                    } else {
+                        double xc = (i+0.5)*dx;
+                        double yc = (j+0.5)*dy;
+
+                        double dist2 =
+                            (xc-cx)*(xc-cx) +
+                            (yc-cy)*(yc-cy);
+
+                        if(dist2 <= r*r)
+                            stamp_cell(i,j,k,{false,false,true});
+                    }
                 }
             }
         }
@@ -704,20 +736,37 @@ public:
         // Vent normal in +Y/-Y (rect lies in XZ plane)
         //====================================================
         else if(ay >= ax && ay >= az) {
-
-            int j = static_cast<int>(std::floor(cy / dy));
-
             double w = v.get_size_m()[0] / 2.0; //get x component of size
+            double h = v.get_size_m()[2] / 2.0; // get z component of size
+            
+            int j = static_cast<int>(std::floor(cy / dy));
             int i0 = static_cast<int>(std::floor((cx-w)/dx));
             int i1 = static_cast<int>(std::ceil ((cx+w)/dx));
-
-            double h = v.get_size_m()[2] / 2.0; // get z component of size
             int k0 = static_cast<int>(std::floor((cz-h)/dz));
             int k1 = static_cast<int>(std::ceil ((cz+h)/dz));
+            
+            if(is_circular) {
+                i0 = static_cast<int>(std::floor((cx-r)/dx));
+                i1 = static_cast<int>(std::ceil ((cx+r)/dx));
+                k0 = static_cast<int>(std::floor((cz-r)/dz));
+                k1 = static_cast<int>(std::ceil ((cz+r)/dz));
+            }
 
             for(int i=i0;i<i1;i++) {
                 for(int k=k0;k<k1;k++) {
-                    stamp_cell(i,j,k,{false,true,false});
+                    if(!is_circular) { 
+                        stamp_cell(i,j,k,{false,true,false});
+                    } else {
+                        double xc = (i+0.5)*dx;
+                        double zc = (k+0.5)*dz;
+
+                        double dist2 =
+                            (xc-cx)*(xc-cx) +
+                            (zc-cz)*(zc-cz);
+
+                        if(dist2 <= r*r)
+                            stamp_cell(i,j,k,{false,true,false});
+                    }
                 }
             }
         }
@@ -726,21 +775,37 @@ public:
         // Vent normal in +X/-X (rect lies in YZ plane)
         //====================================================
         else {
+            double w = v.get_size_m()[1] / 2.0; // get y component of size
+            double h = v.get_size_m()[2] / 2.0; // get z component of size
 
             int i = static_cast<int>(std::floor(cx / dx));
-
-            double w = v.get_size_m()[1] / 2.0; // get y component of size
             int j0 = static_cast<int>(std::floor((cy-w)/dy));
             int j1 = static_cast<int>(std::ceil ((cy+w)/dy));
-
-            double h = v.get_size_m()[2] / 2.0; // get z component of size
             int k0 = static_cast<int>(std::floor((cz-h)/dz));
             int k1 = static_cast<int>(std::ceil ((cz+h)/dz));
+
+            if(is_circular) {
+                j0 = static_cast<int>(std::floor((cy-r)/dy));
+                j1 = static_cast<int>(std::ceil ((cy+r)/dy));
+                k0 = static_cast<int>(std::floor((cz-r)/dz));
+                k1 = static_cast<int>(std::ceil ((cz+r)/dz));
+            }
+
             for(int j=j0;j<j1;j++) {
                 for(int k=k0;k<k1;k++) {
-                    // std::cout << i << " " << j << " " << k << std::endl;
-                    // std::cout << nx << " " << ny << " " << nz << std::endl;
-                    stamp_cell(i,j,k,{true,false,false});
+                    if(!is_circular) {
+                        stamp_cell(i,j,k,{true,false,false});
+                    } else {
+                        double yc = (j+0.5)*dy;
+                        double zc = (k+0.5)*dz;
+
+                        double dist2 =
+                            (yc-cy)*(yc-cy) +
+                            (zc-cz)*(zc-cz);
+
+                        if(dist2 <= r*r)
+                            stamp_cell(i,j,k, {true, false, false});
+                    }
                 }
             }
         }

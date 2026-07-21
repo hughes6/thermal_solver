@@ -10,12 +10,14 @@ struct PositionInput {
     double x = 0.0;
     double y = 0.0;
     double z = 0.0;
+    std::optional<std::string> units;
 };
 
 struct SizeInput {
     double width = 0.0;
     double depth = 0.0;
     double height = 0.0;
+    std::optional<std::string> units;
 };
 
 struct MaterialInput {
@@ -120,6 +122,7 @@ struct FanInput {
     std::optional<SizeInput> size;
     // used by circular fan
     std::optional<double> diameter;
+    std::optional<std::string> diameter_units;
 
     double cfm = 0.0;
 };
@@ -136,11 +139,14 @@ struct VentInput {
 
     PositionInput position;
     DirectionInput direction;
+    
+    double cd = 0.0;
 
     // used by rectangular vent
     std::optional<SizeInput> size;
     // used by circular vent
     std::optional<double> diameter;
+    std::optional<std::string> diameter_units;
 
     double free_area_ratio = 0.0;
 };

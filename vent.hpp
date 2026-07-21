@@ -6,13 +6,22 @@
 #include <string>
 #include <stdexcept>
 
+enum class VentShapeType {
+    Circular, 
+    Rectangular,
+    Uninitialized
+};
+
 struct Vent {
+    static constexpr double PI = 3.14159265358979323846;
     static constexpr double U_TO_M  = 1.75 * 0.0254;
     static constexpr double IN_TO_M = 0.0254;
     static constexpr double MM_TO_M = 0.001;
     std::string name;
     double free_area_ratio; // 0.0 to 1.0
     double cd; // 0.0 to 1.0
+    VentShapeType shape;
+    double diameter;
 
     std::array<double, 3> size_m;      // m
     std::array<double, 3> center;    // m
@@ -23,7 +32,9 @@ struct Vent {
              free_area_ratio(0.0),
              cd(0.0),
              center{0.0, 0.0, 0.0},
-             direction{0.0, 0.0, 0.0} {}
+             direction{0.0, 0.0, 0.0},
+             diameter(0.0),
+             shape(VentShapeType::Uninitialized) {}
 
     // explicit copy constructor
     Vent clone() const {
@@ -33,15 +44,28 @@ struct Vent {
     Vent(std::string name_,
          std::array<double, 3> size_,
          double free_area_ratio_,
+         double diameter_,
          double cd_,
          std::array<double, 3> center_,
-         std::array<double, 3> direction_) :
+         std::array<double, 3> direction_,
+         VentShapeType shape_) :
          name(name_),
          size_m(size_),
+         diameter(diameter_),
          center(center_),
-         direction(direction_) {set_free_area_ratio(free_area_ratio_);
-                                set_cd(cd_);}
+         direction(direction_),
+         shape(shape_) {set_free_area_ratio(free_area_ratio_);
+                                set_cd(cd_);
+                                check_shape_dimensions();}
 
+    void check_shape_dimensions() {
+        if(shape == VentShapeType::Circular && (size_m[0] != 0.0 || size_m[1] != 0.0 || size_m[2] != 0.0)) {
+            std::cerr << "Invalid size, cartesian size defined for radial fan \n";
+        }
+        if(shape == VentShapeType::Rectangular && diameter != 0.0) {
+            std::cerr << "Invalid size, diameter defined for a rectangular fan \n";
+        }
+    }   
     // setters
     void set_name(std::string n) { name = n; }
     void set_center(std::array<double, 3> c) { center = c; }
@@ -54,17 +78,28 @@ struct Vent {
             throw std::invalid_argument("Invalid free area ratio. Needs to be between 0.0 and 1.0.");
         }
     }
+    
     void set_cd(double cd_) {
-        if(cd < 1.0 || cd > 0.0) { cd = cd_; }
-        else {
-            throw std::invalid_argument("Invalid vent discharge coefficient. Needs to be between 0.0 and 1.0.");
+        if(cd_ >= 0.0 && cd_ <= 1.0) {
+            cd = cd_;
+        } else {
+            throw std::invalid_argument(
+                "Invalid vent discharge coefficient. "
+                "Needs to be between 0.0 and 1.0."
+            );
         }
     }
+
     void set_direction(double x, double y, double z) {
         direction[0] = x;
         direction[1] = y;
         direction[2] = z;
     }
+    void set_diameter_meters(double d) { diameter = d; }
+    void set_diameter_rack_units(double d) { diameter = d * U_TO_M; }
+    void set_diameter_inches(double d) { diameter = d * IN_TO_M; }
+    void set_diameter_mm(double d) { diameter = d * MM_TO_M; }
+    void set_shape(VentShapeType shape_) { shape = shape_; }
 
     //getters
     std::string get_name() const { return name; }
@@ -73,7 +108,8 @@ struct Vent {
     std::array<double, 3> get_center() const { return center; }
     std::array<double, 3> get_direction() const { return direction; }
     double get_cd() const { return cd; }
-
+    double get_diameter() const { return diameter; }
+    VentShapeType get_shape() const { return shape; }
 
     // helpers
     double get_width_m()  const { return size_m[0]; }
@@ -88,6 +124,8 @@ struct Vent {
     double get_width_mm()  const { return size_m[0] / MM_TO_M; }
     double get_depth_mm()  const { return size_m[1] / MM_TO_M; }
     double get_height_mm() const { return size_m[2] / MM_TO_M; }
+    bool is_circular() const { return shape == VentShapeType::Circular; }
+    std::string get_shape_s() const { return is_circular() ? "Circular" : "Rectangular"; }
 
     static Vent from_rack_units(double width_u, double depth_u, double height_u, std::string name = "not set") {
         Vent v;
@@ -166,6 +204,8 @@ struct Vent {
     }
 
     double gross_area() const {
+        if(is_circular()) { return PI * diameter * diameter / 4.0; }
+
         const double ax = std::abs(direction[0]);
         const double ay = std::abs(direction[1]);
         const double az = std::abs(direction[2]);
@@ -174,6 +214,7 @@ struct Vent {
         if (ay >= ax && ay >= az) return size_m[0] * size_m[2]; // XZ plane
         return size_m[1] * size_m[2];                           // YZ plane
     }
+
     double free_area() const { return gross_area() * free_area_ratio; }   
 };
 

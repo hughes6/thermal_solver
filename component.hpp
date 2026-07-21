@@ -130,6 +130,30 @@ struct InternalRegion {
         size_m[2] = height_mm * MM_TO_M;
     }
 
+    void set_local_position_meters(double x, double y, double z) { 
+        local_position[0] = x;
+        local_position[1] = y;
+        local_position[2] = z;
+    }
+
+    void set_local_position_rack_units(double x, double y, double z) { 
+        local_position[0] = x * U_TO_M;
+        local_position[1] = y * U_TO_M;
+        local_position[2] = z * U_TO_M;
+    }    
+
+    void set_local_position_inches(double x, double y, double z) { 
+        local_position[0] = x * IN_TO_M;
+        local_position[1] = y * IN_TO_M;
+        local_position[2] = z * IN_TO_M;
+    }    
+
+    void set_local_position_mm(double x, double y, double z) { 
+        local_position[0] = x * MM_TO_M;
+        local_position[1] = y * MM_TO_M;
+        local_position[2] = z * MM_TO_M;
+    }    
+
     // setters
     void set_name(std::string name_) { name = name_; }
     void set_region_type(RegionType t) { region_type = t; }
@@ -371,6 +395,22 @@ struct Component {
             x_u * U_TO_M,
             y_u * U_TO_M,
             z_u * U_TO_M
+        };
+    }
+
+    void set_coords_in(double x, double y, double z) {
+        bot_left_corner_coords = {
+            x * IN_TO_M,
+            y * IN_TO_M,
+            z * IN_TO_M
+        };
+    }
+
+    void set_coords_mm(double x, double y, double z) {
+        bot_left_corner_coords = {
+            x * MM_TO_M,
+            y * MM_TO_M,
+            z * MM_TO_M
         };
     }
 

@@ -142,6 +142,10 @@ public:
 
         // test_internal_vent_on_offset_component_face();
 
+        test_fan_curve_throttles_vs_fixed_cfm_under_restrictive_vent();
+        test_fan_curve_flow_increases_with_less_restrictive_vent();
+        test_fan_curve_density_sensitivity();
+        
         std::cout << "========== ALL UNIT TESTS PASSED ==========\n\n";
     }
 
@@ -416,15 +420,15 @@ public:
 
     void test_vent_area_uses_plane_dimensions() {
         Vent vent_y_normal(
-            "XZ vent", {0.10, 0.0, 0.20}, 0.50, 0.5,
-            {0.0, 0.0, 0.0}, {0.0, 1.0, 0.0});
+            "XZ vent", {0.10, 0.0, 0.20}, 0.50, 0.0, 0.5,
+            {0.0, 0.0, 0.0}, {0.0, 1.0, 0.0}, VentShapeType::Rectangular);
 
         assert(nearly_equal(vent_y_normal.gross_area(), 0.02));
         assert(nearly_equal(vent_y_normal.free_area(), 0.01));
 
         Vent vent_z_normal(
-            "XY vent", {0.10, 0.20, 0.0}, 0.25, 0.5,
-            {0.0, 0.0, 0.0}, {0.0, 0.0, 1.0});
+            "XY vent", {0.10, 0.20, 0.0}, 0.25, 0.0, 0.5,
+            {0.0, 0.0, 0.0}, {0.0, 0.0, 1.0}, VentShapeType::Rectangular);
 
         assert(nearly_equal(vent_z_normal.gross_area(), 0.02));
         assert(nearly_equal(vent_z_normal.free_area(), 0.005));
@@ -435,8 +439,8 @@ public:
         bool threw = false;
         try {
             Vent invalid(
-                "Invalid vent", {0.10, 0.0, 0.10}, 1.2, 0.5,
-                {0.0, 0.0, 0.0}, {0.0, 1.0, 0.0});
+                "Invalid vent", {0.10, 0.0, 0.10}, 1.2, 0.0, 0.5,
+                {0.0, 0.0, 0.0}, {0.0, 1.0, 0.0},  VentShapeType::Rectangular);
         } catch (const std::invalid_argument&) {
             threw = true;
         }
@@ -531,9 +535,9 @@ public:
             ShapeType::Rectangular);
 
         Vent outlet(
-            "Outlet", {0.0, 0.10, 0.10}, 1.0, 0.5,
+            "Outlet", {0.0, 0.10, 0.10}, 1.0, 0.0, 0.5,
             {0.10, 0.05, 0.05},
-            {1.0, 0.0, 0.0});
+            {1.0, 0.0, 0.0},  VentShapeType::Rectangular);
         
         mesh.stamp_fan(intake);
         mesh.stamp_vent(outlet);
@@ -1656,6 +1660,162 @@ public:
             << "PASSED\n";
     }
 
+    double total_fan_curve_flow(const Mesh& m) const {
+        double total = 0.0;
+        for (int x = 0; x < m.get_nx(); ++x)
+            for (int y = 0; y < m.get_ny(); ++y)
+                for (int z = 0; z < m.get_nz(); ++z) {
+                    const Cell& c = m.at(x, y, z);
+                    if (c.has_fan_curve()) total += c.get_fan_Q_ref();
+                }
+        return total;
+    }
+
+    void test_fan_curve_throttles_vs_fixed_cfm_under_restrictive_vent() {
+        auto build_case = [](bool use_curve) {
+            Environment env(30.0, 5800.0, 20.0, 1005.0, 0.02587, 0.000018, 0.71, 1.225);
+            Workload load(100'00, 1'000'000, 100'000, 4);
+            Rack rack = Rack::from_meters(0.10, 0.10, 0.20, "rack");
+            rack.set_t(20.0); rack.set_cp(1005.0); rack.set_k(0.02587); rack.set_rho(1.225);
+            Mesh mesh = Mesh().build_mesh(rack, 0.05, 0.05, 0.05, env, load);
+
+            const double cfm = 20.0;
+            Fan intake(
+                "Intake", cfm, 0.0,
+                {0.0, 0.10, 0.10}, {0.0, 0.05, 0.05}, {1.0, 0.0, 0.0},
+                FlowType::Intake, ShapeType::Rectangular);
+
+            const double Q_free = intake.flow_m3s();
+            if (use_curve) {
+                intake.set_curve(/*a=*/50.0, /*b=*/50.0 / Q_free, /*c=*/0.0, /*rho_rated=*/1.2);
+            }
+
+            // Deliberately restrictive vent -> forces meaningful backpressure.
+            Vent outlet("Outlet", {0.0, 0.10, 0.10}, /*far=*/0.02, 0.0, /*cd=*/0.5,
+                        {0.10, 0.05, 0.05}, {1.0, 0.0, 0.0},  VentShapeType::Rectangular);
+
+            mesh.stamp_fan(intake);
+            mesh.stamp_vent(outlet);
+
+            FlowSolver flow_solver(mesh, 4.5, 1e-10, 20000, 1.1, 60, 1e-3);
+            flow_solver.solve();
+
+            return std::make_pair(mesh, Q_free);
+        };
+
+        auto [mesh_fixed, Q_free_a] = build_case(false);
+        auto [mesh_curve, Q_free_b] = build_case(true);
+
+        double total_fixed_source = 0.0;
+        for (const Cell& c : mesh_fixed.get_cells()) {
+            if (c.is_intake()) total_fixed_source += std::abs(c.get_flow_source());
+        }
+        assert(nearly_equal(total_fixed_source, Q_free_a, 1e-9, 1e-6) &&
+            "fixed-CFM fan should inject its full rated flow regardless of backpressure");
+
+        double total_curve_flow = total_fan_curve_flow(mesh_curve);
+        assert(total_curve_flow < 0.85 * Q_free_b &&
+            "curve-enabled fan should be throttled below rated CFM by a restrictive vent");
+        assert(total_curve_flow > 0.0 && "throttled fan should still deliver nonzero flow");
+
+        std::cout << "test_fan_curve_throttles_vs_fixed_cfm_under_restrictive_vent PASSED "
+                << "(fixed=" << total_fixed_source << ", curve=" << total_curve_flow
+                << ", free-air=" << Q_free_a << ")\n";
+    }
+
+    void test_fan_curve_flow_increases_with_less_restrictive_vent() {
+        auto build_case = [](double free_area_ratio, double cd) {
+            Environment env(30.0, 5800.0, 20.0, 1005.0, 0.02587, 0.000018, 0.71, 1.225);
+            Workload load(100'00, 1'000'000, 100'000, 4);
+            Rack rack = Rack::from_meters(0.10, 0.10, 0.20, "rack");
+            rack.set_t(20.0); rack.set_cp(1005.0); rack.set_k(0.02587); rack.set_rho(1.225);
+            Mesh mesh = Mesh().build_mesh(rack, 0.05, 0.05, 0.05, env, load);
+
+            const double cfm = 20.0;
+            Fan intake(
+                "Intake", cfm, 0.0,
+                {0.0, 0.10, 0.10}, {0.0, 0.05, 0.05}, {1.0, 0.0, 0.0},
+                FlowType::Intake, ShapeType::Rectangular);
+
+            const double Q_free = intake.flow_m3s();
+            intake.set_curve(50.0, 50.0 / Q_free, 0.0, 1.2);
+
+            Vent outlet("Outlet", {0.0, 0.10, 0.10}, free_area_ratio, 0.0, cd,
+                        {0.10, 0.05, 0.05}, {1.0, 0.0, 0.0}, VentShapeType::Rectangular);
+
+            mesh.stamp_fan(intake);
+            mesh.stamp_vent(outlet);
+
+            FlowSolver flow_solver(mesh, 4.5, 1e-10, 20000, 1.1, 60, 1e-3);
+            flow_solver.solve();
+            return mesh;
+        };
+
+        Mesh restrictive = build_case(/*far=*/0.02, /*cd=*/0.5);
+        Mesh open        = build_case(/*far=*/0.95, /*cd=*/0.9);
+
+        const double flow_restrictive = total_fan_curve_flow(restrictive);
+        const double flow_open = total_fan_curve_flow(open);
+
+        assert(flow_open > flow_restrictive &&
+            "a less-restrictive vent should let the fan deliver more flow");
+
+        std::cout << "test_fan_curve_flow_increases_with_less_restrictive_vent PASSED "
+                << "(restrictive=" << flow_restrictive << ", open=" << flow_open << ")\n";
+    }
+
+    void test_fan_curve_density_sensitivity() {
+        auto build_case = [](double fan_cell_rho) {
+            Environment env(30.0, 5800.0, 20.0, 1005.0, 0.02587, 0.000018, 0.71, 1.225);
+            Workload load(100'00, 1'000'000, 100'000, 4);
+            Rack rack = Rack::from_meters(0.10, 0.10, 0.20, "rack");
+            rack.set_t(20.0); rack.set_cp(1005.0); rack.set_k(0.02587); rack.set_rho(1.225);
+            Mesh mesh = Mesh().build_mesh(rack, 0.05, 0.05, 0.05, env, load);
+
+            const double cfm = 20.0;
+            Fan intake(
+                "Intake", cfm, 0.0,
+                {0.0, 0.10, 0.10}, {0.0, 0.05, 0.05}, {1.0, 0.0, 0.0},
+                FlowType::Intake, ShapeType::Rectangular);
+
+            const double Q_free = intake.flow_m3s();
+            intake.set_curve(50.0, 50.0 / Q_free, 0.0, /*rho_rated=*/1.2);
+
+            // Moderate restriction so there's headroom for density to matter.
+            Vent outlet("Outlet", {0.0, 0.10, 0.10}, /*far=*/0.15, 0.0, /*cd=*/0.6,
+                        {0.10, 0.05, 0.05}, {1.0, 0.0, 0.0}, VentShapeType::Rectangular);
+
+            mesh.stamp_fan(intake);
+            mesh.stamp_vent(outlet);
+
+            // Isolate the fan curve's own rho_ratio scaling: only override
+            // density on the fan cells themselves, leaving the rest of the
+            // network's rho (friction, vent conductance) untouched.
+            for (int x = 0; x < mesh.get_nx(); ++x)
+                for (int y = 0; y < mesh.get_ny(); ++y)
+                    for (int z = 0; z < mesh.get_nz(); ++z) {
+                        Cell& c = mesh.at(x, y, z);
+                        if (c.has_fan_curve()) c.set_rho(fan_cell_rho);
+                    }
+
+            FlowSolver flow_solver(mesh, 4.5, 1e-10, 20000, 1.1, 60, 1e-3);
+            flow_solver.solve();
+            return mesh;
+        };
+
+        Mesh cool_dense = build_case(/*rho=*/1.2);   // matches rho_rated -> no derating
+        Mesh hot_thin   = build_case(/*rho=*/0.85);  // hot, less-dense air
+
+        const double flow_dense = total_fan_curve_flow(cool_dense);
+        const double flow_thin  = total_fan_curve_flow(hot_thin);
+
+        assert(flow_thin < flow_dense &&
+            "lower local air density should reduce the fan's achievable pressure rise, "
+            "and therefore its throttled delivered flow under the same vent resistance");
+
+        std::cout << "test_fan_curve_density_sensitivity PASSED "
+                << "(rho=1.2 -> Q=" << flow_dense << ", rho=0.85 -> Q=" << flow_thin << ")\n";
+    }
 };
 
 #endif

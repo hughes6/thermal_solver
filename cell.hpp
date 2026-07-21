@@ -1,6 +1,8 @@
 #ifndef CELL_HPP
 #define CELL_HPP
 
+#include <array>
+
 class Cell {
 public:
     enum class State {
@@ -139,6 +141,22 @@ public:
     double area_y() const { return dx * dz; }
     double area_z() const { return dx * dy; }
 
+    bool has_fan_curve() const { return fan_curve_a > 0.0; }
+    double get_fan_curve_a() const { return fan_curve_a; }
+    double get_fan_curve_b() const { return fan_curve_b; }
+    double get_fan_curve_c() const { return fan_curve_c; }
+    double get_fan_rho_rated() const { return fan_rho_rated; }
+    double get_fan_Q_ref() const { return fan_Q_ref; }
+    std::array<double, 3> get_fan_dir() const { return {fan_dir_x, fan_dir_y, fan_dir_z}; }
+    double get_fan_area() const { return fan_area; }
+
+    void set_fan_curve(double a, double b, double c, double rho_rated) {
+        fan_curve_a = a; fan_curve_b = b; fan_curve_c = c; fan_rho_rated = rho_rated;
+    }
+    void set_fan_Q_ref(double q) { fan_Q_ref = q; }
+    void set_fan_dir(double dx, double dy, double dz) { fan_dir_x = dx; fan_dir_y = dy; fan_dir_z = dz; }
+    void set_fan_area(double a) { fan_area = a; }
+
 private:
 
     // Thermal state
@@ -153,6 +171,13 @@ private:
     double pressure;           // P_i, (Pa) 
     double flow_source;        // S_i (m^3/s) += intake -= exh
     double vent_conductance;   // C_v (m^3/(s*Pa)). 0 unless vent cell
+    double fan_curve_a = 0.0;
+    double fan_curve_b = 0.0;
+    double fan_curve_c = 0.0;
+    double fan_rho_rated = 1.2;
+    double fan_Q_ref = 0.0;       // current flow-rate guess through this fan cell (m^3/s)
+    double fan_dir_x = 0.0, fan_dir_y = 0.0, fan_dir_z = 0.0; // unit direction
+    double fan_area = 0.0;       // per-cell share of fan opening area
 
     // Cell dimensions (m)
     double dx;

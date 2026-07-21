@@ -228,23 +228,41 @@ public:
         }
         ctr = 1;
         fout << "Vents: \n";
-        for(const Vent v: vents) {
-            auto center = v.get_center();
-            fout << "Vent " << ctr << ": " << v.get_name() << "\n";
-            fout << "  Free area ratio: " << v.get_free_area_ratio() << "\n";
-            fout << "  size: " << v.get_size_m()[0] << " " <<
-                                  v.get_size_m()[1] << " " <<
-                                  v.get_size_m()[2] << " m\n";
-            fout << "  v_center: " << v.get_center()[0] << " " <<
-                                  v.get_center()[1] << " " <<
-                                  v.get_center()[2] << " m\n";
-            fout << "  v_direction: " << v.get_direction()[0] << " " <<
-                                     v.get_direction()[1] << " " << 
-                                     v.get_direction()[2] << "\n";
-            fout << "\n";
-            ctr++;
-        }
 
+        for(const Vent& v : vents) {
+            fout << "Vent " << ctr
+                << ": " << v.get_name() << "\n";
+
+            fout << "  shape: "
+                << v.get_shape_s() << "\n";
+
+            fout << "  free_area_ratio: "
+                << v.get_free_area_ratio() << "\n";
+
+            fout << "  cd: "
+                << v.get_cd() << "\n";
+
+            fout << "  diameter: "
+                << v.get_diameter() << " m\n";
+
+            fout << "  v_size: "
+                << v.get_size_m()[0] << " "
+                << v.get_size_m()[1] << " "
+                << v.get_size_m()[2] << " m\n";
+
+            fout << "  v_center: "
+                << v.get_center()[0] << " "
+                << v.get_center()[1] << " "
+                << v.get_center()[2] << " m\n";
+
+            fout << "  v_direction: "
+                << v.get_direction()[0] << " "
+                << v.get_direction()[1] << " "
+                << v.get_direction()[2] << "\n";
+
+            fout << "\n";
+            ++ctr;
+        }
     }
 
     const std::vector<Component>& get_components() const {
@@ -442,75 +460,135 @@ private:
             }
         }
 
-        void populate_vent(const Vent& v,
-                        double dx,
-                        double dy,
-                        double dz) {
+        void populate_vent(const Vent& v, double dx, double dy, double dz) {
             auto [cx_m, cy_m, cz_m] = v.get_center();
             auto [vx, vy, vz] = v.get_direction();
 
-            double ax = std::abs(vx);
-            double ay = std::abs(vy);
-            double az = std::abs(vz);
+            const bool is_circular = v.is_circular();
+            const double r = v.get_diameter() / 2.0;
 
-            // Fan normal mostly x: opening plane is y-z
+            const double ax = std::abs(vx);
+            const double ay = std::abs(vy);
+            const double az = std::abs(vz);
+
+            // Vent normal mostly X: opening lies in YZ plane
             if(ax >= ay && ax >= az) {
-                int x = static_cast<int>(std::floor(cx_m / dx));
+                const double w = v.get_size_m()[1] / 2.0;
+                const double h = v.get_size_m()[2] / 2.0;
 
-                double w = v.get_size_m()[1] / 2.0;
+                const int x = static_cast<int>(std::floor(cx_m / dx));
                 int y0 = static_cast<int>(std::floor((cy_m - w) / dy));
-                int y1 = static_cast<int>(std::ceil ((cy_m + w) / dy));
-
-                double h = v.get_size_m()[2] / 2.0;
+                int y1 = static_cast<int>(std::ceil((cy_m + w) / dy));
                 int z0 = static_cast<int>(std::floor((cz_m - h) / dz));
-                int z1 = static_cast<int>(std::ceil ((cz_m + h) / dz));
+                int z1 = static_cast<int>(std::ceil((cz_m + h) / dz));
+
+                if(is_circular) {
+                    y0 = static_cast<int>(std::floor((cy_m - r) / dy));
+                    y1 = static_cast<int>(std::ceil((cy_m + r) / dy));
+                    z0 = static_cast<int>( std::floor((cz_m - r) / dz));
+                    z1 = static_cast<int>(std::ceil((cz_m + r) / dz));
+                }
 
                 for(int y = y0; y < y1; ++y) {
                     for(int z = z0; z < z1; ++z) {
-                        if(in_bounds(x, y, z)) {
-                            at(x, y, z) = 1;
+                        if(!is_circular) {
+                            if(in_bounds(x, y, z)) {
+                                at(x, y, z) = 1;
+                            }
+                        } else {
+                            const double yc = (y + 0.5) * dy;
+                            const double zc = (z + 0.5) * dz;
+
+                            const double dist2 =
+                                (yc - cy_m) * (yc - cy_m) +
+                                (zc - cz_m) * (zc - cz_m);
+
+                            if(dist2 <= r * r &&
+                            in_bounds(x, y, z)) {
+                                at(x, y, z) = 1;
+                            }
                         }
                     }
                 }
             }
 
-            // Fan normal mostly y: opening plane is x-z
+            // Vent normal mostly Y: opening lies in XZ plane
             else if(ay >= ax && ay >= az) {
-                int y = static_cast<int>(std::floor(cy_m / dy));
+                const double w = v.get_size_m()[0] / 2.0;
+                const double h = v.get_size_m()[2] / 2.0;
 
-                double w = v.get_size_m()[0] / 2.0;
-                int x0 = static_cast<int>(std::floor((cx_m - w) / dx));
-                int x1 = static_cast<int>(std::ceil ((cx_m + w) / dx));
-
-                double h = v.get_size_m()[2] / 2.0;
+                const int y = static_cast<int>(std::floor(cy_m / dy));
+                int x0 =  static_cast<int>(std::floor((cx_m - w) / dx));
+                int x1 = static_cast<int>(std::ceil((cx_m + w) / dx));
                 int z0 = static_cast<int>(std::floor((cz_m - h) / dz));
-                int z1 = static_cast<int>(std::ceil ((cz_m + h) / dz));
+                int z1 = static_cast<int>(std::ceil((cz_m + h) / dz));
+
+                if(is_circular) {
+                    x0 = static_cast<int>(std::floor((cx_m - r) / dx));
+                    x1 = static_cast<int>(std::ceil((cx_m + r) / dx));
+                    z0 = static_cast<int>(std::floor((cz_m - r) / dz));
+                    z1 = static_cast<int>(std::ceil((cz_m + r) / dz));
+                }
 
                 for(int x = x0; x < x1; ++x) {
                     for(int z = z0; z < z1; ++z) {
-                        if(in_bounds(x, y, z)) {
-                            at(x, y, z) = 1;
+                        if(!is_circular) {
+                            if(in_bounds(x, y, z)) {
+                                at(x, y, z) = 1;
+                            }
+                        } else {
+                            const double xc = (x + 0.5) * dx;
+                            const double zc = (z + 0.5) * dz;
+
+                            const double dist2 =
+                                (xc - cx_m) * (xc - cx_m) +
+                                (zc - cz_m) * (zc - cz_m);
+
+                            if(dist2 <= r * r &&
+                            in_bounds(x, y, z)) {
+                                at(x, y, z) = 1;
+                            }
                         }
                     }
                 }
             }
 
-            // Fan normal mostly z: opening plane is x-y
+            // Vent normal mostly Z: opening lies in XY plane
             else {
-                int z = static_cast<int>(std::floor(cz_m / dz));
+                const double w = v.get_size_m()[0] / 2.0;
+                const double h = v.get_size_m()[1] / 2.0;
 
-                double w = v.get_size_m()[0] / 2.0;
+                const int z = static_cast<int>(std::floor(cz_m / dz));
                 int x0 = static_cast<int>(std::floor((cx_m - w) / dx));
-                int x1 = static_cast<int>(std::ceil ((cx_m + w) / dx));
-
-                double h = v.get_size_m()[1] / 2.0;
+                int x1 = static_cast<int>(std::ceil((cx_m + w) / dx));
                 int y0 = static_cast<int>(std::floor((cy_m - h) / dy));
-                int y1 = static_cast<int>(std::ceil ((cy_m + h) / dy));
+                int y1 = static_cast<int>(std::ceil((cy_m + h) / dy));
+
+                if(is_circular) {
+                    x0 = static_cast<int>(std::floor((cx_m - r) / dx));
+                    x1 = static_cast<int>( std::ceil((cx_m + r) / dx));
+                    y0 = static_cast<int>(std::floor((cy_m - r) / dy));
+                    y1 = static_cast<int>(std::ceil((cy_m + r) / dy));
+                }
 
                 for(int x = x0; x < x1; ++x) {
                     for(int y = y0; y < y1; ++y) {
-                        if(in_bounds(x, y, z)) {
-                            at(x, y, z) = 1;
+                        if(!is_circular) {
+                            if(in_bounds(x, y, z)) {
+                                at(x, y, z) = 1;
+                            }
+                        } else {
+                            const double xc = (x + 0.5) * dx;
+                            const double yc = (y + 0.5) * dy;
+
+                            const double dist2 =
+                                (xc - cx_m) * (xc - cx_m) +
+                                (yc - cy_m) * (yc - cy_m);
+
+                            if(dist2 <= r * r &&
+                            in_bounds(x, y, z)) {
+                                at(x, y, z) = 1;
+                            }
                         }
                     }
                 }
@@ -620,41 +698,81 @@ private:
 
 
     void validate_bounds(const Vent& v) const {
-        auto[x, y, z] = v.get_center();
-        auto[vx, vy, vz] = v.get_direction();
+        auto [x, y, z] = v.get_center();
+        auto [vx, vy, vz] = v.get_direction();
 
-        double rack_w = rack.get_width_m();
-        double rack_d = rack.get_depth_m();
-        double rack_h = rack.get_height_m();
+        const bool is_circular = v.is_circular();
+        const double r = v.get_diameter() / 2.0;
 
-        if(x < 0.0 || x > rack_w || y < 0.0 || y > rack_d || z < 0.0 || z > rack_h) {
+        const double rack_w = rack.get_width_m();
+        const double rack_d = rack.get_depth_m();
+        const double rack_h = rack.get_height_m();
+
+        if(x < 0.0 || x > rack_w ||  y < 0.0 || y > rack_d || z < 0.0 || z > rack_h) {
             throw std::out_of_range("Grapher: Vent '" + v.get_name() + "' center out of rack bounds");
         }
-        double ax = std::abs(vx);
-        double ay = std::abs(vy);
-        double az = std::abs(vz);
-        // Fan normal mostly x: vent opening plane is y-z
+
+        const double ax = std::abs(vx);
+        const double ay = std::abs(vy);
+        const double az = std::abs(vz);
+
+        // Vent normal mostly X: opening lies in YZ plane
         if(ax >= ay && ax >= az) {
-            double w = v.get_size_m()[1] / 2.0;
-            double h = v.get_size_m()[2] / 2.0;
-            if(y - w < 0.0 || y + w > rack_d || z - h < 0.0 || z + h > rack_h) {
-                throw std::out_of_range("Grapher: Vent '" + v.get_name() + "' box out of rack bounds");
+            if(is_circular) {
+                if(y - r < 0.0 || y + r > rack_d || z - r < 0.0 || z + r > rack_h) {
+                    std::cout << "x" << std::endl;
+                    throw std::out_of_range("Grapher: Vent '" + v.get_name() + "' disk out of rack bounds");
+                }
+            } else {
+                const double w = v.get_size_m()[1] / 2.0;
+                const double h = v.get_size_m()[2] / 2.0;
+                if(y - w < 0.0 || y + w > rack_d || z - h < 0.0 || z + h > rack_h) {
+                    throw std::out_of_range(
+                        "Grapher: Vent '" +
+                        v.get_name() +
+                        "' box out of rack bounds"
+                    );
+                }
             }
         }
-        // Fan normal mostly y: vent opening plane is x-z
+
+        // Vent normal mostly Y: opening lies in XZ plane
         else if(ay >= ax && ay >= az) {
-            double w = v.get_size_m()[0] / 2.0;
-            double h = v.get_size_m()[2] / 2.0;
-            if(x - w < 0.0 || x + w > rack_w || z - h < 0.0 || z + h > rack_h) {
-                throw std::out_of_range("Grapher: Vent '" + v.get_name() + "' box out of rack bounds");
+            if(is_circular) {
+                if(x - r < 0.0 || x + r > rack_w || z - r < 0.0 || z + r > rack_h) {
+                    throw std::out_of_range("Grapher: Vent '" + v.get_name() + "' disk out of rack bounds");
+                }
+            } else {
+                const double w = v.get_size_m()[0] / 2.0;
+                const double h = v.get_size_m()[2] / 2.0;
+                if(x - w < 0.0 || x + w > rack_w ||
+                z - h < 0.0 || z + h > rack_h) {
+                    throw std::out_of_range(
+                        "Grapher: Vent '" +
+                        v.get_name() +
+                        "' box out of rack bounds"
+                    );
+                }
             }
         }
-        // Fan normal mostly z: vent opening plane is x-y
+
+        // Vent normal mostly Z: opening lies in XY plane
         else {
-            double w = v.get_size_m()[0] / 2.0;
-            double h = v.get_size_m()[1] / 2.0;
-            if(x - w < 0.0 || x + w > rack_w || y - h < 0.0 || y + h > rack_d) {
-                throw std::out_of_range("Grapher: Vent '" + v.get_name() + "' box out of rack bounds");
+            if(is_circular) {
+                if(x - r < 0.0 || x + r > rack_w || y - r < 0.0 || y + r > rack_d) {
+                    throw std::out_of_range("Grapher: Vent '" + v.get_name() + "' disk out of rack bounds");
+                }
+            } else {
+                const double w = v.get_size_m()[0] / 2.0;
+                const double h = v.get_size_m()[1] / 2.0;
+                if(x - w < 0.0 || x + w > rack_w ||
+                y - h < 0.0 || y + h > rack_d) {
+                    throw std::out_of_range(
+                        "Grapher: Vent '" +
+                        v.get_name() +
+                        "' box out of rack bounds"
+                    );
+                }
             }
         }
     }
