@@ -25,6 +25,11 @@ struct Vent {
              center{0.0, 0.0, 0.0},
              direction{0.0, 0.0, 0.0} {}
 
+    // explicit copy constructor
+    Vent clone() const {
+        return Vent(*this);
+    }
+
     Vent(std::string name_,
          std::array<double, 3> size_,
          double free_area_ratio_,
@@ -55,6 +60,11 @@ struct Vent {
             throw std::invalid_argument("Invalid vent discharge coefficient. Needs to be between 0.0 and 1.0.");
         }
     }
+    void set_direction(double x, double y, double z) {
+        direction[0] = x;
+        direction[1] = y;
+        direction[2] = z;
+    }
 
     //getters
     std::string get_name() const { return name; }
@@ -63,6 +73,7 @@ struct Vent {
     std::array<double, 3> get_center() const { return center; }
     std::array<double, 3> get_direction() const { return direction; }
     double get_cd() const { return cd; }
+
 
     // helpers
     double get_width_m()  const { return size_m[0]; }
@@ -128,6 +139,30 @@ struct Vent {
         size_m[0] = width_mm  * MM_TO_M;
         size_m[1] = depth_mm  * MM_TO_M;
         size_m[2] = height_mm * MM_TO_M;
+    }
+
+    void set_center_rack_units(double width_u, double depth_u, double height_u) {
+        center[0]  = width_u  * U_TO_M;
+        center[1]  = depth_u  * U_TO_M;
+        center[2]  = height_u * U_TO_M;
+    }
+
+    void set_center_meters(double width_m, double depth_m, double height_m) {
+        center[0] = width_m;
+        center[1] = depth_m;
+        center[2] = height_m;
+    }
+
+    void set_center_inches(double width_in, double depth_in, double height_in) {
+        center[0] = width_in  * IN_TO_M;
+        center[1] = depth_in  * IN_TO_M;
+        center[2] = height_in * IN_TO_M;
+    }
+
+    void set_center_mm(double width_mm, double depth_mm, double height_mm) {
+        center[0] = width_mm  * MM_TO_M;
+        center[1] = depth_mm  * MM_TO_M;
+        center[2] = height_mm * MM_TO_M;
     }
 
     double gross_area() const {
