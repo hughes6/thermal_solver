@@ -120,6 +120,38 @@ public:
         report_mass_balance();
     }           
 
+    void solve(Mesh& mesh_) {
+        mesh = mesh_;
+        validate_grounding();
+        initialize_storage();
+        initialize_pressures();
+
+        bool outer_converged = false;
+        for (int outer = 0; outer < max_outer_iters; ++outer) {
+            build_linearized_network();
+            solve_pressures();
+
+            const double max_relative_change = update_face_flows();
+            update_cell_velocities();
+
+            if (max_relative_change < flow_tolerance && outer > 0) {
+                std::cout << "FlowSolver: nonlinear flow converged after "
+                          << outer + 1 << " outer iterations (max relative face-flow change = "
+                          << max_relative_change << ")\n";
+                outer_converged = true;
+                break;
+            }
+        }
+
+        if (!outer_converged) {
+            std::cerr << "FlowSolver: WARNING -- nonlinear face flow did not "
+                         "converge within " << max_outer_iters
+                      << " outer iterations.\n";
+        }
+
+        report_mass_balance();
+    }    
+
     void set_resistivity(double r) { linear_resistivity = r; }
     double get_resistivity() const { return linear_resistivity; }
 private:
