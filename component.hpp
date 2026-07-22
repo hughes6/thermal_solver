@@ -1,5 +1,5 @@
-#ifndef COMPONENT_HPP
-#define COMPONENT_HPP
+#ifndef THERMAL_SOLVER_COMPONENT_HPP
+#define THERMAL_SOLVER_COMPONENT_HPP
 
 #include <array>
 #include <string>
@@ -8,6 +8,7 @@
 #include <vector>
 
 #include "fan.hpp"
+#include "vent.hpp"
 
 enum class RegionType {
     Air,
@@ -77,6 +78,43 @@ struct InternalRegion {
         validate_vent();
     }
 
+    explicit InternalRegion(const Fan& fan)
+        : InternalRegion()
+    {
+        name = fan.get_name();
+        region_type = RegionType::Fan;
+        size_m = fan.get_size_m();
+        local_position = fan.get_center();
+        direction = fan.get_velocity_dir();
+        velocity_direction = fan.get_velocity_dir();
+        diameter = fan.get_diameter();
+        cfm = fan.get_cfm();
+        flow_type = fan.get_type_t();
+        shape_type = fan.get_shape_t();
+
+        validate_fan();
+    }
+
+    explicit InternalRegion(const Vent& vent)
+        : InternalRegion()
+    {
+        name = vent.get_name();
+        region_type = RegionType::Vent;
+        size_m = vent.get_size_m();
+        local_position = vent.get_center();
+        direction = vent.get_direction();
+        diameter = vent.get_diameter();
+        free_area_ratio = vent.get_free_area_ratio();
+        cd = vent.get_cd();
+
+        shape_type =
+            vent.get_shape() == VentShapeType::Circular
+                ? ShapeType::Circular
+                : ShapeType::Rectangular;
+
+        validate_vent();
+    }
+
     // factories
     static InternalRegion from_meters(double width_m, double depth_m, double height_m, std::string name = "not set") {
         InternalRegion r;
@@ -129,6 +167,30 @@ struct InternalRegion {
         size_m[1] = depth_mm  * MM_TO_M;
         size_m[2] = height_mm * MM_TO_M;
     }
+
+    void set_local_position_meters(double x, double y, double z) { 
+        local_position[0] = x;
+        local_position[1] = y;
+        local_position[2] = z;
+    }
+
+    void set_local_position_rack_units(double x, double y, double z) { 
+        local_position[0] = x * U_TO_M;
+        local_position[1] = y * U_TO_M;
+        local_position[2] = z * U_TO_M;
+    }    
+
+    void set_local_position_inches(double x, double y, double z) { 
+        local_position[0] = x * IN_TO_M;
+        local_position[1] = y * IN_TO_M;
+        local_position[2] = z * IN_TO_M;
+    }    
+
+    void set_local_position_mm(double x, double y, double z) { 
+        local_position[0] = x * MM_TO_M;
+        local_position[1] = y * MM_TO_M;
+        local_position[2] = z * MM_TO_M;
+    }    
 
     // setters
     void set_name(std::string name_) { name = name_; }
@@ -189,7 +251,7 @@ struct InternalRegion {
         if(shape_type == ShapeType::Circular) {
             return PI * diameter * diameter / 4.0;
         } else {
-            gross_area(); 
+            return gross_area(); 
         }
     }
     double velocity_mag() const { return area() > 0.0 ? flow_m3s() / area() : 0.0; }
@@ -296,6 +358,12 @@ struct Component {
 
     Component() = default;
 
+    // explicit copy constructor
+    Component clone() const {
+        return Component(*this);
+    }
+
+
     // Size directly in meters
     Component(double width_m_, double depth_m_, double height_m_, std::string n = "Uninitialized")
         : name(std::move(n)),
@@ -360,11 +428,27 @@ struct Component {
         bot_left_corner_coords = {x, y, z};
     }
 
-    void set_coords_rack_units(double x_in, double y_in, double z_u) {
+    void set_coords_rack_units(double x_u, double y_u, double z_u) {
         bot_left_corner_coords = {
-            x_in * IN_TO_M,
-            y_in * IN_TO_M,
+            x_u * U_TO_M,
+            y_u * U_TO_M,
             z_u * U_TO_M
+        };
+    }
+
+    void set_coords_in(double x, double y, double z) {
+        bot_left_corner_coords = {
+            x * IN_TO_M,
+            y * IN_TO_M,
+            z * IN_TO_M
+        };
+    }
+
+    void set_coords_mm(double x, double y, double z) {
+        bot_left_corner_coords = {
+            x * MM_TO_M,
+            y * MM_TO_M,
+            z * MM_TO_M
         };
     }
 
@@ -461,17 +545,17 @@ struct Component {
         if(loc[0] < bot_left_corner_coords[0] - eps|| loc[0] + loc_size[0] > bot_left_corner_coords[0] + width_m + eps) {
             std::cout << "loc x min: " << loc[0] << " comp x min: " << bot_left_corner_coords[0];
             std::cout << " loc x max: " << loc[0] + loc_size[0] << " comp x max: " << bot_left_corner_coords[0] + width_m << std::endl;
-            throw std::invalid_argument("Component:InternalRegion - int region x component out of component x bounds.");
+            throw std::invalid_argument("Component:InternalRegion " + r.get_name() + " - int region x component out of component x bounds.");
         }
         if(loc[1] < bot_left_corner_coords[1] - eps|| loc[1] + loc_size[1] > bot_left_corner_coords[1] + depth_m + eps) {
             std::cout << "loc y min: " << loc[1] << " comp y min: " << bot_left_corner_coords[1];
             std::cout << " loc y max: " << loc[1] + loc_size[1] << " comp y max: " << bot_left_corner_coords[1] + depth_m << std::endl;
-            throw std::invalid_argument("Component:InternalRegion - int region y component out of component y bounds.");
+            throw std::invalid_argument("Component:InternalRegion  " + r.get_name() + " - int region y component out of component y bounds.");
         }
         if(loc[2] < bot_left_corner_coords[2] - eps || loc[2] + loc_size[2] > bot_left_corner_coords[2] + height_m + eps) {
             std::cout << "loc z min: " << loc[2] << " comp z min: " << bot_left_corner_coords[2];
             std::cout << " loc z max: " << loc[2] + loc_size[2] << " comp z max: " << bot_left_corner_coords[2] + height_m << std::endl;
-            throw std::invalid_argument("Component:InternalRegion - int region z component out of component z bounds.");
+            throw std::invalid_argument("Component:InternalRegion  " + r.get_name() + " - int region z component out of component z bounds.");
         }
     }
 

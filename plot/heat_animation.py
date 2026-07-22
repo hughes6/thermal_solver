@@ -173,13 +173,29 @@ def parse_rack_file(filename: str) -> RackGeom:
         match = re.match(r"^Vent\s+\d+:\s*(.*)$", line)
         if match:
             values, i = parse_simple_block(lines, i)
+
+            # Vent output now mirrors fan output:
+            #   shape, diameter, v_size, v_center, v_direction
+            # Keep fallbacks for older output.txt files.
+            vent_size_text = values.get("v_size", values.get("size", "0 0 0"))
+            far = values.get(
+                "free_area_ratio",
+                values.get("free area ratio", "?")
+            )
+
             rack.openings.append(OpeningGeom(
-                name=match.group(1), kind="Vent",
-                center=three_floats(values["v_center"]),
-                direction=three_floats(values["v_direction"]),
-                size=three_floats(values["size"]),
-                shape="Rectangular",
-                label_detail=f"FAR={values.get('free area ratio', '?')}",
+                name=match.group(1),
+                kind="Vent",
+                center=three_floats(
+                    values.get("v_center", values.get("center", ""))
+                ),
+                direction=three_floats(
+                    values.get("v_direction", values.get("direction", ""))
+                ),
+                size=three_floats(vent_size_text),
+                shape=values.get("shape", "Rectangular").strip(),
+                diameter=first_float(values.get("diameter", "0")),
+                label_detail=f"FAR={far}",
             ))
             continue
         i += 1

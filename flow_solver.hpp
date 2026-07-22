@@ -101,6 +101,7 @@ public:
 
             const double max_relative_change = update_face_flows();
             update_cell_velocities();
+            update_fan_operating_points();
 
             if (max_relative_change < flow_tolerance && outer > 0) {
                 std::cout << "FlowSolver: nonlinear flow converged after "
@@ -119,6 +120,39 @@ public:
 
         report_mass_balance();
     }           
+
+    void solve(Mesh& mesh_) {
+        mesh = mesh_;
+        validate_grounding();
+        initialize_storage();
+        initialize_pressures();
+
+        bool outer_converged = false;
+        for (int outer = 0; outer < max_outer_iters; ++outer) {
+            build_linearized_network();
+            solve_pressures();
+
+            const double max_relative_change = update_face_flows();
+            update_cell_velocities();
+            update_fan_operating_points();
+
+            if (max_relative_change < flow_tolerance && outer > 0) {
+                std::cout << "FlowSolver: nonlinear flow converged after "
+                          << outer + 1 << " outer iterations (max relative face-flow change = "
+                          << max_relative_change << ")\n";
+                outer_converged = true;
+                break;
+            }
+        }
+
+        if (!outer_converged) {
+            std::cerr << "FlowSolver: WARNING -- nonlinear face flow did not "
+                         "converge within " << max_outer_iters
+                      << " outer iterations.\n";
+        }
+
+        report_mass_balance();
+    }    
 
     void set_resistivity(double r) { linear_resistivity = r; }
     double get_resistivity() const { return linear_resistivity; }
@@ -158,6 +192,7 @@ private:
 
     std::vector<std::vector<FaceLink>> neighbors;
     std::vector<double> vent_C;
+    std::vector<double> fan_ground_C;  // conductance to ambient from fan's internal resistance
     std::vector<double> source_S;
 
     // One value per global positive-oriented mesh face.
@@ -181,6 +216,7 @@ private:
         const size_t n = static_cast<size_t>(mesh.get_nx()) * mesh.get_ny() * mesh.get_nz();
         neighbors.assign(n, {});
         vent_C.assign(n, 0.0);
+        fan_ground_C.assign(n, 0.0);
         source_S.assign(n, 0.0);
 
         qx.assign(static_cast<size_t>(mesh.get_nx() + 1) * mesh.get_ny() * mesh.get_nz(), 0.0);
@@ -295,6 +331,30 @@ private:
                     const size_t i = cell_idx(x, y, z);
                     source_S[i] = c.get_flow_source();
 
+                    fan_ground_C[i] = 0.0;
+
+                    if (c.has_fan_curve()) {
+                        const double Q_ref = std::max(c.get_fan_Q_ref(), minimum_flow);
+                        const double rho_local = std::max(c.get_rho(), 1e-9);
+                        const double rho_ratio = rho_local / c.get_fan_rho_rated();
+
+                        const double dP_ref = std::max(
+                            c.get_fan_curve_a() - c.get_fan_curve_b() * Q_ref
+                                                - c.get_fan_curve_c() * Q_ref * Q_ref, 0.0) * rho_ratio;
+
+                        // slope of dP(Q) at the current operating point (always <= 0 for a
+                        // sane curve); this is what gives the fan its "internal resistance."
+                        const double slope = -(c.get_fan_curve_b() + 2.0 * c.get_fan_curve_c() * Q_ref) * rho_ratio;
+                        const double safe_slope = std::min(slope, -1e-9); // guard against a flat/zero slope
+
+                        const double C_fan = -1.0 / safe_slope; // always positive -> stabilizing diagonal term
+                        fan_ground_C[i] = C_fan;
+
+                        const double sign = c.is_intake() ? +1.0 : -1.0;
+                        // Norton-equivalent constant current term (see derivation: this is
+                        // the fan's autonomous push, independent of local cell pressure).
+                        source_S[i] += sign * (Q_ref + dP_ref * C_fan);
+                    }
                     add_link(i, x, y, z, x + 1, y, z, Axis::X,
                              xface_idx(x + 1, y, z), mesh.area_x(), mesh.get_dx(), +1.0);
                     add_link(i, x, y, z, x - 1, y, z, Axis::X,
@@ -354,7 +414,7 @@ private:
                         if (!c.is_fluid()) continue;
 
                         const size_t i = cell_idx(x, y, z);
-                        double diagonal = vent_C[i];
+                        double diagonal = vent_C[i] + fan_ground_C[i];
                         double rhs = source_S[i];
                         for (const FaceLink& link : neighbors[i]) {
                             diagonal += link.conductance;
@@ -388,7 +448,7 @@ private:
                     const Cell& c = mesh.at(x, y, z);
                     if (!c.is_fluid()) continue;
                     const size_t i = cell_idx(x, y, z);
-                    double r = source_S[i] - vent_C[i] * c.get_pressure();
+                    double r = source_S[i] - vent_C[i] * c.get_pressure() - fan_ground_C[i] * c.get_pressure();
                     for (const FaceLink& link : neighbors[i]) {
                         r -= link.conductance *
                              (c.get_pressure() -
@@ -459,6 +519,42 @@ private:
                     c.set_vx(0.5 * (ux_minus + ux_plus));
                     c.set_vy(0.5 * (uy_minus + uy_plus));
                     c.set_vz(0.5 * (uz_minus + uz_plus));
+                }
+            }
+        }
+    }
+
+    void update_fan_operating_points() {
+        for (int x = 0; x < mesh.get_nx(); ++x) {
+            for (int y = 0; y < mesh.get_ny(); ++y) {
+                for (int z = 0; z < mesh.get_nz(); ++z) {
+                    Cell& c = mesh.at(x, y, z);
+                    if (!c.has_fan_curve()) continue;
+
+                    const double Q_ref = std::max(c.get_fan_Q_ref(), minimum_flow);
+                    const double rho_local = std::max(c.get_rho(), 1e-9);
+                    const double rho_ratio = rho_local / c.get_fan_rho_rated();
+                    const double dP_ref = std::max(
+                        c.get_fan_curve_a() - c.get_fan_curve_b() * Q_ref
+                                            - c.get_fan_curve_c() * Q_ref * Q_ref, 0.0) * rho_ratio;
+                    const double slope = -(c.get_fan_curve_b() + 2.0 * c.get_fan_curve_c() * Q_ref) * rho_ratio;
+                    const double safe_slope = std::min(slope, -1e-9);
+
+                    const double P_i = c.get_pressure();
+                    const double sign = c.is_intake() ? +1.0 : -1.0;
+
+                    // Solve the linearized relation for the new Q at this P_i.
+                    double Q_new = Q_ref + (sign * P_i - dP_ref) / safe_slope;
+                    Q_new = std::max(Q_new, minimum_flow);
+                    c.set_fan_Q_ref(Q_new);
+
+                    if (c.get_fan_area() > 0.0) {
+                        const auto dir = c.get_fan_dir();
+                        const double v = Q_new / c.get_fan_area();
+                        c.set_vx(v * dir[0]);
+                        c.set_vy(v * dir[1]);
+                        c.set_vz(v * dir[2]);
+                    }
                 }
             }
         }

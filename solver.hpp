@@ -3,22 +3,29 @@
 
 #include <stdexcept>
 
+#include "air_properties.hpp"
 #include "convection.hpp"
 #include "mesh.hpp"
+#include "flow_solver.hpp"
 #include "workload.hpp"
 
 class Solver {
 public:
-    Solver() {}
     
-    Solver(Mesh initial_mesh, double dt_, double sim_length_, bool print_convections_, int output_interval_)
-        : current(std::move(initial_mesh)),
-          next(current),
-          dt(dt_),
-          sim_length(sim_length_),
-          print_convections(print_convections_),
-          output_interval(output_interval_),
-          logfile("simulation.csv")
+    Solver(Mesh initial_mesh, double dt_, double sim_length_, bool print_convections_, int output_interval_,
+            int update_flow_interval_ = -1,
+            double resistivity_ = 4.5, double tolerance_ = 1e-3, int max_iterations_ = 10,
+            double sor_omega_ = 1.3, int max_outer_iterations_ = 2, double flow_tolerance_ = 1e-2)
+            : current(std::move(initial_mesh)),
+            next(current),
+            dt(dt_),
+            sim_length(sim_length_),
+            print_convections(print_convections_),
+            output_interval(output_interval_),
+            update_flow_interval(update_flow_interval_),
+            logfile("simulation.csv"),
+            flow_solver(current, resistivity_, tolerance_, max_iterations_,
+                        sor_omega_, max_outer_iterations_, flow_tolerance_)
     { 
       load = current.get_load();
       validate_computational_workload();
@@ -28,6 +35,7 @@ public:
         << ",dz," << current.get_dz()
         << '\n';
     }
+
 
     void validate_computational_workload() {
         std::size_t timesteps = get_timestep_count(); // sim length / dt;   5.0/0.1 = 50
@@ -124,6 +132,56 @@ public:
         std::cout << "Conduction CFL max = " << max_C << '\n';
     }
 
+    void check_convection_stability() const {
+        double max_h_estimate = 0.0;
+
+        for(const Cell& c : current.get_cells()) {
+            if(!c.is_fluid()) continue;
+
+            double vmag = std::sqrt(c.get_vx()*c.get_vx() +
+                                    c.get_vy()*c.get_vy() +
+                                    c.get_vz()*c.get_vz());
+
+            // Conservative delta_T: worst case is hottest possible solid vs
+            // this cell's current air temp. Since we don't know solid temps
+            // in advance, use ambient-to-max-expected-hotspot as a bound.
+            // A simple proxy: use a generous fixed margin, e.g. 80 C, or
+            // wire in the max component watt-density -> rough T estimate
+            // if you want this tighter.
+            double delta_T_bound = 80.0;
+            double t_film_bound = c.get_T() + 273.15 + delta_T_bound / 2.0;
+
+            double h_est = Convection::compute_local_h(
+                vmag, /*char_length=*/std::min({current.get_dx(), current.get_dy(), current.get_dz()}),
+                Convection::AIR_RHO, Convection::AIR_MU, Convection::AIR_K,
+                Convection::AIR_PR, delta_T_bound, t_film_bound);
+
+            max_h_estimate = std::max(max_h_estimate, h_est);
+        }
+
+        // Worst-case face area / cell volume ratio for a boundary cell:
+        // use the smallest face area over the largest single-cell volume the
+        // stencil could apply h across (any of the 6 faces).
+        double A_over_V = std::max({
+            current.area_x(), current.area_y(), current.area_z()
+        }) / current.cell_volume();
+
+        // Use air's rho*cp as the limiting (smaller) thermal mass — a thin
+        // air cell heats/cools faster than a solid cell of the same size.
+        double rho_cp_air = Convection::AIR_RHO * 1005.0; // or pull from Environment if available
+
+        double C = max_h_estimate * A_over_V * dt / rho_cp_air;
+
+        if(C > 1.0) {
+            std::cerr << "WARNING: convection term may be unstable. "
+                        "Estimated C = " << C << " > 1.0 (h_est = "
+                    << max_h_estimate << " W/m^2K)\n";
+        } else {
+            std::cout << "Convection stability estimate: C = " << C
+                    << " (h_est = " << max_h_estimate << " W/m^2K)\n";
+        }
+    }
+
     const Mesh& get_mesh() const {
         return current;
     }
@@ -132,16 +190,29 @@ public:
     void solve() {
         check_advection_stability();
         check_conduction_stability();
+        check_convection_stability();
         int steps = static_cast<int>(sim_length / dt);
         log_state(0);
         for(int step = 0; step < steps; step++) {
             timestep_h_sum = 0.0;
             timestep_h_count = 0;
+        if(update_flow_interval != -1 && step % update_flow_interval == 0) {
+            flow_solver.solve(current);
+            check_convection_stability();
+        }
+
             for(int x = 0; x < current.get_nx(); x++) {
                 for(int y = 0; y < current.get_ny(); y++) {
                     for(int z = 0; z < current.get_nz(); z++) {
                         double T_new = compute_t_next(x,y,z);
+                        Cell& next_cell = next.at(x,y,z);
                         next.at(x,y,z).set_T(T_new);
+                        // Keep fluid density/viscosity consistent with the
+                        // temperature that was just computed for this cell.
+                        if(next_cell.is_fluid()) {
+                            next_cell.set_rho(AirProperties::density(T_new, current.get_env().get_ambient_pressure()));
+                            next_cell.set_mu(AirProperties::viscosity(T_new));
+                        }
                     }
                 }
             }
@@ -167,18 +238,27 @@ private:
     Mesh current;
     Mesh next;
     Workload load;
+    FlowSolver flow_solver;
     bool print_convections = false;
     double dt;
     double sim_length;
     double timestep_h_sum = 0.0;
     int timestep_h_count = 0;
     int output_interval = 0;
+    int update_flow_interval = 0;
 
     std::ofstream logfile;
 
     double compute_t_next(int x, int y, int z) {
         const Cell& c = current.at(x, y, z);
         double T = c.get_T();
+            
+        // Intake cells are fed by an effectively infinite ambient reservoir —
+        // pin them at ambient rather than letting the stencil evolve them.
+        if(c.is_intake()) {
+            return current.get_env().get_T_ambient();
+        }
+
         double Qcond = 0.0, Qconv = 0.0, Qgen = 0.0;
         /*
         if (cell is solid) {
@@ -261,9 +341,9 @@ private:
             const Cell& n = current.at(nx, ny, nz);
             double Tn = n.get_T();
             double kn = n.get_k();
-            if(k <= 0.0 || kn <= 0.0) {
-                return;
-            }
+
+            if(c.is_solid() != n.is_solid()) return;
+
             double k_face = 2.0 * k * kn / (k + kn);
             Q += k_face * area * (Tn - T) / dist;
         };

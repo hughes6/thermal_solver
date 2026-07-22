@@ -36,6 +36,8 @@ vent_centers = []
 vent_fars = []
 vent_directions = []
 vent_sizes = []
+vent_shapes = []
+vent_diams = []
 
 try:
     with open(filename, "r") as f:
@@ -184,27 +186,38 @@ while i < len(lines):
         v_size_line = None
         v_center_line = None
         v_dir_line = None
+        v_shape_line = None
+        v_diam_line = None
 
         j = i + 1
         while j < len(lines):
             if re.match(r"^Vent\s+\d+:", lines[j]) or lines[j].startswith(("Component ", "Fan ")):
                 break
 
-            if lines[j].startswith("Free area ratio:"):
+            if lines[j].startswith(("Free area ratio:", "free_area_ratio:")):
                 far_line = lines[j]
-            elif lines[j].startswith("size:"):
+            elif lines[j].startswith(("v_size:", "size:")):
                 v_size_line = lines[j]
             elif lines[j].startswith("v_center:"):
                 v_center_line = lines[j]
             elif lines[j].startswith("v_direction:"):
                 v_dir_line = lines[j]
+            elif lines[j].startswith("shape:"):
+                v_shape_line = lines[j]
+            elif lines[j].startswith("diameter:"):
+                v_diam_line = lines[j]
 
             j += 1
 
-        if far_line is None or v_size_line is None or v_center_line is None or v_dir_line is None:
-            raise ValueError(f"Could not find vent data for {name}")
+        if (far_line is None or v_size_line is None or v_center_line is None
+                or v_dir_line is None or v_shape_line is None or v_diam_line is None):
+            raise ValueError(f"Could not find vent data for {v_name}")
 
         far_text = far_line.split(":", 1)[1].strip()
+        shape_text = v_shape_line.split(":", 1)[1].strip()
+
+        diam_text = v_diam_line.split(":", 1)[1].replace("m", "").strip()
+        diameter = float(diam_text)
 
         v_size_text = v_size_line.split(":", 1)[1].replace("m", "").strip()
         v_size = [float(v.strip()) for v in v_size_text.split()]
@@ -220,6 +233,8 @@ while i < len(lines):
         vent_sizes.append(v_size)
         vent_centers.append(v_center)
         vent_directions.append(v_direction)
+        vent_shapes.append(shape_text)
+        vent_diams.append(diameter)
 
         i = j - 1
 
@@ -411,40 +426,59 @@ for i in range(len(vent_centers)):
 
     x, y, z = vent_centers[i]
     vx, vy, vz = vent_directions[i]
+    d = vent_diams[i]
+    r = d / 2.0
+
     n = vent_names[i]
     f = vent_fars[i]
-    legend_name = f"Vent: {n}, FAR: {f}"
+    s = vent_shapes[i]
+    legend_name = f"Vent: {n}, FAR: {f}, Shape: {s}"
 
     # -------------------------
-    # draw vent rect
+    # draw vent opening
     # -------------------------
 
     # mostly z-normal: vent lies in XY plane
     if abs(vz) >= abs(vx) and abs(vz) >= abs(vy):
-        w, h, n = vent_sizes[i]
-        x0 = x - w/2
-        y0 = y - h/2
-        rect = plt.Rectangle((x0, y0), w, h, color=color, alpha=0.35)
-        ax.add_patch(rect)
-        art3d.pathpatch_2d_to_3d(rect, z=z, zdir="z")
+        if s == "Circular":
+            circle = plt.Circle((x, y), r, color=color, alpha=0.35)
+            ax.add_patch(circle)
+            art3d.pathpatch_2d_to_3d(circle, z=z, zdir="z")
+        elif s == "Rectangular":
+            w, h, _ = vent_sizes[i]
+            x0 = x - w / 2.0
+            y0 = y - h / 2.0
+            rect = plt.Rectangle((x0, y0), w, h, color=color, alpha=0.35)
+            ax.add_patch(rect)
+            art3d.pathpatch_2d_to_3d(rect, z=z, zdir="z")
 
     # mostly y-normal: vent lies in XZ plane
     elif abs(vy) >= abs(vx) and abs(vy) >= abs(vz):
-        w, n, h = vent_sizes[i]
-        x0 = x - w/2
-        z0 = z - h/2
-        rect = plt.Rectangle((x0, z0), w, h, color=color, alpha=0.35)
-        ax.add_patch(rect)
-        art3d.pathpatch_2d_to_3d(rect, z=y, zdir="y")
+        if s == "Circular":
+            circle = plt.Circle((x, z), r, color=color, alpha=0.35)
+            ax.add_patch(circle)
+            art3d.pathpatch_2d_to_3d(circle, z=y, zdir="y")
+        elif s == "Rectangular":
+            w, _, h = vent_sizes[i]
+            x0 = x - w / 2.0
+            z0 = z - h / 2.0
+            rect = plt.Rectangle((x0, z0), w, h, color=color, alpha=0.35)
+            ax.add_patch(rect)
+            art3d.pathpatch_2d_to_3d(rect, z=y, zdir="y")
 
     # mostly x-normal: vent lies in YZ plane
     else:
-        n, w, h = vent_sizes[i]
-        y0 = x - w/2
-        z0 = z - h/2
-        rect = plt.Rectangle((y0, z0), w, h, color=color, alpha=0.35)
-        ax.add_patch(rect)
-        art3d.pathpatch_2d_to_3d(rect, z=x, zdir="x")
+        if s == "Circular":
+            circle = plt.Circle((y, z), r, color=color, alpha=0.35)
+            ax.add_patch(circle)
+            art3d.pathpatch_2d_to_3d(circle, z=x, zdir="x")
+        elif s == "Rectangular":
+            _, w, h = vent_sizes[i]
+            y0 = y - w / 2.0
+            z0 = z - h / 2.0
+            rect = plt.Rectangle((y0, z0), w, h, color=color, alpha=0.35)
+            ax.add_patch(rect)
+            art3d.pathpatch_2d_to_3d(rect, z=x, zdir="x")
 
     legend_handles.append(
         mpatches.Patch(

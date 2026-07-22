@@ -35,7 +35,23 @@ struct Environment {
     double get_mu() const { return mu; }
     double get_pr() const { return pr; }
     double get_rho() const { return rho; }
-    
+    double get_ambient_pressure() const {
+        constexpr double p0 = 101325.0;      // Pa
+        constexpr double T0 = 288.15;        // K
+        constexpr double lapse_rate = 0.0065; // K/m
+        constexpr double gravity = 9.80665;  // m/s^2
+        constexpr double molar_mass = 0.0289644; // kg/mol
+        constexpr double gas_constant = 8.3144598; // J/(mol K)
+        constexpr double feet_to_meters = 0.3048;
+
+        const double altitude_m = elevation * feet_to_meters;
+
+        return p0 * std::pow(
+            1.0 - lapse_rate * altitude_m / T0,
+            gravity * molar_mass / (gas_constant * lapse_rate)
+        );
+    }
+
     void set_humidity_pct(double h) {
         if(h < 0 || h > 100) {
             throw std::invalid_argument("invalid humidity: no where a server rack will be below 0% or above 100% humidity.");
