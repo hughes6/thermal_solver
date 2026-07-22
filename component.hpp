@@ -507,17 +507,17 @@ struct Component {
         if(loc[0] < bot_left_corner_coords[0] - eps|| loc[0] + loc_size[0] > bot_left_corner_coords[0] + width_m + eps) {
             std::cout << "loc x min: " << loc[0] << " comp x min: " << bot_left_corner_coords[0];
             std::cout << " loc x max: " << loc[0] + loc_size[0] << " comp x max: " << bot_left_corner_coords[0] + width_m << std::endl;
-            throw std::invalid_argument("Component:InternalRegion - int region x component out of component x bounds.");
+            throw std::invalid_argument("Component:InternalRegion " + r.get_name() + " - int region x component out of component x bounds.");
         }
         if(loc[1] < bot_left_corner_coords[1] - eps|| loc[1] + loc_size[1] > bot_left_corner_coords[1] + depth_m + eps) {
             std::cout << "loc y min: " << loc[1] << " comp y min: " << bot_left_corner_coords[1];
             std::cout << " loc y max: " << loc[1] + loc_size[1] << " comp y max: " << bot_left_corner_coords[1] + depth_m << std::endl;
-            throw std::invalid_argument("Component:InternalRegion - int region y component out of component y bounds.");
+            throw std::invalid_argument("Component:InternalRegion  " + r.get_name() + " - int region y component out of component y bounds.");
         }
         if(loc[2] < bot_left_corner_coords[2] - eps || loc[2] + loc_size[2] > bot_left_corner_coords[2] + height_m + eps) {
             std::cout << "loc z min: " << loc[2] << " comp z min: " << bot_left_corner_coords[2];
             std::cout << " loc z max: " << loc[2] + loc_size[2] << " comp z max: " << bot_left_corner_coords[2] + height_m << std::endl;
-            throw std::invalid_argument("Component:InternalRegion - int region z component out of component z bounds.");
+            throw std::invalid_argument("Component:InternalRegion  " + r.get_name() + " - int region z component out of component z bounds.");
         }
     }
 
