@@ -7,6 +7,7 @@
 #include <string>
 
 #include "input_types.hpp"
+#include "../component_grapher.hpp"
 #include "../toml.hpp"
 
 
@@ -118,31 +119,55 @@ namespace {
 
     InternalRegionInput parse_internal_region(const toml::table& table, const std::string& context) {
         InternalRegionInput internal_region;
-
-        internal_region.name = require_value<std::string>(table["name"], context + ".name");
-        internal_region.local_position = parse_position(require_table(table["position"], context + ".position"), context + ".position");
-        internal_region.size = parse_size(require_table(table["size"], context + ".size"), context + ".size");
-        internal_region.material = parse_material(require_table(table["material"], context + ".material"), context + ".material");
-        internal_region.watts = require_value<double>(table["watts"], context + ".watts");
         internal_region.state = parse_region_state(require_value<std::string>(table["state"], context + ".state"));
+        internal_region.size = parse_size(require_table(table["size"], context + ".size"), context + ".size");
+        internal_region.local_position = parse_position(require_table(table["position"], context + ".position"), context + ".position");
+        internal_region.name = require_value<std::string>(table["name"], context + ".name");
 
+        if(internal_region.state == RegionState::Air) {
+            return internal_region;
+        }
+        if(internal_region.state == RegionState::Solid) {
+            internal_region.material = parse_material(require_table(table["material"], context + ".material"), context + ".material");
+            internal_region.watts = require_value<double>(table["watts"], context + ".watts");
+            return internal_region;
+        }
+        if(internal_region.state == RegionState::Fan) {
+            return internal_region;
+        }
+        if(internal_region.state == RegionState::Vent) {
+            return internal_region;
+        }
+        throw std::runtime_error(context + " No state found");
         return internal_region;
     }
 
-    ComponentInput parse_component(const toml::table& table, const std::string& context) {
+    ComponentInput parse_component(const toml::table& table, const std::string& context, bool is_loading_from_template = false, PositionInput pos = PositionInput()) {
         ComponentInput component;
 
-        component.name = require_value<std::string>(table["name"], context + ".name");
+        component.template_path = table["template"].value<std::string>();
+        if(!is_loading_from_template) {
         component.position = parse_position(require_table(table["position"], context + ".position"), context + ".position");
+        } else {
+            component.position = pos;
+        }
+        if (component.template_path.has_value()) return component;
+
+        component.name = require_value<std::string>(table["name"], context + ".name");
+        component.watts = require_value<double>(table["watts"], context + ".watts");
         component.size = parse_size(require_table(table["size"], context + ".size"), context + ".size");
         component.material = parse_material(require_table(table["material"], context + ".material"), context + ".material");
-        component.watts = require_value<double>(table["watts"], context + ".watts");
 
         const toml::array* internal_regions = table["internal_regions"].as_array();
+
+        if(internal_regions == nullptr) {
+            throw std::runtime_error("internal_regions[...] must be a table");
+        }
 
         std::size_t index = 0;
 
         for(const toml::node& node : *internal_regions) {
+
             const toml::table* internal_region_table = node.as_table();
             if(internal_region_table == nullptr) {
                 throw std::runtime_error("internal_regions[" + std::to_string(index) + "] must be a table");
@@ -150,8 +175,17 @@ namespace {
             component.internal_regions.push_back(parse_internal_region(*internal_region_table, "internal_regions[" + std::to_string(index) + "]"));
             index++;
         }
-
         return component;
+    }
+        
+    ComponentInput load_component_template(const std::filesystem::path& path, PositionInput pos) {
+        try {
+            const toml::table root = toml::parse_file(path.string());
+            return parse_component(root, path.stem().string(), true, pos);
+        } catch (const toml::parse_error& error) {
+            throw std::runtime_error("Failed to parse component template '" + path.string() + "': "
+                                    + std::string(error.description()));
+        }
     }
 
     FanInput parse_fan(const toml::table& table, const std::string& context) {
@@ -207,6 +241,7 @@ namespace {
             if(component_table == nullptr) {
                 throw std::runtime_error("components[" + std::to_string(index) + "] must be a table");
             }
+
             model.components.push_back(parse_component(*component_table, "compnents[" + std::to_string(index) + "]"));
             index++;
         }
@@ -290,6 +325,7 @@ namespace {
 struct ModelLoader {
     ModelInput model;
     std::unordered_map<std::string, FanCurveInput> fan_curve_library;
+    std::unordered_map<std::string, ComponentInput> component_template_cache; 
 
     ModelLoader() = default;
 
@@ -364,6 +400,13 @@ struct ModelLoader {
         }
     }
 
+const ComponentInput& get_component_template(const std::string& path, PositionInput pos) {
+    auto it = component_template_cache.find(path);
+    if (it != component_template_cache.end()) return it->second;
+    auto [inserted, ok] = component_template_cache.emplace(path, load_component_template(path, pos));
+    return inserted->second;
+}
+
 void run() 
     {
     Workload load = Workload(model.simulation.max_timesteps, model.simulation.max_updates, model.simulation.max_cell_count, model.simulation.max_megabyte_usage);
@@ -392,9 +435,18 @@ void run()
     Mesh mesh = Mesh().build_mesh(rack, model.mesh.dx, model.mesh.dy, model.mesh.dz, env, load);
     Grapher grapher = Grapher(rack, model.mesh.dx, model.mesh.dy, model.mesh.dz);
 
-    for(const ComponentInput& c : model.components) {
-        const std::string comp_units = c.size.units.value_or("u");
+    for(const ComponentInput& c_in : model.components) {
         Component component;
+        ComponentInput c = c_in;
+        if (c.template_path.has_value()) {
+            const ComponentInput& tmpl = get_component_template(*c.template_path, c.position);
+            c.name = tmpl.name;
+            c.size = tmpl.size;
+            c.material = tmpl.material;
+            c.watts = tmpl.watts;
+            c.internal_regions = tmpl.internal_regions;
+        }
+        const std::string comp_units = c.size.units.value_or("u");
         if(comp_units == "u") {
             component = Component::from_rack_units(c.size.width, c.size.depth, c.size.height, c.name);
         } else if(comp_units == "m") {
@@ -418,6 +470,7 @@ void run()
         } else {
             throw std::runtime_error("Invalid component.position units: '" + comp_pos_units + "'. Supported values are 'u', 'm', 'in', and 'mm'.");
         }
+        component.set_name(c.name);
         component.set_cp(c.material.cp);
         component.set_rho_solid(c.material.density);
         component.set_k_solid(c.material.k);
@@ -633,6 +686,148 @@ void run()
                 *model.flow_solver.max_iterations, *model.flow_solver.sor_omega,
                 *model.flow_solver.max_outer_iters, *model.flow_solver.flow_tolerance);
     solver.solve();
+    }
+};
+
+
+
+struct ComponentLoader {
+    ComponentInput model;
+    std::unordered_map<std::string, ComponentInput> component_template_cache; 
+
+    ComponentLoader() = default;
+
+
+    void load_component(const std::filesystem::path& component_path) 
+    {
+        try {
+            const toml::table root = toml::parse_file(component_path.string());
+
+            model.name = root["name"].value<std::string>().value_or(component_path.stem().string());
+            PositionInput pos;
+            model = parse_component(root, "component laoder", true, pos);
+    
+        } catch(const toml::parse_error& error) {
+            throw std::runtime_error("Failed to parse model file '" + component_path.string() + "': " + std::string(error.description()));
+        }
+    }
+
+    const ComponentInput& get_component_template(const std::string& path, PositionInput pos) {
+        auto it = component_template_cache.find(path);
+        if (it != component_template_cache.end()) return it->second;
+        auto [inserted, ok] = component_template_cache.emplace(path, load_component_template(path, pos));
+        return inserted->second;
+    }
+
+    void run() 
+    {
+        
+        ComponentGrapher grapher = ComponentGrapher();
+
+        Component component;
+        if (model.template_path.has_value()) {
+            const ComponentInput& tmpl = get_component_template(*model.template_path, model.position);
+            model.name = tmpl.name;
+            model.size = tmpl.size;
+            model.material = tmpl.material;
+            model.watts = tmpl.watts;
+            model.internal_regions = tmpl.internal_regions;
+        }
+        const std::string comp_units = model.size.units.value_or("u");
+        if(comp_units == "u") {
+            component = Component::from_rack_units(model.size.width, model.size.depth, model.size.height, model.name);
+        } else if(comp_units == "m") {
+            component = Component::from_meters(model.size.width, model.size.depth, model.size.height, model.name);
+        } else if(comp_units == "in") {
+            component = Component::from_inches(model.size.width, model.size.depth, model.size.height, model.name);
+        } else if(comp_units == "mm") {
+            component = Component::from_mm(model.size.width, model.size.depth, model.size.height, model.name);
+        } else {
+            throw std::runtime_error("Invalid component.size units: '" + comp_units + "'. Supported values are 'u', 'm', 'in', and 'mm'.");
+        }
+        const std::string comp_pos_units = model.position.units.value_or("u");
+        if(comp_pos_units == "u") {
+            component.set_coords_rack_units(model.position.x, model.position.y, model.position.z);
+        } else if(comp_pos_units == "m") {
+            component.set_coords_m(model.position.x, model.position.y, model.position.z);
+        } else if(comp_pos_units == "in") {
+            component.set_coords_in(model.position.x, model.position.y, model.position.z);
+        } else if(comp_pos_units == "mm") {
+            component.set_coords_mm(model.position.x, model.position.y, model.position.z);
+        } else {
+            throw std::runtime_error("Invalid component.position units: '" + comp_pos_units + "'. Supported values are 'u', 'm', 'in', and 'mm'.");
+        }
+        component.set_name(model.name);
+        component.set_cp(model.material.cp);
+        component.set_rho_solid(model.material.density);
+        component.set_k_solid(model.material.k);
+        component.set_watts(model.watts);
+        for(const InternalRegionInput& i : model.internal_regions) {
+            InternalRegion internal_region = InternalRegion();
+            const std::string int_units = i.local_position.units.value_or("u");
+            if(int_units == "u") {
+                internal_region.set_local_position_rack_units(i.local_position.x, i.local_position.y, i.local_position.z);
+            } else if(int_units == "m") {
+                internal_region.set_local_position_meters(i.local_position.x, i.local_position.y, i.local_position.z);
+            } else if(int_units == "in") {
+                internal_region.set_local_position_inches(i.local_position.x, i.local_position.y, i.local_position.z);
+            } else if(int_units == "mm") {
+                internal_region.set_local_position_mm(i.local_position.x, i.local_position.y, i.local_position.z);
+            } else {
+                throw std::runtime_error("Invalid internal_region.position units: '" + int_units + "'. Supported values are 'u', 'm', 'in', and 'mm'.");
+            }
+            if(i.state == RegionState::Solid) {
+                const std::string int_s_units = i.size.units.value_or("u");
+                if(int_s_units == "u") {
+                    internal_region.set_size_rack_units(i.size.width, i.size.depth, i.size.height);
+                } else if(int_s_units == "m") {
+                    internal_region.set_size_meters(i.size.width, i.size.depth, i.size.height);
+                } else if(int_s_units == "in") {
+                    internal_region.set_size_inches(i.size.width, i.size.depth, i.size.height);
+                } else if(int_s_units == "mm") {
+                    internal_region.set_size_mm(i.size.width, i.size.depth, i.size.height);
+                } else {
+                    throw std::runtime_error("Invalid internal_region.size units: '" + int_s_units + "'. Supported values are 'u', 'm', 'in', and 'mm'.");
+                }
+                internal_region.set_region_type(RegionType::HeatSource);
+                internal_region.set_name(i.name);
+                internal_region.set_cp(i.material.cp);
+                internal_region.set_rho(i.material.density);
+                internal_region.set_k(i.material.k);
+                internal_region.set_watts(i.watts);
+            }
+            if(i.state == RegionState::Air) {
+                const std::string int_s_units = i.local_position.units.value_or("u");
+                if(int_s_units == "u") {
+                    internal_region.set_size_rack_units(i.size.width, i.size.depth, i.size.height);
+                } else if(int_s_units == "m") {
+                    internal_region.set_size_meters(i.size.width, i.size.depth, i.size.height);
+                } else if(int_s_units == "in") {
+                    internal_region.set_size_inches(i.size.width, i.size.depth, i.size.height);
+                } else if(int_s_units == "mm") {
+                    internal_region.set_size_mm(i.size.width, i.size.depth, i.size.height);
+                } else {
+                    throw std::runtime_error("Invalid internal_region.size units: '" + int_s_units + "'. Supported values are 'u', 'm', 'in', and 'mm'.");
+                }
+                internal_region.set_region_type(RegionType::Air);
+                internal_region.set_name(i.name);
+            }
+            // if(i.state == RegionState::Fan) {
+            //   internal_region.set_region_type(RegionType::Fan);
+            //   internal_region.set_name(i.name);
+            //   internal_region.set_size({i.size.width, i.size.depth, i.size.height});
+            // }
+            // if(i.state == RegionState::Vent) {
+            //   internal_region.set_region_type(RegionType::Vent);
+            //   internal_region.set_name(i.name);
+            //   internal_region.set_size({i.size.width, i.size.depth, i.size.height});
+            // }
+            component.add_region(internal_region);
+        
+            component.order_internal_regions();
+            grapher.add_component(component);
+        }
+        grapher.export_to_file("output.txt");
     }
 };
 
