@@ -33,3 +33,242 @@ Version 2
 Version 3
     Add buoyancy (Boussinesq approximation).
     Couple the thermal and flow solvers more tightly.
+
+
+
+
+input types
+
+struct ComponentTemplateInput {
+    std::string name;
+    std::string type;
+    SizeInput size;
+    MaterialInput material;
+    double watts = 0.0;
+    std::vector<InternalRegionInput> internal_regions;
+};
+
+struct ComponentInput {
+    std::string name;
+    std::optional<std::string> template_path;   // NEW
+
+    PositionInput position;                      // always required -- placement in the rack
+    std::optional<SizeInput> size;                // NEW: optional, template can supply
+    std::optional<MaterialInput> material;        // NEW: optional
+    std::optional<double> watts;                  // NEW: optional
+
+    std::vector<InternalRegionInput> internal_regions;
+};
+
+
+model loader 
+MaterialInput parse_template_material(const toml::table& table, const std::string& context) {
+    return {
+        require_value<double>(table["density"], context + ".density"),
+        require_value<double>(table["specific_heat"], context + ".specific_heat"),
+        require_value<double>(table["conductivity"], context + ".conductivity")
+    };
+}
+
+// Template files are written in raw meters with no explicit `units` key --
+// stamp "m" as the default so the existing per-instance unit dispatch in
+// run() picks it up correctly, same as any inline "units = m" would.
+SizeInput parse_template_size(const toml::table& table, const std::string& context) {
+    SizeInput size = parse_size(table, context);
+    if (!size.units.has_value()) size.units = "m";
+    return size;
+}
+
+PositionInput parse_template_position(const toml::table& table, const std::string& context) {
+    PositionInput pos = parse_position(table, context);
+    if (!pos.units.has_value()) pos.units = "m";
+    return pos;
+}
+
+InternalRegionInput parse_template_internal_region(const toml::table& table,
+                                                    const std::string& context,
+                                                    const MaterialInput& parent_material) {
+    InternalRegionInput region;
+    region.name = require_value<std::string>(table["name"], context + ".name");
+    region.state = parse_region_state(require_value<std::string>(table["region_type"], context + ".region_type"));
+    region.local_position = parse_template_position(
+        require_table(table["local_position"], context + ".local_position"), context + ".local_position");
+    region.size = parse_template_size(require_table(table["size"], context + ".size"), context + ".size");
+
+    if (const toml::node_view<const toml::node> material_node = table["material"]; material_node.is_table()) {
+        region.material = parse_template_material(*material_node.as_table(), context + ".material");
+    } else {
+        region.material = parent_material;   // inherit component-level material (e.g. your Power Supply region)
+    }
+
+    region.watts = require_value<double>(table["watts"], context + ".watts");
+    return region;
+}
+
+ComponentTemplateInput parse_component_template(const toml::table& root, const std::string& context) {
+    ComponentTemplateInput tmpl;
+    tmpl.name = root["name"].value<std::string>().value_or("Unnamed component template");
+    tmpl.type = root["type"].value<std::string>().value_or("generic");
+    tmpl.size = parse_template_size(require_table(root["size"], context + ".size"), context + ".size");
+    tmpl.material = parse_template_material(
+        require_table(root["material"], context + ".material"), context + ".material");
+    tmpl.watts = require_value<double>(root["watts"], context + ".watts");
+
+    const toml::array* regions = root["internal_regions"].as_array();
+    if (regions != nullptr) {
+        std::size_t index = 0;
+        for (const toml::node& node : *regions) {
+            const toml::table* region_table = node.as_table();
+            if (region_table == nullptr) {
+                throw std::runtime_error("internal_regions[" + std::to_string(index) + "] must be a table");
+            }
+            tmpl.internal_regions.push_back(parse_template_internal_region(
+                *region_table, "internal_regions[" + std::to_string(index) + "]", tmpl.material));
+            index++;
+        }
+    }
+    return tmpl;
+}
+
+ComponentTemplateInput load_component_template(const std::filesystem::path& path) {
+    try {
+        const toml::table root = toml::parse_file(path.string());
+        return parse_component_template(root, path.stem().string());
+    } catch (const toml::parse_error& error) {
+        throw std::runtime_error("Failed to parse component template '" + path.string() + "': "
+                                  + std::string(error.description()));
+    }
+}
+
+
+
+
+in parse component
+ComponentInput parse_component(const toml::table& table, const std::string& context) {
+    ComponentInput component;
+
+    component.template_path = table["template"].value<std::string>();
+    component.name = table["name"].value<std::string>().value_or(std::string());
+    component.position = parse_position(require_table(table["position"], context + ".position"), context + ".position");
+
+    if (const toml::node_view<const toml::node> size_node = table["size"]; size_node.is_table()) {
+        component.size = parse_size(*size_node.as_table(), context + ".size");
+    }
+    if (const toml::node_view<const toml::node> material_node = table["material"]; material_node.is_table()) {
+        component.material = parse_material(*material_node.as_table(), context + ".material");
+    }
+    component.watts = table["watts"].value<double>();
+
+    const toml::array* internal_regions = table["internal_regions"].as_array();
+    if (internal_regions != nullptr) {
+        std::size_t index = 0;
+        for (const toml::node& node : *internal_regions) {
+            const toml::table* internal_region_table = node.as_table();
+            if (internal_region_table == nullptr) {
+                throw std::runtime_error("internal_regions[" + std::to_string(index) + "] must be a table");
+            }
+            component.internal_regions.push_back(
+                parse_internal_region(*internal_region_table, "internal_regions[" + std::to_string(index) + "]"));
+            index++;
+        }
+    }
+
+    if (!component.template_path.has_value() &&
+        (!component.size.has_value() || !component.material.has_value() || !component.watts.has_value())) {
+        throw std::runtime_error(context + ": must specify either 'template' or explicit size/material/watts");
+    }
+
+    return component;
+}
+
+
+
+in model loader struct
+
+
+struct ModelLoader {
+    ModelInput model;
+    std::unordered_map<std::string, FanCurveInput> fan_curve_library;
+    std::unordered_map<std::string, ComponentTemplateInput> component_template_cache;   // NEW
+
+    // ... load_fan_curves, load_model unchanged ...
+
+    const ComponentTemplateInput& get_component_template(const std::string& path) {
+        auto it = component_template_cache.find(path);
+        if (it != component_template_cache.end()) return it->second;
+        auto [inserted, ok] = component_template_cache.emplace(path, load_component_template(path));
+        return inserted->second;
+    }
+
+    void run() {
+        // ... Workload/Environment/Rack/Mesh/Grapher setup unchanged ...
+
+        for (const ComponentInput& c_in : model.components) {
+            ComponentInput c = c_in;   // local mutable copy for merging
+
+            if (c.template_path.has_value()) {
+                const ComponentTemplateInput& tmpl = get_component_template(*c.template_path);
+                if (c.name.empty())              c.name = tmpl.name;
+                if (!c.size.has_value())         c.size = tmpl.size;
+                if (!c.material.has_value())     c.material = tmpl.material;
+                if (!c.watts.has_value())        c.watts = tmpl.watts;
+                if (c.internal_regions.empty())  c.internal_regions = tmpl.internal_regions;
+            }
+
+            if (c.name.empty()) {
+                throw std::runtime_error("Component has no name and no template to supply one");
+            }
+            if (!c.size.has_value() || !c.material.has_value() || !c.watts.has_value()) {
+                throw std::runtime_error("Component '" + c.name + "': missing size/material/watts "
+                                          "and no template supplied them");
+            }
+
+            const std::string comp_units = c.size->units.value_or("u");
+            Component component;
+            if(comp_units == "u") {
+                component = Component::from_rack_units(c.size->width, c.size->depth, c.size->height, c.name);
+            } else if(comp_units == "m") {
+                component = Component::from_meters(c.size->width, c.size->depth, c.size->height, c.name);
+            } else if(comp_units == "in") {
+                component = Component::from_inches(c.size->width, c.size->depth, c.size->height, c.name);
+            } else if(comp_units == "mm") {
+                component = Component::from_mm(c.size->width, c.size->depth, c.size->height, c.name);
+            } else {
+                throw std::runtime_error("Invalid component.size units: '" + comp_units + "'.");
+            }
+
+            // position dispatch: unchanged from your current run(), still uses c.position directly
+
+            component.set_cp(c.material->cp);
+            component.set_rho_solid(c.material->density);
+            component.set_k_solid(c.material->k);
+            component.set_watts(*c.watts);
+
+            // internal-region loop: unchanged -- i.size.units / i.local_position.units
+            // are already "m" for template-sourced regions, "u" (default) for inline ones,
+            // so the existing per-instance dispatch handles both transparently.
+
+            component.order_internal_regions();
+            mesh.stamp_component(component);
+            grapher.add_component(component);
+        }
+
+        // ... fans/vents/flow-solver/thermal-solver unchanged ...
+    }
+};
+
+
+
+in toml[[components]]
+template = "components/server_1u.toml"
+
+[components.position]
+units = "u"
+x = 0
+y = 0
+z = 1
+
+
+Position stays inline (rack placement is always model-specific, never templated). watts = 550.0 at the top level would override the template's 500.0 for this one instance, same override pattern as before — only fields you actually specify inline win over the template.
+
+Fix your template file's internal_regions.watts= 160.0 line to watts = 160.0 (dotted key creates a nested field instead of setting watts on the current table) before testing this, or the CPU region will throw a missing-value erro

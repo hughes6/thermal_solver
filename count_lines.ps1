@@ -1,9 +1,10 @@
 # count_lines.ps1
 
-$files = Get-ChildItem -Recurse -Include *.hpp, *.cpp, *.py, *.ps1
+# Skip any file named toml.hpp
+$files = Get-ChildItem -Recurse -Include *.hpp, *.cpp, *.py, *.ps1 -Exclude "toml.hpp"
 
 if ($files.Count -eq 0) {
-    Write-Host "No .hpp, .cpp, or .py files found."
+    Write-Host "No .hpp, .cpp, .py, or .ps1 files found (excluding toml.hpp)."
     exit
 }
 
