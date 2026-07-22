@@ -22,6 +22,9 @@
 /* 
 =========================================================
 TODO
+ - make python component viewer file
+ - vent / fan component overlap fix
+ - component overlap check not done at mesh level- geometry level
  - input toml file int regions
  - adaptive meshing
 =========================================================
@@ -29,10 +32,14 @@ TODO
 
 int main(int argc, char* argv[]) {
 
-  ModelLoader loader;
-  loader.load_fan_curves("library/components/fan_curves.toml");  
-  loader.load_model("rack_test.toml");
+
+  ComponentLoader loader;
+  loader.load_component("library/components/keysight_N6701C.toml");
   loader.run();
+  // ModelLoader loader;
+  // loader.load_fan_curves("library/components/fan_curves.toml");  
+  // loader.load_model("library/models/rack_test.toml");
+  // loader.run();
 
   // // ===========
   // // UNIT TEST
