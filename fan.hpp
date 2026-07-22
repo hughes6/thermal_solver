@@ -1,5 +1,5 @@
-#ifndef FAN_HPP
-#define FAN_HPP
+#ifndef THERMAL_SOLVER_FAN_HPP
+#define THERMAL_SOLVER_FAN_HPP
 
 #include <array>
 #include <cmath>

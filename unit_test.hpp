@@ -10,6 +10,7 @@
 #include <vector>
 
 #include "cell.hpp"
+#include "collision.hpp"
 #include "component.hpp"
 #include "convection.hpp"
 #include "environment.hpp"
@@ -145,6 +146,13 @@ public:
         test_fan_curve_throttles_vs_fixed_cfm_under_restrictive_vent();
         test_fan_curve_flow_increases_with_less_restrictive_vent();
         test_fan_curve_density_sensitivity();
+
+        test_collision_allows_non_overlapping_components();
+        test_collision_detects_component_component_overlap();
+        test_collision_allows_flush_adjacent_components();
+        test_collision_detects_fan_embedded_in_component();
+        test_collision_detects_vent_overlapping_fan();
+        test_collision_is_independent_of_mesh_resolution();
         
         std::cout << "========== ALL UNIT TESTS PASSED ==========\n\n";
     }
@@ -1815,6 +1823,139 @@ public:
 
         std::cout << "test_fan_curve_density_sensitivity PASSED "
                 << "(rho=1.2 -> Q=" << flow_dense << ", rho=0.85 -> Q=" << flow_thin << ")\n";
+    }
+
+    // ============================================================
+    // COLLISION CHECKER TESTS
+    // ============================================================
+    // These validate geometry-level collision detection (collision.hpp),
+    // which now runs once, before the mesh exists, rather than being
+    // discovered reactively while stamping cells.
+
+    void test_collision_allows_non_overlapping_components() {
+        Component a(0.03, 0.03, 0.03, "A");
+        a.set_coords_m(0.0, 0.0, 0.0);
+
+        Component b(0.03, 0.03, 0.03, "B");
+        b.set_coords_m(0.10, 0.0, 0.0); // well clear of A
+
+        bool threw = false;
+        try {
+            CollisionChecker::check_all({a, b}, {}, {});
+        } catch (const std::runtime_error&) {
+            threw = true;
+        }
+        assert(!threw && "Non-overlapping components must not raise a collision.");
+
+        std::cout << "test_collision_allows_non_overlapping_components PASSED\n";
+    }
+
+    void test_collision_detects_component_component_overlap() {
+        Component a(0.03, 0.03, 0.03, "A");
+        a.set_coords_m(0.0, 0.0, 0.0); // spans x:[0, 0.03]
+
+        Component b(0.03, 0.03, 0.03, "B");
+        b.set_coords_m(0.02, 0.0, 0.0); // spans x:[0.02, 0.05] -> overlaps A
+
+        bool threw = false;
+        try {
+            CollisionChecker::check_all({a, b}, {}, {});
+        } catch (const std::runtime_error&) {
+            threw = true;
+        }
+        assert(threw && "Genuinely overlapping components must be rejected.");
+
+        std::cout << "test_collision_detects_component_component_overlap PASSED\n";
+    }
+
+    void test_collision_allows_flush_adjacent_components() {
+        Component a(0.03, 0.03, 0.03, "A");
+        a.set_coords_m(0.0, 0.0, 0.0); // spans x:[0, 0.03]
+
+        Component b(0.03, 0.03, 0.03, "B");
+        b.set_coords_m(0.03, 0.0, 0.0); // spans x:[0.03, 0.06] -> shares a face, no volume overlap
+
+        bool threw = false;
+        try {
+            CollisionChecker::check_all({a, b}, {}, {});
+        } catch (const std::runtime_error&) {
+            threw = true;
+        }
+        assert(!threw && "Components that only share a face must not be treated as overlapping.");
+
+        std::cout << "test_collision_allows_flush_adjacent_components PASSED\n";
+    }
+
+    void test_collision_detects_fan_embedded_in_component() {
+        Component c(0.05, 0.05, 0.05, "Block");
+        c.set_coords_m(0.0, 0.0, 0.0); // spans [0,0.05] in all 3 axes
+
+        // Fan sitting mid-volume, nowhere near any face - unambiguously invalid.
+        Fan fan(
+            "Buried fan", /*cfm=*/10.0, /*diameter=*/0.0,
+            /*size=*/{0.02, 0.02, 0.0}, /*center=*/{0.025, 0.025, 0.025},
+            /*direction=*/{0.0, 0.0, 1.0},
+            FlowType::Exhaust, ShapeType::Rectangular
+        );
+
+        bool threw = false;
+        try {
+            CollisionChecker::check_all({c}, {fan}, {});
+        } catch (const std::runtime_error&) {
+            threw = true;
+        }
+        assert(threw && "A fan buried inside a component's solid volume must be rejected.");
+
+        std::cout << "test_collision_detects_fan_embedded_in_component PASSED\n";
+    }
+
+    void test_collision_detects_vent_overlapping_fan() {
+        // Both floating in open space (away from any component), footprints coincide.
+        Fan fan(
+            "Fan", 10.0, 0.0,
+            {0.02, 0.02, 0.0}, {0.10, 0.10, 0.10}, {0.0, 0.0, 1.0},
+            FlowType::Exhaust, ShapeType::Rectangular
+        );
+
+        Vent vent(
+            "Vent", {0.02, 0.02, 0.0}, /*far=*/0.5, /*diameter=*/0.0, /*cd=*/0.6,
+            /*center=*/{0.10, 0.10, 0.10}, /*direction=*/{0.0, 0.0, 1.0},
+            VentShapeType::Rectangular
+        );
+
+        bool threw = false;
+        try {
+            CollisionChecker::check_all({}, {fan}, {vent});
+        } catch (const std::runtime_error&) {
+            threw = true;
+        }
+        assert(threw && "A fan and vent occupying the same footprint must be rejected.");
+
+        std::cout << "test_collision_detects_vent_overlapping_fan PASSED\n";
+    }
+
+    void test_collision_is_independent_of_mesh_resolution() {
+        // A and B have a real 1mm physical gap. A coarse mesh (dx=0.02) would
+        // floor both components into the same cell index and previously would
+        // have thrown "Component overlap detected" purely as a meshing
+        // artifact. CollisionChecker takes no mesh at all, so it isn't fooled.
+        Component a(0.03, 0.03, 0.03, "A");
+        a.set_coords_m(0.0, 0.0, 0.0); // spans x:[0, 0.03]
+
+        Component b(0.03, 0.03, 0.03, "B");
+        b.set_coords_m(0.031, 0.0, 0.0); // spans x:[0.031, 0.061] -> real 1mm gap
+
+        bool threw = false;
+        try {
+            CollisionChecker::check_all({a, b}, {}, {});
+        } catch (const std::runtime_error&) {
+            threw = true;
+        }
+        assert(!threw &&
+            "A real physical gap must read as valid regardless of any mesh resolution, "
+            "since the checker never looks at dx/dy/dz.");
+
+        std::cout << "test_collision_is_independent_of_mesh_resolution PASSED\n";
     }
 };
 

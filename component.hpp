@@ -1,5 +1,5 @@
-#ifndef COMPONENT_HPP
-#define COMPONENT_HPP
+#ifndef THERMAL_SOLVER_COMPONENT_HPP
+#define THERMAL_SOLVER_COMPONENT_HPP
 
 #include <array>
 #include <string>
@@ -8,6 +8,7 @@
 #include <vector>
 
 #include "fan.hpp"
+#include "vent.hpp"
 
 enum class RegionType {
     Air,
@@ -74,6 +75,43 @@ struct InternalRegion {
         direction = direction_;
         free_area_ratio = free_area_ratio_;
         cd = cd_;
+        validate_vent();
+    }
+
+    explicit InternalRegion(const Fan& fan)
+        : InternalRegion()
+    {
+        name = fan.get_name();
+        region_type = RegionType::Fan;
+        size_m = fan.get_size_m();
+        local_position = fan.get_center();
+        direction = fan.get_velocity_dir();
+        velocity_direction = fan.get_velocity_dir();
+        diameter = fan.get_diameter();
+        cfm = fan.get_cfm();
+        flow_type = fan.get_type_t();
+        shape_type = fan.get_shape_t();
+
+        validate_fan();
+    }
+
+    explicit InternalRegion(const Vent& vent)
+        : InternalRegion()
+    {
+        name = vent.get_name();
+        region_type = RegionType::Vent;
+        size_m = vent.get_size_m();
+        local_position = vent.get_center();
+        direction = vent.get_direction();
+        diameter = vent.get_diameter();
+        free_area_ratio = vent.get_free_area_ratio();
+        cd = vent.get_cd();
+
+        shape_type =
+            vent.get_shape() == VentShapeType::Circular
+                ? ShapeType::Circular
+                : ShapeType::Rectangular;
+
         validate_vent();
     }
 

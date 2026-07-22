@@ -8,6 +8,7 @@
 
 #include "input_types.hpp"
 #include "../component_grapher.hpp"
+#include "../collision.hpp"
 #include "../toml.hpp"
 
 
@@ -101,6 +102,9 @@ namespace {
         throw std::runtime_error("Invalid vent flow type: " + value);
     }
 
+    FanInput parse_fan(const toml::table& table, const std::string& context);
+    VentInput parse_vent(const toml::table& table, const std::string& context);
+
     RegionState parse_region_state(const std::string& value) {
         if(value == "solid") {
             return RegionState::Solid;
@@ -120,26 +124,36 @@ namespace {
     InternalRegionInput parse_internal_region(const toml::table& table, const std::string& context) {
         InternalRegionInput internal_region;
         internal_region.state = parse_region_state(require_value<std::string>(table["state"], context + ".state"));
+
+        if(internal_region.state == RegionState::Fan) {
+            internal_region.fan = parse_fan(table, context);
+            internal_region.name = internal_region.fan->name;
+            internal_region.local_position = internal_region.fan->position;
+            if(internal_region.fan->size.has_value()) internal_region.size = *internal_region.fan->size;
+            return internal_region;
+        }
+
+        if(internal_region.state == RegionState::Vent) {
+            internal_region.vent = parse_vent(table, context);
+            internal_region.name = internal_region.vent->name;
+            internal_region.local_position = internal_region.vent->position;
+            if(internal_region.vent->size.has_value()) internal_region.size = *internal_region.vent->size;
+            return internal_region;
+        }
+
         internal_region.size = parse_size(require_table(table["size"], context + ".size"), context + ".size");
         internal_region.local_position = parse_position(require_table(table["position"], context + ".position"), context + ".position");
         internal_region.name = require_value<std::string>(table["name"], context + ".name");
 
-        if(internal_region.state == RegionState::Air) {
-            return internal_region;
-        }
+        if(internal_region.state == RegionState::Air) return internal_region;
+
         if(internal_region.state == RegionState::Solid) {
             internal_region.material = parse_material(require_table(table["material"], context + ".material"), context + ".material");
             internal_region.watts = require_value<double>(table["watts"], context + ".watts");
             return internal_region;
         }
-        if(internal_region.state == RegionState::Fan) {
-            return internal_region;
-        }
-        if(internal_region.state == RegionState::Vent) {
-            return internal_region;
-        }
-        throw std::runtime_error(context + " No state found");
-        return internal_region;
+
+        throw std::runtime_error(context + ": unsupported internal region state");
     }
 
     ComponentInput parse_component(const toml::table& table, const std::string& context, bool is_loading_from_template = false, PositionInput pos = PositionInput()) {
@@ -320,6 +334,89 @@ namespace {
             }
             return library;
         }
+
+    double to_meters(double value, const std::string& units, const std::string& context) {
+        if(units == "m") return value;
+        if(units == "u") return value * Fan::U_TO_M;
+        if(units == "in") return value * Fan::IN_TO_M;
+        if(units == "mm") return value * Fan::MM_TO_M;
+        throw std::runtime_error("Invalid " + context + " units: '" + units + "'. Supported values are 'u', 'm', 'in', and 'mm'.");
+    }
+
+    std::array<double, 3> position_to_meters(const PositionInput& position, const std::string& context) {
+        const std::string units = position.units.value_or("u");
+        return {
+            to_meters(position.x, units, context),
+            to_meters(position.y, units, context),
+            to_meters(position.z, units, context)
+        };
+    }
+
+    std::array<double, 3> size_to_meters(const SizeInput& size, const std::string& context) {
+        const std::string units = size.units.value_or("u");
+        return {
+            to_meters(size.width, units, context),
+            to_meters(size.depth, units, context),
+            to_meters(size.height, units, context)
+        };
+    }
+
+    InternalRegion build_internal_region(const InternalRegionInput& input) {
+        if(input.state == RegionState::Fan) {
+            if(!input.fan.has_value()) throw std::runtime_error("Internal fan region is missing parsed fan data.");
+            const FanInput& f = *input.fan;
+            const std::array<double, 3> size = f.shape == FanShape::Rectangular
+                ? size_to_meters(*f.size, "internal fan.size")
+                : std::array<double, 3>{0.0, 0.0, 0.0};
+            const double diameter = f.shape == FanShape::Circular
+                ? to_meters(*f.diameter, f.diameter_units.value_or("u"), "internal fan.diameter")
+                : 0.0;
+            Fan fan(f.name, f.cfm, diameter, size,
+                position_to_meters(f.position, "internal fan.position"),
+                {f.direction.x, f.direction.y, f.direction.z},
+                f.flow_type == FanFlowType::Intake ? FlowType::Intake : FlowType::Exhaust,
+                f.shape == FanShape::Circular ? ShapeType::Circular : ShapeType::Rectangular
+            );
+            return InternalRegion(fan);
+        }
+
+        if(input.state == RegionState::Vent) {
+            if(!input.vent.has_value()) throw std::runtime_error("Internal vent region is missing parsed vent data.");
+            const VentInput& v = *input.vent;
+            const std::array<double, 3> size = v.shape == VentShape::Rectangular
+                ? size_to_meters(*v.size, "internal vent.size")
+                : std::array<double, 3>{0.0, 0.0, 0.0};
+            const double diameter = v.shape == VentShape::Circular
+                ? to_meters(*v.diameter, v.diameter_units.value_or("u"), "internal vent.diameter")
+                : 0.0;
+            Vent vent(v.name, size, v.free_area_ratio, diameter, v.cd,
+                position_to_meters(v.position, "internal vent.position"),
+                {v.direction.x, v.direction.y, v.direction.z},
+                v.shape == VentShape::Circular ? VentShapeType::Circular : VentShapeType::Rectangular
+            );
+            return InternalRegion(vent);
+        }
+
+        InternalRegion region;
+        const auto position = position_to_meters(input.local_position, "internal_region.position");
+        const auto size = size_to_meters(input.size, "internal_region.size");
+        region.set_local_position(position);
+        region.set_size(size);
+        region.set_name(input.name);
+
+        if(input.state == RegionState::Solid) {
+            region.set_region_type(RegionType::HeatSource);
+            region.set_cp(input.material.cp);
+            region.set_rho(input.material.density);
+            region.set_k(input.material.k);
+            region.set_watts(input.watts);
+        } else if(input.state == RegionState::Air) {
+            region.set_region_type(RegionType::Air);
+        } else {
+            throw std::runtime_error("Unsupported internal region state.");
+        }
+        return region;
+    }
 }
 
 struct ModelLoader {
@@ -435,6 +532,13 @@ void run()
     Mesh mesh = Mesh().build_mesh(rack, model.mesh.dx, model.mesh.dy, model.mesh.dz, env, load);
     Grapher grapher = Grapher(rack, model.mesh.dx, model.mesh.dy, model.mesh.dz);
 
+    // Built up-front, geometry-checked as a whole, then stamped. Keeping the
+    // "build" and "stamp" phases separate is what lets CollisionChecker see
+    // every component/fan/vent before the mesh has any say in the matter.
+    std::vector<Component> components;
+    std::vector<Fan> fans;
+    std::vector<Vent> vents;
+
     for(const ComponentInput& c_in : model.components) {
         Component component;
         ComponentInput c = c_in;
@@ -476,70 +580,10 @@ void run()
         component.set_k_solid(c.material.k);
         component.set_watts(c.watts);
         for(const InternalRegionInput& i : c.internal_regions) {
-            InternalRegion internal_region = InternalRegion();
-            const std::string int_units = i.local_position.units.value_or("u");
-            if(int_units == "u") {
-                internal_region.set_local_position_rack_units(i.local_position.x, i.local_position.y, i.local_position.z);
-            } else if(int_units == "m") {
-                internal_region.set_local_position_meters(i.local_position.x, i.local_position.y, i.local_position.z);
-            } else if(int_units == "in") {
-                internal_region.set_local_position_inches(i.local_position.x, i.local_position.y, i.local_position.z);
-            } else if(int_units == "mm") {
-                internal_region.set_local_position_mm(i.local_position.x, i.local_position.y, i.local_position.z);
-            } else {
-                throw std::runtime_error("Invalid internal_region.position units: '" + int_units + "'. Supported values are 'u', 'm', 'in', and 'mm'.");
-            }
-            if(i.state == RegionState::Solid) {
-                const std::string int_s_units = i.size.units.value_or("u");
-                if(int_s_units == "u") {
-                    internal_region.set_size_rack_units(i.size.width, i.size.depth, i.size.height);
-                } else if(int_s_units == "m") {
-                    internal_region.set_size_meters(i.size.width, i.size.depth, i.size.height);
-                } else if(int_s_units == "in") {
-                    internal_region.set_size_inches(i.size.width, i.size.depth, i.size.height);
-                } else if(int_s_units == "mm") {
-                    internal_region.set_size_mm(i.size.width, i.size.depth, i.size.height);
-                } else {
-                    throw std::runtime_error("Invalid internal_region.size units: '" + int_s_units + "'. Supported values are 'u', 'm', 'in', and 'mm'.");
-                }
-                internal_region.set_region_type(RegionType::HeatSource);
-                internal_region.set_name(i.name);
-                internal_region.set_cp(i.material.cp);
-                internal_region.set_rho(i.material.density);
-                internal_region.set_k(i.material.k);
-                internal_region.set_watts(i.watts);
-            }
-            if(i.state == RegionState::Air) {
-                const std::string int_s_units = i.local_position.units.value_or("u");
-                if(int_s_units == "u") {
-                    internal_region.set_size_rack_units(i.size.width, i.size.depth, i.size.height);
-                } else if(int_s_units == "m") {
-                    internal_region.set_size_meters(i.size.width, i.size.depth, i.size.height);
-                } else if(int_s_units == "in") {
-                    internal_region.set_size_inches(i.size.width, i.size.depth, i.size.height);
-                } else if(int_s_units == "mm") {
-                    internal_region.set_size_mm(i.size.width, i.size.depth, i.size.height);
-                } else {
-                    throw std::runtime_error("Invalid internal_region.size units: '" + int_s_units + "'. Supported values are 'u', 'm', 'in', and 'mm'.");
-                }
-                internal_region.set_region_type(RegionType::Air);
-                internal_region.set_name(i.name);
-            }
-            // if(i.state == RegionState::Fan) {
-            //   internal_region.set_region_type(RegionType::Fan);
-            //   internal_region.set_name(i.name);
-            //   internal_region.set_size({i.size.width, i.size.depth, i.size.height});
-            // }
-            // if(i.state == RegionState::Vent) {
-            //   internal_region.set_region_type(RegionType::Vent);
-            //   internal_region.set_name(i.name);
-            //   internal_region.set_size({i.size.width, i.size.depth, i.size.height});
-            // }
-            component.add_region(internal_region);
+            component.add_region(build_internal_region(i));
         }
         component.order_internal_regions();
-        mesh.stamp_component(component);
-        grapher.add_component(component);
+        components.push_back(component);
     }
 
     for(const FanInput& f : model.fans) {
@@ -607,8 +651,7 @@ void run()
             const FanCurveInput& curve = it->second;
             fan.set_curve(curve.a, curve.b, curve.c, curve.rho_rated);
         }
-        mesh.stamp_fan(fan);
-        grapher.add_fan(fan);
+        fans.push_back(fan);
     }
 
     for(const VentInput& v : model.vents) {
@@ -663,9 +706,27 @@ void run()
             vent.set_direction(v.direction.x, v.direction.y, v.direction.z);
             // vent.set_shape(ShapeType::Rectangular);
         }
+        vents.push_back(vent);
+    }
+
+    // Single geometry-level validation gate. Throws with a descriptive
+    // message if any two components/fans/vents overlap in real-world space,
+    // independent of mesh resolution. Mesh stamping below trusts this.
+    CollisionChecker::check_all(components, fans, vents);
+
+    for(const Component& component : components) {
+        mesh.stamp_component(component);
+        grapher.add_component(component);
+    }
+    for(const Fan& fan : fans) {
+        mesh.stamp_fan(fan);
+        grapher.add_fan(fan);
+    }
+    for(const Vent& vent : vents) {
         mesh.stamp_vent(vent);
         grapher.add_vent(vent);
     }
+
     grapher.stamp_components();
     grapher.stamp_fans();
     grapher.stamp_vents();
@@ -763,70 +824,10 @@ struct ComponentLoader {
         component.set_k_solid(model.material.k);
         component.set_watts(model.watts);
         for(const InternalRegionInput& i : model.internal_regions) {
-            InternalRegion internal_region = InternalRegion();
-            const std::string int_units = i.local_position.units.value_or("u");
-            if(int_units == "u") {
-                internal_region.set_local_position_rack_units(i.local_position.x, i.local_position.y, i.local_position.z);
-            } else if(int_units == "m") {
-                internal_region.set_local_position_meters(i.local_position.x, i.local_position.y, i.local_position.z);
-            } else if(int_units == "in") {
-                internal_region.set_local_position_inches(i.local_position.x, i.local_position.y, i.local_position.z);
-            } else if(int_units == "mm") {
-                internal_region.set_local_position_mm(i.local_position.x, i.local_position.y, i.local_position.z);
-            } else {
-                throw std::runtime_error("Invalid internal_region.position units: '" + int_units + "'. Supported values are 'u', 'm', 'in', and 'mm'.");
-            }
-            if(i.state == RegionState::Solid) {
-                const std::string int_s_units = i.size.units.value_or("u");
-                if(int_s_units == "u") {
-                    internal_region.set_size_rack_units(i.size.width, i.size.depth, i.size.height);
-                } else if(int_s_units == "m") {
-                    internal_region.set_size_meters(i.size.width, i.size.depth, i.size.height);
-                } else if(int_s_units == "in") {
-                    internal_region.set_size_inches(i.size.width, i.size.depth, i.size.height);
-                } else if(int_s_units == "mm") {
-                    internal_region.set_size_mm(i.size.width, i.size.depth, i.size.height);
-                } else {
-                    throw std::runtime_error("Invalid internal_region.size units: '" + int_s_units + "'. Supported values are 'u', 'm', 'in', and 'mm'.");
-                }
-                internal_region.set_region_type(RegionType::HeatSource);
-                internal_region.set_name(i.name);
-                internal_region.set_cp(i.material.cp);
-                internal_region.set_rho(i.material.density);
-                internal_region.set_k(i.material.k);
-                internal_region.set_watts(i.watts);
-            }
-            if(i.state == RegionState::Air) {
-                const std::string int_s_units = i.local_position.units.value_or("u");
-                if(int_s_units == "u") {
-                    internal_region.set_size_rack_units(i.size.width, i.size.depth, i.size.height);
-                } else if(int_s_units == "m") {
-                    internal_region.set_size_meters(i.size.width, i.size.depth, i.size.height);
-                } else if(int_s_units == "in") {
-                    internal_region.set_size_inches(i.size.width, i.size.depth, i.size.height);
-                } else if(int_s_units == "mm") {
-                    internal_region.set_size_mm(i.size.width, i.size.depth, i.size.height);
-                } else {
-                    throw std::runtime_error("Invalid internal_region.size units: '" + int_s_units + "'. Supported values are 'u', 'm', 'in', and 'mm'.");
-                }
-                internal_region.set_region_type(RegionType::Air);
-                internal_region.set_name(i.name);
-            }
-            // if(i.state == RegionState::Fan) {
-            //   internal_region.set_region_type(RegionType::Fan);
-            //   internal_region.set_name(i.name);
-            //   internal_region.set_size({i.size.width, i.size.depth, i.size.height});
-            // }
-            // if(i.state == RegionState::Vent) {
-            //   internal_region.set_region_type(RegionType::Vent);
-            //   internal_region.set_name(i.name);
-            //   internal_region.set_size({i.size.width, i.size.depth, i.size.height});
-            // }
-            component.add_region(internal_region);
-        
-            component.order_internal_regions();
-            grapher.add_component(component);
+            component.add_region(build_internal_region(i));
         }
+        component.order_internal_regions();
+        grapher.add_component(component);
         grapher.export_to_file("output.txt");
     }
 };

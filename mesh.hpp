@@ -168,10 +168,8 @@ public:
             for(int j = my; j < my + cny; j++) {
                 for(int k = mz; k < mz + cnz; k++) {
                     Cell& cell = at(i, j, k);
-                    // overlap detection below
-                    if(cell.get_state() != Cell::State::Air) {
-                        throw std::runtime_error("Component overlap detected");
-                    }
+                    // Overlap is validated at the geometry level (CollisionChecker)
+                    // before the mesh is built - trust cell_state here.
                     cell.set_qdot(c.watt_density());
                     cell.set_rho(c.get_rho());
                     cell.set_k(c.get_k());
@@ -339,16 +337,8 @@ public:
                 double C_per_cell = covered.empty() ? 0.0 : C_total / covered.size();
                 for(auto& [i, j, k] : covered) {
                     Cell& cell = at(i, j, k);
-                    if(cell.get_state() == Cell::State::Component) {
-                        throw std::runtime_error("Vent overlaps component.");
-                    } else if(cell.get_state() == Cell::State::Fan ||
-                            cell.get_state() == Cell::State::Intake ||
-                            cell.get_state() == Cell::State::Exhaust) {
-                        throw std::runtime_error("Vent overlaps fan/intake/exhaust");
-                    } else {
-                        cell.set_state(Cell::State::Vent);
-                    }
-
+                    // Overlap already validated at the geometry level.
+                    cell.set_state(Cell::State::Vent);
                     cell.set_vent_conductance(C_per_cell);
                 }
 
@@ -483,15 +473,12 @@ public:
                 double sign = (r.get_flow_type() == FlowType::Intake) ? +1.0 : -1.0;
                 for (auto& [i, j,k ] : covered) {
                     Cell& cell = at(i, j, k);
-                    if(cell.get_state() == Cell::State::Component) {
-                        throw std::runtime_error("Fan overlaps component.");
-                    } else {
-                        cell.set_state(
-                            r.get_flow_type() == FlowType::Intake ?
-                            Cell::State::Intake :
-                            Cell::State::Exhaust
-                        );
-                    }
+                    // Overlap already validated at the geometry level.
+                    cell.set_state(
+                        r.get_flow_type() == FlowType::Intake ?
+                        Cell::State::Intake :
+                        Cell::State::Exhaust
+                    );
                     cell.set_vx(r.velocity_x());
                     cell.set_vy(r.velocity_y());
                     cell.set_vz(r.velocity_z());
@@ -642,16 +629,12 @@ public:
         double area_per_cell = covered.empty() ? 0.0 : f.area() / covered.size();
         for (auto& [i, j,k ] : covered) {
             Cell& cell = at(i, j, k);
-            if(cell.get_state() == Cell::State::Component) {
-                std::cout << i << " " << j << " " << k << std::endl;
-                throw std::runtime_error("Fan overlaps component.");
-            } else {
-                cell.set_state(
-                    f.get_type_t() == FlowType::Intake ?
-                    Cell::State::Intake :
-                    Cell::State::Exhaust
-                );
-            }
+            // Overlap already validated at the geometry level.
+            cell.set_state(
+                f.get_type_t() == FlowType::Intake ?
+                Cell::State::Intake :
+                Cell::State::Exhaust
+            );
             cell.set_vx(f.velocity_x());
             cell.set_vy(f.velocity_y());
             cell.set_vz(f.velocity_z());
@@ -815,16 +798,8 @@ public:
         double C_per_cell = covered.empty() ? 0.0 : C_total / covered.size();
         for(auto& [i, j, k] : covered) {
             Cell& cell = at(i, j, k);
-            if(cell.get_state() == Cell::State::Component) {
-                throw std::runtime_error("Vent overlaps component.");
-            } else if(cell.get_state() == Cell::State::Fan ||
-                      cell.get_state() == Cell::State::Intake ||
-                      cell.get_state() == Cell::State::Exhaust) {
-                throw std::runtime_error("Vent overlaps fan/intake/exhaust");
-            } else {
-                cell.set_state(Cell::State::Vent);
-            }
-
+            // Overlap already validated at the geometry level.
+            cell.set_state(Cell::State::Vent);
             cell.set_vent_conductance(C_per_cell);
         }
 

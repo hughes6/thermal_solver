@@ -1,5 +1,5 @@
-#ifndef VENT_HPP
-#define VENT_HPP
+#ifndef THERMAL_SOLVER_VENT_HPP
+#define THERMAL_SOLVER_VENT_HPP
 
 #include <array>
 #include <cmath>

@@ -177,13 +177,16 @@ struct InternalRegionInput {
 
     RegionState state{RegionState::Solid};
 
-    // local to component
+    // Used by solid and air regions. For fan/vent regions, the position and
+    // geometry are stored in the parsed FanInput or VentInput below.
     PositionInput local_position;
     SizeInput size;
 
-
     MaterialInput material;
     double watts = 0.0;
+
+    std::optional<FanInput> fan;
+    std::optional<VentInput> vent;
 };
 
 // -------------------------------------------------------------

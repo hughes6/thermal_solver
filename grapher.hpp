@@ -10,6 +10,7 @@
 #include <iomanip>
 
 #include "rack.hpp"
+#include "collision.hpp"
 #include "component.hpp"
 #include "fan.hpp"
 #include "vent.hpp"

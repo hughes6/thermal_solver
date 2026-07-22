@@ -6,6 +6,7 @@
 #include <cmath>
 
 #include "cell.hpp"
+#include "collision.hpp"
 #include "component.hpp"
 #include "environment.hpp"
 #include "fan.hpp"
@@ -22,10 +23,8 @@
 /* 
 =========================================================
 TODO
- - make python component viewer file
  - vent / fan component overlap fix
- - component overlap check not done at mesh level- geometry level
- - input toml file int regions
+ - unit tests for toml files
  - adaptive meshing
 =========================================================
 */
@@ -130,24 +129,36 @@ int main(int argc, char* argv[]) {
   // //  server2.set_rho_solid(2100.0); // kg/m^3
   // //  server2.set_t(90.0);           // °C
   // //  server2.set_watts(10000);      // W
+  // server1.order_internal_regions();
+
+  // // ---------------------------------------------------------------
+  // // BUILD phase: every component/fan/vent exists as a plain object,
+  // // nothing has been stamped into the mesh or the grapher's bitmap yet.
+  // // ---------------------------------------------------------------
+  // std::vector<Component> components = { server1 /*, server2 */ };
+  // std::vector<Fan> fans = { top_fan, mid_fan };
+  // std::vector<Vent> vents = { vent };
+
+  // // ---------------------------------------------------------------
+  // // VALIDATE phase: one geometry-level pass, no mesh involved at all.
+  // // Throws with a descriptive message on any real-world overlap.
+  // // ---------------------------------------------------------------
+  // CollisionChecker::check_all(components, fans, vents);
+
+  // // ---------------------------------------------------------------
+  // // STAMP phase: mesh and grapher both trust the geometry is valid
+  // // and just populate themselves from it.
+  // // ---------------------------------------------------------------
   // Grapher grapher(rack, dx, dy, dz);
-  // grapher.add_component(server1);
-  // //  grapher.add_component(server2);
-  // grapher.add_fan(top_fan);
-  // grapher.add_fan(mid_fan);
-  // grapher.add_vent(vent);
+  // for (const Component& c : components) { mesh.stamp_component(c); grapher.add_component(c); }
+  // for (const Fan& f : fans)             { mesh.stamp_fan(f);       grapher.add_fan(f); }
+  // for (const Vent& v : vents)           { mesh.stamp_vent(v);      grapher.add_vent(v); }
+
   // grapher.stamp_components();
   // grapher.stamp_fans();
   // grapher.stamp_vents();
   // // grapher.print_bitmap();
   // grapher.export_to_file("output.txt");
-
-  // server1.order_internal_regions();
-  // mesh.stamp_component(server1);
-  // mesh.stamp_fan(top_fan);
-  // mesh.stamp_fan(mid_fan);
-  // mesh.stamp_vent(vent);
-  // //  mesh.stamp_component(server2);
   // // mesh.print_mesh();
 
   // int update_flow_interval = 10;
