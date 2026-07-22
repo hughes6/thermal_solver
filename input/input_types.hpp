@@ -192,14 +192,14 @@ struct InternalRegionInput {
 
 struct ComponentInput {
     std::string name;
-
     PositionInput position;
     SizeInput size;
     MaterialInput material;
-
     std::vector<InternalRegionInput> internal_regions;
     double watts = 0.0;
+    std::optional<std::string> template_path;
 };
+
 
 // -------------------------------------------------------------
 // Model
