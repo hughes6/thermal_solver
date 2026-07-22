@@ -31,6 +31,7 @@ TODO
 int main(int argc, char* argv[]) {
 
   ModelLoader loader;
+  loader.load_fan_curves("library/components/fan_curves.toml");  
   loader.load_model("rack_test.toml");
   loader.run();
 

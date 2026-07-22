@@ -3,6 +3,7 @@
 
 #include <filesystem>
 #include <iostream>
+#include <unordered_map>
 #include <string>
 
 #include "input_types.hpp"
@@ -162,6 +163,8 @@ namespace {
         fan.cfm = require_value<double>(table["cfm"], context + ".cfm");
         fan.position = parse_position(require_table(table["position"], context + ".position"), context + ".position");
         fan.direction = parse_direction(require_table(table["direction"], context + ".direction"), context + ".direction");
+       
+        fan.curve_name = table["curve"].value<std::string>();
 
         if(fan.shape == FanShape::Rectangular) {
             fan.size = parse_size(require_table(table["size"], context + ".size"), context + ".size");
@@ -241,11 +244,58 @@ namespace {
         }
     }
 
+    FanCurveInput parse_fan_curve(const toml::table& table, const std::string& context) {
+        FanCurveInput curve;
+        curve.name = require_value<std::string>(table["name"], context + ".name");
+        curve.a = require_value<double>(table["a"], context + ".a");
+        curve.b = require_value<double>(table["b"], context + ".b");
+        curve.c = table["c"].value<double>().value_or(0.0);
+        curve.rho_rated = table["rho_rated"].value<double>().value_or(1.2);
+
+        if (curve.a <= 0.0) {
+            throw std::runtime_error(context + ": shutoff pressure 'a' must be > 0.0");
+        }
+        return curve;
+    }
+
+    std::unordered_map<std::string, FanCurveInput>
+        load_fan_curve_library(const std::filesystem::path& path) {
+            std::unordered_map<std::string, FanCurveInput> library;
+            try {
+                const toml::table root = toml::parse_file(path.string());
+                const toml::array* curves = root["fan_curve"].as_array();
+                if (curves == nullptr) return library;
+
+                std::size_t index = 0;
+                for (const toml::node& node : *curves) {
+                    const toml::table* curve_table = node.as_table();
+                    if (curve_table == nullptr) {
+                        throw std::runtime_error("fan_curve[" + std::to_string(index) + "] must be a table");
+                    }
+                    FanCurveInput curve = parse_fan_curve(*curve_table, "fan_curve[" + std::to_string(index) + "]");
+                    if (library.count(curve.name)) {
+                        throw std::runtime_error("Duplicate fan curve name: " + curve.name);
+                    }
+                    library[curve.name] = curve;
+                    index++;
+                }
+            } catch (const toml::parse_error& error) {
+                throw std::runtime_error("Failed to parse fan curve library '" + path.string() + "': "
+                                        + std::string(error.description()));
+            }
+            return library;
+        }
 }
 
 struct ModelLoader {
     ModelInput model;
+    std::unordered_map<std::string, FanCurveInput> fan_curve_library;
+
     ModelLoader() = default;
+
+    void load_fan_curves(const std::filesystem::path& library_path) {
+        fan_curve_library = load_fan_curve_library(library_path);
+    }
 
     void load_model(const std::filesystem::path& model_path) 
     {
@@ -494,6 +544,15 @@ void run()
             fan.set_velocity_dir({f.direction.x, f.direction.y, f.direction.z});
             fan.set_type(flow);
             fan.set_shape(ShapeType::Rectangular);
+        }
+        if (f.curve_name.has_value()) {
+            auto it = fan_curve_library.find(*f.curve_name);
+            if (it == fan_curve_library.end()) {
+                throw std::runtime_error(
+                    "Fan '" + f.name + "' references unknown curve '" + *f.curve_name + "'");
+            }
+            const FanCurveInput& curve = it->second;
+            fan.set_curve(curve.a, curve.b, curve.c, curve.rho_rated);
         }
         mesh.stamp_fan(fan);
         grapher.add_fan(fan);

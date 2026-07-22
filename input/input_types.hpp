@@ -99,6 +99,14 @@ struct RackInput {
 // Fan and vents
 // -------------------------------------------------------------
 
+struct FanCurveInput {
+    std::string name;
+    double a = 0.0;
+    double b = 0.0;
+    double c = 0.0;
+    double rho_rated = 1.2;
+};
+
 enum class FanShape {
     Circular,
     Rectangular
@@ -123,6 +131,8 @@ struct FanInput {
     // used by circular fan
     std::optional<double> diameter;
     std::optional<std::string> diameter_units;
+
+    std::optional<std::string> curve_name;
 
     double cfm = 0.0;
 };
