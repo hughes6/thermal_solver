@@ -17,6 +17,7 @@
 #include "fan.hpp"
 #include "flow_solver.hpp"
 #include "grapher.hpp"
+#include "input/model_loader.hpp"
 #include "mesh.hpp"
 #include "rack.hpp"
 #include "solver.hpp"
@@ -158,6 +159,12 @@ public:
         test_collision_allows_openings_on_different_walls();
         test_rack_bounds_rejects_component_outside_rack();
         test_rack_bounds_allows_fan_flush_on_rack_wall();
+
+        test_component_loader_valid_toml_succeeds();
+        test_component_loader_missing_watts_fails();
+        test_component_loader_invalid_units_fail_on_run();
+        test_model_loader_valid_toml_succeeds();
+        test_model_loader_missing_environment_fails();
         
         std::cout << "========== ALL UNIT TESTS PASSED ==========\n\n";
     }
@@ -2080,6 +2087,99 @@ public:
 
         std::cout << "test_rack_bounds_allows_fan_flush_on_rack_wall PASSED\n";
     }
+
+    // ============================================================
+    // TOML LOADER TESTS
+    // ============================================================
+
+    void test_component_loader_valid_toml_succeeds() {
+        const auto path = "library/tests/valid_component.toml";
+
+        bool threw = false;
+        try {
+            ComponentLoader loader;
+            loader.load_component(path);
+            loader.run();
+        } catch (const std::exception&) {
+            threw = true;
+        }
+
+        assert(!threw && "A complete component TOML file must load and run successfully.");
+        std::cout << "test_component_loader_valid_toml_succeeds PASSED\n";
+    }
+
+    void test_component_loader_missing_watts_fails() {
+        const auto path = "library/tests/component_missing_watts.toml";
+
+        bool threw = false;
+        try {
+            ComponentLoader loader;
+            loader.load_component(path);
+        } catch (const std::runtime_error& e) {
+            threw = true;
+            assert(std::string(e.what()).find("watts") != std::string::npos);
+        }
+
+        assert(threw && "A component TOML missing required watts must be rejected.");
+        std::cout << "test_component_loader_missing_watts_fails PASSED\n";
+    }
+
+    void test_component_loader_invalid_units_fail_on_run() {
+        const auto path = "library/tests/component_invalid_units.toml";
+
+        bool load_threw = false;
+        bool run_threw = false;
+        try {
+            ComponentLoader loader;
+            loader.load_component(path);
+            try {
+                loader.run();
+            } catch (const std::runtime_error& e) {
+                run_threw = true;
+                assert(std::string(e.what()).find("Invalid component.size units") != std::string::npos);
+            }
+        } catch (const std::exception&) {
+            load_threw = true;
+        }
+
+        assert(!load_threw && "Unsupported units are validated during ComponentLoader::run().");
+        assert(run_threw && "Unsupported component units must cause run() to fail.");
+        std::cout << "test_component_loader_invalid_units_fail_on_run PASSED\n";
+    }
+
+
+    void test_model_loader_valid_toml_succeeds() {
+        const auto path = "library/tests/valid_model.toml";
+
+        bool threw = false;
+        try {
+            ModelLoader loader;
+            loader.load_model(path);
+            loader.run();
+        } catch (const std::exception&) {
+            threw = true;
+        }
+
+        assert(!threw && "A complete minimal model TOML file must load and run successfully.");
+        std::cout << "test_model_loader_valid_toml_succeeds PASSED\n";
+    }
+
+    void test_model_loader_missing_environment_fails() {
+        const auto path = "library/tests/model_missing_environment.toml";
+
+        bool threw = false;
+        try {
+            ModelLoader loader;
+            loader.load_model(path);
+        } catch (const std::runtime_error& e) {
+            threw = true;
+            assert(std::string(e.what()).find("environment") != std::string::npos);
+        }
+
+        assert(threw && "A model TOML missing the required environment table must be rejected.");
+        std::cout << "test_model_loader_missing_environment_fails PASSED\n";
+    }
+
 };
 
 #endif
