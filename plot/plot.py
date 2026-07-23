@@ -260,13 +260,13 @@ ax.bar3d(
     color="black",
     shade=True,
     edgecolor="black",
-    alpha=0.2
+    alpha=0.05
 )
 
 legend_handles = [
     mpatches.Patch(
         color="black",
-        alpha=0.4,
+        alpha=0.05,
         label="Rack"
     )
 ]
@@ -293,12 +293,12 @@ for i in range(len(component_coords)):
     legend_handles.append(
         mpatches.Patch(
             color=color,
-            alpha=0.5,
+            alpha=0.1,
             label=f"Component: {component_names[i]}"
         )
     )
 
-start_alpha = 0.2
+start_alpha = 0.05
 # Internal regions are added to the existing rack axes; no new plot or layout is created.
 for i in range(len(internal_region_global_positions)):
     color = next(colors)
@@ -306,9 +306,9 @@ for i in range(len(internal_region_global_positions)):
     sx, sy, sz = internal_region_sizes[i]
     region_type = internal_region_types[i]
     parent = internal_region_parent[i]
-    alpha = start_alpha + (i * 0.1)
+    alpha = start_alpha * i
     if alpha >= 1:
-        alpha = 0.95
+        alpha = 0.9
 
     ax.bar3d(
         x, y, z,
