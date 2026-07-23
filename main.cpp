@@ -23,8 +23,6 @@
 /* 
 =========================================================
 TODO
- - vent / fan component overlap fix
- - unit tests for toml files
  - adaptive meshing
 =========================================================
 */
@@ -32,13 +30,14 @@ TODO
 int main(int argc, char* argv[]) {
 
 
-  ComponentLoader loader;
-  loader.load_component("library/components/keysight_N6701C.toml");
-  loader.run();
-  // ModelLoader loader;
-  // loader.load_fan_curves("library/components/fan_curves.toml");  
-  // loader.load_model("library/models/rack_test.toml");
+  // ComponentLoader loader;
+  // loader.load_component("library/components/keysight_N6701C.toml");
   // loader.run();
+
+  ModelLoader loader;
+  loader.load_fan_curves("library/components/fan_curves.toml");  
+  loader.load_model("library/models/rack_test.toml");
+  loader.run();
 
   // // ===========
   // // UNIT TEST
@@ -53,7 +52,7 @@ int main(int argc, char* argv[]) {
   // double dx = 0.04445;   // 1U
   // double dy = 0.04445;   // 1U
   // double dz = 0.04445/2.0;   // 1U
-  // double sim_length = 5.0; 
+  // double sim_length = 10.0; 
   // double dt = 0.05;
   // double mu = 1.8e-5;  // air at atmospheric pressure and temp
   // double pr = 0.71;    // air at atmospheric pressure and temp
@@ -172,13 +171,51 @@ int main(int argc, char* argv[]) {
   // // FlowSolver flow_solver(mesh, resistivity, tolerance, max_iterations, sor_omega, 20, 1e-3);
   // // flow_solver.solve(); // pre populate all velocity cells
 
-  // int otuput_interval = 1;
+  // int otuput_interval = 10;
   // Solver solver(mesh, dt, sim_length, false, otuput_interval, update_flow_interval, resistivity, tolerance, max_iterations, sor_omega, max_outer_iterations, flow_tolerance);
   // //  solver.apply_bulk_velocity(0.0, 0.0, 0.0222);
   // /*advection stability ratio C = vz * dt / dz
   //   should  be C <= 1
   //   so C = 0.0222*0.1/0.0222 = 1*/
 
+  // LoggingConfig config;
+
+  // config.output_directory =
+  //     "simulation_output";
+
+  // config.field_interval = 100;
+  // config.summary_interval = 10;
+  // config.probe_interval = 1;
+
+  // config.field_variables = {
+  //     LogVariable::Temperature,
+  //     LogVariable::Pressure,
+  //     LogVariable::VelocityX,
+  //     LogVariable::VelocityY,
+  //     LogVariable::VelocityZ
+  // };
+
+  // config.summary_requests = {
+  //       {"temperature_all", LogVariable::Temperature, CellSelection::All,
+  //           true,   // minimum
+  //           true,   // maximum
+  //           true,   // average
+  //           false,  // RMS
+  //           true    // standard deviation
+  //       },
+  //       {"fluid_velocity", LogVariable::VelocityMagnitude, CellSelection::FluidOnly, true, true, true, true, true},
+  //       {"fluid_pressure", LogVariable::Pressure, CellSelection::FluidOnly, true, true, true, false, true}
+  // };
+
+  // config.probes = {
+  //     {"rack_inlet", 0.22, 0.00, 0.3, {LogVariable::Temperature, LogVariable::Pressure, LogVariable::VelocityMagnitude}},
+  //     {"rack_exhaust", 0.220, 0.22, 0.3, {LogVariable::Temperature, LogVariable::Pressure, LogVariable::VelocityMagnitude}}
+  // };
+
+  // SimulationLogger logger(config);
+  // logger.initialize(mesh);
+
+  // solver.set_logger(logger);
   // solver.solve();
   // // Mesh final_mesh = solver.get_mesh();
   // // final_mesh.print_mesh_layer_temp(3);
