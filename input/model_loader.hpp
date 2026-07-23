@@ -6,6 +6,7 @@
 #include <unordered_map>
 #include <string>
 
+#include "../logger.hpp"
 #include "input_types.hpp"
 #include "../component_grapher.hpp"
 #include "../collision.hpp"
@@ -417,18 +418,296 @@ namespace {
         }
         return region;
     }
+
+
+
+    // --------------logger----------------------------
+
+    LogVariable parse_log_variable(const std::string& value) {
+        if(value =="temperature" || value == "T") {
+            return LogVariable::Temperature;
+        }
+        if(value =="pressure" || value == "[vz]") {
+            return LogVariable::Pressure;
+        }
+        if(value =="velocity_x" || value == "vx") {
+            return LogVariable::VelocityX;
+        }
+        if(value =="velocity_y" || value == "vy") {
+            return LogVariable::VelocityY;
+        }
+        if(value =="velocity_z" || value == "vz") {
+            return LogVariable::VelocityZ;
+        }
+        if(value =="velocity_mag" || value == "vmag" || value == "velocity" || value == "v") {
+            return LogVariable::VelocityMagnitude;
+        }
+        if(value =="density" || value == "rho") {
+            return LogVariable::Density;
+        }
+        if(value =="specific_heat" || value == "cp") {
+            return LogVariable::SpecificHeat;
+        }
+        if(value =="conductivity" || value == "k") {
+            return LogVariable::Conductivity;
+        }
+        if(value =="heat_generation" || value == "qdot") {
+            return LogVariable::HeatGeneration;
+        }
+        if(value =="reynolds_number" || value == "re") {
+            return LogVariable::ReynoldsNumber;
+        }
+        if(value =="convection_coefficient" || value == "h") {
+            return LogVariable::ConvectionCoefficient;
+        }
+        throw std::runtime_error("Uknown logger variable: " + value);
+    }
+
+    CellSelection parse_cell_selection(const std::string& value) {
+        if(value == "all") {
+            return CellSelection::All;
+        }
+        if(value == "air") {
+            return CellSelection::AirOnly;
+        }
+        if(value == "solid") {
+            return CellSelection::SolidOnly;
+        }
+        if(value == "fluid") {
+            return CellSelection::FluidOnly;
+        }
+        if(value == "heat_generating" || value == "heat-generating") {
+            return CellSelection::HeatGeneratingOnly;
+        }
+        throw std::runtime_error("Unknown cell selection: " + value);
+    }
+
+    void parse_logger_summary_requests(const toml::array& summaries, LoggerInput cfg) {
+        std::vector<LoggerSummaryInput> parsed_summaries;
+        for(const toml::node& node : summaries) {
+            const toml::table* summary_table = node.as_table();
+
+            if(summary_table == nullptr) {
+                throw std::runtime_error("Each [[logger.summary]] entry must be a table");
+            }
+
+            LoggerSummaryInput input;
+            if(auto value = (*summary_table)["name"].value<std::string>()) {
+                input.name = *value;
+            }
+            if(auto value = (*summary_table)["variable"].value<std::string>()) {
+                input.variable = parse_log_variable(*value);
+            }
+            if(auto value = (*summary_table)["selection"].value<std::string>()) {
+                input.selection = parse_cell_selection(*value);
+            }
+            if(auto value = (*summary_table)["log_min"].value<bool>()) {
+                input.log_min = *value;
+            }
+            if(auto value = (*summary_table)["log_max"].value<bool>()) {
+                input.log_max = *value;
+            }
+            if(auto value = (*summary_table)["log_average"].value<bool>()) {
+                input.log_average = *value;
+            }
+            if(auto value = (*summary_table)["log_rms"].value<bool>()) {
+                input.log_rms = *value;
+            }
+            if(auto value = (*summary_table)["log_standard_deviation"].value<bool>()) {
+                input.log_standard_deviation = *value;
+            }
+            parsed_summaries.push_back(std::move(input));
+        }
+        cfg.summary_requests = std::move(parsed_summaries);
+    }
+
+    void parse_logger_probes(const toml::array& probes, LoggerInput cfg) {
+        std::vector<LoggerProbeInput> parsed_probes;
+        for(const toml::node& node : probes) {
+            const toml::table* probe_table = node.as_table();
+
+            if(probe_table == nullptr)  {
+                throw std::runtime_error("Each [[logger.probe]] entry must be a table.");
+            }
+
+            LoggerProbeInput input;
+            if(auto value = (*probe_table)["name"].value<std::string>()) {
+                input.name = *value;
+            }
+            if(const toml::array* position = (*probe_table)["position"].as_array()) {
+                if(position->size() != 3) {
+                    throw std::runtime_error("logger.probe position must contain [x, y, z].");
+                }
+                const auto x = (*position)[0].value<double>();
+                const auto y = (*position)[1].value<double>();
+                const auto z = (*position)[2].value<double>();
+                if(!x || !y || !z) {
+                    throw std::runtime_error("logger.probe position values must be numeric.");
+                }
+                input.x = *x;
+                input.y = *y;
+                input.z = *z;
+            }
+            if(const toml::array* variables = (*probe_table)["variables"].as_array()) {
+                std::vector<LogVariable> parsed_variables;
+                for(const toml::node& variable_node : *variables) {
+                    const auto variable_name = variable_node.value<std::string>();
+                    if(!variable_name) {
+                        throw std::runtime_error("Every logger probe variable must be a string.");
+                    }
+                    parsed_variables.push_back(parse_log_variable(*variable_name));
+                }
+                input.variables = std::move(parsed_variables);
+            }
+            parsed_probes.push_back(std::move(input));
+        }
+        cfg.probes = std::move(parsed_probes);
+    }
+
+    void parse_logger(const toml::table& root, LoggerInput cfg) {
+        const toml::table* logger_table = root["logger"].as_table();
+
+        if(logger_table == nullptr) {
+            return; // logging config defaults are going to be used
+        }
+
+        if(auto value = (*logger_table)["template"].value<std::string>()) {
+            cfg.template_file = *value;
+            return;
+        } else {
+            cfg.template_file = "NULL";
+        }
+        
+        if(auto value = (*logger_table)["output_directory"].value<std::string>()) {
+            cfg.output_directory = *value;
+        } 
+        if(auto value = (*logger_table)["enable_summary_logging"].value<bool>()) {
+            cfg.enable_summary_logging = *value;
+        } 
+        if(auto value = (*logger_table)["enable_field_logging"].value<bool>()) {
+            cfg.enable_field_logging = *value;
+        } 
+        if(auto value = (*logger_table)["enable_probe_logging"].value<bool>()) {
+            cfg.enable_probe_logging = *value;
+        } 
+        if(auto value = (*logger_table)["field_interval"].value<int>()) {
+            cfg.field_interval = *value;
+        } 
+        if(auto value = (*logger_table)["summary_interval"].value<int>()) {
+            cfg.summary_interval = *value;
+        } 
+        if(auto value = (*logger_table)["probe_interval"].value<int>()) {
+            cfg.probe_interval = *value;
+        } 
+        if(const toml::array* variables = (*logger_table)["field_variables"].as_array()) {
+            std::vector<LogVariable> parsed_variables;
+            for(const toml::node& node : *variables) {
+                const auto variable_name = node.value<std::string>();
+                if(!variable_name) {
+                    throw std::runtime_error("Every logger.field_variables entry must be a string");
+                }
+                parsed_variables.push_back(parse_log_variable(*variable_name));
+            }
+            cfg.field_variables = std::move(parsed_variables);
+        }
+        if(const toml::array* summaries = (*logger_table)["summary"].as_array()) {
+            parse_logger_summary_requests(*summaries, cfg);
+        }
+        if(const toml::array* probes = (*logger_table)["probes"].as_array()) {
+            parse_logger_probes(*probes, cfg);
+        }
+
+    }
+
+    //--------------------make logger object from input struct-------------------
+    inline LoggingConfig make_logging_config(const LoggerInput& input) {
+        LoggingConfig config;
+        if(input.output_directory) {
+            config.output_directory = *input.output_directory;
+        }
+        if(input.enable_field_logging) {
+            config.enable_field_logging = *input.enable_field_logging;
+        }
+        if(input.enable_probe_logging) {
+            config.enable_probe_logging = *input.enable_probe_logging;
+        }
+        if(input.field_interval) {
+            config.field_interval = *input.field_interval;
+        }
+        if(input.summary_interval) {
+            config.summary_interval = *input.summary_interval;
+        }
+        if(input.probe_interval) {
+            config.probe_interval = *input.probe_interval;
+        }
+        if(input.field_variables) {
+            config.field_variables = *input.field_variables;
+        }
+        if(input.summary_requests) {
+            config.summary_requests;
+            for(const LoggerSummaryInput& summary_input : *input.summary_requests) {
+                SummaryRequest request;
+                if(summary_input.name) {
+                    request.name = *summary_input.name;
+                }
+                if(summary_input.variable) {
+                    request.variable = *summary_input.variable;
+                }
+                if(summary_input.selection) {
+                    request.selection = *summary_input.selection;
+                }
+                if(summary_input.log_min) {
+                    request.log_min = *summary_input.log_min;
+                }
+                if(summary_input.log_max) {
+                    request.log_max = *summary_input.log_max;
+                }
+                if(summary_input.log_average) {
+                    request.log_average = *summary_input.log_average;
+                }
+                if(summary_input.log_rms) {
+                    request.log_rms = *summary_input.log_rms;
+                }
+                if(summary_input.log_standard_deviation) {
+                    request.log_standard_deviation = *summary_input.log_standard_deviation;
+                }
+                config.summary_requests.push_back(std::move(request));
+            }
+        }
+        if(input.probes) {
+            config.probes.clear();
+            for(const LoggerProbeInput& probe_input : *input.probes) {
+                Probe probe;
+                if(probe_input.x) {
+                    probe.x = *probe_input.x;
+                }
+                if(probe_input.y) {
+                    probe.y = *probe_input.y;
+                }
+                if(probe_input.z) {
+                    probe.z = *probe_input.z;
+                }
+                if(probe_input.variables) {
+                    probe.variables = *probe_input.variables;
+                }
+                config.probes.push_back(std::move(probe));
+            }
+        }
+        return config;
+    }
 }
 
 struct ModelLoader {
     ModelInput model;
+    LoggerInput input;
+    LoggingConfig config;
     std::unordered_map<std::string, FanCurveInput> fan_curve_library;
     std::unordered_map<std::string, ComponentInput> component_template_cache; 
 
     ModelLoader() = default;
 
     void load_fan_curves(const std::filesystem::path& library_path) {
-        fan_curve_library = load_fan_curve_library(library_path);
-    }
+        fan_curve_library = load_fan_curve_library(library_path);}
 
     void load_model(const std::filesystem::path& model_path) 
     {
@@ -492,263 +771,276 @@ struct ModelLoader {
             parse_global_fans(root, model);
             parse_global_vents(root, model);
 
+            // ------------------------------------------Global Objects---------------------------------------
+            parse_logger(root, input);
+            if(input.template_file == "NULL") {
+                const toml::table& templat_cfg = require_table(root["template"], "logger.template");
+                parse_logger(templat_cfg, input);
+            }
+            config = std::move(make_logging_config(input));
+
         } catch(const toml::parse_error& error) {
             throw std::runtime_error("Failed to parse model file '" + model_path.string() + "': " + std::string(error.description()));
         }
     }
 
-const ComponentInput& get_component_template(const std::string& path, PositionInput pos) {
-    auto it = component_template_cache.find(path);
-    if (it != component_template_cache.end()) return it->second;
-    auto [inserted, ok] = component_template_cache.emplace(path, load_component_template(path, pos));
-    return inserted->second;
-}
+    const ComponentInput& get_component_template(const std::string& path, PositionInput pos) {
+        auto it = component_template_cache.find(path);
+        if (it != component_template_cache.end()) return it->second;
+        auto [inserted, ok] = component_template_cache.emplace(path, load_component_template(path, pos));
+        return inserted->second;
+    }
 
-void run() 
+    void run() 
     {
-    Workload load = Workload(model.simulation.max_timesteps, model.simulation.max_updates, model.simulation.max_cell_count, model.simulation.max_megabyte_usage);
-    Environment env(model.environment.humidity, model.environment.elevation, model.environment.T_ambient, 
-                    model.environment.cp, model.environment.k, model.environment.mu, model.environment.pr, model.environment.rho);
-    Rack rack;
-    const std::string rack_units = model.rack.size.units.value_or("u");
+        Workload load = Workload(model.simulation.max_timesteps, model.simulation.max_updates, model.simulation.max_cell_count, model.simulation.max_megabyte_usage);
+        Environment env(model.environment.humidity, model.environment.elevation, model.environment.T_ambient, 
+                        model.environment.cp, model.environment.k, model.environment.mu, model.environment.pr, model.environment.rho);
+        Rack rack;
+        const std::string rack_units = model.rack.size.units.value_or("u");
 
-    if(rack_units == "u") {
-        rack = Rack::from_rack_units(model.rack.size.width, model.rack.size.depth, model.rack.size.height, model.rack.name);
-    } else if(rack_units == "m") {
-        rack = Rack::from_meters(model.rack.size.width, model.rack.size.depth, model.rack.size.height, model.rack.name);
-    } else if(rack_units == "in") {
-        rack = Rack::from_inches(model.rack.size.width, model.rack.size.depth, model.rack.size.height, model.rack.name);
-    } else if(rack_units == "mm") {
-        rack = Rack::from_mm(model.rack.size.width, model.rack.size.depth, model.rack.size.height, model.rack.name);
-    } else {
-        throw std::runtime_error("Invalid rack.size units: '" + rack_units + "'. Supported values are 'u', 'm', 'in', and 'mm'.");
-    }
-    rack.set_cp(model.rack.ambient.cp);
-    rack.set_k(model.rack.ambient.k);
-    rack.set_h(model.rack.ambient.h);
-    rack.set_rho(model.rack.ambient.rho);
-    rack.set_t(model.rack.ambient.temperature);
-
-    Mesh mesh = Mesh().build_mesh(rack, model.mesh.dx, model.mesh.dy, model.mesh.dz, env, load);
-    Grapher grapher = Grapher(rack, model.mesh.dx, model.mesh.dy, model.mesh.dz);
-
-    // Built up-front, geometry-checked as a whole, then stamped. Keeping the
-    // "build" and "stamp" phases separate is what lets CollisionChecker see
-    // every component/fan/vent before the mesh has any say in the matter.
-    std::vector<Component> components;
-    std::vector<Fan> fans;
-    std::vector<Vent> vents;
-
-    for(const ComponentInput& c_in : model.components) {
-        Component component;
-        ComponentInput c = c_in;
-        if (c.template_path.has_value()) {
-            const ComponentInput& tmpl = get_component_template(*c.template_path, c.position);
-            c.name = tmpl.name;
-            c.size = tmpl.size;
-            c.material = tmpl.material;
-            c.watts = tmpl.watts;
-            c.internal_regions = tmpl.internal_regions;
-        }
-        const std::string comp_units = c.size.units.value_or("u");
-        if(comp_units == "u") {
-            component = Component::from_rack_units(c.size.width, c.size.depth, c.size.height, c.name);
-        } else if(comp_units == "m") {
-            component = Component::from_meters(c.size.width, c.size.depth, c.size.height, c.name);
-        } else if(comp_units == "in") {
-            component = Component::from_inches(c.size.width, c.size.depth, c.size.height, c.name);
-        } else if(comp_units == "mm") {
-            component = Component::from_mm(c.size.width, c.size.depth, c.size.height, c.name);
+        if(rack_units == "u") {
+            rack = Rack::from_rack_units(model.rack.size.width, model.rack.size.depth, model.rack.size.height, model.rack.name);
+        } else if(rack_units == "m") {
+            rack = Rack::from_meters(model.rack.size.width, model.rack.size.depth, model.rack.size.height, model.rack.name);
+        } else if(rack_units == "in") {
+            rack = Rack::from_inches(model.rack.size.width, model.rack.size.depth, model.rack.size.height, model.rack.name);
+        } else if(rack_units == "mm") {
+            rack = Rack::from_mm(model.rack.size.width, model.rack.size.depth, model.rack.size.height, model.rack.name);
         } else {
-            throw std::runtime_error("Invalid component.size units: '" + comp_units + "'. Supported values are 'u', 'm', 'in', and 'mm'.");
+            throw std::runtime_error("Invalid rack.size units: '" + rack_units + "'. Supported values are 'u', 'm', 'in', and 'mm'.");
         }
-        const std::string comp_pos_units = c.position.units.value_or("u");
-        if(comp_pos_units == "u") {
-            component.set_coords_rack_units(c.position.x, c.position.y, c.position.z);
-        } else if(comp_pos_units == "m") {
-            component.set_coords_m(c.position.x, c.position.y, c.position.z);
-        } else if(comp_pos_units == "in") {
-            component.set_coords_in(c.position.x, c.position.y, c.position.z);
-        } else if(comp_pos_units == "mm") {
-            component.set_coords_mm(c.position.x, c.position.y, c.position.z);
-        } else {
-            throw std::runtime_error("Invalid component.position units: '" + comp_pos_units + "'. Supported values are 'u', 'm', 'in', and 'mm'.");
-        }
-        component.set_name(c.name);
-        component.set_cp(c.material.cp);
-        component.set_rho_solid(c.material.density);
-        component.set_k_solid(c.material.k);
-        component.set_watts(c.watts);
-        for(const InternalRegionInput& i : c.internal_regions) {
-            component.add_region(build_internal_region(i));
-        }
-        component.order_internal_regions();
-        components.push_back(component);
-    }
+        rack.set_cp(model.rack.ambient.cp);
+        rack.set_k(model.rack.ambient.k);
+        rack.set_h(model.rack.ambient.h);
+        rack.set_rho(model.rack.ambient.rho);
+        rack.set_t(model.rack.ambient.temperature);
 
-    for(const FanInput& f : model.fans) {
-        Fan fan = Fan();
-        const std::string fan_units = f.position.units.value_or("u");
-        if(fan_units == "u") {
-            fan.set_center_rack_units(f.position.x, f.position.y, f.position.z);
-        } else if(fan_units == "m") {
-            fan.set_center_meters(f.position.x, f.position.y, f.position.z);
-        } else if(fan_units == "in") {
-            fan.set_center_inches(f.position.x, f.position.y, f.position.z);
-        } else if(fan_units == "mm") {
-            fan.set_center_mm(f.position.x, f.position.y, f.position.z);
-        } else {
-            throw std::runtime_error("Invalid fan.position units: '" + fan_units + "'. Supported values are 'u', 'm', 'in', and 'mm'.");
+        Mesh mesh = Mesh().build_mesh(rack, model.mesh.dx, model.mesh.dy, model.mesh.dz, env, load);
+        Grapher grapher = Grapher(rack, model.mesh.dx, model.mesh.dy, model.mesh.dz);
+
+        // Built up-front, geometry-checked as a whole, then stamped. Keeping the
+        // "build" and "stamp" phases separate is what lets CollisionChecker see
+        // every component/fan/vent before the mesh has any say in the matter.
+        std::vector<Component> components;
+        std::vector<Fan> fans;
+        std::vector<Vent> vents;
+
+        for(const ComponentInput& c_in : model.components) {
+            Component component;
+            ComponentInput c = c_in;
+            if (c.template_path.has_value()) {
+                const ComponentInput& tmpl = get_component_template(*c.template_path, c.position);
+                c.name = tmpl.name;
+                c.size = tmpl.size;
+                c.material = tmpl.material;
+                c.watts = tmpl.watts;
+                c.internal_regions = tmpl.internal_regions;
+            }
+            const std::string comp_units = c.size.units.value_or("u");
+            if(comp_units == "u") {
+                component = Component::from_rack_units(c.size.width, c.size.depth, c.size.height, c.name);
+            } else if(comp_units == "m") {
+                component = Component::from_meters(c.size.width, c.size.depth, c.size.height, c.name);
+            } else if(comp_units == "in") {
+                component = Component::from_inches(c.size.width, c.size.depth, c.size.height, c.name);
+            } else if(comp_units == "mm") {
+                component = Component::from_mm(c.size.width, c.size.depth, c.size.height, c.name);
+            } else {
+                throw std::runtime_error("Invalid component.size units: '" + comp_units + "'. Supported values are 'u', 'm', 'in', and 'mm'.");
+            }
+            const std::string comp_pos_units = c.position.units.value_or("u");
+            if(comp_pos_units == "u") {
+                component.set_coords_rack_units(c.position.x, c.position.y, c.position.z);
+            } else if(comp_pos_units == "m") {
+                component.set_coords_m(c.position.x, c.position.y, c.position.z);
+            } else if(comp_pos_units == "in") {
+                component.set_coords_in(c.position.x, c.position.y, c.position.z);
+            } else if(comp_pos_units == "mm") {
+                component.set_coords_mm(c.position.x, c.position.y, c.position.z);
+            } else {
+                throw std::runtime_error("Invalid component.position units: '" + comp_pos_units + "'. Supported values are 'u', 'm', 'in', and 'mm'.");
+            }
+            component.set_name(c.name);
+            component.set_cp(c.material.cp);
+            component.set_rho_solid(c.material.density);
+            component.set_k_solid(c.material.k);
+            component.set_watts(c.watts);
+            for(const InternalRegionInput& i : c.internal_regions) {
+                component.add_region(build_internal_region(i));
+            }
+            component.order_internal_regions();
+            components.push_back(component);
         }
-        if(f.shape == FanShape::Circular) {
+
+        for(const FanInput& f : model.fans) {
+            Fan fan = Fan();
+            const std::string fan_units = f.position.units.value_or("u");
+            if(fan_units == "u") {
+                fan.set_center_rack_units(f.position.x, f.position.y, f.position.z);
+            } else if(fan_units == "m") {
+                fan.set_center_meters(f.position.x, f.position.y, f.position.z);
+            } else if(fan_units == "in") {
+                fan.set_center_inches(f.position.x, f.position.y, f.position.z);
+            } else if(fan_units == "mm") {
+                fan.set_center_mm(f.position.x, f.position.y, f.position.z);
+            } else {
+                throw std::runtime_error("Invalid fan.position units: '" + fan_units + "'. Supported values are 'u', 'm', 'in', and 'mm'.");
+            }
+            if(f.shape == FanShape::Circular) {
+                FlowType flow = FlowType::Exhaust;
+                if(f.flow_type == FanFlowType::Intake) flow = FlowType::Intake;
+                const std::string fan_d_units = f.diameter_units.value_or("u");
+                if(fan_d_units == "u") {
+                    fan.set_diameter_rack_units(*f.diameter);
+                } else if(fan_d_units == "m") {
+                    fan.set_diameter_meters(*f.diameter);
+                } else if(fan_d_units == "in") {
+                    fan.set_diameter_inches(*f.diameter);
+                } else if(fan_d_units == "mm") {
+                    fan.set_diameter_mm(*f.diameter);
+                } else {
+                    throw std::runtime_error("Invalid fan diameter_units: '" + fan_d_units + "'. Supported values are 'u', 'm', 'in', and 'mm'.");
+                }
+                fan.set_name(f.name);
+                fan.set_cfm(f.cfm);
+                fan.set_velocity_dir({f.direction.x, f.direction.y, f.direction.z});
+                fan.set_type(flow);
+                fan.set_shape(ShapeType::Circular);
+            }
+            if(f.shape == FanShape::Rectangular) {
             FlowType flow = FlowType::Exhaust;
             if(f.flow_type == FanFlowType::Intake) flow = FlowType::Intake;
-            const std::string fan_d_units = f.diameter_units.value_or("u");
-            if(fan_d_units == "u") {
-                fan.set_diameter_rack_units(*f.diameter);
-            } else if(fan_d_units == "m") {
-                fan.set_diameter_meters(*f.diameter);
-            } else if(fan_d_units == "in") {
-                fan.set_diameter_inches(*f.diameter);
-            } else if(fan_d_units == "mm") {
-                fan.set_diameter_mm(*f.diameter);
+                fan.set_name(f.name);
+                const std::string fan_pos_units = f.size->units.value_or("u");
+                if(fan_pos_units == "u") {
+                    fan.set_size_rack_units(f.size->width, f.size->depth, f.size->height);
+                } else if(fan_pos_units == "m") {
+                    fan.set_size_meters(f.size->width, f.size->depth, f.size->height);
+                } else if(fan_pos_units == "in") {
+                    fan.set_size_inches(f.size->width, f.size->depth, f.size->height);
+                } else if(fan_pos_units == "mm") {
+                    fan.set_size_mm(f.size->width, f.size->depth, f.size->height);
+                } else {
+                    throw std::runtime_error("Invalid fan.size units: '" + fan_pos_units + "'. Supported values are 'u', 'm', 'in', and 'mm'.");
+                }
+                fan.set_cfm(f.cfm);
+                fan.set_velocity_dir({f.direction.x, f.direction.y, f.direction.z});
+                fan.set_type(flow);
+                fan.set_shape(ShapeType::Rectangular);
+            }
+            if (f.curve_name.has_value()) {
+                auto it = fan_curve_library.find(*f.curve_name);
+                if (it == fan_curve_library.end()) {
+                    throw std::runtime_error(
+                        "Fan '" + f.name + "' references unknown curve '" + *f.curve_name + "'");
+                }
+                const FanCurveInput& curve = it->second;
+                fan.set_curve(curve.a, curve.b, curve.c, curve.rho_rated);
+            }
+            fans.push_back(fan);
+        }
+
+        for(const VentInput& v : model.vents) {
+            Vent vent = Vent();
+            const std::string vent_units = v.position.units.value_or("u");
+            if(vent_units == "u") {
+                vent.set_center_rack_units(v.position.x, v.position.y, v.position.z);
+            } else if(vent_units == "m") {
+                vent.set_center_meters(v.position.x, v.position.y, v.position.z);
+            } else if(vent_units == "in") {
+                vent.set_center_inches(v.position.x, v.position.y, v.position.z);
+            } else if(vent_units == "mm") {
+                vent.set_center_mm(v.position.x, v.position.y, v.position.z);
             } else {
-                throw std::runtime_error("Invalid fan diameter_units: '" + fan_d_units + "'. Supported values are 'u', 'm', 'in', and 'mm'.");
+                throw std::runtime_error("Invalid vent.position units: '" + vent_units + "'. Supported values are 'u', 'm', 'in', and 'mm'.");
             }
-            fan.set_name(f.name);
-            fan.set_cfm(f.cfm);
-            fan.set_velocity_dir({f.direction.x, f.direction.y, f.direction.z});
-            fan.set_type(flow);
-            fan.set_shape(ShapeType::Circular);
-        }
-        if(f.shape == FanShape::Rectangular) {
-        FlowType flow = FlowType::Exhaust;
-        if(f.flow_type == FanFlowType::Intake) flow = FlowType::Intake;
-            fan.set_name(f.name);
-            const std::string fan_pos_units = f.size->units.value_or("u");
-            if(fan_pos_units == "u") {
-                fan.set_size_rack_units(f.size->width, f.size->depth, f.size->height);
-            } else if(fan_pos_units == "m") {
-                fan.set_size_meters(f.size->width, f.size->depth, f.size->height);
-            } else if(fan_pos_units == "in") {
-                fan.set_size_inches(f.size->width, f.size->depth, f.size->height);
-            } else if(fan_pos_units == "mm") {
-                fan.set_size_mm(f.size->width, f.size->depth, f.size->height);
-            } else {
-                throw std::runtime_error("Invalid fan.size units: '" + fan_pos_units + "'. Supported values are 'u', 'm', 'in', and 'mm'.");
+            if(v.shape == VentShape::Circular) {
+                const std::string vent_d_units = v.diameter_units.value_or("u");
+                if(vent_d_units == "u") {
+                    vent.set_diameter_rack_units(*v.diameter);
+                } else if(vent_d_units == "m") {
+                    vent.set_diameter_meters(*v.diameter);
+                } else if(vent_d_units == "in") {
+                    vent.set_diameter_inches(*v.diameter);
+                } else if(vent_d_units == "mm") {
+                    vent.set_diameter_mm(*v.diameter);
+                } else {
+                    throw std::runtime_error("Invalid vent diameter_units: '" + vent_d_units + "'. Supported values are 'u', 'm', 'in', and 'mm'.");
+                }
+                vent.set_cd(v.cd);
+                vent.set_direction(v.direction.x, v.direction.y, v.direction.z);
+                vent.set_name(v.name);
+                vent.set_free_area_ratio(v.free_area_ratio);
+                vent.set_shape(VentShapeType::Circular);
             }
-            fan.set_cfm(f.cfm);
-            fan.set_velocity_dir({f.direction.x, f.direction.y, f.direction.z});
-            fan.set_type(flow);
-            fan.set_shape(ShapeType::Rectangular);
-        }
-        if (f.curve_name.has_value()) {
-            auto it = fan_curve_library.find(*f.curve_name);
-            if (it == fan_curve_library.end()) {
-                throw std::runtime_error(
-                    "Fan '" + f.name + "' references unknown curve '" + *f.curve_name + "'");
+            if(v.shape == VentShape::Rectangular) {
+                const std::string vent_s_units = v.size->units.value_or("u");
+                if(vent_s_units == "u") {
+                    vent.set_size_rack_units(v.size->width, v.size->depth, v.size->height);
+                } else if(vent_s_units == "m") {
+                    vent.set_size_meters(v.size->width, v.size->depth, v.size->height);
+                } else if(vent_s_units == "in") {
+                    vent.set_size_inches(v.size->width, v.size->depth, v.size->height);
+                } else if(vent_s_units == "mm") {
+                    vent.set_size_mm(v.size->width, v.size->depth, v.size->height);
+                } else {
+                    throw std::runtime_error("Invalid vent.size units: '" + vent_s_units + "'. Supported values are 'u', 'm', 'in', and 'mm'.");
+                }
+                vent.set_cd(v.cd);
+                vent.set_name(v.name);
+                vent.set_free_area_ratio(v.free_area_ratio);
+                vent.set_direction(v.direction.x, v.direction.y, v.direction.z);
+                // vent.set_shape(ShapeType::Rectangular);
             }
-            const FanCurveInput& curve = it->second;
-            fan.set_curve(curve.a, curve.b, curve.c, curve.rho_rated);
+            vents.push_back(vent);
         }
-        fans.push_back(fan);
-    }
 
-    for(const VentInput& v : model.vents) {
-        Vent vent = Vent();
-        const std::string vent_units = v.position.units.value_or("u");
-        if(vent_units == "u") {
-            vent.set_center_rack_units(v.position.x, v.position.y, v.position.z);
-        } else if(vent_units == "m") {
-            vent.set_center_meters(v.position.x, v.position.y, v.position.z);
-        } else if(vent_units == "in") {
-            vent.set_center_inches(v.position.x, v.position.y, v.position.z);
-        } else if(vent_units == "mm") {
-            vent.set_center_mm(v.position.x, v.position.y, v.position.z);
-        } else {
-            throw std::runtime_error("Invalid vent.position units: '" + vent_units + "'. Supported values are 'u', 'm', 'in', and 'mm'.");
+        // Single geometry-level validation gate, run once before anything is
+        // stamped into the mesh or populated into the grapher: first, does
+        // everything fit inside the rack; second, does anything collide with
+        // anything else. Both are resolution-independent - no dx/dy/dz involved.
+        RackBoundsChecker::check_all(rack, components, fans, vents);
+        CollisionChecker::check_all(components, fans, vents);
+
+        for(const Component& component : components) {
+            mesh.stamp_component(component);
+            grapher.add_component(component);
         }
-        if(v.shape == VentShape::Circular) {
-            const std::string vent_d_units = v.diameter_units.value_or("u");
-            if(vent_d_units == "u") {
-                vent.set_diameter_rack_units(*v.diameter);
-            } else if(vent_d_units == "m") {
-                vent.set_diameter_meters(*v.diameter);
-            } else if(vent_d_units == "in") {
-                vent.set_diameter_inches(*v.diameter);
-            } else if(vent_d_units == "mm") {
-                vent.set_diameter_mm(*v.diameter);
-            } else {
-                throw std::runtime_error("Invalid vent diameter_units: '" + vent_d_units + "'. Supported values are 'u', 'm', 'in', and 'mm'.");
-            }
-            vent.set_cd(v.cd);
-            vent.set_direction(v.direction.x, v.direction.y, v.direction.z);
-            vent.set_name(v.name);
-            vent.set_free_area_ratio(v.free_area_ratio);
-            vent.set_shape(VentShapeType::Circular);
+        for(const Fan& fan : fans) {
+            mesh.stamp_fan(fan);
+            grapher.add_fan(fan);
         }
-        if(v.shape == VentShape::Rectangular) {
-            const std::string vent_s_units = v.size->units.value_or("u");
-            if(vent_s_units == "u") {
-                vent.set_size_rack_units(v.size->width, v.size->depth, v.size->height);
-            } else if(vent_s_units == "m") {
-                vent.set_size_meters(v.size->width, v.size->depth, v.size->height);
-            } else if(vent_s_units == "in") {
-                vent.set_size_inches(v.size->width, v.size->depth, v.size->height);
-            } else if(vent_s_units == "mm") {
-                vent.set_size_mm(v.size->width, v.size->depth, v.size->height);
-            } else {
-                throw std::runtime_error("Invalid vent.size units: '" + vent_s_units + "'. Supported values are 'u', 'm', 'in', and 'mm'.");
-            }
-            vent.set_cd(v.cd);
-            vent.set_name(v.name);
-            vent.set_free_area_ratio(v.free_area_ratio);
-            vent.set_direction(v.direction.x, v.direction.y, v.direction.z);
-            // vent.set_shape(ShapeType::Rectangular);
+        for(const Vent& vent : vents) {
+            mesh.stamp_vent(vent);
+            grapher.add_vent(vent);
         }
-        vents.push_back(vent);
-    }
 
-    // Single geometry-level validation gate, run once before anything is
-    // stamped into the mesh or populated into the grapher: first, does
-    // everything fit inside the rack; second, does anything collide with
-    // anything else. Both are resolution-independent - no dx/dy/dz involved.
-    RackBoundsChecker::check_all(rack, components, fans, vents);
-    CollisionChecker::check_all(components, fans, vents);
+        grapher.stamp_components();
+        grapher.stamp_fans();
+        grapher.stamp_vents();
+        grapher.export_to_file("output.txt");
+        if(model.flow_solver.enable_flow_solver) {
+            FlowSolver flow_solver(mesh, *model.flow_solver.resistivity, *model.flow_solver.tolerance, *model.flow_solver.max_iterations, 
+                                *model.flow_solver.sor_omega, *model.flow_solver.max_outer_iters, *model.flow_solver.flow_tolerance);
+            flow_solver.solve(); // pre populate all velocity cells
+        }
+        int update_flow_interval = model.flow_solver.enable_flow_solver
+            ? model.simulation.update_flow_interval.value_or(1)
+            : -1;
 
-    for(const Component& component : components) {
-        mesh.stamp_component(component);
-        grapher.add_component(component);
-    }
-    for(const Fan& fan : fans) {
-        mesh.stamp_fan(fan);
-        grapher.add_fan(fan);
-    }
-    for(const Vent& vent : vents) {
-        mesh.stamp_vent(vent);
-        grapher.add_vent(vent);
-    }
+        Solver solver(mesh, model.simulation.dt, model.simulation.duration, false,
+                    model.simulation.output_interval,
+                    update_flow_interval,
+                    *model.flow_solver.resistivity, *model.flow_solver.tolerance,
+                    *model.flow_solver.max_iterations, *model.flow_solver.sor_omega,
+                    *model.flow_solver.max_outer_iters, *model.flow_solver.flow_tolerance);
 
-    grapher.stamp_components();
-    grapher.stamp_fans();
-    grapher.stamp_vents();
-    grapher.export_to_file("output.txt");
-    if(model.flow_solver.enable_flow_solver) {
-        FlowSolver flow_solver(mesh, *model.flow_solver.resistivity, *model.flow_solver.tolerance, *model.flow_solver.max_iterations, 
-                            *model.flow_solver.sor_omega, *model.flow_solver.max_outer_iters, *model.flow_solver.flow_tolerance);
-        flow_solver.solve(); // pre populate all velocity cells
-    }
-    int update_flow_interval = model.flow_solver.enable_flow_solver
-        ? model.simulation.update_flow_interval.value_or(1)
-        : -1;
 
-    Solver solver(mesh, model.simulation.dt, model.simulation.duration, false,
-                model.simulation.output_interval,
-                update_flow_interval,
-                *model.flow_solver.resistivity, *model.flow_solver.tolerance,
-                *model.flow_solver.max_iterations, *model.flow_solver.sor_omega,
-                *model.flow_solver.max_outer_iters, *model.flow_solver.flow_tolerance);
-    solver.solve();
+        SimulationLogger logger(config);
+        logger.initialize(mesh);
+        solver.set_logger(logger);
+        solver.solve();
     }
 };
 
