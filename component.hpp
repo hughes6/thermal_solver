@@ -567,6 +567,10 @@ struct Component {
         if(loc[1] == 0.0 || loc[1] + loc_size[1] == depth_m) lies_on_face++;
         if(loc[2] == 0.0 || loc[2] + loc_size[2] == height_m) lies_on_face++;
         if(lies_on_face > 1) {
+            std::cout << "region name: " << r.get_name() << " global x: " << loc[0] << " global y: " << loc[1] << " global z: " << loc[2] << std::endl;
+            std::cout << "size x: " << loc_size[0] << " size y: " << loc_size[1] << " size z: " << loc_size[2] << std::endl;
+            std::cout << " end x: " << loc[0] + loc_size[0] << " end y: " << loc[1] + loc_size[1] << " end z: " << loc[2] + loc_size[2] << std::endl;
+            std::cout << "width: " << width_m << " depth: " << depth_m << " height: " << height_m << std::endl;
             throw std::invalid_argument("Component:InternalRegion - fan/vent intercepts more than 1 face.");
         }
         if(lies_on_face < 1) {
