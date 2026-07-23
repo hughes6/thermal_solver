@@ -91,6 +91,7 @@ public:
     double get_vx() const { return vx; }
     double get_vy() const { return vy; }
     double get_vz() const { return vz; }
+    double get_vmag() const { return std::sqrt(vx*vx + vy*vy + vz*vz); }
     double get_mu() const { return mu; }
     double get_pr() const { return pr; }
     
