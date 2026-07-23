@@ -10,7 +10,6 @@
 #include <iomanip>
 
 #include "rack.hpp"
-#include "collision.hpp"
 #include "component.hpp"
 #include "fan.hpp"
 #include "vent.hpp"
@@ -33,18 +32,19 @@ public:
           vent_exist(nx, ny, nz)
     {}
 
+    // Bounds/collision validity is established once, up front, by
+    // RackBoundsChecker + CollisionChecker (collision.hpp) before anything
+    // reaches the grapher. Grapher's only job is to populate its bitmap
+    // from geometry that's already known-good.
     void add_component(const Component& c) {
-        validate_bounds(c);
         components.push_back(c.clone());
     }
      
     void add_fan(const Fan& f) {
-        validate_bounds(f);
         fans.push_back(f.clone());
     }
 
     void add_vent(const Vent& v) {
-        validate_bounds(v);
         vents.push_back(v.clone());
     }
 
@@ -618,165 +618,6 @@ private:
     Bitmap component_exist;
     Bitmap fan_exist;
     Bitmap vent_exist;
-
-    void validate_bounds(const Component& c) const {
-        auto [x, y, z] = c.get_coords();
-        double tol = 1e-8;
-        if(x + tol< 0.0 || y + tol < 0.0 || z + tol < 0.0 ||
-           x + c.get_width_m()  > rack.get_width_m() + tol||
-           y + c.get_depth_m()  > rack.get_depth_m() + tol||
-           z + c.get_height_m() > rack.get_height_m() + tol) {
-            std::cout << x + c.get_width_m() << " !> " << rack.get_width_m() << std::endl;
-            std::cout << y + c.get_depth_m() << " !> " << rack.get_depth_m() << std::endl;
-            std::cout << z + c.get_height_m() << " !> " << rack.get_height_m() << std::endl;
-
-            throw std::out_of_range( "Component '" + c.get_name() + "' out of rack bounds" );
-        }
-    }
-
-    void validate_bounds(const Fan& f) const {
-        auto[x, y, z] = f.get_center();
-        double r = f.get_diameter() / 2.0;
-        auto[vx, vy, vz] = f.get_velocity_dir();
-        bool is_circular = f.is_circular();
-
-        double rack_w = rack.get_width_m();
-        double rack_d = rack.get_depth_m();
-        double rack_h = rack.get_height_m();
-
-
-        if(x < 0.0 || x > rack_w || y < 0.0 || y > rack_d || z < 0.0 || z > rack_h) {
-            throw std::out_of_range("Grapher: Fan '" + f.get_name() + "' center out of rack bounds");
-        }
-        double ax = std::abs(vx);
-        double ay = std::abs(vy);
-        double az = std::abs(vz);
-        // Fan normal mostly x: fan opening plane is y-z
-        if(ax >= ay && ax >= az) {
-            if(is_circular) {
-                if(y - r < 0.0 || y + r > rack_d || z - r < 0.0 || z + r > rack_h) {
-                    throw std::out_of_range("Grapher: Fan '" + f.get_name() + "' disk out of rack bounds");
-                }
-            } else {
-                double w = f.get_size_m()[1] / 2.0;
-                double h = f.get_size_m()[2] / 2.0;
-                if(y - w < 0.0 || y + w > rack_d || z - h < 0.0 || z + h > rack_h) {
-                    throw std::out_of_range("Grapher: Fan " + f.get_name() + " box out of bounds");
-                }
-            }
-
-        }
-        // Fan normal mostly y: fan opening plane is x-z
-        else if(ay >= ax && ay >= az) {
-            if(is_circular) {
-                if(x - r < 0.0 || x + r > rack_w || z - r < 0.0 || z + r > rack_h) {
-                    throw std::out_of_range("Grapher: Fan '" + f.get_name() + "' disk out of rack bounds");
-                }
-            } else {
-                double w = f.get_size_m()[0] / 2.0;
-                double h = f.get_size_m()[2] / 2.0;
-                if(x - w < 0.0 || x + w > rack_w || z - h < 0.0 || z + h > rack_h) {
-                    throw std::out_of_range("Grapher: Fan " + f.get_name() + " box out of bounds");
-                }
-            }
-        }
-        // Fan normal mostly z: fan opening plane is x-y
-        else {
-            if(is_circular) {
-                if(x - r < 0.0 || x + r > rack_w || y - r < 0.0 || y + r > rack_d) {
-                    throw std::out_of_range("Grapher: Fan '" + f.get_name() + "' disk out of rack bounds");
-                }
-            } else {
-                double w = f.get_size_m()[0] / 2.0;
-                double h = f.get_size_m()[1] / 2.0;
-                if(x - w < 0.0 || x + w > rack_w || y - h < 0.0 || y + h > rack_d) {
-                    throw std::out_of_range("Grapher: Fan " + f.get_name() + " box out of bounds");
-                }
-            }
-        }
-    }
-
-
-
-    void validate_bounds(const Vent& v) const {
-        auto [x, y, z] = v.get_center();
-        auto [vx, vy, vz] = v.get_direction();
-
-        const bool is_circular = v.is_circular();
-        const double r = v.get_diameter() / 2.0;
-
-        const double rack_w = rack.get_width_m();
-        const double rack_d = rack.get_depth_m();
-        const double rack_h = rack.get_height_m();
-
-        if(x < 0.0 || x > rack_w ||  y < 0.0 || y > rack_d || z < 0.0 || z > rack_h) {
-            throw std::out_of_range("Grapher: Vent '" + v.get_name() + "' center out of rack bounds");
-        }
-
-        const double ax = std::abs(vx);
-        const double ay = std::abs(vy);
-        const double az = std::abs(vz);
-
-        // Vent normal mostly X: opening lies in YZ plane
-        if(ax >= ay && ax >= az) {
-            if(is_circular) {
-                if(y - r < 0.0 || y + r > rack_d || z - r < 0.0 || z + r > rack_h) {
-                    std::cout << "x" << std::endl;
-                    throw std::out_of_range("Grapher: Vent '" + v.get_name() + "' disk out of rack bounds");
-                }
-            } else {
-                const double w = v.get_size_m()[1] / 2.0;
-                const double h = v.get_size_m()[2] / 2.0;
-                if(y - w < 0.0 || y + w > rack_d || z - h < 0.0 || z + h > rack_h) {
-                    throw std::out_of_range(
-                        "Grapher: Vent '" +
-                        v.get_name() +
-                        "' box out of rack bounds"
-                    );
-                }
-            }
-        }
-
-        // Vent normal mostly Y: opening lies in XZ plane
-        else if(ay >= ax && ay >= az) {
-            if(is_circular) {
-                if(x - r < 0.0 || x + r > rack_w || z - r < 0.0 || z + r > rack_h) {
-                    throw std::out_of_range("Grapher: Vent '" + v.get_name() + "' disk out of rack bounds");
-                }
-            } else {
-                const double w = v.get_size_m()[0] / 2.0;
-                const double h = v.get_size_m()[2] / 2.0;
-                if(x - w < 0.0 || x + w > rack_w ||
-                z - h < 0.0 || z + h > rack_h) {
-                    throw std::out_of_range(
-                        "Grapher: Vent '" +
-                        v.get_name() +
-                        "' box out of rack bounds"
-                    );
-                }
-            }
-        }
-
-        // Vent normal mostly Z: opening lies in XY plane
-        else {
-            if(is_circular) {
-                if(x - r < 0.0 || x + r > rack_w || y - r < 0.0 || y + r > rack_d) {
-                    throw std::out_of_range("Grapher: Vent '" + v.get_name() + "' disk out of rack bounds");
-                }
-            } else {
-                const double w = v.get_size_m()[0] / 2.0;
-                const double h = v.get_size_m()[1] / 2.0;
-                if(x - w < 0.0 || x + w > rack_w ||
-                y - h < 0.0 || y + h > rack_d) {
-                    throw std::out_of_range(
-                        "Grapher: Vent '" +
-                        v.get_name() +
-                        "' box out of rack bounds"
-                    );
-                }
-            }
-        }
-    }
 };
 
 #endif

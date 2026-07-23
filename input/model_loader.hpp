@@ -709,9 +709,11 @@ void run()
         vents.push_back(vent);
     }
 
-    // Single geometry-level validation gate. Throws with a descriptive
-    // message if any two components/fans/vents overlap in real-world space,
-    // independent of mesh resolution. Mesh stamping below trusts this.
+    // Single geometry-level validation gate, run once before anything is
+    // stamped into the mesh or populated into the grapher: first, does
+    // everything fit inside the rack; second, does anything collide with
+    // anything else. Both are resolution-independent - no dx/dy/dz involved.
+    RackBoundsChecker::check_all(rack, components, fans, vents);
     CollisionChecker::check_all(components, fans, vents);
 
     for(const Component& component : components) {

@@ -153,6 +153,11 @@ public:
         test_collision_detects_fan_embedded_in_component();
         test_collision_detects_vent_overlapping_fan();
         test_collision_is_independent_of_mesh_resolution();
+        test_collision_allows_fan_flush_on_component_face();
+        test_collision_detects_two_vents_at_same_spot();
+        test_collision_allows_openings_on_different_walls();
+        test_rack_bounds_rejects_component_outside_rack();
+        test_rack_bounds_allows_fan_flush_on_rack_wall();
         
         std::cout << "========== ALL UNIT TESTS PASSED ==========\n\n";
     }
@@ -1956,6 +1961,124 @@ public:
             "since the checker never looks at dx/dy/dz.");
 
         std::cout << "test_collision_is_independent_of_mesh_resolution PASSED\n";
+    }
+
+    void test_collision_allows_fan_flush_on_component_face() {
+        Component c(0.05, 0.05, 0.05, "Block");
+        c.set_coords_m(0.0, 0.0, 0.0); // spans [0,0.05] in all 3 axes
+
+        // Mounted exactly on the top face - the normal, intended case.
+        Fan fan(
+            "Top fan", 10.0, 0.0,
+            {0.02, 0.02, 0.0}, {0.025, 0.025, 0.05}, {0.0, 0.0, 1.0},
+            FlowType::Exhaust, ShapeType::Rectangular
+        );
+
+        bool threw = false;
+        try {
+            CollisionChecker::check_all({c}, {fan}, {});
+        } catch (const std::runtime_error&) {
+            threw = true;
+        }
+        assert(!threw &&
+            "A fan flush-mounted on a component's face must not read as an overlap.");
+
+        std::cout << "test_collision_allows_fan_flush_on_component_face PASSED\n";
+    }
+
+    void test_collision_detects_two_vents_at_same_spot() {
+        Vent vent_a(
+            "Vent A", {0.02, 0.02, 0.0}, /*far=*/0.5, /*diameter=*/0.0, /*cd=*/0.6,
+            /*center=*/{0.10, 0.10, 0.10}, /*direction=*/{0.0, 0.0, 1.0},
+            VentShapeType::Rectangular
+        );
+        Vent vent_b(
+            "Vent B", {0.02, 0.02, 0.0}, /*far=*/0.5, /*diameter=*/0.0, /*cd=*/0.6,
+            /*center=*/{0.10, 0.10, 0.10}, /*direction=*/{0.0, 0.0, 1.0},
+            VentShapeType::Rectangular
+        );
+
+        bool threw = false;
+        try {
+            CollisionChecker::check_all({}, {}, {vent_a, vent_b});
+        } catch (const std::runtime_error&) {
+            threw = true;
+        }
+        assert(threw &&
+            "Two vents placed at (essentially) the same spot must be rejected, "
+            "even though a flush-mounted opening against a solid is allowed.");
+
+        std::cout << "test_collision_detects_two_vents_at_same_spot PASSED\n";
+    }
+
+    void test_collision_allows_openings_on_different_walls() {
+        // Left wall vent (normal along x) and front wall vent (normal along
+        // y), both parked near the same corner so their raw x/y/z ranges
+        // overlap in space - but they're openings on two different faces,
+        // not two things fighting over the same opening, so this must pass.
+        Vent left(
+            "Left wall vent", {0.0, 0.03, 0.03}, /*far=*/0.5, /*diameter=*/0.0, /*cd=*/0.6,
+            /*center=*/{0.0, 0.03, 0.03}, /*direction=*/{1.0, 0.0, 0.0},
+            VentShapeType::Rectangular
+        );
+        Vent front(
+            "Front wall vent", {0.03, 0.0, 0.03}, /*far=*/0.5, /*diameter=*/0.0, /*cd=*/0.6,
+            /*center=*/{0.03, 0.0, 0.03}, /*direction=*/{0.0, 1.0, 0.0},
+            VentShapeType::Rectangular
+        );
+
+        bool threw = false;
+        try {
+            CollisionChecker::check_all({}, {}, {left, front});
+        } catch (const std::runtime_error&) {
+            threw = true;
+        }
+        assert(!threw &&
+            "Openings on two different walls must never conflict, even if their "
+            "raw coordinate ranges happen to intersect near a shared corner.");
+
+        std::cout << "test_collision_allows_openings_on_different_walls PASSED\n";
+    }
+
+    void test_rack_bounds_rejects_component_outside_rack() {
+        Rack rack = Rack::from_meters(0.10, 0.10, 0.10, "rack");
+
+        Component c(0.05, 0.05, 0.05, "Overhang");
+        c.set_coords_m(0.08, 0.0, 0.0); // spans x:[0.08, 0.13] -> pokes past rack.width=0.10
+
+        bool threw = false;
+        try {
+            RackBoundsChecker::check_all(rack, {c}, {}, {});
+        } catch (const std::out_of_range&) {
+            threw = true;
+        }
+        assert(threw && "A component extending outside the rack must be rejected.");
+
+        std::cout << "test_rack_bounds_rejects_component_outside_rack PASSED\n";
+    }
+
+    void test_rack_bounds_allows_fan_flush_on_rack_wall() {
+        Rack rack = Rack::from_meters(0.10, 0.10, 0.10, "rack");
+
+        // Mounted exactly on the rack's own ceiling (z = rack height).
+        Fan fan(
+            "Ceiling fan", 10.0, 0.0,
+            {0.02, 0.02, 0.0}, {0.05, 0.05, 0.10}, {0.0, 0.0, 1.0},
+            FlowType::Exhaust, ShapeType::Rectangular
+        );
+
+        bool threw = false;
+        try {
+            RackBoundsChecker::check_all(rack, {}, {fan}, {});
+        } catch (const std::out_of_range&) {
+            threw = true;
+        }
+        assert(!threw &&
+            "A fan flush on the rack's own boundary wall must not be rejected - "
+            "this is resolution-independent, unlike the old Grapher::validate_bounds, "
+            "which required a mesh resolution just to construct the checking object.");
+
+        std::cout << "test_rack_bounds_allows_fan_flush_on_rack_wall PASSED\n";
     }
 };
 
