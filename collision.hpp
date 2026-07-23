@@ -246,6 +246,9 @@ struct RackBoundsChecker {
             x + c.get_width_m()  > rack.get_width_m()  + tol ||
             y + c.get_depth_m()  > rack.get_depth_m()  + tol ||
             z + c.get_height_m() > rack.get_height_m() + tol) {
+            std::cout << "x min: " << x << " y min: " << y << " z min: " << z << std::endl;
+            std::cout << "x max: " << x + c.get_width_m() << " y max: " << y + c.get_depth_m() << " z max: " << z + c.get_height_m() << std::endl;
+            std::cout << "rack x: " << rack.get_width_m() << " rack y: " << rack.get_depth_m() << " rack z: " << rack.get_height_m() << std::endl;
             throw std::out_of_range("Component '" + c.get_name() + "' out of rack bounds");
         }
     }
