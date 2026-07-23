@@ -57,6 +57,41 @@ struct FlowSolverInput {
     std::optional<double> flow_tolerance = 0.0;
 };
 
+struct LoggerSummaryInput {
+    std::optional<std::string> name;
+    std::optional<LogVariable> variable;
+    std::optional<CellSelection> selection;
+    std::optional<bool> log_min;
+    std::optional<bool> log_max;
+    std::optional<bool> log_average;
+    std::optional<bool> log_rms;
+    std::optional<bool> log_standard_deviation;
+};
+
+struct LoggerProbeInput {
+    std::optional<std::string> name;
+    std::optional<double> x;
+    std::optional<double> y;
+    std::optional<double> z;
+    std::optional<std::vector<LogVariable>> variables;
+};
+
+struct LoggerInput {
+    std::optional<std::string> output_directory;
+    std::optional<bool> enable_field_logging;
+    std::optional<bool> enable_summary_logging;
+    std::optional<bool> enable_probe_logging;
+
+    std::optional<int> field_interval;
+    std::optional<int> summary_interval;
+    std::optional<int> probe_interval;
+
+    std::optional<std::vector<LogVariable>> field_variables;
+    std::optional<std::vector<LoggerSummaryInput>> summary_requests;
+    std::optional<std::vector<LoggerProbeInput>> probes;
+
+    std::optional<std::string> template_file;
+};
 
 struct EnvironmentInput {
     double humidity = 0.0;
