@@ -1,12 +1,13 @@
-#ifndef SOLVER_HPP
-#define SOLVER_HPP
+#ifndef THERMAL_SOLVER_HPP
+#define THERMAL_SOLVER_HPP
 
 #include <stdexcept>
 
 #include "air_properties.hpp"
 #include "convection.hpp"
-#include "mesh.hpp"
 #include "flow_solver.hpp"
+#include "mesh.hpp"
+#include "logger.hpp"
 #include "workload.hpp"
 
 class Solver {
@@ -193,6 +194,9 @@ public:
         check_convection_stability();
         int steps = static_cast<int>(sim_length / dt);
         log_state(0);
+        if(logger != nullptr) {
+            logger->log(current, 0, 0.0);
+        }
         for(int step = 0; step < steps; step++) {
             timestep_h_sum = 0.0;
             timestep_h_count = 0;
@@ -216,6 +220,7 @@ public:
                     }
                 }
             }
+
             const double average_h =
             timestep_h_count > 0
                 ? timestep_h_sum /
@@ -231,7 +236,15 @@ public:
             if(step % output_interval == 0) {
                 log_state(step + 1);
             }
+
+            if(logger != nullptr) {
+                logger->log(current, step, static_cast<double>(step) * dt);
+            }
         }
+    }
+
+    void set_logger(SimulationLogger& simulation_logger) {
+        logger = &simulation_logger;
     }
 
 private:
@@ -246,6 +259,8 @@ private:
     int timestep_h_count = 0;
     int output_interval = 0;
     int update_flow_interval = 0;
+
+    SimulationLogger* logger = nullptr;
 
     std::ofstream logfile;
 
