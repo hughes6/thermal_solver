@@ -110,20 +110,24 @@ ax.bar3d(
     height,
     shade=True,
     edgecolor="black",
-    alpha=0.15,
+    alpha=0.05,
 )
 
 legend_handles = [
-    mpatches.Patch(alpha=0.3, label=f"Component: {component_name}")
+    mpatches.Patch(alpha=0.05, label=f"Component: {component_name}")
 ]
 
 colors = itertools.cycle(plt.rcParams["axes.prop_cycle"].by_key()["color"])
 
+i = 1
 for region in internal_regions:
     x, y, z = region["local_position"]
     region_width, region_depth, region_height = region["size"]
     color = next(colors)
-
+    a = 0.05 * 1
+    if a > 0.9:
+        a = 0.9
+        
     ax.bar3d(
         x,
         y,
@@ -134,7 +138,7 @@ for region in internal_regions:
         shade=True,
         edgecolor=color,
         linewidth=1.2,
-        alpha=0.65,
+        alpha=a,
         color=color,
     )
 
@@ -145,6 +149,7 @@ for region in internal_regions:
             label=f"{region['name']}: {region['type']}",
         )
     )
+    i += 1
 
 ax.set_xlim(0.0, width)
 ax.set_ylim(0.0, depth)
