@@ -1041,6 +1041,8 @@ struct ModelLoader {
         logger.initialize(mesh);
         solver.set_logger(logger);
         solver.solve();
+
+        mesh.check_stamps();
     }
 };
 
