@@ -15,8 +15,7 @@ struct Environment {
         pr(0.0),
         rho(0.0) {}
 
-    Environment(double humidity_, double elevation_, double T_ambient_, double cp_, double k_, double mu_, double pr_, double rho_) 
-    {
+    Environment(double humidity_, double elevation_, double T_ambient_, double cp_, double k_, double mu_, double pr_, double rho_) {
         set_humidity_pct(humidity_);
         set_elevation_ft(elevation_);
         set_T_ambient_C(T_ambient_);
@@ -25,8 +24,11 @@ struct Environment {
         set_mu_Pa_s(mu_);
         set_pr(pr_);
         set_rho_kg_m3(rho_);
-        }
+    }
 
+    //========================
+    // getters
+    //========================
     double get_humidity_pct() const { return humidity; }
     double get_elevation_ft() const { return elevation; }
     double get_T_ambient() const { return T_ambient; }
@@ -52,6 +54,9 @@ struct Environment {
         );
     }
 
+    //========================
+    // setters
+    //========================
     void set_humidity_pct(double h) {
         if(h < 0 || h > 100) {
             throw std::invalid_argument("invalid humidity: no where a server rack will be below 0% or above 100% humidity.");
