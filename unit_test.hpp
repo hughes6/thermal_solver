@@ -142,6 +142,7 @@ public:
         test_internal_rectangular_fan_area();
         test_internal_fan_is_mass_conserving_transfer();
         test_internal_fan_curve_throttles_without_ambient_ground();
+        test_internal_fan_curve_uses_adaptive_flow_path();
         // test_internal_fan_uses_velocity_direction();
 
         test_internal_vent_on_offset_component_face();
@@ -1801,6 +1802,51 @@ public:
             << "test_internal_fan_curve_throttles_without_ambient_ground PASSED "
             << "(flow=" << delivered_flow
             << ", free-air=" << free_air_flow << ")\n";
+    }
+
+    void test_internal_fan_curve_uses_adaptive_flow_path() {
+        Environment env(
+            30.0, 0.0, 20.0, 1005.0, 0.02587, 1.8e-5, 0.71, 1.225);
+        Workload load(1'000'000, 1'000'000'000, 1'000'000, 1);
+        Mesh mesh(
+            3, 3, 3,
+            {0.01, 0.02, 0.03},
+            {0.015, 0.02, 0.025},
+            {0.01, 0.025, 0.035},
+            env,
+            load);
+
+        for(int x = 0; x < mesh.get_nx(); ++x) {
+            for(int y = 0; y < mesh.get_ny(); ++y) {
+                for(int z = 0; z < mesh.get_nz(); ++z) {
+                    mesh.at(x, y, z) = Cell(
+                        20.0, 1.225, 1005.0, 0.02587, 0.0, 0.0,
+                        Cell::State::Air,
+                        mesh.get_dx(x), mesh.get_dy(y), mesh.get_dz(z),
+                        1.8e-5, 0.71);
+                }
+            }
+        }
+
+        const double free_air_flow = 0.002;
+        mesh.get_internal_fans().push_back(
+            {{1, 1, 1}, {1, 0, 1}, free_air_flow, {0.0, -1.0, 0.0},
+             20.0, 20.0 / free_air_flow, 0.0, 1.2, free_air_flow});
+        mesh.at(1, 0, 1).set_state(Cell::State::Fan);
+
+        assert(!mesh.is_uniform());
+        FlowSolver flow(mesh, 5.0, 1e-6, 20000, 1.3, 80, 1e-4);
+        flow.solve();
+
+        const auto& fan = mesh.get_internal_fans().front();
+        assert(std::isfinite(fan.q_ref));
+        assert(fan.q_ref > 0.0);
+        assert(fan.q_ref < free_air_flow);
+        assert(std::isfinite(mesh.at(1, 0, 1).get_pressure()));
+        assert(std::isfinite(mesh.at(1, 1, 1).get_pressure()));
+
+        std::cout
+            << "test_internal_fan_curve_uses_adaptive_flow_path PASSED\n";
     }
 
     double total_fan_curve_flow(const Mesh& m) const {
