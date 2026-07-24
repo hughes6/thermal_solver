@@ -14,8 +14,7 @@ namespace AirProperties {
         return P_ambient / (R_SPECIFIC_AIR * T_kelvin);
     }
 
-    // Sutherland's law -- captures air viscosity's temperature dependence
-    // much better than a linear/ideal-gas assumption would.
+    // Sutherland's law --  air viscosity's temperature dependence
     inline double viscosity(double T_celsius) {
         double T_kelvin = T_celsius + 273.15;
         if (T_kelvin <= 0.0) return MU_REF;
