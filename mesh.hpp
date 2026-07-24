@@ -133,6 +133,18 @@ public:
     double area_y() const { return get_dx() * get_dz(); }
     double area_z() const { return get_dx() * get_dy(); }
 
+    // True while every cell shares the same width on every axis (all of
+    // Stage 1's build_mesh() calls, i.e. everything today). Solver and
+    // FlowSolver use this to pick between their uniform-mesh kernels and
+    // their per-cell/adaptive-mesh kernels, without either caller having
+    // to be told explicitly which kind of mesh it was handed.
+    bool is_uniform() const {
+        for (double v : dxs) if (v != dxs[0]) return false;
+        for (double v : dys) if (v != dys[0]) return false;
+        for (double v : dzs) if (v != dzs[0]) return false;
+        return true;
+    }
+
     Mesh build_mesh(const Rack& rack, double dx, double dy, double dz, Environment env, Workload load){
         int nx = std::ceil(rack.get_width_m()  / dx);
         int ny = std::ceil(rack.get_depth_m()  / dy);
@@ -572,7 +584,6 @@ public:
                             (yc-cy)*(yc-cy);
 
                         if(dist2 <= r*r)
-
                             stamp_cell(i,j,k);
                     }
                 }
@@ -843,7 +854,7 @@ public:
         }
 
     }
-
+    
     void check_stamps() const {
         double air = 0.0;
         double solid = 0.0;

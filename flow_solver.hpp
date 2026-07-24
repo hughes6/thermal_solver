@@ -1,5 +1,5 @@
-#ifndef FLOW_SOLVER_HPP
-#define FLOW_SOLVER_HPP
+#ifndef THERMAL_FLOW_SOLVER_HPP
+#define THERMAL_FLOW_SOLVER_HPP
 
 #include <vector>
 #include <cmath>
@@ -94,13 +94,17 @@ public:
         initialize_storage();
         initialize_pressures();
 
+        const bool adaptive = !mesh.is_uniform();
+
         bool outer_converged = false;
         for (int outer = 0; outer < max_outer_iters; ++outer) {
-            build_linearized_network();
+            if (adaptive) build_linearized_network_adaptive();
+            else          build_linearized_network();
             solve_pressures();
 
             const double max_relative_change = update_face_flows();
-            update_cell_velocities();
+            if (adaptive) update_cell_velocities_adaptive();
+            else          update_cell_velocities();
             update_fan_operating_points();
 
             if (max_relative_change < flow_tolerance && outer > 0) {
@@ -127,13 +131,17 @@ public:
         initialize_storage();
         initialize_pressures();
 
+        const bool adaptive = !mesh.is_uniform();
+
         bool outer_converged = false;
         for (int outer = 0; outer < max_outer_iters; ++outer) {
-            build_linearized_network();
+            if (adaptive) build_linearized_network_adaptive();
+            else          build_linearized_network();
             solve_pressures();
 
             const double max_relative_change = update_face_flows();
-            update_cell_velocities();
+            if (adaptive) update_cell_velocities_adaptive();
+            else          update_cell_velocities();
             update_fan_operating_points();
 
             if (max_relative_change < flow_tolerance && outer > 0) {
@@ -255,6 +263,18 @@ private:
         if (axis == Axis::X) { a = m.get_dy(); b = m.get_dz(); }
         if (axis == Axis::Y) { a = m.get_dx(); b = m.get_dz(); }
         if (axis == Axis::Z) { a = m.get_dx(); b = m.get_dy(); }
+        return (a > 0.0 && b > 0.0) ? 2.0 * a * b / (a + b) : 0.0;
+    }
+
+    // Same formula, reading one cell's own width instead of the mesh-wide
+    // scalar. On a tensor-product grid the two un-stepped axes are shared
+    // by every cell at that face regardless of which side you read from.
+    static double hydraulic_diameter_adaptive(Axis axis, const Cell& c) {
+        double a = 0.0;
+        double b = 0.0;
+        if (axis == Axis::X) { a = c.get_dy(); b = c.get_dz(); }
+        if (axis == Axis::Y) { a = c.get_dx(); b = c.get_dz(); }
+        if (axis == Axis::Z) { a = c.get_dx(); b = c.get_dy(); }
         return (a > 0.0 && b > 0.0) ? 2.0 * a * b / (a + b) : 0.0;
     }
 
@@ -380,6 +400,61 @@ private:
         }
     }
 
+    // Same structure as build_linearized_network() - identical fan/vent
+    // logic (that part never touched geometry) - just routes each face
+    // through add_link_adaptive() instead of add_link() so area/length/Dh
+    // come from the two cells actually touching that face.
+    void build_linearized_network_adaptive() {
+        for (auto& links : neighbors) links.clear();
+        std::fill(vent_C.begin(), vent_C.end(), 0.0);
+        std::fill(source_S.begin(), source_S.end(), 0.0);
+
+        for (int x = 0; x < mesh.get_nx(); ++x) {
+            for (int y = 0; y < mesh.get_ny(); ++y) {
+                for (int z = 0; z < mesh.get_nz(); ++z) {
+                    const Cell& c = mesh.at(x, y, z);
+                    if (!c.is_fluid()) continue;
+                    const size_t i = cell_idx(x, y, z);
+                    source_S[i] = c.get_flow_source();
+
+                    fan_ground_C[i] = 0.0;
+
+                    if (c.has_fan_curve()) {
+                        const double Q_ref = std::max(c.get_fan_Q_ref(), minimum_flow);
+                        const double rho_local = std::max(c.get_rho(), 1e-9);
+                        const double rho_ratio = rho_local / c.get_fan_rho_rated();
+
+                        const double dP_ref = std::max(
+                            c.get_fan_curve_a() - c.get_fan_curve_b() * Q_ref
+                                                - c.get_fan_curve_c() * Q_ref * Q_ref, 0.0) * rho_ratio;
+
+                        const double slope = -(c.get_fan_curve_b() + 2.0 * c.get_fan_curve_c() * Q_ref) * rho_ratio;
+                        const double safe_slope = std::min(slope, -1e-9);
+
+                        const double C_fan = -1.0 / safe_slope;
+                        fan_ground_C[i] = C_fan;
+
+                        const double sign = c.is_intake() ? +1.0 : -1.0;
+                        source_S[i] += sign * (Q_ref + dP_ref * C_fan);
+                    }
+                    add_link_adaptive(i, x, y, z, x + 1, y, z, Axis::X, xface_idx(x + 1, y, z), +1.0);
+                    add_link_adaptive(i, x, y, z, x - 1, y, z, Axis::X, xface_idx(x, y, z), -1.0);
+                    add_link_adaptive(i, x, y, z, x, y + 1, z, Axis::Y, yface_idx(x, y + 1, z), +1.0);
+                    add_link_adaptive(i, x, y, z, x, y - 1, z, Axis::Y, yface_idx(x, y, z), -1.0);
+                    add_link_adaptive(i, x, y, z, x, y, z + 1, Axis::Z, zface_idx(x, y, z + 1), +1.0);
+                    add_link_adaptive(i, x, y, z, x, y, z - 1, Axis::Z, zface_idx(x, y, z), -1.0);
+
+                    if (c.get_state() == Cell::State::Vent) {
+                        const double CdA = c.get_vent_conductance();
+                        const double rho = std::max(c.get_rho(), 1e-9);
+                        const double p_ref = std::max(std::abs(c.get_pressure()), minimum_pressure);
+                        vent_C[i] = CdA * std::sqrt(2.0 / (rho * p_ref));
+                    }
+                }
+            }
+        }
+    }
+
     void add_link(size_t i,
                   int x, int y, int z,
                   int nx, int ny, int nz,
@@ -396,6 +471,44 @@ private:
         // exact same physical face conductance.
         const Cell* low_cell = &mesh.at(x, y, z);
         const Cell* high_cell = &mesh.at(nx, ny, nz);
+        if (global_face_sign < 0.0) std::swap(low_cell, high_cell);
+
+        const double C = linearized_face_conductance(
+            *low_cell, *high_cell, axis, face_index, area, length, Dh);
+
+        neighbors[i].push_back(
+            {nx, ny, nz, axis, face_index, area, length, Dh, C, global_face_sign});
+    }
+
+    // Same structure as add_link(), but area/length/Dh are computed here
+    // (after the bounds+fluid check, once both cells are in hand) instead
+    // of being passed in as precomputed mesh-wide scalars - length in
+    // particular now needs the neighbor's own width too.
+    void add_link_adaptive(size_t i,
+                            int x, int y, int z,
+                            int nx, int ny, int nz,
+                            Axis axis,
+                            size_t face_index,
+                            double global_face_sign) {
+        if (!mesh.in_bounds(nx, ny, nz) || !mesh.at(nx, ny, nz).is_fluid()) return;
+
+        const Cell& c = mesh.at(x, y, z);
+        const Cell& n = mesh.at(nx, ny, nz);
+
+        // Area is shared across this face on a tensor-product grid (the
+        // two un-stepped axes are identical for both cells); length is the
+        // average of the two cells' widths along the stepped axis, since
+        // that's the one dimension that can actually differ.
+        double area, length;
+        switch (axis) {
+            case Axis::X: area = c.area_x(); length = (c.get_dx() + n.get_dx()) / 2.0; break;
+            case Axis::Y: area = c.area_y(); length = (c.get_dy() + n.get_dy()) / 2.0; break;
+            default:      area = c.area_z(); length = (c.get_dz() + n.get_dz()) / 2.0; break;
+        }
+        const double Dh = hydraulic_diameter_adaptive(axis, c);
+
+        const Cell* low_cell = &c;
+        const Cell* high_cell = &n;
         if (global_face_sign < 0.0) std::swap(low_cell, high_cell);
 
         const double C = linearized_face_conductance(
@@ -515,6 +628,35 @@ private:
                     const double uy_plus  = qy[yface_idx(x, y + 1, z)] / mesh.area_y();
                     const double uz_minus = qz[zface_idx(x, y, z)] / mesh.area_z();
                     const double uz_plus  = qz[zface_idx(x, y, z + 1)] / mesh.area_z();
+
+                    c.set_vx(0.5 * (ux_minus + ux_plus));
+                    c.set_vy(0.5 * (uy_minus + uy_plus));
+                    c.set_vz(0.5 * (uz_minus + uz_plus));
+                }
+            }
+        }
+    }
+
+    // Same structure as update_cell_velocities(), reading each cell's own
+    // face areas instead of one mesh-wide value. On a tensor-product grid
+    // the area at a given face is shared by whichever cell you read it
+    // from, so this is a pure per-cell substitution.
+    void update_cell_velocities_adaptive() {
+        for (int x = 0; x < mesh.get_nx(); ++x) {
+            for (int y = 0; y < mesh.get_ny(); ++y) {
+                for (int z = 0; z < mesh.get_nz(); ++z) {
+                    Cell& c = mesh.at(x, y, z);
+                    if (!c.is_fluid()) {
+                        c.set_vx(0.0); c.set_vy(0.0); c.set_vz(0.0);
+                        continue;
+                    }
+
+                    const double ux_minus = qx[xface_idx(x, y, z)] / c.area_x();
+                    const double ux_plus  = qx[xface_idx(x + 1, y, z)] / c.area_x();
+                    const double uy_minus = qy[yface_idx(x, y, z)] / c.area_y();
+                    const double uy_plus  = qy[yface_idx(x, y + 1, z)] / c.area_y();
+                    const double uz_minus = qz[zface_idx(x, y, z)] / c.area_z();
+                    const double uz_plus  = qz[zface_idx(x, y, z + 1)] / c.area_z();
 
                     c.set_vx(0.5 * (ux_minus + ux_plus));
                     c.set_vy(0.5 * (uy_minus + uy_plus));

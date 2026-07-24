@@ -1,5 +1,5 @@
-#ifndef MODEL_LOADER_HPP
-#define MODEL_LOADER_HPP
+#ifndef THERMAL_MODEL_LOADER_HPP
+#define THERMAL_MODEL_LOADER_HPP
 
 #include <filesystem>
 #include <iostream>
@@ -7,6 +7,7 @@
 #include <string>
 
 #include "../logger.hpp"
+#include "../solver.hpp"
 #include "input_types.hpp"
 #include "../component_grapher.hpp"
 #include "../collision.hpp"
