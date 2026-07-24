@@ -24,6 +24,13 @@ public:
         std::array<int, 3> downstream;
         double flow_m3s = 0.0;
         std::array<double, 3> direction{0.0, 0.0, 0.0};
+        double curve_a = 0.0;
+        double curve_b = 0.0;
+        double curve_c = 0.0;
+        double rho_rated = 1.2;
+        double q_ref = 0.0;
+
+        bool has_curve() const { return curve_a > 0.0; }
     };
 
     Mesh() = default;
@@ -83,6 +90,9 @@ public:
     const Environment& get_env() const { return env; }
     const std::vector<Cell>& get_cells() const { return cells; }
     const std::vector<InternalFanInterface>& get_internal_fans() const {
+        return internal_fans;
+    }
+    std::vector<InternalFanInterface>& get_internal_fans() {
         return internal_fans;
     }
 
@@ -535,7 +545,12 @@ public:
                                 "Add an internal air region that reaches the fan face.");
                         }
                         internal_fans.push_back(
-                            {upstream, downstream, Q_per_cell, {nnx, nny, nnz}});
+                            {upstream, downstream, Q_per_cell, {nnx, nny, nnz},
+                             r.get_curve_a(),
+                             r.get_curve_b() * covered.size(),
+                             r.get_curve_c() * covered.size() * covered.size(),
+                             r.get_fan_rho_rated(),
+                             Q_per_cell});
                     }
                 }
             }

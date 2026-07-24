@@ -22,7 +22,8 @@ struct InternalRegion {
     InternalRegion()  : region_type(RegionType::Uninitialized), flow_type(FlowType::Uninitialized), shape_type(ShapeType::Uninitialized),
           size_m{0.0, 0.0, 0.0}, local_position{0.0, 0.0, 0.0}, direction{0.0, 0.0, 0.0}, diameter(0.0), cfm(0.0),
           free_area_ratio(0.0), cp(0.0), rho(0.0), k(0.0), watts(0.0), global_position{0.0, 0.0, 0.0}, cd(0.0), velocity_direction{0.0, 0.0, 0.0},
-          name("Uninitialized") {}
+          name("Uninitialized"), curve_a(0.0), curve_b(0.0), curve_c(0.0),
+          fan_rho_rated(1.2) {}
 
     InternalRegion(std::string name_, std::array<double,3> size_, std::array<double,3> local_position_, double cp_, double rho_, double k_, double watts_)
         : InternalRegion() 
@@ -91,6 +92,10 @@ struct InternalRegion {
         cfm = fan.get_cfm();
         flow_type = fan.get_type_t();
         shape_type = fan.get_shape_t();
+        curve_a = fan.get_curve_a();
+        curve_b = fan.get_curve_b();
+        curve_c = fan.get_curve_c();
+        fan_rho_rated = fan.get_rho_rated();
 
         validate_fan();
     }
@@ -210,6 +215,12 @@ struct InternalRegion {
     void set_k(double k_) { k = k_; }
     void set_watts(double watts_) { watts = watts_; }
     void set_cd(double cd_) { cd = cd_; }
+    void set_curve(double a, double b, double c, double rho_rated = 1.2) {
+        curve_a = a;
+        curve_b = b;
+        curve_c = c;
+        fan_rho_rated = rho_rated;
+    }
 
     // getters
     std::string get_name() const { return name; }
@@ -229,6 +240,11 @@ struct InternalRegion {
     double get_k() const { return k; }
     double get_watts() const { return watts; }
     double get_cd() const { return cd; }
+    bool has_curve() const { return curve_a > 0.0; }
+    double get_curve_a() const { return curve_a; }
+    double get_curve_b() const { return curve_b; }
+    double get_curve_c() const { return curve_c; }
+    double get_fan_rho_rated() const { return fan_rho_rated; }
 
     // helpers
     double get_width_m()  const { return size_m[0]; }
@@ -330,6 +346,10 @@ private:
     double k;
     double watts;
     double cd;
+    double curve_a;
+    double curve_b;
+    double curve_c;
+    double fan_rho_rated;
 };
 
 

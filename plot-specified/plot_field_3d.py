@@ -5,6 +5,16 @@ import matplotlib.pyplot as plt
 import pandas as pd
 
 
+def color_limits(values):
+    finite=pd.to_numeric(values,errors='coerce').dropna()
+    if finite.empty: raise ValueError('Selected variable has no finite values.')
+    lo=float(finite.min()); hi=float(finite.max())
+    if lo==hi:
+        pad=max(abs(lo)*0.01,1e-12)
+        lo-=pad; hi+=pad
+    return lo,hi
+
+
 def args():
     p=argparse.ArgumentParser(description='Plot one 3D field snapshot.')
     p.add_argument('--file',default='simulation_output/field.csv')
@@ -43,9 +53,13 @@ def main():
         if 'state' not in frame: raise ValueError('field.csv has no state column.')
         frame=frame[frame.state==a.state]
     frame=frame.dropna(subset=['x','y','z',a.variable])
+    if frame.empty: raise ValueError('Selected snapshot has no finite cells.')
     step=int(frame.step.iloc[0]); t=float(frame.time.iloc[0])
+    vmin,vmax=color_limits(frame[a.variable])
     fig=plt.figure(figsize=(10,8)); ax=fig.add_subplot(111,projection='3d')
-    sc=ax.scatter(frame.x,frame.y,frame.z,c=frame[a.variable],s=a.marker_size,alpha=a.alpha)
+    sc=ax.scatter(
+        frame.x,frame.y,frame.z,c=frame[a.variable],s=a.marker_size,
+        alpha=a.alpha,vmin=vmin,vmax=vmax)
     fig.colorbar(sc,ax=ax,pad=.1,label=a.variable)
     ax.set(xlabel='x [m]',ylabel='y [m]',zlabel='z [m]',title=f'{a.variable} — step {step}, time {t:g} s')
     equal_axes(ax,frame); fig.tight_layout()

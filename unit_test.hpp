@@ -141,6 +141,7 @@ public:
         test_internal_fan_cfm_conversion();
         test_internal_rectangular_fan_area();
         test_internal_fan_is_mass_conserving_transfer();
+        test_internal_fan_curve_throttles_without_ambient_ground();
         // test_internal_fan_uses_velocity_direction();
 
         test_internal_vent_on_offset_component_face();
@@ -1739,6 +1740,67 @@ public:
         assert(downstream.get_pressure() > upstream.get_pressure());
         std::cout
             << "test_internal_fan_is_mass_conserving_transfer PASSED\n";
+    }
+
+    void test_internal_fan_curve_throttles_without_ambient_ground() {
+        Environment env(
+            30.0, 0.0, 20.0, 1005.0, 0.02587, 1.8e-5, 0.71, 1.225);
+        Workload load(1'000'000, 1'000'000'000, 1'000'000, 1);
+        Rack rack = make_air_rack(0.08, 0.08, 0.08, 20.0);
+        Mesh mesh = Mesh().build_mesh(rack, 0.02, 0.02, 0.02, env, load);
+
+        Component component(0.02, 0.04, 0.02, "Curve-cooled server");
+        component.set_coords_m(0.02, 0.02, 0.02);
+        component.set_t(20.0);
+        component.set_rho_solid(1000.0);
+        component.set_cp(1000.0);
+        component.set_k_solid(1.0);
+
+        InternalRegion air(
+            "server air path",
+            {0.02, 0.04, 0.02},
+            {0.0, 0.0, 0.0});
+
+        Fan fan(
+            "curve server fan",
+            10.0,
+            0.0,
+            {0.02, 0.0, 0.02},
+            {0.01, 0.0, 0.01},
+            {0.0, -1.0, 0.0},
+            FlowType::Exhaust,
+            ShapeType::Rectangular);
+        const double free_air_flow = fan.flow_m3s();
+        fan.set_curve(
+            /*a=*/25.0,
+            /*b=*/25.0 / free_air_flow,
+            /*c=*/0.0,
+            /*rho_rated=*/1.2);
+
+        component.add_region(air);
+        component.add_region(InternalRegion(fan));
+        component.order_internal_regions();
+        mesh.stamp_component(component);
+
+        assert(!mesh.get_internal_fans().empty());
+        for(const auto& interface : mesh.get_internal_fans()) {
+            assert(interface.has_curve());
+        }
+
+        FlowSolver flow(mesh, 5.0, 1e-6, 20000, 1.3, 80, 1e-4);
+        flow.solve();
+
+        double delivered_flow = 0.0;
+        for(const auto& interface : mesh.get_internal_fans()) {
+            delivered_flow += interface.q_ref;
+        }
+        assert(delivered_flow > 0.0);
+        assert(delivered_flow < free_air_flow);
+
+        std::cout
+            << "test_internal_fan_curve_throttles_without_ambient_ground PASSED "
+            << "(flow=" << delivered_flow
+            << ", free-air=" << free_air_flow << ")\n";
     }
 
     double total_fan_curve_flow(const Mesh& m) const {
