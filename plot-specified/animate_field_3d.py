@@ -6,6 +6,16 @@ from matplotlib.animation import FuncAnimation
 import pandas as pd
 
 
+def color_limits(values):
+    finite=pd.to_numeric(values,errors='coerce').dropna()
+    if finite.empty: raise ValueError('Selected variable has no finite values.')
+    lo=float(finite.min()); hi=float(finite.max())
+    if lo==hi:
+        pad=max(abs(lo)*0.01,1e-12)
+        lo-=pad; hi+=pad
+    return lo,hi
+
+
 def args():
     p=argparse.ArgumentParser(description='Animate a 3D field.')
     p.add_argument('--file',default='simulation_output/field.csv')
@@ -31,7 +41,7 @@ def main():
     steps=sorted(d.step.unique())[::a.skip]
     if not steps: raise ValueError('No animation frames.')
     first=d[d.step==steps[0]]
-    vmin=float(d[a.variable].min()); vmax=float(d[a.variable].max()); vmax=vmax if vmax!=vmin else vmin+1
+    vmin,vmax=color_limits(d[a.variable])
     fig=plt.figure(figsize=(10,8)); ax=fig.add_subplot(111,projection='3d')
     sc=ax.scatter(first.x,first.y,first.z,c=first[a.variable],s=a.marker_size,alpha=a.alpha,
                   vmin=vmin if a.fixed_scale else None,vmax=vmax if a.fixed_scale else None)
@@ -41,7 +51,7 @@ def main():
     def update(n):
         f=d[d.step==steps[n]]; sc._offsets3d=(f.x.to_numpy(),f.y.to_numpy(),f.z.to_numpy()); sc.set_array(f[a.variable].to_numpy())
         if not a.fixed_scale:
-            lo=float(f[a.variable].min()); hi=float(f[a.variable].max()); sc.set_clim(lo,hi if hi!=lo else lo+1); cb.update_normal(sc)
+            lo,hi=color_limits(f[a.variable]); sc.set_clim(lo,hi); cb.update_normal(sc)
         ax.set_title(f'{a.variable} — step {int(steps[n])}, time {float(f.time.iloc[0]):g} s')
         return (sc,)
     anim=FuncAnimation(fig,update,frames=len(steps),interval=1000/a.fps,blit=False)

@@ -5,6 +5,16 @@ import matplotlib.pyplot as plt
 import pandas as pd
 
 
+def color_limits(values):
+    finite=pd.to_numeric(values,errors='coerce').dropna()
+    if finite.empty: raise ValueError('Selected variable has no finite values.')
+    lo=float(finite.min()); hi=float(finite.max())
+    if lo==hi:
+        pad=max(abs(lo)*0.01,1e-12)
+        lo-=pad; hi+=pad
+    return lo,hi
+
+
 def main():
     p=argparse.ArgumentParser(description='Plot a 2D field slice.')
     p.add_argument('--file',default='simulation_output/field.csv'); p.add_argument('--variable',default='T')
@@ -18,7 +28,11 @@ def main():
     else:
         n=int(f[idx].max()//2) if a.index is None else a.index; f=f[f[idx]==n]; plane=f'{idx}={n}'
     if f.empty: raise ValueError('Selected slice has no cells.')
-    fig,ax=plt.subplots(figsize=(9,7)); sc=ax.scatter(f[axes[0]],f[axes[1]],c=f[a.variable],s=80,marker='s')
+    if a.variable not in f: raise ValueError(f'Missing column: {a.variable}')
+    vmin,vmax=color_limits(f[a.variable])
+    fig,ax=plt.subplots(figsize=(9,7)); sc=ax.scatter(
+        f[axes[0]],f[axes[1]],c=f[a.variable],s=80,marker='s',
+        vmin=vmin,vmax=vmax)
     fig.colorbar(sc,ax=ax,label=a.variable); ax.set_xlabel(f'{axes[0]} [m]'); ax.set_ylabel(f'{axes[1]} [m]'); ax.set_aspect('equal')
     ax.set_title(f'{a.variable} slice at {plane}\nstep {step}, time {float(f.time.iloc[0]):g} s'); fig.tight_layout()
     if a.save: fig.savefig(a.save,dpi=200,bbox_inches='tight')

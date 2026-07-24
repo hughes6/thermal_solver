@@ -363,7 +363,9 @@ namespace {
         };
     }
 
-    InternalRegion build_internal_region(const InternalRegionInput& input) {
+    InternalRegion build_internal_region(
+        const InternalRegionInput& input,
+        const std::unordered_map<std::string, FanCurveInput>* curve_library = nullptr) {
         if(input.state == RegionState::Fan) {
             if(!input.fan.has_value()) throw std::runtime_error("Internal fan region is missing parsed fan data.");
             const FanInput& f = *input.fan;
@@ -379,6 +381,21 @@ namespace {
                 f.flow_type == FanFlowType::Intake ? FlowType::Intake : FlowType::Exhaust,
                 f.shape == FanShape::Circular ? ShapeType::Circular : ShapeType::Rectangular
             );
+            if(f.curve_name.has_value()) {
+                if(curve_library == nullptr) {
+                    throw std::runtime_error(
+                        "Internal fan '" + f.name + "' references curve '" +
+                        *f.curve_name + "' but no fan curve library was loaded.");
+                }
+                const auto it = curve_library->find(*f.curve_name);
+                if(it == curve_library->end()) {
+                    throw std::runtime_error(
+                        "Internal fan '" + f.name + "' references unknown curve '" +
+                        *f.curve_name + "'");
+                }
+                const FanCurveInput& curve = it->second;
+                fan.set_curve(curve.a, curve.b, curve.c, curve.rho_rated);
+            }
             return InternalRegion(fan);
         }
 
@@ -868,7 +885,7 @@ struct ModelLoader {
             component.set_k_solid(c.material.k);
             component.set_watts(c.watts);
             for(const InternalRegionInput& i : c.internal_regions) {
-                component.add_region(build_internal_region(i));
+                component.add_region(build_internal_region(i, &fan_curve_library));
             }
             component.order_internal_regions();
             components.push_back(component);
@@ -1051,9 +1068,14 @@ struct ModelLoader {
 
 struct ComponentLoader {
     ComponentInput model;
+    std::unordered_map<std::string, FanCurveInput> fan_curve_library;
     std::unordered_map<std::string, ComponentInput> component_template_cache; 
 
     ComponentLoader() = default;
+
+    void load_fan_curves(const std::filesystem::path& library_path) {
+        fan_curve_library = load_fan_curve_library(library_path);
+    }
 
 
     void load_component(const std::filesystem::path& component_path) 
@@ -1121,7 +1143,7 @@ struct ComponentLoader {
         component.set_k_solid(model.material.k);
         component.set_watts(model.watts);
         for(const InternalRegionInput& i : model.internal_regions) {
-            component.add_region(build_internal_region(i));
+            component.add_region(build_internal_region(i, &fan_curve_library));
         }
         component.order_internal_regions();
         grapher.add_component(component);
