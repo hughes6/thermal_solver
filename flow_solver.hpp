@@ -6,6 +6,7 @@
 #include <stdexcept>
 #include <iostream>
 #include <algorithm>
+#include <limits>
 
 #include "mesh.hpp"
 #include "cell.hpp"
@@ -202,6 +203,7 @@ private:
     std::vector<double> vent_C;
     std::vector<double> fan_ground_C;  // conductance to ambient from fan's internal resistance
     std::vector<double> source_S;
+    size_t pressure_reference = std::numeric_limits<size_t>::max();
 
     // One value per global positive-oriented mesh face.
     std::vector<double> qx;
@@ -245,15 +247,17 @@ private:
     }
 
     void validate_grounding() const {
-        bool has_source = false;
+        bool has_ambient_fan_source = false;
         bool has_vent = false;
         for (const Cell& c : mesh.get_cells()) {
-            has_source = has_source || std::abs(c.get_flow_source()) > 0.0;
+            has_ambient_fan_source =
+                has_ambient_fan_source || std::abs(c.get_flow_source()) > 0.0;
             has_vent = has_vent || c.get_state() == Cell::State::Vent;
         }
-        if (has_source && !has_vent) {
+        if (has_ambient_fan_source && !has_vent) {
             throw std::runtime_error(
-                "FlowSolver: fan source exists but no vent pressure reference exists.");
+                "FlowSolver: rack-boundary fan source exists but no ambient "
+                "vent pressure reference exists.");
         }
     }
 
@@ -398,6 +402,37 @@ private:
                 }
             }
         }
+
+        // Internal fixed-flow fans transfer volume between two cells. Equal
+        // and opposite source terms conserve total rack mass exactly.
+        for(const auto& fan : mesh.get_internal_fans()) {
+            const size_t upstream =
+                cell_idx(fan.upstream[0], fan.upstream[1], fan.upstream[2]);
+            const size_t downstream =
+                cell_idx(fan.downstream[0], fan.downstream[1], fan.downstream[2]);
+            source_S[upstream] -= fan.flow_m3s;
+            source_S[downstream] += fan.flow_m3s;
+        }
+
+        pressure_reference = std::numeric_limits<size_t>::max();
+        bool has_ambient_reference = false;
+        for(double conductance : vent_C) {
+            has_ambient_reference = has_ambient_reference || conductance > 0.0;
+        }
+        if(!has_ambient_reference && !mesh.get_internal_fans().empty()) {
+            for(int x = 0; x < mesh.get_nx() &&
+                           pressure_reference == std::numeric_limits<size_t>::max(); ++x) {
+                for(int y = 0; y < mesh.get_ny() &&
+                               pressure_reference == std::numeric_limits<size_t>::max(); ++y) {
+                    for(int z = 0; z < mesh.get_nz(); ++z) {
+                        if(mesh.at(x, y, z).is_fluid()) {
+                            pressure_reference = cell_idx(x, y, z);
+                            break;
+                        }
+                    }
+                }
+            }
+        }
     }
 
     // Same structure as build_linearized_network() - identical fan/vent
@@ -527,6 +562,10 @@ private:
                         if (!c.is_fluid()) continue;
 
                         const size_t i = cell_idx(x, y, z);
+                        if(i == pressure_reference) {
+                            c.set_pressure(0.0);
+                            continue;
+                        }
                         double diagonal = vent_C[i] + fan_ground_C[i];
                         double rhs = source_S[i];
                         for (const FaceLink& link : neighbors[i]) {
@@ -561,6 +600,7 @@ private:
                     const Cell& c = mesh.at(x, y, z);
                     if (!c.is_fluid()) continue;
                     const size_t i = cell_idx(x, y, z);
+                    if(i == pressure_reference) continue;
                     double r = source_S[i] - vent_C[i] * c.get_pressure() - fan_ground_C[i] * c.get_pressure();
                     for (const FaceLink& link : neighbors[i]) {
                         r -= link.conductance *

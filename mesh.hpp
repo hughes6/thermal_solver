@@ -19,6 +19,13 @@
 
 class Mesh {
 public:
+    struct InternalFanInterface {
+        std::array<int, 3> upstream;
+        std::array<int, 3> downstream;
+        double flow_m3s = 0.0;
+        std::array<double, 3> direction{0.0, 0.0, 0.0};
+    };
+
     Mesh() = default;
     
     Mesh(int nx_, int ny_, int nz_,
@@ -75,6 +82,9 @@ public:
     
     const Environment& get_env() const { return env; }
     const std::vector<Cell>& get_cells() const { return cells; }
+    const std::vector<InternalFanInterface>& get_internal_fans() const {
+        return internal_fans;
+    }
 
     size_t idx(int x, int y, int z) const {
         return
@@ -512,19 +522,33 @@ public:
                 // apply init velocities
                 double Q_total = r.flow_m3s();
                 double Q_per_cell = covered.empty() ? 0.0 : Q_total / covered.size();
-                double sign = (r.get_flow_type() == FlowType::Intake) ? +1.0 : -1.0;
-                for (auto& [i, j,k ] : covered) {
+                const int sx = nnx > 0.0 ? 1 : (nnx < 0.0 ? -1 : 0);
+                const int sy = nny > 0.0 ? 1 : (nny < 0.0 ? -1 : 0);
+                const int sz = nnz > 0.0 ? 1 : (nnz < 0.0 ? -1 : 0);
+                for (auto& [i, j, k] : covered) {
                     Cell& cell = at(i, j, k);
-                    // Overlap already validated at the geometry level.
-                    cell.set_state(
-                        r.get_flow_type() == FlowType::Intake ?
-                        Cell::State::Intake :
-                        Cell::State::Exhaust
-                    );
+                    // A component-owned fan is an internal transfer device,
+                    // not an exchange with ambient. The fan cell represents
+                    // the downstream side of the interface; the immediately
+                    // upstream cell receives an equal and opposite source.
+                    cell.set_state(Cell::State::Fan);
                     cell.set_vx(r.velocity_x());
                     cell.set_vy(r.velocity_y());
                     cell.set_vz(r.velocity_z());
-                    cell.set_flow_source(sign * Q_per_cell);
+                    cell.set_flow_source(0.0);
+
+                    const std::array<int, 3> upstream{i - sx, j - sy, k - sz};
+                    const std::array<int, 3> downstream{i, j, k};
+                    if(in_bounds(upstream[0], upstream[1], upstream[2])) {
+                        if(!at(upstream[0], upstream[1], upstream[2]).is_fluid()) {
+                            throw std::runtime_error(
+                                "Internal fan '" + r.get_name() +
+                                "' has no fluid cell immediately upstream. "
+                                "Add an internal air region that reaches the fan face.");
+                        }
+                        internal_fans.push_back(
+                            {upstream, downstream, Q_per_cell, {nnx, nny, nnz}});
+                    }
                 }
             }
         }
@@ -943,6 +967,7 @@ private:
     Workload load;
 
     std::vector<Cell> cells;
+    std::vector<InternalFanInterface> internal_fans;
 };
 
 #endif

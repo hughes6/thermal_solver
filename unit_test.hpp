@@ -140,9 +140,10 @@ public:
         test_internal_fan_negative_cfm_rejected();
         test_internal_fan_cfm_conversion();
         test_internal_rectangular_fan_area();
+        test_internal_fan_is_mass_conserving_transfer();
         // test_internal_fan_uses_velocity_direction();
 
-        // test_internal_vent_on_offset_component_face();
+        test_internal_vent_on_offset_component_face();
 
         test_fan_curve_throttles_vs_fixed_cfm_under_restrictive_vent();
         test_fan_curve_flow_increases_with_less_restrictive_vent();
@@ -1678,6 +1679,66 @@ public:
         std::cout
             << "test_internal_vent_on_offset_component_face "
             << "PASSED\n";
+    }
+
+    void test_internal_fan_is_mass_conserving_transfer() {
+        Environment env(
+            30.0, 0.0, 20.0, 1005.0, 0.02587, 1.8e-5, 0.71, 1.225);
+        Workload load(1'000'000, 1'000'000'000, 1'000'000, 1);
+        Rack rack = make_air_rack(0.08, 0.08, 0.08, 20.0);
+        Mesh mesh = Mesh().build_mesh(rack, 0.02, 0.02, 0.02, env, load);
+
+        Component component(0.02, 0.04, 0.02, "Internally cooled server");
+        component.set_coords_m(0.02, 0.02, 0.02);
+        component.set_t(20.0);
+        component.set_rho_solid(1000.0);
+        component.set_cp(1000.0);
+        component.set_k_solid(1.0);
+
+        InternalRegion air(
+            "server air path",
+            {0.02, 0.04, 0.02},
+            {0.0, 0.0, 0.0});
+        InternalRegion fan(
+            "server exhaust fan",
+            {0.02, 0.0, 0.02},
+            {0.01, 0.0, 0.01},
+            {0.0, -1.0, 0.0},
+            {0.0, -1.0, 0.0},
+            0.0,
+            1.0,
+            FlowType::Exhaust,
+            ShapeType::Rectangular);
+
+        component.add_region(air);
+        component.add_region(fan);
+        component.order_internal_regions();
+        mesh.stamp_component(component);
+
+        assert(!mesh.get_internal_fans().empty());
+        double transferred_flow = 0.0;
+        for(const auto& stamped_interface : mesh.get_internal_fans()) {
+            transferred_flow += stamped_interface.flow_m3s;
+        }
+        assert(nearly_equal(transferred_flow, fan.flow_m3s()));
+        const auto& interface = mesh.get_internal_fans().front();
+        const Cell& upstream = mesh.at(
+            interface.upstream[0], interface.upstream[1], interface.upstream[2]);
+        const Cell& downstream = mesh.at(
+            interface.downstream[0], interface.downstream[1], interface.downstream[2]);
+
+        assert(upstream.is_fluid());
+        assert(downstream.get_state() == Cell::State::Fan);
+        assert(!downstream.is_intake());
+        assert(nearly_equal(upstream.get_flow_source(), 0.0));
+        assert(nearly_equal(downstream.get_flow_source(), 0.0));
+
+        FlowSolver flow(mesh);
+        flow.solve();
+
+        assert(downstream.get_pressure() > upstream.get_pressure());
+        std::cout
+            << "test_internal_fan_is_mass_conserving_transfer PASSED\n";
     }
 
     double total_fan_curve_flow(const Mesh& m) const {
