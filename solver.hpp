@@ -200,10 +200,10 @@ public:
         for(int step = 0; step < steps; step++) {
             timestep_h_sum = 0.0;
             timestep_h_count = 0;
-        if(update_flow_interval != -1 && step % update_flow_interval == 0) {
-            flow_solver.solve(current);
-            check_convection_stability();
-        }
+            if(update_flow_interval != -1 && step % update_flow_interval == 0) {
+                flow_solver.solve(current);
+                check_convection_stability();
+            }
 
             for(int x = 0; x < current.get_nx(); x++) {
                 for(int y = 0; y < current.get_ny(); y++) {
