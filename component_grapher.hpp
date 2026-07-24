@@ -46,6 +46,7 @@ struct ComponentGrapher
             const auto size = region.get_size_m();
             const auto local = region.get_local_position();
             const auto global = region.get_global_position();
+            const auto name = region.get_name();
 
             const char* type = "Uninitialized";
             switch(region.get_region_type()) {
@@ -57,7 +58,7 @@ struct ComponentGrapher
             }
 
             fout << "  Internal Region " << region_ctr << ":\n";
-            fout << "    type: " << type << "\n";
+            fout << "    type: " << name << "/" << type << "\n";
             fout << "    size: " << size[0] << " " << size[1] << " " << size[2] << " m\n";
             fout << "    local_position: " << local[0] << " " << local[1] << " " << local[2] << " m\n";
             fout << "    global_position: " << global[0] << " " << global[1] << " " << global[2] << " m\n";
