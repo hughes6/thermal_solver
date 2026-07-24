@@ -22,13 +22,14 @@ public:
     Mesh() = default;
     
     Mesh(int nx_, int ny_, int nz_,
-         double dx_, double dy_, double dz_, Environment env_, Workload load_)
+         std::vector<double> dxs_, std::vector<double> dys_, std::vector<double> dzs_,
+         Environment env_, Workload load_)
         : nx(nx_),
           ny(ny_),
           nz(nz_),
-          dx(dx_),
-          dy(dy_),
-          dz(dz_),
+          dxs(std::move(dxs_)),
+          dys(std::move(dys_)),
+          dzs(std::move(dzs_)),
           env(env_),
           load(load_)
     {
@@ -112,19 +113,38 @@ public:
     int get_nx() const { return nx; }
     int get_ny() const { return ny; }
     int get_nz() const { return nz; }
-    double get_dx() const { return dx; }
-    double get_dy() const { return dy; }
-    double get_dz() const { return dz; }
-    double cell_volume() const { return dx * dy * dz; }
-    double area_x() const { return dy * dz; }
-    double area_y() const { return dx * dz; }
-    double area_z() const { return dx * dy; }
+
+    // Legacy scalar accessors. Valid as long as the mesh is uniform (true
+    // of every caller today). These return exactly the same double that
+    // used to live in the flat dx/dy/dz members - Solver/FlowSolver keep
+    // working unmodified until Stage 2 migrates them to the per-index
+    // overloads below.
+    double get_dx() const { return dxs.empty() ? 0.0 : dxs[0]; }
+    double get_dy() const { return dys.empty() ? 0.0 : dys[0]; }
+    double get_dz() const { return dzs.empty() ? 0.0 : dzs[0]; }
+
+    // Per-index accessors - ready for non-uniform spacing (Stage 3).
+    double get_dx(int i) const { return dxs[i]; }
+    double get_dy(int j) const { return dys[j]; }
+    double get_dz(int k) const { return dzs[k]; }
+
+    double cell_volume() const { return get_dx() * get_dy() * get_dz(); }
+    double area_x() const { return get_dy() * get_dz(); }
+    double area_y() const { return get_dx() * get_dz(); }
+    double area_z() const { return get_dx() * get_dy(); }
 
     Mesh build_mesh(const Rack& rack, double dx, double dy, double dz, Environment env, Workload load){
         int nx = std::ceil(rack.get_width_m()  / dx);
         int ny = std::ceil(rack.get_depth_m()  / dy);
         int nz = std::ceil(rack.get_height_m() / dz);
-        Mesh mesh(nx, ny, nz, dx, dy, dz, env, load);
+
+        // Stage 1: still uniform everywhere - every entry is the same
+        // scalar. This is the seam a future refinement planner (Stage 3)
+        // will plug non-uniform widths into instead, without touching the
+        // Mesh/Cell data model at all.
+        std::vector<double> dxs(nx, dx), dys(ny, dy), dzs(nz, dz);
+
+        Mesh mesh(nx, ny, nz, dxs, dys, dzs, env, load);
         for(int i=0;i<nx;i++)
         {
             for(int j=0;j<ny;j++)
@@ -139,9 +159,9 @@ public:
                         0.0,
                         0.0,
                         Cell::State::Air,
-                        dx,
-                        dy,
-                        dz,
+                        dxs[i],
+                        dys[j],
+                        dzs[k],
                         env.get_mu(),
                         env.get_pr()
                     );
@@ -153,6 +173,16 @@ public:
     }
 
     void stamp_component(const Component& c) {
+        // Stage 1: mesh is still uniform, so these are just the scalar
+        // spacing values under a familiar name - every formula below is
+        // untouched from before. Once Stage 3 introduces real per-axis
+        // variation, this function gets its own index-lookup-based sibling
+        // rather than being rewritten in place (see stamp_component_adaptive
+        // note in the class docs once that lands).
+        const double dx = get_dx();
+        const double dy = get_dy();
+        const double dz = get_dz();
+
         auto[x, y, z] = c.get_coords();
         // start coord converted to mesh units
         int mx = static_cast<int>(std::floor(x / dx));
@@ -489,6 +519,10 @@ public:
     }
  
     void stamp_fan(const Fan& f) {
+        const double dx = get_dx();
+        const double dy = get_dy();
+        const double dz = get_dz();
+
         auto [cx, cy, cz] = f.get_center();
         auto [nnx, nny, nnz] = f.get_velocity_dir();
         bool is_circular = f.is_circular();
@@ -538,6 +572,7 @@ public:
                             (yc-cy)*(yc-cy);
 
                         if(dist2 <= r*r)
+
                             stamp_cell(i,j,k);
                     }
                 }
@@ -657,6 +692,10 @@ public:
 
 
     void stamp_vent(const Vent& v) {
+        const double dx = get_dx();
+        const double dy = get_dy();
+        const double dz = get_dz();
+
         auto [cx, cy, cz] = v.get_center();
         auto [nnx, nny, nnz] = v.get_direction();
         bool is_circular = v.is_circular();
@@ -805,6 +844,28 @@ public:
 
     }
 
+    void check_stamps() const {
+        double air = 0.0;
+        double solid = 0.0;
+        double vent = 0.0;
+        double fan = 0.0;
+        for(int i = 0; i < nx; i++) {
+            for(int j = 0; j < ny; j++) {
+                for(int k = 0; k < nz; k++) {
+                    const Cell& c = at(i, j, k);
+                    if(c.is_solid()) solid++;
+                    if(c.is_fan()) fan++;
+                    if(c.is_air()) air++;
+                    if(c.is_vent()) vent++;
+                }
+            }
+        }
+        std::cout << "air cells: " << air << "\n";
+        std::cout << "solid cells: " << solid << "\n";
+        std::cout << "fan cells: " << fan << "\n";
+        std::cout << "vent cells: " << vent << "\n";
+    }
+
     void print_mesh() const {
         for (int z = 0; z < nz; ++z) {
             std::cout << "\n========== Layer z = " << z << " ==========\n";
@@ -862,7 +923,11 @@ public:
 
 private:
     int nx, ny, nz;
-    double dx, dy, dz;
+    // Per-axis cell widths. Right now build_mesh() always fills these with
+    // nx/ny/nz identical copies of a single scalar, so behavior is byte-for-
+    // byte the same as the old flat dx/dy/dz members - this is groundwork
+    // for adaptive meshing (Stage 3), not a behavior change yet.
+    std::vector<double> dxs, dys, dzs;
     Environment env;
     Workload load;
 
