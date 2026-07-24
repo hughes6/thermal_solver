@@ -100,7 +100,7 @@ public:
                                    cell_state == State::Vent; }
     bool is_air() const { return cell_state == State::Air; }
     bool is_solid() const { return cell_state == State::Component || cell_state == State::Wall; }
-    bool is_fan() const { return cell_state == State::Fan; }
+    bool is_fan() const { return cell_state == State::Fan || cell_state == State::Intake || cell_state == State::Exhaust; }
     bool is_intake() const { return cell_state == State::Intake; }
     bool is_exhaust() const { return cell_state == State::Exhaust; }
     bool is_vent() const { return cell_state == State::Vent; }
@@ -110,7 +110,6 @@ public:
     //========================
     // Setters
     //========================
-
     void set_T(double t) { T = t; }
     void set_rho(double r) { rho = r; }
     void set_cp(double c) { cp = c; }
@@ -134,6 +133,7 @@ public:
     void set_pr(double pr_) { pr = pr_; }
     void set_state(State s) { cell_state = s; }
 
+
     //========================
     // Geometry
     //========================
@@ -142,6 +142,9 @@ public:
     double area_y() const { return dx * dz; }
     double area_z() const { return dx * dy; }
 
+    //========================
+    // General
+    //========================
     bool has_fan_curve() const { return fan_curve_a > 0.0; }
     double get_fan_curve_a() const { return fan_curve_a; }
     double get_fan_curve_b() const { return fan_curve_b; }
