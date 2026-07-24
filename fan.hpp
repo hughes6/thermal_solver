@@ -93,6 +93,7 @@ struct Fan {
             return gross_area(); 
         }
     }
+    
     double gross_area() const {
         const double ax = std::abs(direction[0]);
         const double ay = std::abs(direction[1]);
