@@ -501,7 +501,7 @@ namespace {
         throw std::runtime_error("Unknown cell selection: " + value);
     }
 
-    void parse_logger_summary_requests(const toml::array& summaries, LoggerInput cfg) {
+    void parse_logger_summary_requests(const toml::array& summaries, LoggerInput& cfg) {
         std::vector<LoggerSummaryInput> parsed_summaries;
         for(const toml::node& node : summaries) {
             const toml::table* summary_table = node.as_table();
@@ -540,7 +540,7 @@ namespace {
         cfg.summary_requests = std::move(parsed_summaries);
     }
 
-    void parse_logger_probes(const toml::array& probes, LoggerInput cfg) {
+    void parse_logger_probes(const toml::array& probes, LoggerInput& cfg) {
         std::vector<LoggerProbeInput> parsed_probes;
         for(const toml::node& node : probes) {
             const toml::table* probe_table = node.as_table();
@@ -583,7 +583,7 @@ namespace {
         cfg.probes = std::move(parsed_probes);
     }
 
-    void parse_logger(const toml::table& root, LoggerInput cfg) {
+    void parse_logger(const toml::table& root, LoggerInput& cfg) {
         const toml::table* logger_table = root["logger"].as_table();
 
         if(logger_table == nullptr) {
@@ -632,7 +632,7 @@ namespace {
         if(const toml::array* summaries = (*logger_table)["summary"].as_array()) {
             parse_logger_summary_requests(*summaries, cfg);
         }
-        if(const toml::array* probes = (*logger_table)["probes"].as_array()) {
+        if(const toml::array* probes = (*logger_table)["probe"].as_array()) {
             parse_logger_probes(*probes, cfg);
         }
 
@@ -646,6 +646,9 @@ namespace {
         }
         if(input.enable_field_logging) {
             config.enable_field_logging = *input.enable_field_logging;
+        }
+        if(input.enable_summary_logging) {
+            config.enable_summary_logging = *input.enable_summary_logging;
         }
         if(input.enable_probe_logging) {
             config.enable_probe_logging = *input.enable_probe_logging;
@@ -663,7 +666,7 @@ namespace {
             config.field_variables = *input.field_variables;
         }
         if(input.summary_requests) {
-            config.summary_requests;
+            config.summary_requests.clear();
             for(const LoggerSummaryInput& summary_input : *input.summary_requests) {
                 SummaryRequest request;
                 if(summary_input.name) {
@@ -697,6 +700,9 @@ namespace {
             config.probes.clear();
             for(const LoggerProbeInput& probe_input : *input.probes) {
                 Probe probe;
+                if(probe_input.name) {
+                    probe.name = *probe_input.name;
+                }
                 if(probe_input.x) {
                     probe.x = *probe_input.x;
                 }
@@ -800,9 +806,10 @@ struct ModelLoader {
 
             // ------------------------------------------Global Objects---------------------------------------
             parse_logger(root, input);
-            if(input.template_file == "NULL") {
-                const toml::table& templat_cfg = require_table(root["template"], "logger.template");
-                parse_logger(templat_cfg, input);
+            if(input.template_file && *input.template_file != "NULL") {
+                const toml::table template_root =
+                    toml::parse_file(*input.template_file);
+                parse_logger(template_root, input);
             }
             config = std::move(make_logging_config(input));
 

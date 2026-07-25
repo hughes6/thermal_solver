@@ -2443,6 +2443,7 @@ public:
         try {
             ModelLoader loader;
             loader.load_model("library/tests/valid_adaptive_model.toml");
+            assert(loader.config.field_variables.size() == 2);
             loader.run();
         } catch (const std::exception&) {
             threw = true;

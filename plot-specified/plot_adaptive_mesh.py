@@ -20,8 +20,9 @@ def parse_args():
                         help="Slice normal axis.")
     parser.add_argument("--position", type=float,
                         help="Requested slice position in meters; nearest layer is used.")
-    parser.add_argument("--variable", default="T",
-                        help="Field column to color. Use 'none' for mesh lines only.")
+    parser.add_argument("--variable", default="auto",
+                        help="Field column to color. 'auto' uses T when logged, "
+                             "otherwise plots mesh lines; use 'none' for lines only.")
     parser.add_argument("--step", type=int,
                         help="Timestep to plot; defaults to the latest.")
     parser.add_argument("--cmap", default="inferno")
@@ -74,19 +75,30 @@ def plot(args):
     ]
 
     fig, ax = plt.subplots(figsize=(9, 7))
-    variable = args.variable.lower()
+    requested_variable = args.variable
+    variable = requested_variable.lower()
+    if variable == "auto":
+        if "T" in frame.columns:
+            requested_variable = "T"
+            variable = "t"
+        else:
+            print(
+                "Temperature column 'T' was not logged; plotting mesh "
+                "boundaries only. Add 'temperature' to logger.field_variables "
+                "and rerun the model for temperature coloring.")
+            variable = "none"
     if variable == "none":
         collection = PatchCollection(
             rectangles, facecolor="none", edgecolor="black", linewidth=0.45)
     else:
-        if args.variable not in frame.columns:
+        if requested_variable not in frame.columns:
             raise ValueError(
-                f"Column '{args.variable}' is not present. Available columns: "
+                f"Column '{requested_variable}' is not present. Available columns: "
                 + ", ".join(frame.columns))
-        values = frame[args.variable].to_numpy(dtype=float)
+        values = frame[requested_variable].to_numpy(dtype=float)
         finite = values[np.isfinite(values)]
         if finite.size == 0:
-            raise ValueError(f"Column '{args.variable}' contains no finite values.")
+            raise ValueError(f"Column '{requested_variable}' contains no finite values.")
         vmin = float(finite.min()) if args.vmin is None else args.vmin
         vmax = float(finite.max()) if args.vmax is None else args.vmax
         if vmax < vmin:
@@ -98,7 +110,7 @@ def plot(args):
             rectangles, cmap=args.cmap, norm=Normalize(vmin=vmin, vmax=vmax),
             edgecolor=(0, 0, 0, 0.5), linewidth=0.35)
         collection.set_array(values)
-        fig.colorbar(collection, ax=ax, label=args.variable)
+        fig.colorbar(collection, ax=ax, label=requested_variable)
 
     ax.add_collection(collection)
     ax.autoscale()
