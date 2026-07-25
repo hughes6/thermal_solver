@@ -19,6 +19,7 @@
 #include "grapher.hpp"
 #include "input/model_loader.hpp"
 #include "mesh.hpp"
+#include "mesh_refinement_planner.hpp"
 #include "rack.hpp"
 #include "solver.hpp"
 #include "vent.hpp"
@@ -163,10 +164,16 @@ public:
         test_rack_bounds_rejects_component_outside_rack();
         test_rack_bounds_allows_fan_flush_on_rack_wall();
 
+        test_adaptive_planner_refines_near_component();
+        test_adaptive_mesh_conserves_component_watts();
+        test_adaptive_stagnant_rack_remains_isothermal();
+        test_adaptive_mesh_rejects_wrong_extent();
+
         test_component_loader_valid_toml_succeeds();
         test_component_loader_missing_watts_fails();
         test_component_loader_invalid_units_fail_on_run();
         test_model_loader_valid_toml_succeeds();
+        test_model_loader_adaptive_toml_succeeds();
         test_model_loader_missing_environment_fails();
         
         std::cout << "========== ALL UNIT TESTS PASSED ==========\n\n";
@@ -2261,6 +2268,104 @@ public:
     // TOML LOADER TESTS
     // ============================================================
 
+    void test_adaptive_planner_refines_near_component() {
+        Rack rack = make_air_rack(0.30, 0.20, 0.20);
+        Component component =
+            Component::from_meters(0.04, 0.04, 0.04, "refinement target");
+        component.set_coords_m(0.13, 0.08, 0.08);
+
+        const MeshRefinementPlan plan = MeshRefinementPlanner::plan(
+            rack, {component}, {}, {}, 0.01, 0.05, 0.01);
+
+        auto sum = [](const std::vector<double>& widths) {
+            double value = 0.0;
+            for (double width : widths) value += width;
+            return value;
+        };
+        assert(nearly_equal(sum(plan.dxs), rack.get_width_m()));
+        assert(nearly_equal(sum(plan.dys), rack.get_depth_m()));
+        assert(nearly_equal(sum(plan.dzs), rack.get_height_m()));
+
+        bool has_fine = false;
+        bool has_coarse = false;
+        for (double width : plan.dxs) {
+            has_fine = has_fine || nearly_equal(width, 0.01);
+            has_coarse = has_coarse || nearly_equal(width, 0.05);
+        }
+        assert(has_fine && has_coarse);
+        std::cout << "test_adaptive_planner_refines_near_component PASSED\n";
+    }
+
+    void test_adaptive_mesh_conserves_component_watts() {
+        Environment env(30.0, 5800.0, 20.0, 1005.0, 0.02587,
+                        0.000018, 0.71, 1.225);
+        Workload load(1000, 100000, 100000, 100);
+        Rack rack = make_air_rack(0.10, 0.10, 0.10);
+        Mesh mesh = Mesh().build_adaptive_mesh(
+            rack,
+            {0.02, 0.03, 0.05},
+            {0.04, 0.06},
+            {0.01, 0.02, 0.07},
+            env, load);
+
+        Component component =
+            Component::from_meters(0.05, 0.10, 0.03, "adaptive heater");
+        component.set_coords_m(0.0, 0.0, 0.0);
+        component.set_t(40.0);
+        component.set_rho_solid(2700.0);
+        component.set_cp(900.0);
+        component.set_k_solid(200.0);
+        component.set_watts(75.0);
+        mesh.stamp_component(component);
+
+        double integrated_watts = 0.0;
+        for (const Cell& cell : mesh.get_cells()) {
+            integrated_watts += cell.get_qdot() *
+                cell.get_dx() * cell.get_dy() * cell.get_dz();
+        }
+        assert(nearly_equal(integrated_watts, 75.0));
+        std::cout << "test_adaptive_mesh_conserves_component_watts PASSED\n";
+    }
+
+    void test_adaptive_mesh_rejects_wrong_extent() {
+        Environment env(30.0, 5800.0, 20.0, 1005.0, 0.02587,
+                        0.000018, 0.71, 1.225);
+        Workload load(1000, 100000, 100000, 100);
+        Rack rack = make_air_rack(0.10, 0.10, 0.10);
+        bool threw = false;
+        try {
+            Mesh().build_adaptive_mesh(
+                rack, {0.04, 0.04}, {0.10}, {0.10}, env, load);
+        } catch (const std::invalid_argument&) {
+            threw = true;
+        }
+        assert(threw);
+        std::cout << "test_adaptive_mesh_rejects_wrong_extent PASSED\n";
+    }
+
+    void test_adaptive_stagnant_rack_remains_isothermal() {
+        Environment env(30.0, 5800.0, 31.0, 1005.0, 0.02587,
+                        0.000018, 0.71, 1.225);
+        Workload load(1000, 100000, 100000, 100);
+        Rack rack = make_air_rack(0.10, 0.10, 0.10, 31.0);
+        Mesh mesh = Mesh().build_adaptive_mesh(
+            rack,
+            {0.02, 0.03, 0.05},
+            {0.04, 0.06},
+            {0.01, 0.02, 0.07},
+            env, load);
+
+        Solver solver(mesh, 0.001, 0.002, false, 1);
+        solver.solve();
+        for (const Cell& cell : solver.get_mesh().get_cells()) {
+            assert(nearly_equal(cell.get_T(), 31.0));
+            assert(nearly_equal(cell.get_vx(), 0.0));
+            assert(nearly_equal(cell.get_vy(), 0.0));
+            assert(nearly_equal(cell.get_vz(), 0.0));
+        }
+        std::cout << "test_adaptive_stagnant_rack_remains_isothermal PASSED\n";
+    }
+
     void test_component_loader_valid_toml_succeeds() {
         const auto path = "library/tests/valid_component.toml";
 
@@ -2331,6 +2436,19 @@ public:
 
         assert(!threw && "A complete minimal model TOML file must load and run successfully.");
         std::cout << "test_model_loader_valid_toml_succeeds PASSED\n";
+    }
+
+    void test_model_loader_adaptive_toml_succeeds() {
+        bool threw = false;
+        try {
+            ModelLoader loader;
+            loader.load_model("library/tests/valid_adaptive_model.toml");
+            loader.run();
+        } catch (const std::exception&) {
+            threw = true;
+        }
+        assert(!threw && "A valid adaptive-mesh model must load and run.");
+        std::cout << "test_model_loader_adaptive_toml_succeeds PASSED\n";
     }
 
     void test_model_loader_missing_environment_fails() {

@@ -372,9 +372,9 @@ private:
     // ========================================================
 
     static ResolvedProbe resolve_probe(const Mesh& mesh, const Probe& probe) {
-        const int i = static_cast<int>(std::floor(probe.x / mesh.get_dx()));
-        const int j = static_cast<int>(std::floor(probe.y / mesh.get_dy()));
-        const int k = static_cast<int>(std::floor(probe.z / mesh.get_dz()));
+        const int i = mesh.index_x(probe.x);
+        const int j = mesh.index_y(probe.y);
+        const int k = mesh.index_z(probe.z);
 
         if(!mesh.in_bounds(i, j, k)) {
             throw std::out_of_range("Probe '" + probe.name +"' lies outside the mesh.");
@@ -465,7 +465,7 @@ private:
 
     void write_field_header() {
         field_file_
-            << "step,time,i,j,k,x,y,z,state";
+            << "step,time,i,j,k,x,y,z,dx,dy,dz,state";
 
         for(LogVariable variable :
             config_.field_variables) {
@@ -561,23 +561,9 @@ private:
                     const Cell& cell =
                         mesh.at(i, j, k);
 
-                    const double x =
-                        (
-                            static_cast<double>(i)
-                            + 0.5
-                        ) * mesh.get_dx();
-
-                    const double y =
-                        (
-                            static_cast<double>(j)
-                            + 0.5
-                        ) * mesh.get_dy();
-
-                    const double z =
-                        (
-                            static_cast<double>(k)
-                            + 0.5
-                        ) * mesh.get_dz();
+                    const double x = mesh.cell_center_x(i);
+                    const double y = mesh.cell_center_y(j);
+                    const double z = mesh.cell_center_z(k);
 
                     field_file_
                         << timestep << ','
@@ -588,6 +574,9 @@ private:
                         << x << ','
                         << y << ','
                         << z << ','
+                        << mesh.get_dx(i) << ','
+                        << mesh.get_dy(j) << ','
+                        << mesh.get_dz(k) << ','
                         << static_cast<int>(
                             cell.get_state()
                         );

@@ -13,6 +13,7 @@
 #include "flow_solver.hpp"
 #include "grapher.hpp"
 #include "mesh.hpp"
+#include "mesh_refinement_planner.hpp"
 #include "rack.hpp"
 #include "solver.hpp"
 #include "unit_test.hpp"

@@ -11,6 +11,7 @@
 #include "input_types.hpp"
 #include "../component_grapher.hpp"
 #include "../collision.hpp"
+#include "../mesh_refinement_planner.hpp"
 #include "../toml.hpp"
 
 
@@ -768,9 +769,17 @@ struct ModelLoader {
 
             // ------------------------------------------Mesh------------------------------------------------
             const toml::table& mesh = require_table(root["mesh"],"mesh");
-            model.mesh.dx = require_value<double>(mesh["dx"], "mesh.dx");
-            model.mesh.dy = require_value<double>(mesh["dy"], "mesh.dy");
-            model.mesh.dz = require_value<double>(mesh["dz"], "mesh.dz");
+            model.mesh.adaptive = mesh["adaptive"].value<bool>().value_or(false);
+            if (model.mesh.adaptive) {
+                model.mesh.fine_dx = require_value<double>(mesh["fine_dx"], "mesh.fine_dx");
+                model.mesh.coarse_dx = require_value<double>(mesh["coarse_dx"], "mesh.coarse_dx");
+                model.mesh.refinement_margin =
+                    mesh["refinement_margin"].value<double>().value_or(0.0);
+            } else {
+                model.mesh.dx = require_value<double>(mesh["dx"], "mesh.dx");
+                model.mesh.dy = require_value<double>(mesh["dy"], "mesh.dy");
+                model.mesh.dz = require_value<double>(mesh["dz"], "mesh.dz");
+            }
 
             // ------------------------------------------Rack------------------------------------------------
             const toml::table& rack = require_table(root["rack"], "rack");
@@ -833,9 +842,6 @@ struct ModelLoader {
         rack.set_h(model.rack.ambient.h);
         rack.set_rho(model.rack.ambient.rho);
         rack.set_t(model.rack.ambient.temperature);
-
-        Mesh mesh = Mesh().build_mesh(rack, model.mesh.dx, model.mesh.dy, model.mesh.dz, env, load);
-        Grapher grapher = Grapher(rack, model.mesh.dx, model.mesh.dy, model.mesh.dz);
 
         // Built up-front, geometry-checked as a whole, then stamped. Keeping the
         // "build" and "stamp" phases separate is what lets CollisionChecker see
@@ -1020,6 +1026,26 @@ struct ModelLoader {
         // anything else. Both are resolution-independent - no dx/dy/dz involved.
         RackBoundsChecker::check_all(rack, components, fans, vents);
         CollisionChecker::check_all(components, fans, vents);
+
+        Mesh mesh;
+        double graph_dx = model.mesh.dx;
+        double graph_dy = model.mesh.dy;
+        double graph_dz = model.mesh.dz;
+        if (model.mesh.adaptive) {
+            const MeshRefinementPlan plan = MeshRefinementPlanner::plan(
+                rack, components, fans, vents,
+                model.mesh.fine_dx, model.mesh.coarse_dx,
+                model.mesh.refinement_margin);
+            mesh = Mesh().build_adaptive_mesh(
+                rack, plan.dxs, plan.dys, plan.dzs, env, load);
+            // Grapher remains a lightweight uniform ASCII geometry preview.
+            // Use the fine spacing so it does not hide resolved features.
+            graph_dx = graph_dy = graph_dz = model.mesh.fine_dx;
+        } else {
+            mesh = Mesh().build_mesh(
+                rack, model.mesh.dx, model.mesh.dy, model.mesh.dz, env, load);
+        }
+        Grapher grapher(rack, graph_dx, graph_dy, graph_dz);
 
         for(const Component& component : components) {
             mesh.stamp_component(component);
