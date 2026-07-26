@@ -458,7 +458,7 @@ namespace {
         if(value =="velocity_z" || value == "vz") {
             return LogVariable::VelocityZ;
         }
-        if(value =="velocity_mag" || value == "vmag" || value == "velocity" || value == "v") {
+        if(value =="velocity_mag" || value == "vmag" || value == "velocity" || value == "v" || value == "velocity_magnitude") {
             return LogVariable::VelocityMagnitude;
         }
         if(value =="density" || value == "rho") {
@@ -1055,15 +1055,27 @@ struct ModelLoader {
         Grapher grapher(rack, graph_dx, graph_dy, graph_dz);
 
         for(const Component& component : components) {
-            mesh.stamp_component(component);
+            if(model.mesh.adaptive) {
+                mesh.stamp_component_adaptive(component);
+            } else {
+                mesh.stamp_component(component);
+            }
             grapher.add_component(component);
         }
         for(const Fan& fan : fans) {
-            mesh.stamp_fan(fan);
+            if(model.mesh.adaptive) {
+                mesh.stamp_fan_adaptive(fan);
+            } else {
+                mesh.stamp_fan(fan);
+            }
             grapher.add_fan(fan);
         }
         for(const Vent& vent : vents) {
-            mesh.stamp_vent(vent);
+            if(model.mesh.adaptive) {
+                mesh.stamp_vent_adaptive(vent);
+            } else {
+                mesh.stamp_vent(vent);
+            }
             grapher.add_vent(vent);
         }
 

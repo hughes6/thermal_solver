@@ -377,7 +377,8 @@ private:
         const int k = mesh.index_z(probe.z);
 
         if(!mesh.in_bounds(i, j, k)) {
-            throw std::out_of_range("Probe '" + probe.name +"' lies outside the mesh.");
+            std::string x = "x: " + std::to_string(i) + " y: " + std::to_string(j) + " z: " + std::to_string(k);
+            throw std::out_of_range("Probe '" + probe.name +"' lies outside the mesh." + x);
         }
 
         return { probe.name, probe.x, probe.y, probe.z, i, j, k, probe.variables };

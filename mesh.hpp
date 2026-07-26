@@ -1211,6 +1211,9 @@ public:
         std::vector<std::array<int, 3>> covered;
 
         auto stamp_cell = [&](int i, int j, int k) {
+            std::cout << i << " " << j << " " << k << std::endl;
+            std::cout << nx << " " << ny << " " << nz << std::endl;
+            std::cout << std::to_string(i < nx) << " " << std::to_string(j < ny) << " " << std::to_string(k < nz) << std::endl;
             if(!in_bounds(i, j, k)) return;
             covered.push_back({i, j, k});
         };
