@@ -5,7 +5,6 @@ import pandas as pd
 import numpy as np
 import re
 from mpl_toolkits.mplot3d import art3d
-from mpl_toolkits.mplot3d.art3d import Poly3DCollection
 import argparse
 
 anim = False
@@ -24,6 +23,8 @@ internal_region_parent = []
 internal_region_types = []
 internal_region_sizes = []
 internal_region_global_positions = []
+internal_region_diams = []
+internal_region_directions = []
 fan_names = []
 fan_sizes = []
 fan_types = []
@@ -80,6 +81,8 @@ while i < len(lines):
                 region_type = None
                 region_size = None
                 region_global = None
+                region_direction = None
+                region_diam = None
                 k = j + 1
                 while k < len(lines):
                     if lines[k].startswith("Internal Region ") or lines[k].startswith(("Component ", "Fan ", "Vent ")):
@@ -92,9 +95,15 @@ while i < len(lines):
                     elif lines[k].startswith("global_position:"):
                         text = lines[k].split(":", 1)[1].replace("m", "").strip()
                         region_global = [float(v) for v in text.split()]
+                    elif lines[k].startswith("diameter"):
+                        text = lines[k].split(":", 1)[1].replace("m", "").strip()
+                        region_diam = [float(v) for v in text.split()]
+                    elif lines[k].startswith("direction:"):
+                        text = lines[k].split(":", 1)[1].replace("m", "").strip()
+                        region_direction = [float(v) for v in text.split()]
                     k += 1
                 if region_type is not None and region_size is not None and region_global is not None:
-                    regions_for_component.append((region_type, region_size, region_global))
+                    regions_for_component.append((region_type, region_size, region_global, region_diam, region_direction))
                 j = k
                 continue
             j += 1
@@ -110,11 +119,13 @@ while i < len(lines):
         component_names.append(name)
         component_dims.append(dims)
         component_coords.append(coords)
-        for region_type, region_size, region_global in regions_for_component:
+        for region_type, region_size, region_global, region_diam, region_direction in regions_for_component:
             internal_region_parent.append(name)
             internal_region_types.append(region_type)
             internal_region_sizes.append(region_size)
             internal_region_global_positions.append(region_global)
+            internal_region_diams.append(region_diam)
+            internal_region_directions.append(region_direction)
 
         i = j - 1
 
@@ -298,34 +309,54 @@ for i in range(len(component_coords)):
         )
     )
 
-start_alpha = 0.05
+# start_alpha = 0.05
 # Internal regions are added to the existing rack axes; no new plot or layout is created.
 for i in range(len(internal_region_global_positions)):
-    color = next(colors)
+    # color = next(colors)
+    color = 'gray'
     x, y, z = internal_region_global_positions[i]
     sx, sy, sz = internal_region_sizes[i]
+    vx, vy, vz = internal_region_directions[i]
+    diam = internal_region_diams[i][0]
     region_type = internal_region_types[i]
     parent = internal_region_parent[i]
-    alpha = start_alpha * i
-    if alpha >= 1:
-        alpha = 0.9
-
-    ax.bar3d(
-        x, y, z,
-        sx, sy, sz,
-        color=color,
-        shade=True,
-        edgecolor=color,
-        linewidth=1.5,
-        alpha=alpha
-    )
-    legend_handles.append(
-        mpatches.Patch(
+    # alpha = start_alpha * i
+    # if alpha >= 1:
+    #     alpha = 0.9
+    alpha = 0.1 
+    if(sx > 0.0 or sy > 0.0 or sz > 0.0):
+        ax.bar3d(
+            x, y, z,
+            sx, sy, sz,
             color=color,
-            alpha=alpha,
-            label=f"Internal region ({parent}): {region_type}"
+            shade=True,
+            edgecolor=color,
+            linewidth=1.5,
+            alpha=alpha
         )
-    )
+    # legend_handles.append(
+    #     mpatches.Patch(
+    #         color=color,
+    #         alpha=alpha,
+    #         label=f"Internal region ({parent}): {region_type}"
+    #     )
+    # )
+
+    if abs(vz) >= abs(vx) and abs(vz) >= abs(vy):
+        circle = plt.Circle((x, y), diam/2, color=color, alpha=alpha)
+        ax.add_patch(circle)
+        art3d.pathpatch_2d_to_3d(circle, z=z, zdir="z")
+    # mostly y-normal: fan lies in XZ plane
+    elif abs(vy) >= abs(vx) and abs(vy) >= abs(vz):
+        circle = plt.Circle((x, z), diam/2, color=color, alpha=alpha)
+        ax.add_patch(circle)
+        art3d.pathpatch_2d_to_3d(circle, z=y, zdir="y")
+    # mostly x-normal: fan lies in YZ plane
+    else:
+        circle = plt.Circle((y, z), diam/2, color=color, alpha=alpha)
+        ax.add_patch(circle)
+        art3d.pathpatch_2d_to_3d(circle, z=x, zdir="x")
+
 
 # print(fan_centers)
 # print(fan_diams)
