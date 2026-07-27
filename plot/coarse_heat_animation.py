@@ -21,31 +21,17 @@ from matplotlib.colors import Normalize
 import numpy as np
 import pandas as pd
 
-from heat_animation import draw_box_edges, parse_rack_file, read_spacing
+from coarse_heat_io import read_spacing, temperature_limits, validate_columns
+from heat_animation import draw_box_edges, parse_rack_file
 
 
 def load_simulation(path: str) -> tuple[pd.DataFrame, tuple[float, float, float]]:
     spacing = read_spacing(path)
     frame = pd.read_csv(path, skiprows=[1])
-    required = {
-        "step", "time", "x", "y", "z", "T", "is_component",
-        "vx", "vy", "vz",
-    }
-    missing = required.difference(frame.columns)
-    if missing:
-        raise ValueError(f"{path} is missing CSV columns: {sorted(missing)}")
+    validate_columns(frame.columns)
     for key in ("step", "x", "y", "z"):
         frame[key] = frame[key].astype(int)
     return frame, spacing
-
-
-def temperature_limits(df: pd.DataFrame, ambient: float | None) -> tuple[float, float]:
-    values = df["T"].to_numpy(dtype=float)
-    low = float(np.nanmin(values) if ambient is None else ambient)
-    high = float(np.nanmax(values))
-    if high <= low + 1e-9:
-        high = low + 1.0
-    return low, high
 
 
 def physical_centers(values: np.ndarray, spacing: float) -> np.ndarray:
@@ -162,7 +148,7 @@ def main() -> None:
     nz = int(df["z"].max()) + 1
     mid = {"x": nx // 2, "y": ny // 2, "z": nz // 2}
     extents = (nx * dx, ny * dy, nz * dz)
-    tmin, tmax = temperature_limits(df, args.ambient)
+    tmin, tmax = temperature_limits(df["T"], args.ambient)
     norm = Normalize(tmin, tmax)
     cmap = "inferno"
 

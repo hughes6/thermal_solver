@@ -60,4 +60,13 @@ int main() {
     advection_solver.solve();
     assert(std::abs(advection_solver.get_mesh().at(1,0,0).get_T()-20.0) < 1e-12);
     std::cout << "face_wall_advection_block_test PASSED\n";
+
+    // An opening removes both the flow obstruction and the wall lookup.
+    Mesh opened = Mesh().build_mesh(rack, 0.1, 0.1, 0.1, env, load);
+    opened.add_wall_face(0,0,0,0,0.005,150.0,2700.0,900.0,20.0);
+    assert(opened.wall_between(0,0,0,1,0,0) != nullptr);
+    opened.open_wall_face(0,0,0,0);
+    assert(opened.wall_between(0,0,0,1,0,0) == nullptr);
+    assert(!opened.get_wall_faces()[0].active);
+    std::cout << "face_wall_opening_test PASSED\n";
 }

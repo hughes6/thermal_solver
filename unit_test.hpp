@@ -110,6 +110,8 @@ public:
         test_flow_solver_keeps_stagnant_rack_at_zero_velocity();
         test_flow_solver_creates_nonzero_fan_to_vent_flow();
         test_flow_solver_rejects_source_without_vent();
+        test_pcg_matches_sor_and_preserves_default();
+        test_pcg_rejects_invalid_method();
 
         test_internal_air_region_stamps_as_air();
 
@@ -131,8 +133,8 @@ public:
         test_internal_region_ordering();
 
         test_valid_internal_vent_on_component_face();
-        test_internal_vent_not_on_face_rejected();
-        test_internal_vent_touching_two_faces_rejected();
+        test_internal_vent_away_from_face_allowed();
+        test_internal_vent_footprint_out_of_bounds_rejected();
         test_internal_vent_free_area_ratio_bounds();
         test_internal_vent_free_area_ratio_endpoints_allowed();
 
@@ -168,6 +170,8 @@ public:
         test_adaptive_mesh_conserves_component_watts();
         test_adaptive_stagnant_rack_remains_isothermal();
         test_adaptive_mesh_rejects_wrong_extent();
+        test_advection_subcycling_regression();
+        test_face_wall_regression();
 
         test_component_loader_valid_toml_succeeds();
         test_component_loader_missing_watts_fails();
@@ -175,6 +179,7 @@ public:
         test_model_loader_valid_toml_succeeds();
         test_model_loader_adaptive_toml_succeeds();
         test_model_loader_missing_environment_fails();
+        test_current_advanced_model_configuration();
         
         std::cout << "========== ALL UNIT TESTS PASSED ==========\n\n";
     }
@@ -1240,7 +1245,7 @@ public:
     }
 
 
-    void test_internal_vent_not_on_face_rejected() {
+    void test_internal_vent_away_from_face_allowed() {
         Component component(0.04, 0.04, 0.04, "Vent test component");
 
         component.set_coords_m(0.0, 0.0, 0.0);
@@ -1254,33 +1259,17 @@ public:
             /*discharge coefficient=*/0.65
         );
 
-        bool threw = false;
-
-        try {
-            component.add_region(vent);
-        }
-        catch(const std::invalid_argument& e) {
-            threw = true;
-
-            assert(
-                std::string(e.what()).find(
-                    "does not intercept any component face"
-                ) != std::string::npos
-            );
-        }
-
-        assert(
-            threw &&
-            "An internal vent not touching a component face "
-            "must be rejected."
-        );
+        component.add_region(vent);
+        assert(component.get_regions().size() == 1);
+        assert(component.get_regions()[0].get_region_type() ==
+               RegionType::Vent);
 
         std::cout
-            << "test_internal_vent_not_on_face_rejected PASSED\n";
+            << "test_internal_vent_away_from_face_allowed PASSED\n";
     }
 
 
-    void test_internal_vent_touching_two_faces_rejected() {
+    void test_internal_vent_footprint_out_of_bounds_rejected() {
         Component component(0.04, 0.04, 0.04, "Vent test component");
 
         component.set_coords_m(0.0, 0.0, 0.0);
@@ -1304,19 +1293,19 @@ public:
 
             assert(
                 std::string(e.what()).find(
-                    "intercepts more than 1 face"
+                    "out of component bounds"
                 ) != std::string::npos
             );
         }
 
         assert(
             threw &&
-            "A vent intersecting multiple component faces "
+            "A center-based vent whose footprint leaves the component "
             "must be rejected."
         );
 
         std::cout
-            << "test_internal_vent_touching_two_faces_rejected "
+            << "test_internal_vent_footprint_out_of_bounds_rejected "
             << "PASSED\n";
     }
 
@@ -2466,6 +2455,156 @@ public:
 
         assert(threw && "A model TOML missing the required environment table must be rejected.");
         std::cout << "test_model_loader_missing_environment_fails PASSED\n";
+    }
+
+    void test_pcg_matches_sor_and_preserves_default() {
+        auto make_case = [&]() {
+            Environment env(
+                30.0, 5800.0, 20.0, 1005.0, 0.02587,
+                0.000018, 0.71, 1.225);
+            Workload load(10000, 1000000, 100000, 4);
+            Rack rack = make_air_rack(0.10, 0.10, 0.20);
+            Mesh mesh = Mesh().build_mesh(
+                rack, 0.05, 0.05, 0.05, env, load);
+            Fan intake(
+                "PCG intake", 1.0, 0.0,
+                {0.0, 0.10, 0.10}, {0.0, 0.05, 0.05},
+                {1.0, 0.0, 0.0}, FlowType::Intake,
+                ShapeType::Rectangular);
+            Vent outlet(
+                "PCG outlet", {0.0, 0.10, 0.10}, 1.0, 0.0, 0.5,
+                {0.10, 0.05, 0.05}, {1.0, 0.0, 0.0},
+                VentShapeType::Rectangular);
+            mesh.stamp_fan(intake);
+            mesh.stamp_vent(outlet);
+            return mesh;
+        };
+        auto maximum_pressure_difference =
+            [](const Mesh& a, const Mesh& b) {
+                double maximum = 0.0;
+                for(size_t i=0; i<a.get_cells().size(); ++i)
+                    maximum = std::max(
+                        maximum,
+                        std::abs(a.get_cells()[i].get_pressure() -
+                                 b.get_cells()[i].get_pressure()));
+                return maximum;
+            };
+
+        Mesh default_mesh = make_case();
+        Mesh sor_mesh = default_mesh;
+        Mesh pcg_mesh = default_mesh;
+        FlowSolver default_solver(
+            default_mesh,4.5,1e-10,20000,1.1,60,1e-3);
+        FlowSolver sor_solver(
+            sor_mesh,4.5,1e-10,20000,1.1,60,1e-3,"sor");
+        FlowSolver pcg_solver(
+            pcg_mesh,4.5,1e-10,20000,1.1,60,1e-3,"pcg");
+        default_solver.solve();
+        sor_solver.solve();
+        pcg_solver.solve();
+
+        assert(maximum_pressure_difference(default_mesh,sor_mesh) < 1e-12);
+        assert(maximum_pressure_difference(sor_mesh,pcg_mesh) < 1e-5);
+        assert(std::abs(pcg_solver.mass_imbalance_m3s()) < 1e-5);
+        std::cout
+            << "test_pcg_matches_sor_and_preserves_default PASSED\n";
+    }
+
+    void test_pcg_rejects_invalid_method() {
+        Environment env(
+            30.0,0.0,20.0,1005.0,0.02587,0.000018,0.71,1.225);
+        Workload load(1000,100000,10000,10);
+        Rack rack=make_air_rack(0.1,0.1,0.1);
+        Mesh mesh=Mesh().build_mesh(rack,0.1,0.1,0.1,env,load);
+        bool threw=false;
+        try {
+            FlowSolver invalid(
+                mesh,4.5,1e-6,100,1.1,2,1e-3,"invalid");
+            (void)invalid;
+        } catch(const std::invalid_argument&) {
+            threw=true;
+        }
+        assert(threw);
+        std::cout << "test_pcg_rejects_invalid_method PASSED\n";
+    }
+
+    void test_advection_subcycling_regression() {
+        auto make_mesh = [&]() {
+            Environment env(
+                30.0,0.0,20.0,1005.0,0.02587,
+                0.000018,0.71,1.225);
+            Workload load(10000,1000000,100000,100);
+            Rack rack=make_air_rack(0.3,0.1,0.1);
+            Mesh mesh=Mesh().build_mesh(
+                rack,0.1,0.1,0.1,env,load);
+            mesh.at(0,0,0).set_T(40.0);
+            for(int x=0; x<3; ++x) {
+                mesh.at(x,0,0).set_vx(1.0);
+                mesh.at(x,0,0).set_k(1e-12);
+            }
+            return mesh;
+        };
+
+        Solver reference(make_mesh(),0.05,0.20,false,4);
+        Solver subcycled(
+            make_mesh(),0.20,0.20,false,1,-1,
+            4.5,1e-3,10,1.3,2,1e-2,true,0.5,100);
+        reference.solve();
+        subcycled.solve();
+        for(int x=0; x<3; ++x)
+            assert(std::abs(
+                reference.get_mesh().at(x,0,0).get_T() -
+                subcycled.get_mesh().at(x,0,0).get_T()) < 1e-9);
+
+        bool limit_threw=false;
+        try {
+            Solver limited(
+                make_mesh(),0.20,0.20,false,1,-1,
+                4.5,1e-3,10,1.3,2,1e-2,true,0.5,1);
+            limited.solve();
+        } catch(const std::runtime_error&) {
+            limit_threw=true;
+        }
+        assert(limit_threw);
+        std::cout << "test_advection_subcycling_regression PASSED\n";
+    }
+
+    void test_face_wall_regression() {
+        Environment env(
+            30.0,0.0,20.0,1005.0,0.02587,0.000018,0.71,1.225);
+        Workload load(1000,1000000,100000,100);
+        Rack rack=make_air_rack(0.2,0.1,0.1);
+        Mesh mesh=Mesh().build_mesh(rack,0.1,0.1,0.1,env,load);
+        mesh.at(0,0,0).set_T(40.0);
+        mesh.at(1,0,0).set_T(20.0);
+        mesh.at(1,0,0).set_vx(1.0);
+        mesh.add_wall_face(
+            0,0,0,0,0.005,150.0,2700.0,900.0,20.0);
+        assert(mesh.wall_between(0,0,0,1,0,0) != nullptr);
+
+        Solver blocked(mesh,0.01,0.01,false,1);
+        blocked.solve();
+        assert(std::abs(
+            blocked.get_mesh().at(1,0,0).get_T()-20.0) < 1e-12);
+
+        mesh.open_wall_face(0,0,0,0);
+        assert(mesh.wall_between(0,0,0,1,0,0) == nullptr);
+        assert(!mesh.get_wall_faces()[0].active);
+        std::cout << "test_face_wall_regression PASSED\n";
+    }
+
+    void test_current_advanced_model_configuration() {
+        ModelLoader loader;
+        loader.load_fan_curves(
+            "library/fan_curves/fan_curves.toml");
+        loader.load_model("library/models/model.toml");
+        assert(loader.model.flow_solver.enable_flow_solver);
+        assert(loader.model.flow_solver.pressure_method == "pcg");
+        assert(loader.model.mesh.adaptive);
+        assert(loader.model.multistage.enabled);
+        assert(loader.model.simulation.advection_subcycling);
+        std::cout
+            << "test_current_advanced_model_configuration PASSED\n";
     }
 
 };

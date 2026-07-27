@@ -45,5 +45,27 @@ int main() {
         assert(std::abs(reference.get_mesh().at(x,0,0).get_T()-
                         subcycled.get_mesh().at(x,0,0).get_T()) < 1e-9);
 
+    bool invalid_target_threw=false;
+    try {
+        Solver invalid(
+            make_mesh(),0.1,0.1,false,1,-1,
+            4.5,1e-3,10,1.3,2,1e-2,true,1.1,100);
+        (void)invalid;
+    } catch(const std::invalid_argument&) {
+        invalid_target_threw=true;
+    }
+    assert(invalid_target_threw);
+
+    bool substep_limit_threw=false;
+    try {
+        Solver limited(
+            make_mesh(),0.2,0.2,false,1,-1,
+            4.5,1e-3,10,1.3,2,1e-2,true,0.5,1);
+        limited.solve();
+    } catch(const std::runtime_error&) {
+        substep_limit_threw=true;
+    }
+    assert(substep_limit_threw);
+
     std::cout << "advection_subcycling_test PASSED\n";
 }
