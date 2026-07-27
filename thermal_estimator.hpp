@@ -30,6 +30,15 @@ struct ThermalTimeEstimate {
 
     double max_stable_dt_conduction_s = std::numeric_limits<double>::infinity();
     double max_stable_dt_advection_s  = std::numeric_limits<double>::infinity();
+    double recommended_dt_s = std::numeric_limits<double>::infinity();
+
+    // Realized mesh diagnostics. Geometry-aligned cuts can create cells
+    // smaller than the configured fine_dx (for example, 5 mm walls).
+    double min_cell_dx_m = std::numeric_limits<double>::infinity();
+    double min_cell_dy_m = std::numeric_limits<double>::infinity();
+    double min_cell_dz_m = std::numeric_limits<double>::infinity();
+    std::size_t mesh_cell_count = 0;
+    std::size_t mesh_memory_bytes = 0;
 
     void print() const {
         std::cout << "----- Thermal Time Estimate -----\n";
@@ -38,8 +47,15 @@ struct ThermalTimeEstimate {
         std::cout << "Representative h:           " << h_estimate_W_m2K << " W/m^2K\n";
         std::cout << "Estimated tau:              " << tau_seconds << " s\n";
         std::cout << "Recommended sim_length:     " << recommended_sim_length_s << " s (~5*tau)\n";
+        std::cout << "Minimum realized dx:       " << min_cell_dx_m << " m\n";
+        std::cout << "Minimum realized dy:       " << min_cell_dy_m << " m\n";
+        std::cout << "Minimum realized dz:       " << min_cell_dz_m << " m\n";
+        std::cout << "Mesh cell count:           " << mesh_cell_count << "\n";
+        std::cout << "Approx. cell memory:       " << mesh_memory_bytes
+                  << " bytes (" << mesh_memory_bytes / (1024.0 * 1024.0) << " MiB)\n";
         std::cout << "Max stable dt (conduction): " << max_stable_dt_conduction_s << " s\n";
         std::cout << "Max stable dt (advection):  " << max_stable_dt_advection_s << " s\n";
+        std::cout << "Recommended dt (80% limit): " << recommended_dt_s << " s\n";
         std::cout << "----------------------------------\n";
         std::cout << "This is a single-tau, lumped-mass estimate - a starting point,\n"
                      "not a substitute for watching the logger's summary output actually\n"
@@ -50,6 +66,13 @@ struct ThermalTimeEstimate {
 struct ThermalTimeEstimator {
     static ThermalTimeEstimate estimate(const Mesh& mesh) {
         ThermalTimeEstimate result;
+        result.mesh_cell_count =
+            static_cast<std::size_t>(mesh.get_nx()) *
+            static_cast<std::size_t>(mesh.get_ny()) *
+            static_cast<std::size_t>(mesh.get_nz());
+        result.mesh_memory_bytes =
+            result.mesh_cell_count * sizeof(Cell) +
+            mesh.get_face_wall_memory_byte();
 
         double h_sum = 0.0;
         int h_count = 0;
@@ -64,18 +87,23 @@ struct ThermalTimeEstimator {
             for (int j = 0; j < mesh.get_ny(); ++j) {
                 for (int k = 0; k < mesh.get_nz(); ++k) {
                     const Cell& c = mesh.at(i, j, k);
+                    result.min_cell_dx_m = std::min(result.min_cell_dx_m, c.get_dx());
+                    result.min_cell_dy_m = std::min(result.min_cell_dy_m, c.get_dy());
+                    result.min_cell_dz_m = std::min(result.min_cell_dz_m, c.get_dz());
+
+                    if (c.get_rho() > 0.0 && c.get_cp() > 0.0) {
+                        const double alpha =
+                            c.get_k() / (c.get_rho() * c.get_cp());
+                        const double sum_inv_d2 =
+                            1.0 / (c.get_dx()*c.get_dx()) +
+                            1.0 / (c.get_dy()*c.get_dy()) +
+                            1.0 / (c.get_dz()*c.get_dz());
+                        max_conduction_rate = std::max(
+                            max_conduction_rate,alpha*sum_inv_d2);
+                    }
 
                     if (c.is_solid()) {
                         result.thermal_mass_J_per_K += c.get_rho() * c.get_cp() * c.volume();
-
-                        if (c.get_rho() > 0.0 && c.get_cp() > 0.0) {
-                            double alpha = c.get_k() / (c.get_rho() * c.get_cp());
-                            double sum_inv_d2 =
-                                1.0 / (c.get_dx()*c.get_dx()) +
-                                1.0 / (c.get_dy()*c.get_dy()) +
-                                1.0 / (c.get_dz()*c.get_dz());
-                            max_conduction_rate = std::max(max_conduction_rate, alpha * sum_inv_d2);
-                        }
 
                         for (int f = 0; f < 6; ++f) {
                             int ni = i + di[f], nj = j + dj[f], nk = k + dk[f];
@@ -120,6 +148,61 @@ struct ThermalTimeEstimator {
             }
         }
 
+        // Coarse face walls carry thermal mass without occupying cells.
+        // Include both exposed sides in the convection-area estimate and
+        // include the wall-node explicit update in the conduction dt limit.
+        for(const Mesh::WallFace& wall : mesh.get_wall_faces()) {
+            if(!wall.active) continue;
+            const int hi = wall.x + (wall.axis == 0);
+            const int hj = wall.y + (wall.axis == 1);
+            const int hk = wall.z + (wall.axis == 2);
+            const Cell& low = mesh.at(wall.x, wall.y, wall.z);
+            const Cell& high = mesh.at(hi, hj, hk);
+            const double area = mesh.wall_face_area(wall);
+            const double capacitance =
+                wall.rho * wall.cp * area * wall.thickness;
+            result.thermal_mass_J_per_K += capacitance;
+
+            const Cell* sides[2]{&low, &high};
+            for(const Cell* side : sides) {
+                if(!side->is_fluid()) continue;
+                result.interface_area_m2 += area;
+                const double width =
+                    wall.axis == 0 ? side->get_dx() :
+                    wall.axis == 1 ? side->get_dy() : side->get_dz();
+                const double vmag = std::sqrt(
+                    side->get_vx()*side->get_vx() +
+                    side->get_vy()*side->get_vy() +
+                    side->get_vz()*side->get_vz());
+                const double delta_T =
+                    std::max(std::abs(wall.temperature-side->get_T()),1.0);
+                const double film =
+                    0.5*(wall.temperature+side->get_T())+273.15;
+                h_sum += Convection::compute_local_h(
+                    vmag,width,Convection::AIR_RHO,Convection::AIR_MU,
+                    Convection::AIR_K,Convection::AIR_PR,delta_T,film);
+                ++h_count;
+            }
+
+            if(capacitance > 0.0) {
+                const double low_width =
+                    wall.axis == 0 ? low.get_dx() :
+                    wall.axis == 1 ? low.get_dy() : low.get_dz();
+                const double high_width =
+                    wall.axis == 0 ? high.get_dx() :
+                    wall.axis == 1 ? high.get_dy() : high.get_dz();
+                const double wall_half =
+                    0.5*wall.thickness /
+                    std::max(wall.conductivity,1e-12);
+                const double glow = area /
+                    (0.5*low_width/std::max(low.get_k(),1e-12)+wall_half);
+                const double ghigh = area /
+                    (0.5*high_width/std::max(high.get_k(),1e-12)+wall_half);
+                max_conduction_rate = std::max(
+                    max_conduction_rate,(glow+ghigh)/capacitance);
+            }
+        }
+
         result.h_estimate_W_m2K = (h_count > 0) ? (h_sum / h_count) : 5.0; // weak natural-convection fallback
 
         double denom = result.h_estimate_W_m2K * result.interface_area_m2;
@@ -132,6 +215,13 @@ struct ThermalTimeEstimator {
         result.max_stable_dt_advection_s =
             (max_advection_rate > 0.0) ? (1.0 / max_advection_rate)
                                         : std::numeric_limits<double>::infinity();
+
+        const double limiting_dt = std::min(
+            result.max_stable_dt_conduction_s,
+            result.max_stable_dt_advection_s);
+        result.recommended_dt_s = std::isfinite(limiting_dt)
+            ? 0.8 * limiting_dt
+            : std::numeric_limits<double>::infinity();
 
         return result;
     }

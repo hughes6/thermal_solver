@@ -91,6 +91,7 @@ public:
     // derive face flows and write vx,vy,vz into every cell
     // of mesh, call once before solve           
     void solve() {
+        last_outer_converged = false;
         validate_grounding();
         initialize_storage();
         initialize_pressures();
@@ -114,6 +115,7 @@ public:
                           << outer + 1 << " outer iterations (max relative face-flow change = "
                           << max_relative_change << ")\n";
                 outer_converged = true;
+                last_outer_converged = true;
                 break;
             }
         }
@@ -128,6 +130,7 @@ public:
     }           
 
     void solve(Mesh& mesh_) {
+        last_outer_converged = false;
         mesh = mesh_;
         validate_grounding();
         initialize_storage();
@@ -152,6 +155,7 @@ public:
                           << outer + 1 << " outer iterations (max relative face-flow change = "
                           << max_relative_change << ")\n";
                 outer_converged = true;
+                last_outer_converged = true;
                 break;
             }
         }
@@ -167,6 +171,12 @@ public:
 
     void set_resistivity(double r) { linear_resistivity = r; }
     double get_resistivity() const { return linear_resistivity; }
+    bool converged() const { return last_outer_converged; }
+    double total_source_m3s() const { return last_total_source; }
+    double total_vent_flow_m3s() const { return last_total_vent; }
+    double mass_imbalance_m3s() const {
+        return last_total_source - last_total_vent;
+    }
 private:
     enum class Axis { X, Y, Z };
 
@@ -197,6 +207,9 @@ private:
     double omega;
     int max_outer_iters;
     double flow_tolerance;
+    bool last_outer_converged = false;
+    double last_total_source = 0.0;
+    double last_total_vent = 0.0;
 
     // Model safeguards/tunables.
     double minimum_reynolds = 1.0;
@@ -543,7 +556,8 @@ private:
                   double area,
                   double length,
                   double global_face_sign) {
-        if (!mesh.in_bounds(nx, ny, nz) || !mesh.at(nx, ny, nz).is_fluid()) return;
+        if (!mesh.in_bounds(nx, ny, nz) || !mesh.at(nx, ny, nz).is_fluid() ||
+            mesh.wall_between(x, y, z, nx, ny, nz) != nullptr) return;
 
         const double Dh = hydraulic_diameter(axis, mesh);
 
@@ -570,7 +584,8 @@ private:
                             Axis axis,
                             size_t face_index,
                             double global_face_sign) {
-        if (!mesh.in_bounds(nx, ny, nz) || !mesh.at(nx, ny, nz).is_fluid()) return;
+        if (!mesh.in_bounds(nx, ny, nz) || !mesh.at(nx, ny, nz).is_fluid() ||
+            mesh.wall_between(x, y, z, nx, ny, nz) != nullptr) return;
 
         const Cell& c = mesh.at(x, y, z);
         const Cell& n = mesh.at(nx, ny, nz);
@@ -832,8 +847,9 @@ private:
         return max_relative_change;
     }
 
-    void report_mass_balance() const {
-        double total_source = 0.0;
+    void report_mass_balance() {
+        double total_norton_source = 0.0;
+        double total_effective_source = 0.0;
         double total_vent = 0.0;
         for (int x = 0; x < mesh.get_nx(); ++x) {
             for (int y = 0; y < mesh.get_ny(); ++y) {
@@ -841,15 +857,25 @@ private:
                     const Cell& c = mesh.at(x, y, z);
                     if (!c.is_fluid()) continue;
                     const size_t i = cell_idx(x, y, z);
-                    total_source += source_S[i];
+                    total_norton_source += source_S[i];
+                    // Curved ambient fans are represented as a Norton source
+                    // in parallel with fan_ground_C. Their actual boundary
+                    // flow is source - C*pressure, not source alone.
+                    total_effective_source +=
+                        source_S[i] - fan_ground_C[i] * c.get_pressure();
                     total_vent += vent_C[i] * c.get_pressure();
                 }
             }
         }
-        std::cout << "FlowSolver: source = " << total_source
+        last_total_source = total_effective_source;
+        last_total_vent = total_vent;
+        std::cout << "FlowSolver: effective fan/source flow = "
+                  << total_effective_source
                   << " m^3/s, vent flow = " << total_vent
-                  << " m^3/s, imbalance = " << total_source - total_vent
-                  << " m^3/s\n";
+                  << " m^3/s, imbalance = "
+                  << total_effective_source - total_vent
+                  << " m^3/s (raw Norton source = "
+                  << total_norton_source << " m^3/s)\n";
     }
 };
 

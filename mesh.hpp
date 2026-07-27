@@ -8,6 +8,8 @@
 #include <stdexcept>
 #include <iostream>
 #include <iomanip>
+#include <cstdint>
+#include <limits>
 
 #include "cell.hpp"
 #include "component.hpp"
@@ -19,6 +21,17 @@
 
 class Mesh {
 public:
+    struct WallFace {
+        int x = 0, y = 0, z = 0; // lower-coordinate cell
+        int axis = 0;             // 0=x, 1=y, 2=z
+        double thickness = 0.0;
+        double conductivity = 0.0;
+        double rho = 0.0;
+        double cp = 0.0;
+        double temperature = 20.0;
+        bool active = true;
+    };
+
     struct InternalFanInterface {
         std::array<int, 3> upstream;
         std::array<int, 3> downstream;
@@ -112,6 +125,70 @@ public:
     }
     std::vector<InternalFanInterface>& get_internal_fans() {
         return internal_fans;
+    }
+    const std::vector<WallFace>& get_wall_faces() const { return wall_faces; }
+    std::vector<WallFace>& get_wall_faces() { return wall_faces; }
+    bool has_face_walls() const { return !wall_face_refs.empty(); }
+    std::size_t get_face_wall_memory_byte() const {
+        return wall_face_refs.capacity() * sizeof(int32_t) +
+               wall_faces.capacity() * sizeof(WallFace);
+    }
+
+    int wall_face_index(int x, int y, int z, int nx_, int ny_, int nz_) const {
+        const int dx = nx_ - x, dy = ny_ - y, dz = nz_ - z;
+        const int axis = dx != 0 ? 0 : (dy != 0 ? 1 : 2);
+        int lx = std::min(x, nx_);
+        int ly = std::min(y, ny_);
+        int lz = std::min(z, nz_);
+        if(!in_bounds(lx, ly, lz) || !in_bounds(
+               lx + (axis == 0), ly + (axis == 1), lz + (axis == 2)) ||
+           wall_face_refs.empty()) return -1;
+        return wall_face_refs[idx(lx, ly, lz) * 3u + static_cast<size_t>(axis)];
+    }
+
+    const WallFace* wall_between(int x, int y, int z,
+                                 int nx_, int ny_, int nz_) const {
+        const int wi = wall_face_index(x, y, z, nx_, ny_, nz_);
+        if(wi < 0 || static_cast<size_t>(wi) >= wall_faces.size() ||
+           !wall_faces[wi].active) return nullptr;
+        return &wall_faces[wi];
+    }
+
+    void add_wall_face(int x, int y, int z, int axis, double thickness,
+                       double conductivity, double rho, double cp,
+                       double temperature) {
+        const int hx = x + (axis == 0);
+        const int hy = y + (axis == 1);
+        const int hz = z + (axis == 2);
+        if(axis < 0 || axis > 2 || !in_bounds(x, y, z) ||
+           !in_bounds(hx, hy, hz)) return;
+        if(wall_face_refs.empty())
+            wall_face_refs.assign(get_cell_count() * 3u, -1);
+        const size_t slot = idx(x, y, z) * 3u + static_cast<size_t>(axis);
+        if(wall_face_refs[slot] >= 0) return;
+        wall_face_refs[slot] = static_cast<int32_t>(wall_faces.size());
+        wall_faces.push_back(
+            {x, y, z, axis, thickness, conductivity, rho, cp, temperature, true});
+    }
+
+    void open_wall_face(int x, int y, int z, int axis) {
+        if(wall_face_refs.empty() || !in_bounds(x, y, z)) return;
+        const size_t slot = idx(x, y, z) * 3u + static_cast<size_t>(axis);
+        const int wi = wall_face_refs[slot];
+        if(wi >= 0) wall_faces[wi].active = false;
+        wall_face_refs[slot] = -1;
+    }
+
+    double wall_face_area(const WallFace& wall) const {
+        if(wall.axis == 0) return get_dy(wall.y) * get_dz(wall.z);
+        if(wall.axis == 1) return get_dx(wall.x) * get_dz(wall.z);
+        return get_dx(wall.x) * get_dy(wall.y);
+    }
+
+    double wall_face_coordinate(const WallFace& wall) const {
+        if(wall.axis == 0) return x_bounds[wall.x + 1];
+        if(wall.axis == 1) return y_bounds[wall.y + 1];
+        return z_bounds[wall.z + 1];
     }
 
     size_t idx(int x, int y, int z) const {
@@ -1029,6 +1106,168 @@ public:
         }
     }
 
+    // Coarse-grid enclosure model: retain explicit internal heat-source,
+    // fan, and vent stamps, but replace non-generating enclosure volume
+    // with thermally massive, airflow-blocking faces.
+    void stamp_component_face_walls_adaptive(const Component& c) {
+        if(std::abs(c.get_watts()) > 1e-12) {
+            throw std::invalid_argument(
+                "Coarse face-wall mode requires component '" + c.get_name() +
+                "' watts = 0. Move its power into explicit heat_source regions.");
+        }
+
+        const auto regions = c.get_regions();
+        const InternalRegion* air = nullptr;
+        double largest_air_volume = -1.0;
+        for(const InternalRegion& r : regions) {
+            if(r.get_region_type() != RegionType::Air) continue;
+            const auto s = r.get_size_m();
+            const double volume = s[0] * s[1] * s[2];
+            if(volume > largest_air_volume) {
+                largest_air_volume = volume;
+                air = &r;
+            }
+        }
+        if(air == nullptr) {
+            throw std::invalid_argument(
+                "Coarse face-wall component '" + c.get_name() +
+                "' requires an internal air region.");
+        }
+
+        stamp_component_adaptive(c);
+
+        const auto origin = c.get_coords();
+        const std::array<double,3> outer{
+            c.get_width_m(), c.get_depth_m(), c.get_height_m()};
+        const auto inner_origin = air->get_global_position();
+        const auto inner_size = air->get_size_m();
+        std::array<double,6> thickness{
+            inner_origin[0] - origin[0],
+            origin[0] + outer[0] - (inner_origin[0] + inner_size[0]),
+            inner_origin[1] - origin[1],
+            origin[1] + outer[1] - (inner_origin[1] + inner_size[1]),
+            inner_origin[2] - origin[2],
+            origin[2] + outer[2] - (inner_origin[2] + inner_size[2])};
+        for(double& value : thickness) {
+            if(value <= 0.0) value = 1e-6;
+        }
+
+        auto nearest_boundary = [](const std::vector<double>& bounds,
+                                   double coordinate) {
+            auto upper = std::lower_bound(
+                bounds.begin(),bounds.end(),coordinate);
+            if(upper == bounds.begin()) return 0;
+            if(upper == bounds.end())
+                return static_cast<int>(bounds.size())-1;
+            const int hi = static_cast<int>(upper-bounds.begin());
+            const int lo = hi-1;
+            return std::abs(bounds[hi]-coordinate) <
+                   std::abs(bounds[lo]-coordinate) ? hi : lo;
+        };
+        const int i0 = nearest_boundary(x_bounds,origin[0]);
+        const int j0 = nearest_boundary(y_bounds,origin[1]);
+        const int k0 = nearest_boundary(z_bounds,origin[2]);
+        const int i1 = std::max(i0+1,nearest_boundary(
+            x_bounds,origin[0]+outer[0]));
+        const int j1 = std::max(j0+1,nearest_boundary(
+            y_bounds,origin[1]+outer[1]));
+        const int k1 = std::max(k0+1,nearest_boundary(
+            z_bounds,origin[2]+outer[2]));
+
+        // Remove only the zero-power enclosure volume. Explicit heat-source
+        // regions have nonzero qdot and remain solid.
+        const int stamped_i0=index_x(origin[0]);
+        const int stamped_j0=index_y(origin[1]);
+        const int stamped_k0=index_z(origin[2]);
+        const int stamped_i1=end_index_x(origin[0]+outer[0]);
+        const int stamped_j1=end_index_y(origin[1]+outer[1]);
+        const int stamped_k1=end_index_z(origin[2]+outer[2]);
+        for(int i=stamped_i0; i<stamped_i1; ++i)
+            for(int j=stamped_j0; j<stamped_j1; ++j)
+            for(int k=stamped_k0; k<stamped_k1; ++k) {
+                Cell& cell = at(i,j,k);
+                if(cell.get_state() == Cell::State::Component &&
+                   std::abs(cell.get_qdot()) <= 1e-15) {
+                    cell = Cell(env.get_T_ambient(), env.get_rho(), env.get_cp(),
+                                env.get_k(), 0.0, 0.0, Cell::State::Air,
+                                get_dx(i), get_dy(j), get_dz(k),
+                                env.get_mu(), env.get_pr());
+                }
+            }
+
+        const size_t component_wall_begin = wall_faces.size();
+        double max_snap_distance = 0.0;
+        auto add_plane = [&](int axis, int low, double t, double intended) {
+            if(low >= 0) {
+                const double snapped =
+                    axis == 0 ? x_bounds[low+1] :
+                    axis == 1 ? y_bounds[low+1] : z_bounds[low+1];
+                max_snap_distance =
+                    std::max(max_snap_distance,std::abs(snapped-intended));
+            }
+            if(axis == 0)
+                for(int j=j0; j<j1; ++j) for(int k=k0; k<k1; ++k)
+                    add_wall_face(low,j,k,axis,t,c.get_k(),c.get_rho(),c.get_cp(),c.get_t());
+            else if(axis == 1)
+                for(int i=i0; i<i1; ++i) for(int k=k0; k<k1; ++k)
+                    add_wall_face(i,low,k,axis,t,c.get_k(),c.get_rho(),c.get_cp(),c.get_t());
+            else
+                for(int i=i0; i<i1; ++i) for(int j=j0; j<j1; ++j)
+                    add_wall_face(i,j,low,axis,t,c.get_k(),c.get_rho(),c.get_cp(),c.get_t());
+        };
+        add_plane(0,i0-1,thickness[0],origin[0]);
+        add_plane(0,i1-1,thickness[1],origin[0]+outer[0]);
+        add_plane(1,j0-1,thickness[2],origin[1]);
+        add_plane(1,j1-1,thickness[3],origin[1]+outer[1]);
+        add_plane(2,k0-1,thickness[4],origin[2]);
+        add_plane(2,k1-1,thickness[5],origin[2]+outer[2]);
+        std::cout << "Coarse face-wall snap '" << c.get_name()
+                  << "': max displacement = "
+                  << max_snap_distance << " m\n";
+
+        // Fans and vents are openings through an otherwise blocked face.
+        for(const InternalRegion& r : regions) {
+            if(r.get_region_type() != RegionType::Fan &&
+               r.get_region_type() != RegionType::Vent) continue;
+            const auto p = r.get_global_position();
+            const auto d = r.get_direction();
+            const auto s = r.get_size_m();
+            const double ax=std::abs(d[0]), ay=std::abs(d[1]), az=std::abs(d[2]);
+            const int axis = ax>=ay && ax>=az ? 0 : (ay>=az ? 1 : 2);
+            const double radius = r.get_diameter()/2.0;
+            double nearest_distance = std::numeric_limits<double>::infinity();
+            double nearest_plane = 0.0;
+            for(size_t wi=component_wall_begin; wi<wall_faces.size(); ++wi) {
+                const WallFace& wall = wall_faces[wi];
+                if(!wall.active || wall.axis != axis) continue;
+                const double plane = wall_face_coordinate(wall);
+                const double distance = std::abs(plane-p[axis]);
+                if(distance < nearest_distance) {
+                    nearest_distance = distance;
+                    nearest_plane = plane;
+                }
+            }
+            for(size_t wi=component_wall_begin; wi<wall_faces.size(); ++wi) {
+                WallFace& wall = wall_faces[wi];
+                if(!wall.active || wall.axis != axis ||
+                   std::abs(wall_face_coordinate(wall)-nearest_plane) > 1e-8) continue;
+                const double center[3]{
+                    cell_center_x(wall.x), cell_center_y(wall.y), cell_center_z(wall.z)};
+                const int a0 = axis==0 ? 1 : 0;
+                const int a1 = axis==2 ? 1 : 2;
+                bool inside = false;
+                if(r.is_circular()) {
+                    const double du=center[a0]-p[a0], dv=center[a1]-p[a1];
+                    inside = du*du+dv*dv <= radius*radius;
+                } else {
+                    inside = std::abs(center[a0]-p[a0]) <= s[a0]/2.0 &&
+                             std::abs(center[a1]-p[a1]) <= s[a1]/2.0;
+                }
+                if(inside) open_wall_face(wall.x,wall.y,wall.z,wall.axis);
+            }
+        }
+    }
+
     void stamp_fan(const Fan& f) {
         if (!is_uniform()) { stamp_fan_adaptive(f); return; }
 
@@ -1765,6 +2004,8 @@ private:
 
     std::vector<Cell> cells;
     std::vector<InternalFanInterface> internal_fans;
+    std::vector<int32_t> wall_face_refs;
+    std::vector<WallFace> wall_faces;
 
     void build_bounds() {
         x_bounds.assign(nx + 1, 0.0);

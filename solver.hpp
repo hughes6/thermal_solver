@@ -317,6 +317,7 @@ public:
                     }
                 }
             }
+            update_face_wall_temperatures();
             const double average_h =
             timestep_h_count > 0
                 ? timestep_h_sum /
@@ -368,6 +369,42 @@ private:
     SimulationLogger* logger = nullptr;
 
     std::ofstream logfile;
+
+    void update_face_wall_temperatures() {
+        if(!current.has_face_walls()) return;
+        auto& next_walls = next.get_wall_faces();
+        const auto& walls = current.get_wall_faces();
+        for(size_t wi=0; wi<walls.size(); ++wi) {
+            const Mesh::WallFace& wall = walls[wi];
+            if(!wall.active) continue;
+            const int hx = wall.x + (wall.axis == 0);
+            const int hy = wall.y + (wall.axis == 1);
+            const int hz = wall.z + (wall.axis == 2);
+            const Cell& low = current.at(wall.x, wall.y, wall.z);
+            const Cell& high = current.at(hx, hy, hz);
+            const double area = current.wall_face_area(wall);
+            const double low_width =
+                wall.axis == 0 ? low.get_dx() :
+                wall.axis == 1 ? low.get_dy() : low.get_dz();
+            const double high_width =
+                wall.axis == 0 ? high.get_dx() :
+                wall.axis == 1 ? high.get_dy() : high.get_dz();
+            const double wall_half =
+                0.5 * wall.thickness / std::max(wall.conductivity, 1e-12);
+            const double glow = area /
+                (0.5*low_width/std::max(low.get_k(),1e-12) + wall_half);
+            const double ghigh = area /
+                (0.5*high_width/std::max(high.get_k(),1e-12) + wall_half);
+            const double capacitance =
+                wall.rho * wall.cp * area * wall.thickness;
+            if(capacitance <= 0.0) continue;
+            const double q =
+                glow * (low.get_T() - wall.temperature) +
+                ghigh * (high.get_T() - wall.temperature);
+            next_walls[wi].temperature =
+                wall.temperature + dt * q / capacitance;
+        }
+    }
 
     double compute_t_next(int x, int y, int z) {
         const Cell& c = current.at(x, y, z);
@@ -439,31 +476,37 @@ private:
         double dTdt = 0.0;
 
         // x dir
-        if(vx > 0 && current.in_bounds(x-1, y, z)) {
+        if(vx > 0 && current.in_bounds(x-1, y, z) &&
+           current.wall_between(x,y,z,x-1,y,z) == nullptr) {
             double Tup = current.at(x-1, y, z).get_T();
             dTdt += -vx * (T- Tup) / current.get_dx();
         }
-        else if(vx < 0 && current.in_bounds(x + 1, y, z)) {
+        else if(vx < 0 && current.in_bounds(x + 1, y, z) &&
+                current.wall_between(x,y,z,x+1,y,z) == nullptr) {
             double Tup = current.at(x + 1, y, z).get_T();
             dTdt += -vx * (Tup - T) / current.get_dx();
         }
 
         // y direction
-        if(vy > 0 && current.in_bounds(x, y - 1, z)) {
+        if(vy > 0 && current.in_bounds(x, y - 1, z) &&
+           current.wall_between(x,y,z,x,y-1,z) == nullptr) {
             double Tup = current.at(x, y - 1, z).get_T();
             dTdt += -vy * (T - Tup) / current.get_dy();
         }
-        else if(vy < 0 && current.in_bounds(x, y + 1, z)) {
+        else if(vy < 0 && current.in_bounds(x, y + 1, z) &&
+                current.wall_between(x,y,z,x,y+1,z) == nullptr) {
             double Tup = current.at(x, y + 1, z).get_T();
             dTdt += -vy * (Tup - T) / current.get_dy();
         }
 
         // z direction
-        if(vz > 0 && current.in_bounds(x, y, z - 1)) {
+        if(vz > 0 && current.in_bounds(x, y, z - 1) &&
+           current.wall_between(x,y,z,x,y,z-1) == nullptr) {
             double Tup = current.at(x, y, z - 1).get_T();
             dTdt += -vz * (T - Tup) / current.get_dz();
         }
-        else if(vz < 0 && current.in_bounds(x, y, z + 1)) {
+        else if(vz < 0 && current.in_bounds(x, y, z + 1) &&
+                current.wall_between(x,y,z,x,y,z+1) == nullptr) {
             double Tup = current.at(x, y, z + 1).get_T();
             dTdt += -vz * (Tup - T) / current.get_dz();
         }
@@ -485,36 +528,42 @@ private:
         double dTdt = 0.0;
 
         // x dir
-        if(vx > 0 && current.in_bounds(x-1, y, z)) {
+        if(vx > 0 && current.in_bounds(x-1, y, z) &&
+           current.wall_between(x,y,z,x-1,y,z) == nullptr) {
             const Cell& up = current.at(x-1, y, z);
             double dist = (c.get_dx() + up.get_dx()) / 2.0;
             dTdt += -vx * (T - up.get_T()) / dist;
         }
-        else if(vx < 0 && current.in_bounds(x + 1, y, z)) {
+        else if(vx < 0 && current.in_bounds(x + 1, y, z) &&
+                current.wall_between(x,y,z,x+1,y,z) == nullptr) {
             const Cell& up = current.at(x + 1, y, z);
             double dist = (c.get_dx() + up.get_dx()) / 2.0;
             dTdt += -vx * (up.get_T() - T) / dist;
         }
 
         // y direction
-        if(vy > 0 && current.in_bounds(x, y - 1, z)) {
+        if(vy > 0 && current.in_bounds(x, y - 1, z) &&
+           current.wall_between(x,y,z,x,y-1,z) == nullptr) {
             const Cell& up = current.at(x, y - 1, z);
             double dist = (c.get_dy() + up.get_dy()) / 2.0;
             dTdt += -vy * (T - up.get_T()) / dist;
         }
-        else if(vy < 0 && current.in_bounds(x, y + 1, z)) {
+        else if(vy < 0 && current.in_bounds(x, y + 1, z) &&
+                current.wall_between(x,y,z,x,y+1,z) == nullptr) {
             const Cell& up = current.at(x, y + 1, z);
             double dist = (c.get_dy() + up.get_dy()) / 2.0;
             dTdt += -vy * (up.get_T() - T) / dist;
         }
 
         // z direction
-        if(vz > 0 && current.in_bounds(x, y, z - 1)) {
+        if(vz > 0 && current.in_bounds(x, y, z - 1) &&
+           current.wall_between(x,y,z,x,y,z-1) == nullptr) {
             const Cell& up = current.at(x, y, z - 1);
             double dist = (c.get_dz() + up.get_dz()) / 2.0;
             dTdt += -vz * (T - up.get_T()) / dist;
         }
-        else if(vz < 0 && current.in_bounds(x, y, z + 1)) {
+        else if(vz < 0 && current.in_bounds(x, y, z + 1) &&
+                current.wall_between(x,y,z,x,y,z+1) == nullptr) {
             const Cell& up = current.at(x, y, z + 1);
             double dist = (c.get_dz() + up.get_dz()) / 2.0;
             dTdt += -vz * (up.get_T() - T) / dist;
@@ -534,6 +583,15 @@ private:
                 return;
             }
             const Cell& n = current.at(nx, ny, nz);
+            if(const Mesh::WallFace* wall =
+                   current.wall_between(x,y,z,nx,ny,nz)) {
+                const double resistance =
+                    0.5 * dist / std::max(k, 1e-12) +
+                    0.5 * wall->thickness /
+                        std::max(wall->conductivity, 1e-12);
+                Q += area * (wall->temperature - T) / resistance;
+                return;
+            }
             double Tn = n.get_T();
             double kn = n.get_k();
 
@@ -573,18 +631,29 @@ private:
                 return;
             }
             const Cell& n = current.at(nx, ny, nz);
-            if(c.is_solid() != n.is_solid()) return;
-
-            double Tn = n.get_T();
-            double kn = n.get_k();
-            double k_face = 2.0 * k * kn / (k + kn);
-
             double area, dist;
             switch(axis) {
                 case 0: area = c.area_x(); dist = (c.get_dx() + n.get_dx()) / 2.0; break;
                 case 1: area = c.area_y(); dist = (c.get_dy() + n.get_dy()) / 2.0; break;
                 default: area = c.area_z(); dist = (c.get_dz() + n.get_dz()) / 2.0; break;
             }
+            if(const Mesh::WallFace* wall =
+                   current.wall_between(x,y,z,nx,ny,nz)) {
+                const double cell_half =
+                    axis == 0 ? 0.5*c.get_dx() :
+                    axis == 1 ? 0.5*c.get_dy() : 0.5*c.get_dz();
+                const double resistance =
+                    cell_half / std::max(k, 1e-12) +
+                    0.5 * wall->thickness /
+                        std::max(wall->conductivity, 1e-12);
+                Q += area * (wall->temperature - T) / resistance;
+                return;
+            }
+            if(c.is_solid() != n.is_solid()) return;
+
+            double Tn = n.get_T();
+            double kn = n.get_k();
+            double k_face = 2.0 * k * kn / (k + kn);
             Q += k_face * area * (Tn - T) / dist;
         };
 

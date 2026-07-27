@@ -13,6 +13,7 @@
 #include "../component_grapher.hpp"
 #include "../collision.hpp"
 #include "../mesh_refinement_planner.hpp"
+#include "../thermal_estimator.hpp"
 #include "../toml.hpp"
 
 
@@ -788,6 +789,30 @@ struct ModelLoader {
                 model.mesh.dz = require_value<double>(mesh["dz"], "mesh.dz");
             }
 
+            // ----------------------------------------Multistage---------------------------------------------
+            if (const toml::table* multistage = root["multistage"].as_table()) {
+                model.multistage.enabled =
+                    (*multistage)["enabled"].value<bool>().value_or(false);
+                if (model.multistage.enabled) {
+                    model.multistage.coarse_dt = require_value<double>(
+                        (*multistage)["coarse_dt"], "multistage.coarse_dt");
+                    model.multistage.coarse_duration = require_value<double>(
+                        (*multistage)["coarse_duration"], "multistage.coarse_duration");
+                    model.multistage.coarse_update_flow_interval =
+                        (*multistage)["coarse_update_flow_interval"]
+                            .value<int>().value_or(-1);
+
+                    const toml::table& coarse_mesh = require_table(
+                        (*multistage)["coarse_mesh"], "multistage.coarse_mesh");
+                    model.multistage.coarse_mesh.adaptive = true;
+                    model.multistage.coarse_mesh.fine_dx = require_value<double>(
+                        coarse_mesh["fine_dx"], "multistage.coarse_mesh.fine_dx");
+                    model.multistage.coarse_mesh.coarse_dx = require_value<double>(
+                        coarse_mesh["coarse_dx"], "multistage.coarse_mesh.coarse_dx");
+                    model.multistage.coarse_mesh.refinement_margin =
+                        coarse_mesh["refinement_margin"].value<double>().value_or(0.0);
+                }
+            }
             // ------------------------------------------Rack------------------------------------------------
             const toml::table& rack = require_table(root["rack"], "rack");
             model.rack.name = rack["name"].value<std::string>().value_or("Unnamed rack");
@@ -1035,6 +1060,110 @@ struct ModelLoader {
         RackBoundsChecker::check_all(rack, components, fans, vents);
         CollisionChecker::check_all(components, fans, vents);
         
+        std::optional<Mesh> coarse_warm_start;
+        std::optional<ThermalTimeEstimate> coarse_thermal_estimate;
+        std::size_t coarse_timestep_count = 0;
+        if (model.multistage.enabled) {
+            std::cout << "----- Coarse warm-start stage -----\n";
+            const MeshInput& coarse_cfg = model.multistage.coarse_mesh;
+            const MeshRefinementPlan coarse_plan = MeshRefinementPlanner::plan(
+                rack, components, fans, vents,
+                coarse_cfg.fine_dx, coarse_cfg.coarse_dx,
+                coarse_cfg.refinement_margin,
+                false); // omit thin internal cuts on the warm-start grid
+
+            Mesh coarse_mesh = Mesh().build_adaptive_mesh(
+                rack, coarse_plan.dxs, coarse_plan.dys, coarse_plan.dzs,
+                env, load);
+
+            for (const Component& component : components)
+                coarse_mesh.stamp_component_face_walls_adaptive(component);
+            for (const Fan& fan : fans)
+                coarse_mesh.stamp_fan_adaptive(fan);
+            for (const Vent& vent : vents)
+                coarse_mesh.stamp_vent_adaptive(vent);
+
+            if (model.flow_solver.enable_flow_solver) {
+                FlowSolver coarse_flow(
+                    coarse_mesh,
+                    *model.flow_solver.resistivity,
+                    *model.flow_solver.tolerance,
+                    *model.flow_solver.max_iterations,
+                    *model.flow_solver.sor_omega,
+                    *model.flow_solver.max_outer_iters,
+                    *model.flow_solver.flow_tolerance);
+                coarse_flow.solve();
+                const double flow_scale = std::max({
+                    std::abs(coarse_flow.total_source_m3s()),
+                    std::abs(coarse_flow.total_vent_flow_m3s()),
+                    1e-9});
+                const double relative_imbalance =
+                    std::abs(coarse_flow.mass_imbalance_m3s()) / flow_scale;
+                if(relative_imbalance > 0.05) {
+                    throw std::runtime_error(
+                        "Coarse flow solve is not usable: relative physical "
+                        "source/vent imbalance = " +
+                        std::to_string(relative_imbalance) +
+                        ". Correct fan/vent connectivity or flow settings before "
+                        "running the coarse transient.");
+                }
+                if(!coarse_flow.converged()) {
+                    std::cerr
+                        << "FlowSolver: coarse nonlinear iteration did not meet "
+                        << "its relative-change target, but physical mass "
+                        << "imbalance is " << 100.0*relative_imbalance
+                        << "% (within the 5% coarse acceptance limit).\n";
+                }
+            }
+
+            std::cout << "\n===== Coarse-stage thermal estimate =====\n";
+            coarse_thermal_estimate =
+                ThermalTimeEstimator::estimate(coarse_mesh);
+            coarse_thermal_estimate->print();
+            coarse_timestep_count = static_cast<std::size_t>(std::ceil(
+                model.multistage.coarse_duration /
+                model.multistage.coarse_dt));
+            std::cout << "Configured coarse dt:       "
+                      << model.multistage.coarse_dt << " s\n";
+            std::cout << "Configured coarse duration: "
+                      << model.multistage.coarse_duration << " s\n";
+            std::cout << "Planned coarse timesteps:   "
+                      << coarse_timestep_count << "\n";
+            if(std::isfinite(coarse_thermal_estimate->recommended_dt_s) &&
+               model.multistage.coarse_dt >
+                   coarse_thermal_estimate->recommended_dt_s) {
+                throw std::runtime_error(
+                    "Configured coarse_dt = " +
+                    std::to_string(model.multistage.coarse_dt) +
+                    " s exceeds the stable estimator recommendation of " +
+                    std::to_string(
+                        coarse_thermal_estimate->recommended_dt_s) +
+                    " s. The coarse transient was not started.");
+            }
+
+            const int coarse_flow_interval =
+                model.flow_solver.enable_flow_solver
+                    ? model.multistage.coarse_update_flow_interval
+                    : -1;
+            Solver coarse_solver(
+                coarse_mesh,
+                model.multistage.coarse_dt,
+                model.multistage.coarse_duration,
+                false,
+                std::max(1, static_cast<int>(std::ceil(
+                    model.multistage.coarse_duration /
+                    model.multistage.coarse_dt))),
+                coarse_flow_interval,
+                *model.flow_solver.resistivity,
+                *model.flow_solver.tolerance,
+                *model.flow_solver.max_iterations,
+                *model.flow_solver.sor_omega,
+                *model.flow_solver.max_outer_iters,
+                *model.flow_solver.flow_tolerance);
+            coarse_solver.solve();
+            coarse_warm_start = coarse_solver.get_mesh();
+            std::cout << "----- Fine production stage -----\n";
+        }
         Mesh mesh;
         double graph_dx = model.mesh.dx;
         double graph_dy = model.mesh.dy;
@@ -1080,6 +1209,68 @@ struct ModelLoader {
             grapher.add_vent(vent);
         }
 
+        if (coarse_warm_start.has_value()) {
+            const Mesh& coarse = *coarse_warm_start;
+            std::size_t direct_transfers = 0;
+            std::size_t neighbor_transfers = 0;
+            std::size_t ambient_fallbacks = 0;
+
+            for (int i = 0; i < mesh.get_nx(); ++i) {
+                for (int j = 0; j < mesh.get_ny(); ++j) {
+                    for (int k = 0; k < mesh.get_nz(); ++k) {
+                        Cell& fine_cell = mesh.at(i, j, k);
+                        const double x = mesh.cell_center_x(i);
+                        const double y = mesh.cell_center_y(j);
+                        const double z = mesh.cell_center_z(k);
+                        const int ci = coarse.index_x(x);
+                        const int cj = coarse.index_y(y);
+                        const int ck = coarse.index_z(z);
+
+                        const Cell* source = nullptr;
+                        if (coarse.in_bounds(ci, cj, ck)) {
+                            const Cell& candidate = coarse.at(ci, cj, ck);
+                            if (candidate.is_solid() == fine_cell.is_solid()) {
+                                source = &candidate;
+                                ++direct_transfers;
+                            }
+                        }
+
+                        if (source == nullptr) {
+                            for (int radius = 1; radius <= 2 && source == nullptr; ++radius) {
+                                for (int di = -radius; di <= radius && source == nullptr; ++di) {
+                                    for (int dj = -radius; dj <= radius && source == nullptr; ++dj) {
+                                        for (int dk = -radius; dk <= radius; ++dk) {
+                                            const int ni = ci + di;
+                                            const int nj = cj + dj;
+                                            const int nk = ck + dk;
+                                            if (!coarse.in_bounds(ni, nj, nk)) continue;
+                                            const Cell& candidate = coarse.at(ni, nj, nk);
+                                            if (candidate.is_solid() == fine_cell.is_solid()) {
+                                                source = &candidate;
+                                                ++neighbor_transfers;
+                                                break;
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+
+                        if (source != nullptr) {
+                            fine_cell.set_T(source->get_T());
+                        } else {
+                            fine_cell.set_T(env.get_T_ambient());
+                            ++ambient_fallbacks;
+                        }
+                    }
+                }
+            }
+
+            std::cout << "Warm-start temperature transfer: "
+                      << direct_transfers << " direct, "
+                      << neighbor_transfers << " nearby-phase, "
+                      << ambient_fallbacks << " ambient fallbacks.\n";
+        }
         grapher.stamp_components();
         grapher.stamp_fans();
         grapher.stamp_vents();
@@ -1092,6 +1283,55 @@ struct ModelLoader {
         int update_flow_interval = model.flow_solver.enable_flow_solver
             ? model.simulation.update_flow_interval.value_or(1)
             : -1;
+
+        // Estimate from the fully stamped, geometry-aligned mesh. Run this
+        // after the initial flow solve so the advection limit sees populated
+        // velocities as well as the exact wall/region cell dimensions.
+        std::cout << "\n===== Fine-stage thermal estimate =====\n";
+        const ThermalTimeEstimate thermal_estimate =
+            ThermalTimeEstimator::estimate(mesh);
+        thermal_estimate.print();
+        const std::size_t fine_timestep_count =
+            static_cast<std::size_t>(std::ceil(
+                model.simulation.duration / model.simulation.dt));
+        std::cout << "Configured fine dt:         "
+                  << model.simulation.dt << " s\n";
+        std::cout << "Configured fine duration:   "
+                  << model.simulation.duration << " s\n";
+        std::cout << "Planned fine timesteps:     "
+                  << fine_timestep_count << "\n";
+        if(std::isfinite(thermal_estimate.recommended_dt_s) &&
+           model.simulation.dt > thermal_estimate.recommended_dt_s) {
+            std::cerr
+                << "WARNING: configured fine dt = "
+                << model.simulation.dt
+                << " s exceeds the estimator recommendation of "
+                << thermal_estimate.recommended_dt_s << " s.\n";
+        }
+
+        if(coarse_thermal_estimate.has_value()) {
+            const std::size_t coarse_updates =
+                coarse_thermal_estimate->mesh_cell_count *
+                coarse_timestep_count;
+            const std::size_t fine_updates =
+                thermal_estimate.mesh_cell_count *
+                fine_timestep_count;
+            const std::size_t peak_mesh_bytes = 2u * std::max(
+                coarse_thermal_estimate->mesh_memory_bytes,
+                thermal_estimate.mesh_memory_bytes);
+            std::cout << "\n===== Combined multistage estimate =====\n";
+            std::cout << "Coarse cell updates:        "
+                      << coarse_updates << "\n";
+            std::cout << "Fine cell updates:          "
+                      << fine_updates << "\n";
+            std::cout << "Total cell updates:         "
+                      << coarse_updates + fine_updates << "\n";
+            std::cout << "Approx. peak two-mesh memory: "
+                      << peak_mesh_bytes << " bytes ("
+                      << peak_mesh_bytes/(1024.0*1024.0)
+                      << " MiB)\n";
+            std::cout << "========================================\n";
+        }
 
         Solver solver(mesh, model.simulation.dt, model.simulation.duration, false,
                     model.simulation.output_interval,

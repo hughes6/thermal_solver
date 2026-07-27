@@ -28,7 +28,8 @@ struct MeshRefinementPlanner {
                                    const std::vector<Vent>& vents,
                                    double fine_dx,
                                    double coarse_dx,
-                                   double margin) {
+                                   double margin,
+                                   bool align_internal_geometry = true) {
         if (!std::isfinite(fine_dx) || !std::isfinite(coarse_dx) ||
             !std::isfinite(margin) || fine_dx <= 0.0 ||
             coarse_dx <= 0.0 || margin < 0.0) {
@@ -42,11 +43,11 @@ struct MeshRefinementPlanner {
 
         MeshRefinementPlan out;
         out.dxs = plan_axis(0, rack.get_width_m(), components, fans, vents,
-                            fine_dx, coarse_dx, margin);
+                            fine_dx, coarse_dx, margin, align_internal_geometry);
         out.dys = plan_axis(1, rack.get_depth_m(), components, fans, vents,
-                            fine_dx, coarse_dx, margin);
+                            fine_dx, coarse_dx, margin, align_internal_geometry);
         out.dzs = plan_axis(2, rack.get_height_m(), components, fans, vents,
-                            fine_dx, coarse_dx, margin);
+                            fine_dx, coarse_dx, margin, align_internal_geometry);
         return out;
     }
 
@@ -68,7 +69,21 @@ private:
         const std::vector<Component>& components,
         const std::vector<Fan>& fans,
         const std::vector<Vent>& vents,
-        double fine_dx, double coarse_dx, double margin) {
+        double fine_dx, double coarse_dx, double margin,
+                                   bool align_internal_geometry = true) {
+        // Face-wall coarse meshes intentionally do not honor exact geometry
+        // cuts. A globally regular grid guarantees that nearby component
+        // boundaries cannot create microscopic remainder/sliver cells.
+        // Component walls and openings are snapped to the nearest resulting
+        // face by the face-wall stamper.
+        if(!align_internal_geometry) {
+            const int count = std::max(
+                1, static_cast<int>(std::ceil(extent / fine_dx)));
+            return std::vector<double>(
+                static_cast<size_t>(count),
+                extent / static_cast<double>(count));
+        }
+
         std::vector<std::pair<double, double>> bands;
         std::vector<double> cuts{0.0, extent};
 
@@ -94,6 +109,7 @@ private:
             add_cut(component_min);
             add_cut(component_max);
 
+            if (align_internal_geometry) {
             for (const InternalRegion& region : component.get_regions()) {
                 const auto position = region.get_global_position();
                 const auto region_size = region.get_size_m();
@@ -130,6 +146,7 @@ private:
                     add_cut(position[axis] - half_extent);
                     add_cut(position[axis] + half_extent);
                 }
+            }
             }
         }
 

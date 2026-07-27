@@ -114,6 +114,13 @@ struct MeshInput {
     double coarse_dx = 0.0;
     double refinement_margin = 0.0;
 };
+struct MultiStageInput {
+    bool enabled = false;
+    double coarse_dt = 0.0;
+    double coarse_duration = 0.0;
+    int coarse_update_flow_interval = -1;
+    MeshInput coarse_mesh;
+};
 
 // -------------------------------------------------------------
 // Rack
@@ -254,6 +261,7 @@ struct ModelInput {
     EnvironmentInput environment;
     FlowSolverInput flow_solver;
     MeshInput mesh;
+    MultiStageInput multistage;
     RackInput rack;
 
     std::vector<ComponentInput> components;
