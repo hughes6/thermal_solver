@@ -1010,6 +1010,7 @@ public:
                     const std::array<int, 3> downstream{i, j, k};
                     if(in_bounds(upstream[0], upstream[1], upstream[2])) {
                         if(!at(upstream[0], upstream[1], upstream[2]).is_fluid()) {
+                            std::cout << "upstream: " << upstream[0] << " " << upstream[1] << " " << upstream[2] << std::endl;
                             throw std::runtime_error(
                                 "Internal fan '" + r.get_name() +
                                 "' has no fluid cell immediately upstream. "
@@ -1211,7 +1212,6 @@ public:
         std::vector<std::array<int, 3>> covered;
 
         auto stamp_cell = [&](int i, int j, int k) {
-            std::cout << std::to_string(i < nx) << " " << std::to_string(j < ny) << " " << std::to_string(k < nz) << std::endl;
             if(!in_bounds(i, j, k)) return;
             covered.push_back({i, j, k});
         };
