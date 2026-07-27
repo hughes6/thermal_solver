@@ -35,7 +35,7 @@ int main(int argc, char* argv[]) {
   // loader.run();
 
   ModelLoader loader;
-  loader.load_fan_curves("library/components/fan_curves.toml");  
+  loader.load_fan_curves("library/fan_curves/fan_curves.toml");  
   loader.load_model("library/models/model.toml");
   loader.run();
 
