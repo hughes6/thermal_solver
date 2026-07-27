@@ -141,11 +141,21 @@ for region in internal_regions:
     if a > 0.9:
         a = 0.9
 
-    if(region_width > 0.0 or region_depth > 0.0 or region_height > 0.0):
+    # Air and solid-region positions are lower corners. Fan and vent
+    # positions are centers, so shift rectangular footprints by half of
+    # each non-normal dimension before passing them to bar3d().
+    region_kind = region["type"].rsplit("/", 1)[-1]
+    is_centered_surface = region_kind in ("Fan", "Vent")
+
+    plot_x = x - region_width / 2.0 if is_centered_surface else x
+    plot_y = y - region_depth / 2.0 if is_centered_surface else y
+    plot_z = z - region_height / 2.0 if is_centered_surface else z
+
+    if region_width > 0.0 or region_depth > 0.0 or region_height > 0.0:
         ax.bar3d(
-            x,
-            y,
-            z,
+            plot_x,
+            plot_y,
+            plot_z,
             region_width,
             region_depth,
             region_height,
@@ -156,22 +166,60 @@ for region in internal_regions:
             color=color,
         )
 
-    # mostly z-normal: fan lies in XY plane
+    circle_rgb = plt.matplotlib.colors.to_rgb(color)
+    face_rgba = (*circle_rgb, 0.45)
+    edge_rgba = (*circle_rgb, 1.0)
+
+    # Small offset prevents the component surface from covering the circle.
+    offset = 1e-5
+
+    # Mostly z-normal: circle lies in XY plane.
     if abs(vz) >= abs(vx) and abs(vz) >= abs(vy) and r > 0:
-        circle = plt.Circle((x, y), r, color=color, alpha=a)
+        circle = plt.Circle(
+            (x, y),
+            r,
+            facecolor=face_rgba,
+            edgecolor=edge_rgba,
+            linewidth=3.0,
+        )
         ax.add_patch(circle)
-        art3d.pathpatch_2d_to_3d(circle, z=z, zdir="z")
-    # mostly y-normal: fan lies in XZ plane
+        art3d.pathpatch_2d_to_3d(
+            circle,
+            z=z + offset * (1 if vz >= 0 else -1),
+            zdir="z",
+        )
+
+    # Mostly y-normal: circle lies in XZ plane.
     elif abs(vy) >= abs(vx) and abs(vy) >= abs(vz) and r > 0:
-        circle = plt.Circle((x, z), r, color=color, alpha=a)
+        circle = plt.Circle(
+            (x, z),
+            r,
+            facecolor=face_rgba,
+            edgecolor=edge_rgba,
+            linewidth=3.0,
+        )
         ax.add_patch(circle)
-        art3d.pathpatch_2d_to_3d(circle, z=y, zdir="y")
-    # mostly x-normal: fan lies in YZ plane
-    else:
-        if(r > 0):
-            circle = plt.Circle((y, z), r, color=color, alpha=a)
-            ax.add_patch(circle)
-            art3d.pathpatch_2d_to_3d(circle, z=x, zdir="x")
+        art3d.pathpatch_2d_to_3d(
+            circle,
+            z=y + offset * (1 if vy >= 0 else -1),
+            zdir="y",
+        )
+
+    # Mostly x-normal: circle lies in YZ plane.
+    elif r > 0:
+        circle = plt.Circle(
+            (y, z),
+            r,
+            facecolor=face_rgba,
+            edgecolor=edge_rgba,
+            linewidth=3.0,
+        )
+        ax.add_patch(circle)
+        art3d.pathpatch_2d_to_3d(
+            circle,
+            z=x + offset * (1 if vx >= 0 else -1),
+            zdir="x",
+        )
 
 
     legend_handles.append(

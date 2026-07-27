@@ -3,6 +3,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <iostream>
 #include <stdexcept>
 #include <utility>
 #include <vector>
@@ -18,8 +19,8 @@ struct MeshRefinementPlan {
 };
 
 // Builds a rectilinear mesh with fine cells around components and rack
-// openings, and coarse cells elsewhere. Mesh and the solvers only consume
-// the resulting widths; refinement policy remains isolated here.
+// openings. Exact geometry cuts prevent cells from crossing component,
+// internal-region, fan, and vent boundaries.
 struct MeshRefinementPlanner {
     static MeshRefinementPlan plan(const Rack& rack,
                                    const std::vector<Component>& components,
@@ -69,6 +70,12 @@ private:
         const std::vector<Vent>& vents,
         double fine_dx, double coarse_dx, double margin) {
         std::vector<std::pair<double, double>> bands;
+        std::vector<double> cuts{0.0, extent};
+
+        auto add_cut = [&](double coordinate) {
+            if (!std::isfinite(coordinate)) return;
+            cuts.push_back(std::clamp(coordinate, 0.0, extent));
+        };
 
         for (const auto& component : components) {
             const auto corner = component.get_coords();
@@ -77,11 +84,55 @@ private:
                 component.get_depth_m(),
                 component.get_height_m()
             };
+            const double component_min = corner[axis];
+            const double component_max = corner[axis] + sizes[axis];
+
             bands.push_back({
-                std::max(0.0, corner[axis] - margin),
-                std::min(extent, corner[axis] + sizes[axis] + margin)
+                std::max(0.0, component_min - margin),
+                std::min(extent, component_max + margin)
             });
+            add_cut(component_min);
+            add_cut(component_max);
+
+            for (const InternalRegion& region : component.get_regions()) {
+                const auto position = region.get_global_position();
+                const auto region_size = region.get_size_m();
+
+                if (region.get_region_type() == RegionType::Air ||
+                    region.get_region_type() == RegionType::HeatSource) {
+                    add_cut(position[axis]);
+                    add_cut(position[axis] + region_size[axis]);
+                    continue;
+                }
+
+                if (region.get_region_type() != RegionType::Fan &&
+                    region.get_region_type() != RegionType::Vent) {
+                    continue;
+                }
+
+                const auto direction = region.get_direction();
+                const double ax = std::abs(direction[0]);
+                const double ay = std::abs(direction[1]);
+                const double az = std::abs(direction[2]);
+                const int normal_axis =
+                    ax >= ay && ax >= az ? 0 :
+                    ay >= az ? 1 : 2;
+
+                if (axis == normal_axis) {
+                    add_cut(position[axis]);
+                } else if (region.is_circular()) {
+                    const double radius = region.get_diameter() / 2.0;
+                    add_cut(position[axis] - radius);
+                    add_cut(position[axis] + radius);
+                } else {
+                    // Rectangular fan/vent positions are centers.
+                    const double half_extent = region_size[axis] / 2.0;
+                    add_cut(position[axis] - half_extent);
+                    add_cut(position[axis] + half_extent);
+                }
+            }
         }
+
         for (const auto& fan : fans) {
             double lo, hi;
             footprint_extent(Footprint::from_fan(fan), axis, lo, hi);
@@ -89,7 +140,10 @@ private:
                 std::max(0.0, lo - margin),
                 std::min(extent, hi + margin)
             });
+            add_cut(lo);
+            add_cut(hi);
         }
+
         for (const auto& vent : vents) {
             double lo, hi;
             footprint_extent(Footprint::from_vent(vent), axis, lo, hi);
@@ -97,7 +151,20 @@ private:
                 std::max(0.0, lo - margin),
                 std::min(extent, hi + margin)
             });
+            add_cut(lo);
+            add_cut(hi);
         }
+
+        std::sort(cuts.begin(), cuts.end());
+        constexpr double cut_eps = 1e-12;
+        std::vector<double> unique_cuts;
+        for (double cut : cuts) {
+            if (unique_cuts.empty() ||
+                std::abs(cut - unique_cuts.back()) > cut_eps) {
+                unique_cuts.push_back(cut);
+            }
+        }
+        cuts.swap(unique_cuts);
 
         std::sort(bands.begin(), bands.end());
         std::vector<std::pair<double, double>> merged;
@@ -118,22 +185,34 @@ private:
 
         std::vector<double> widths;
         double position = 0.0;
-        while (position < extent - 1e-12) {
+        while (position < extent - cut_eps) {
             double width = is_fine(position) ? fine_dx : coarse_dx;
 
-            // Stop at a refinement boundary rather than stepping across it.
-            // This preserves the intended fine band and gives stamping exact,
-            // deterministic coordinate boundaries.
+            // Stop at refinement-band boundaries.
             for (const auto& band : merged) {
-                if (band.first > position + 1e-12)
+                if (band.first > position + cut_eps)
                     width = std::min(width, band.first - position);
-                if (band.second > position + 1e-12)
+                if (band.second > position + cut_eps)
                     width = std::min(width, band.second - position);
             }
+
+            // Stop at exact component/internal-region boundaries.
+            for (double cut : cuts) {
+                if (cut > position + cut_eps) {
+                    width = std::min(width, cut - position);
+                    break;
+                }
+            }
+
             width = std::min(width, extent - position);
+            if (width <= cut_eps) {
+                throw std::runtime_error(
+                    "MeshRefinementPlanner generated a zero-width cell.");
+            }
             widths.push_back(width);
             position += width;
         }
+
         if (widths.empty()) widths.push_back(extent);
         return widths;
     }

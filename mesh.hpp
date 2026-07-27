@@ -478,7 +478,7 @@ public:
                     int j1 = static_cast<int>(std::ceil ((cz+h)/dz));
                     for(int i = i0; i < i1; ++i) {
                         for(int j = j0; j < j1; ++j) {
-                            stamp_cell(i, j, k, {false, true, false});
+                            stamp_cell(i, k, j, {false, true, false});
                         }
                     }
                 }
@@ -493,7 +493,7 @@ public:
                     int j1 = static_cast<int>(std::ceil ((cz+h)/dz));
                     for(int i = i0; i < i1; ++i) {
                         for(int j = j0; j < j1; ++j) {
-                            stamp_cell(i, j, k, {true, false, false});
+                            stamp_cell(k, i, j, {true, false, false});
                         }
                     }
                 }
@@ -581,17 +581,17 @@ public:
                     for(int i=i0;i<i1;i++) {
                         for(int j=j0;j<j1;j++) {
                             if(!is_circular) {
-                                stamp_cell(i, j, k);
+                                stamp_cell(i, k, j);
                             } else {
                                 double xc = (i+0.5)*dx;
-                                double yc = (j+0.5)*dy;
+                                double zc = (j+0.5)*dz;
 
                                 double dist2 =
                                     (xc-cx)*(xc-cx) +
-                                    (yc-cy)*(yc-cy);
+                                    (zc-cz)*(zc-cz);
 
                                 if(dist2 <= rad*rad)
-                                    stamp_cell(i,j,k);
+                                    stamp_cell(i,k,j);
                             }
                         }
                     }
@@ -617,17 +617,17 @@ public:
                     for(int i=i0;i<i1;i++) {
                         for(int j=j0;j<j1;j++) {
                             if(!is_circular) {
-                                stamp_cell(i, j, k);
+                                stamp_cell(k, i, j);
                             } else {
-                                double xc = (i+0.5)*dx;
-                                double yc = (j+0.5)*dy;
+                                double yc = (i+0.5)*dy;
+                                double zc = (j+0.5)*dz;
 
                                 double dist2 =
-                                    (xc-cx)*(xc-cx) +
-                                    (yc-cy)*(yc-cy);
+                                    (yc-cy)*(yc-cy) +
+                                    (zc-cz)*(zc-cz);
 
                                 if(dist2 <= rad*rad)
-                                    stamp_cell(i,j,k);
+                                    stamp_cell(k,i,j);
                             }
                         }
                     }
@@ -834,7 +834,7 @@ public:
                     int j1 = end_index_z(cz+h);
                     for(int i = i0; i < i1; ++i) {
                         for(int j = j0; j < j1; ++j) {
-                            stamp_cell(i, j, k, {false, true, false});
+                            stamp_cell(i, k, j, {false, true, false});
                         }
                     }
                 }
@@ -849,7 +849,7 @@ public:
                     int j1 = end_index_z(cz+h);
                     for(int i = i0; i < i1; ++i) {
                         for(int j = j0; j < j1; ++j) {
-                            stamp_cell(i, j, k, {true, false, false});
+                            stamp_cell(k, i, j, {true, false, false});
                         }
                     }
                 }
@@ -937,17 +937,17 @@ public:
                     for(int i=i0;i<i1;i++) {
                         for(int j=j0;j<j1;j++) {
                             if(!is_circular) {
-                                stamp_cell(i, j, k);
+                                stamp_cell(i, k, j);
                             } else {
                                 double xc = cell_center_x(i);
-                                double yc = cell_center_z(j);
+                                double zc = cell_center_z(j);
 
                                 double dist2 =
                                     (xc-cx)*(xc-cx) +
-                                    (yc-cy)*(yc-cy);
+                                    (zc-cz)*(zc-cz);
 
                                 if(dist2 <= rad*rad)
-                                    stamp_cell(i,j,k);
+                                    stamp_cell(i,k,j);
                             }
                         }
                     }
@@ -973,17 +973,17 @@ public:
                     for(int i=i0;i<i1;i++) {
                         for(int j=j0;j<j1;j++) {
                             if(!is_circular) {
-                                stamp_cell(i, j, k);
+                                stamp_cell(k, i, j);
                             } else {
-                                double xc = cell_center_y(i);
-                                double yc = cell_center_z(j);
+                                double yc = cell_center_y(i);
+                                double zc = cell_center_z(j);
 
                                 double dist2 =
-                                    (xc-cx)*(xc-cx) +
-                                    (yc-cy)*(yc-cy);
+                                    (yc-cy)*(yc-cy) +
+                                    (zc-cz)*(zc-cz);
 
                                 if(dist2 <= rad*rad)
-                                    stamp_cell(i,j,k);
+                                    stamp_cell(k,i,j);
                             }
                         }
                     }

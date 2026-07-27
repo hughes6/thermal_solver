@@ -7,6 +7,7 @@
 #include <string>
 
 #include "../logger.hpp"
+#include "../convection.hpp"
 #include "../solver.hpp"
 #include "input_types.hpp"
 #include "../component_grapher.hpp"

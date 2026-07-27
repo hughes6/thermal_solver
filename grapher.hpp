@@ -200,6 +200,14 @@ public:
                 fout << "    global_position: " << global[0] << " " << global[1] << " " << global[2] << " m\n";
                 fout << "    diameter: " << diameter << " m\n";
                 fout << "    direction: " << direction[0] << " " << direction[1] << " " << direction[2] << " m\n";
+               if(region.get_region_type() == RegionType::Fan) {
+                    const char* flow_type =
+                        region.get_flow_type() == FlowType::Intake ? "Intake" :
+                        region.get_flow_type() == FlowType::Exhaust ? "Exhaust" :
+                        "Uninitialized";
+
+                    fout << "    flow_type: " << flow_type << "\n";
+                }
                 if(region.get_region_type() == RegionType::HeatSource) {
                     fout << "    watts: " << region.get_watts() << " W\n";
                     fout << "    k: " << region.get_k() << " W/m-K\n";

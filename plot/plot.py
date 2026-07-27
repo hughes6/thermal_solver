@@ -25,6 +25,7 @@ internal_region_sizes = []
 internal_region_global_positions = []
 internal_region_diams = []
 internal_region_directions = []
+internal_region_flow_types = []
 fan_names = []
 fan_sizes = []
 fan_types = []
@@ -83,6 +84,7 @@ while i < len(lines):
                 region_global = None
                 region_direction = None
                 region_diam = None
+                region_flow_type = None
                 k = j + 1
                 while k < len(lines):
                     if lines[k].startswith("Internal Region ") or lines[k].startswith(("Component ", "Fan ", "Vent ")):
@@ -101,9 +103,11 @@ while i < len(lines):
                     elif lines[k].startswith("direction:"):
                         text = lines[k].split(":", 1)[1].replace("m", "").strip()
                         region_direction = [float(v) for v in text.split()]
+                    elif lines[k].startswith("flow_type:"):
+                        region_flow_type = lines[k].split(":", 1)[1].strip()
                     k += 1
                 if region_type is not None and region_size is not None and region_global is not None:
-                    regions_for_component.append((region_type, region_size, region_global, region_diam, region_direction))
+                    regions_for_component.append((region_type, region_size, region_global, region_diam, region_direction, region_flow_type))
                 j = k
                 continue
             j += 1
@@ -119,13 +123,14 @@ while i < len(lines):
         component_names.append(name)
         component_dims.append(dims)
         component_coords.append(coords)
-        for region_type, region_size, region_global, region_diam, region_direction in regions_for_component:
+        for region_type, region_size, region_global, region_diam, region_direction, region_flow_type in regions_for_component:
             internal_region_parent.append(name)
             internal_region_types.append(region_type)
             internal_region_sizes.append(region_size)
             internal_region_global_positions.append(region_global)
             internal_region_diams.append(region_diam)
             internal_region_directions.append(region_direction)
+            internal_region_flow_types.append(region_flow_type)
 
         i = j - 1
 
@@ -309,54 +314,125 @@ for i in range(len(component_coords)):
         )
     )
 
+internal_region_colors = {
+    "Vent": "tab:blue",
+    "Intake": "tab:green",
+    "Exhaust": "tab:red",
+    "Other": "gray",
+}
 # start_alpha = 0.05
 # Internal regions are added to the existing rack axes; no new plot or layout is created.
 for i in range(len(internal_region_global_positions)):
-    # color = next(colors)
-    color = 'gray'
     x, y, z = internal_region_global_positions[i]
     sx, sy, sz = internal_region_sizes[i]
     vx, vy, vz = internal_region_directions[i]
-    diam = internal_region_diams[i][0]
+
+    diameter_data = internal_region_diams[i]
+    diam = diameter_data[0] if diameter_data else 0.0
+    r = diam / 2.0
+
     region_type = internal_region_types[i]
-    parent = internal_region_parent[i]
-    # alpha = start_alpha * i
-    # if alpha >= 1:
-    #     alpha = 0.9
-    alpha = 0.1 
-    if(sx > 0.0 or sy > 0.0 or sz > 0.0):
+    flow_type = internal_region_flow_types[i]
+
+    # Assign one consistent color to each airflow category.
+    if region_type == "Vent":
+        category = "Vent"
+    elif region_type == "Fan" and flow_type == "Intake":
+        category = "Intake"
+    elif region_type == "Fan" and flow_type == "Exhaust":
+        category = "Exhaust"
+    else:
+        category = "Other"
+
+    color = internal_region_colors[category]
+
+    # Internal fan/vent positions are centers. Air and solid-region
+    # positions remain lower corners.
+    is_centered_surface = region_type in ("Fan", "Vent")
+    plot_x = x - sx / 2.0 if is_centered_surface else x
+    plot_y = y - sy / 2.0 if is_centered_surface else y
+    plot_z = z - sz / 2.0 if is_centered_surface else z
+
+    # Draw rectangular internal regions.
+    if sx > 0.0 or sy > 0.0 or sz > 0.0:
         ax.bar3d(
-            x, y, z,
-            sx, sy, sz,
+            plot_x,
+            plot_y,
+            plot_z,
+            sx,
+            sy,
+            sz,
             color=color,
             shade=True,
             edgecolor=color,
             linewidth=1.5,
-            alpha=alpha
+            alpha=0.25,
         )
-    # legend_handles.append(
-    #     mpatches.Patch(
-    #         color=color,
-    #         alpha=alpha,
-    #         label=f"Internal region ({parent}): {region_type}"
-    #     )
-    # )
 
-    if abs(vz) >= abs(vx) and abs(vz) >= abs(vy):
-        circle = plt.Circle((x, y), diam/2, color=color, alpha=alpha)
-        ax.add_patch(circle)
-        art3d.pathpatch_2d_to_3d(circle, z=z, zdir="z")
-    # mostly y-normal: fan lies in XZ plane
-    elif abs(vy) >= abs(vx) and abs(vy) >= abs(vz):
-        circle = plt.Circle((x, z), diam/2, color=color, alpha=alpha)
-        ax.add_patch(circle)
-        art3d.pathpatch_2d_to_3d(circle, z=y, zdir="y")
-    # mostly x-normal: fan lies in YZ plane
-    else:
-        circle = plt.Circle((y, z), diam/2, color=color, alpha=alpha)
-        ax.add_patch(circle)
-        art3d.pathpatch_2d_to_3d(circle, z=x, zdir="x")
+    # Use separate transparency for the circle interior and edge.
+    circle_rgb = plt.matplotlib.colors.to_rgb(color)
+    face_rgba = (*circle_rgb, 0.45)
+    edge_rgba = (*circle_rgb, 1.0)
 
+    # Prevent a circle from being hidden by a coplanar component face.
+    offset = 1e-5
+
+    # Mostly z-normal: circle lies in the XY plane.
+    if r > 0.0 and abs(vz) >= abs(vx) and abs(vz) >= abs(vy):
+        circle = plt.Circle(
+            (x, y),
+            r,
+            facecolor=face_rgba,
+            edgecolor=edge_rgba,
+            linewidth=3.0,
+        )
+        ax.add_patch(circle)
+        art3d.pathpatch_2d_to_3d(
+            circle,
+            z=z + offset * (1 if vz >= 0.0 else -1),
+            zdir="z",
+        )
+
+    # Mostly y-normal: circle lies in the XZ plane.
+    elif r > 0.0 and abs(vy) >= abs(vx) and abs(vy) >= abs(vz):
+        circle = plt.Circle(
+            (x, z),
+            r,
+            facecolor=face_rgba,
+            edgecolor=edge_rgba,
+            linewidth=3.0,
+        )
+        ax.add_patch(circle)
+        art3d.pathpatch_2d_to_3d(
+            circle,
+            z=y + offset * (1 if vy >= 0.0 else -1),
+            zdir="y",
+        )
+
+    # Mostly x-normal: circle lies in the YZ plane.
+    elif r > 0.0:
+        circle = plt.Circle(
+            (y, z),
+            r,
+            facecolor=face_rgba,
+            edgecolor=edge_rgba,
+            linewidth=3.0,
+        )
+        ax.add_patch(circle)
+        art3d.pathpatch_2d_to_3d(
+            circle,
+            z=x + offset * (1 if vx >= 0.0 else -1),
+            zdir="x",
+        )
+
+for category in ("Vent", "Intake", "Exhaust"):
+    legend_handles.append(
+        mpatches.Patch(
+            color=internal_region_colors[category],
+            alpha=0.65,
+            label=f"Internal {category}",
+        )
+    )
 
 # print(fan_centers)
 # print(fan_diams)

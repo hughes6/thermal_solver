@@ -16,6 +16,7 @@
 #include "mesh_refinement_planner.hpp"
 #include "rack.hpp"
 #include "solver.hpp"
+#include "thermal_estimator.hpp"
 #include "unit_test.hpp"
 #include "vent.hpp"
 #include "workload.hpp"
@@ -26,7 +27,7 @@ int main(int argc, char* argv[]) {
 
 
   ComponentLoader loader;
-  loader.load_component("library/components/trenton_3u_bam.toml");
+  loader.load_component("library/components/eaton_2U_UPS.toml");
   loader.run();
 
   // ModelLoader loader;
@@ -332,6 +333,11 @@ int main(int argc, char* argv[]) {
 //   mesh.stamp_fan_adaptive(top_fan);
 //   mesh.stamp_fan_adaptive(mid_fan);
 //   mesh.stamp_vent_adaptive(vent);
+
+//   ThermalTimeEstimate estimate = ThermalTimeEstimator::estimate(mesh);
+//   std::cout << "\n\n\n";
+//   estimate.print();
+//   std::cout << "\n\n\n";
 
 //   Solver solver(mesh, dt, sim_length, false, otuput_interval, update_flow_interval, resistivity, tolerance, max_iterations, sor_omega, max_outer_iterations, flow_tolerance);
 

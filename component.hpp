@@ -329,6 +329,8 @@ struct InternalRegion {
 
     void validate_vent() {
         if(shape_type == ShapeType::Rectangular) validate_size();
+        if(shape_type == ShapeType::Rectangular && diameter != 0.0) throw std::invalid_argument("InternalRegion: recangular vent has diameter defined.");
+        if(shape_type == ShapeType::Circular && (size_m[0] != 0.0 || size_m[1] != 0.0 || size_m[2] != 0.0)) throw std::invalid_argument("InternalRegion: circular vent has size vector");
         if(free_area_ratio < 0.0 || free_area_ratio > 1.0) throw std::invalid_argument("InternalRegion: vent free area ration needs to be > 0.0 and < 1.0.");
     }
 
@@ -620,31 +622,64 @@ struct Component {
 
     void validate_fan_vent(InternalRegion r) {
         constexpr double eps = 1e-9;
-        const std::array<double, 3> loc = r.get_local_position();
-        const std::array<double, 3> loc_size = r.get_size_m();
-        const std::array<double, 3> component_size{width_m, depth_m, height_m};
-        int lies_on_face = 0;
+
+        const std::array<double, 3> center = r.get_local_position();
+        const std::array<double, 3> region_size = r.get_size_m();
+        const std::array<double, 3> component_size{
+            width_m,
+            depth_m,
+            height_m
+        };
+        const std::array<double, 3> direction = r.get_direction();
+
+        const double ax = std::abs(direction[0]);
+        const double ay = std::abs(direction[1]);
+        const double az = std::abs(direction[2]);
+
+        if(ax <= eps && ay <= eps && az <= eps) {
+            throw std::invalid_argument(
+                "Component:InternalRegion: " + r.get_name() +
+                " - fan/vent direction cannot be zero."
+            );
+        }
+
+        // Determine the fan/vent normal axis.
+        const int normal_axis =
+            ax >= ay && ax >= az ? 0 :
+            ay >= az ? 1 : 2;
+
         for(int axis = 0; axis < 3; ++axis) {
-            if(std::abs(loc[axis]) <= eps ||
-               std::abs(loc[axis] - component_size[axis]) <= eps) {
-                ++lies_on_face;
+            double half_extent = 0.0;
+
+            // A fan or vent has no thickness along its normal axis.
+            if(axis != normal_axis) {
+                if(r.is_circular()) {
+                    half_extent = r.get_diameter() / 2.0;
+                } else {
+                    half_extent = region_size[axis] / 2.0;
+                }
+            }
+
+            const double region_min = center[axis] - half_extent;
+            const double region_max = center[axis] + half_extent;
+
+            if(region_min < -eps ||
+            region_max > component_size[axis] + eps) {
+
+                const char axis_name =
+                    axis == 0 ? 'x' :
+                    axis == 1 ? 'y' : 'z';
+
+                throw std::invalid_argument(
+                    "Component:InternalRegion: " + r.get_name() +
+                    " - fan/vent " +
+                    std::string(1, axis_name) +
+                    " out of component bounds."
+                );
             }
         }
-        if(loc[0] < -eps || loc[0] + loc_size[0] > component_size[0] + eps) {
-            throw std::invalid_argument("Component:InternalRegion: " + r.get_name() + " - fan/vent x out of component bounds.");
-        }
-        if(loc[1] < -eps || loc[1] + loc_size[1] > component_size[1] + eps) {
-            throw std::invalid_argument("Component:InternalRegion: " + r.get_name() + " - fan/vent y out of component bounds.");
-        }
-        if(loc[2] < -eps || loc[2] + loc_size[2] > component_size[2] + eps) {
-            throw std::invalid_argument("Component:InternalRegion: " + r.get_name() + " - fan/vent z out of component bounds.");
-        }
-        if(lies_on_face > 1) {
-            throw std::invalid_argument("Component:InternalRegion: " + r.get_name() + " - fan/vent intercepts more than 1 face.");
-        }
-        // if(lies_on_face < 1) {
-        //     throw std::invalid_argument("Component:InternalRegion: " + r.get_name() + " - fan/vent does not intercept any component face.");
-        // }
+
+        // Internal fans are allowed away from an exterior component face.
     }
 };
 
