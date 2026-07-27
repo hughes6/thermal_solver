@@ -1,7 +1,7 @@
 import argparse
 import itertools
 from pathlib import Path
-
+from mpl_toolkits.mplot3d import art3d
 import matplotlib.patches as mpatches
 import matplotlib.pyplot as plt
 
@@ -53,6 +53,8 @@ while index < len(lines):
             "type": None,
             "size": None,
             "local_position": None,
+            "diameter" : None,
+            "direction" : None
         }
 
         index += 1
@@ -69,6 +71,14 @@ while index < len(lines):
             elif region_line.startswith("local_position:"):
                 text = region_line.split(":", 1)[1].replace("m", "").strip()
                 region["local_position"] = [float(value) for value in text.split()]
+
+            elif region_line.startswith("diameter"):
+                text = region_line.split(":", 1)[1].replace("m", "").strip()
+                region["diameter"] = [float(value) for value in text.split()]
+
+            elif region_line.startswith("direction:"):
+                text = region_line.split(":", 1)[1].replace("m", "").strip()
+                region["direction"] = [float(value) for value in text.split()]
 
             index += 1
 
@@ -123,24 +133,46 @@ i = 1
 for region in internal_regions:
     x, y, z = region["local_position"]
     region_width, region_depth, region_height = region["size"]
+    r = region["diameter"][0] / 2
+    vx, vy, vz = region["direction"]
+    
     color = next(colors)
     a = 0.05 * 1
     if a > 0.9:
         a = 0.9
-        
-    ax.bar3d(
-        x,
-        y,
-        z,
-        region_width,
-        region_depth,
-        region_height,
-        shade=True,
-        edgecolor=color,
-        linewidth=1.2,
-        alpha=a,
-        color=color,
-    )
+
+    if(region_width > 0.0 or region_depth > 0.0 or region_height > 0.0):
+        ax.bar3d(
+            x,
+            y,
+            z,
+            region_width,
+            region_depth,
+            region_height,
+            shade=True,
+            edgecolor=color,
+            linewidth=1.2,
+            alpha=a,
+            color=color,
+        )
+
+    # mostly z-normal: fan lies in XY plane
+    if abs(vz) >= abs(vx) and abs(vz) >= abs(vy) and r > 0:
+        circle = plt.Circle((x, y), r, color=color, alpha=a)
+        ax.add_patch(circle)
+        art3d.pathpatch_2d_to_3d(circle, z=z, zdir="z")
+    # mostly y-normal: fan lies in XZ plane
+    elif abs(vy) >= abs(vx) and abs(vy) >= abs(vz) and r > 0:
+        circle = plt.Circle((x, z), r, color=color, alpha=a)
+        ax.add_patch(circle)
+        art3d.pathpatch_2d_to_3d(circle, z=y, zdir="y")
+    # mostly x-normal: fan lies in YZ plane
+    else:
+        if(r > 0):
+            circle = plt.Circle((y, z), r, color=color, alpha=a)
+            ax.add_patch(circle)
+            art3d.pathpatch_2d_to_3d(circle, z=x, zdir="x")
+
 
     legend_handles.append(
         mpatches.Patch(
