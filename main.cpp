@@ -229,7 +229,7 @@ int main(int argc, char* argv[]) {
   double dy = 0.04445;   // 1U
   double dz = 0.04445/2.0;   // 1U
   double sim_length = 10.0; 
-  double dt = 0.05;
+  double dt = 0.1;
   double mu = 1.8e-5;  // air at atmospheric pressure and temp
   double pr = 0.71;    // air at atmospheric pressure and temp
 
@@ -315,7 +315,7 @@ int main(int argc, char* argv[]) {
   grapher.stamp_vents();
   grapher.export_to_file("output.txt");
 
-  int update_flow_interval = 10;
+  int update_flow_interval = 100;
   double resistivity = 4.5;
   double tolerance = 1e-9;
   int max_iterations = 2000;

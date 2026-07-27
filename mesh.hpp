@@ -1211,8 +1211,6 @@ public:
         std::vector<std::array<int, 3>> covered;
 
         auto stamp_cell = [&](int i, int j, int k) {
-            std::cout << i << " " << j << " " << k << std::endl;
-            std::cout << nx << " " << ny << " " << nz << std::endl;
             std::cout << std::to_string(i < nx) << " " << std::to_string(j < ny) << " " << std::to_string(k < nz) << std::endl;
             if(!in_bounds(i, j, k)) return;
             covered.push_back({i, j, k});
@@ -1779,9 +1777,19 @@ private:
         for (int k = 0; k < nz; ++k) z_bounds[k+1] = z_bounds[k] + dzs[k];
     }
 
+    // static int locate_floor(const std::vector<double>& bounds, double coord) {
+    //     auto it = std::upper_bound(bounds.begin(), bounds.end(), coord);
+    //     return static_cast<int>(it - bounds.begin()) - 1;
+    // }
+
     static int locate_floor(const std::vector<double>& bounds, double coord) {
         auto it = std::upper_bound(bounds.begin(), bounds.end(), coord);
-        return static_cast<int>(it - bounds.begin()) - 1;
+        int idx = static_cast<int>(it - bounds.begin()) - 1;
+        // A coordinate exactly on (or fractionally past) the outer boundary
+        // belongs to the last cell, not one-past it.
+        const int n = static_cast<int>(bounds.size()) - 1;
+        if (idx >= n) idx = n - 1;
+        return idx;
     }
 
     static int locate_ceil(const std::vector<double>& bounds, double coord) {
