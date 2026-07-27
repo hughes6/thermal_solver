@@ -2,6 +2,7 @@
 #define THERMAL_SOLVER_HPP
 
 #include <stdexcept>
+#include <iomanip>
 
 #include "air_properties.hpp"
 #include "convection.hpp"
@@ -16,7 +17,12 @@ public:
     Solver(Mesh initial_mesh, double dt_, double sim_length_, bool print_convections_, int output_interval_,
             int update_flow_interval_ = -1,
             double resistivity_ = 4.5, double tolerance_ = 1e-3, int max_iterations_ = 10,
-            double sor_omega_ = 1.3, int max_outer_iterations_ = 2, double flow_tolerance_ = 1e-2)
+            double sor_omega_ = 1.3, int max_outer_iterations_ = 2, double flow_tolerance_ = 1e-2,
+            bool advection_subcycling_ = false,
+            double advection_cfl_target_ = 0.8,
+            int max_advection_substeps_ = 10000,
+            std::string logfile_path_ = "simulation.csv",
+            std::string pressure_method_ = "sor")
             : current(std::move(initial_mesh)),
             next(current),
             dt(dt_),
@@ -24,12 +30,23 @@ public:
             print_convections(print_convections_),
             output_interval(output_interval_),
             update_flow_interval(update_flow_interval_),
-            logfile("simulation.csv"),
+            advection_subcycling(advection_subcycling_),
+            advection_cfl_target(advection_cfl_target_),
+            max_advection_substeps(max_advection_substeps_),
+            logfile(std::move(logfile_path_)),
             flow_solver(current, resistivity_, tolerance_, max_iterations_,
-                        sor_omega_, max_outer_iterations_, flow_tolerance_)
+                        sor_omega_, max_outer_iterations_, flow_tolerance_,
+                        std::move(pressure_method_))
     { 
+      logfile << std::setprecision(17);
       load = current.get_load();
       adaptive = !current.is_uniform();
+      if(advection_cfl_target <= 0.0 || advection_cfl_target > 1.0)
+          throw std::invalid_argument(
+              "Solver: advection_cfl_target must be in (0,1].");
+      if(max_advection_substeps < 1)
+          throw std::invalid_argument(
+              "Solver: max_advection_substeps must be >= 1.");
       validate_computational_workload();
       logfile << "step,time,x,y,z,T,qdot,is_component,k,rho,cp,vx,vy,vz,h\n";
       logfile << "dx," << current.get_dx()
@@ -277,14 +294,18 @@ public:
     void solve() {
         double pct = 0.0;
         if (adaptive) {
-            check_advection_stability_adaptive();
+            if(!advection_subcycling) check_advection_stability_adaptive();
             check_conduction_stability_adaptive();
             check_convection_stability_adaptive();
         } else {
-            check_advection_stability();
+            if(!advection_subcycling) check_advection_stability();
             check_conduction_stability();
             check_convection_stability();
         }
+        if(advection_subcycling)
+            std::cout << "Advection subcycling enabled: global dt = "
+                      << dt << " s, CFL target = "
+                      << advection_cfl_target << "\n";
         int steps = static_cast<int>(sim_length / dt);
         log_state(0);
         if(logger != nullptr) {
@@ -302,22 +323,26 @@ public:
                 std::cout<< "Working......" << pct << "%" << std::endl;
             }
 
-            for(int x = 0; x < current.get_nx(); x++) {
-                for(int y = 0; y < current.get_ny(); y++) {
-                    for(int z = 0; z < current.get_nz(); z++) {
-                        double T_new = adaptive ? compute_t_next_adaptive(x,y,z) : compute_t_next(x,y,z);
-                        Cell& next_cell = next.at(x,y,z);
-                        next.at(x,y,z).set_T(T_new);
-                        // Keep fluid density/viscosity consistent with the
-                        // temperature that was just computed for this cell.
-                        if(next_cell.is_fluid()) {
-                            next_cell.set_rho(AirProperties::density(T_new, current.get_env().get_ambient_pressure()));
-                            next_cell.set_mu(AirProperties::viscosity(T_new));
+            if(!advection_subcycling) {
+                for(int x = 0; x < current.get_nx(); x++) {
+                    for(int y = 0; y < current.get_ny(); y++) {
+                        for(int z = 0; z < current.get_nz(); z++) {
+                            double T_new = adaptive ? compute_t_next_adaptive(x,y,z) : compute_t_next(x,y,z);
+                            validate_temperature(T_new,x,y,z,"legacy update");
+                            Cell& next_cell = next.at(x,y,z);
+                            next_cell.set_T(T_new);
+                            if(next_cell.is_fluid()) {
+                                next_cell.set_rho(AirProperties::density(T_new, current.get_env().get_ambient_pressure()));
+                                next_cell.set_mu(AirProperties::viscosity(T_new));
+                            }
                         }
                     }
                 }
+                update_face_wall_temperatures();
+                std::swap(current, next);
+            } else {
+                advance_with_advection_subcycling(step);
             }
-            update_face_wall_temperatures();
             const double average_h =
             timestep_h_count > 0
                 ? timestep_h_sum /
@@ -329,7 +354,6 @@ public:
                 << ", average h = " << average_h << " W/(m^2 K)\n";
             }
 
-            std::swap(current, next);
             if(step % output_interval == 0) {
                 log_state(step + 1);
             }
@@ -338,6 +362,10 @@ public:
                 logger->log(current, step, static_cast<double>(step) * dt);
             }
         }
+        // Always preserve the completed state even when the requested output
+        // cadence does not land exactly on the final step.
+        if(steps > 0 && (steps-1) % output_interval != 0)
+            log_state(steps);
     }
 
     void set_logger(SimulationLogger& simulation_logger) {
@@ -365,10 +393,133 @@ private:
     int timestep_h_count = 0;
     int output_interval = 0;
     int update_flow_interval = 0;
+    bool advection_subcycling = false;
+    double advection_cfl_target = 0.8;
+    int max_advection_substeps = 10000;
+    int last_reported_advection_substeps = -1;
 
     SimulationLogger* logger = nullptr;
 
     std::ofstream logfile;
+
+    static void validate_temperature(double temperature,
+                                     int x,int y,int z,
+                                     const char* stage) {
+        if(!std::isfinite(temperature) || temperature <= -273.15 ||
+           temperature > 1.0e5) {
+            throw std::runtime_error(
+                std::string("Solver: nonphysical temperature during ") +
+                stage + " at cell (" + std::to_string(x) + "," +
+                std::to_string(y) + "," + std::to_string(z) +
+                "): " + std::to_string(temperature) + " C.");
+        }
+    }
+
+    double max_advection_cfl_for_dt(double candidate_dt) const {
+        double max_cfl = 0.0;
+        for(const Cell& cell : current.get_cells()) {
+            if(!cell.is_fluid()) continue;
+            const double dx = adaptive ? cell.get_dx() : current.get_dx();
+            const double dy = adaptive ? cell.get_dy() : current.get_dy();
+            const double dz = adaptive ? cell.get_dz() : current.get_dz();
+            const double cfl =
+                std::abs(cell.get_vx())*candidate_dt/dx +
+                std::abs(cell.get_vy())*candidate_dt/dy +
+                std::abs(cell.get_vz())*candidate_dt/dz;
+            max_cfl = std::max(max_cfl,cfl);
+        }
+        return max_cfl;
+    }
+
+    double compute_t_next_without_advection(int x, int y, int z) {
+        const Cell& cell = current.at(x,y,z);
+        if(cell.is_intake()) return current.get_env().get_T_ambient();
+        const double volume = adaptive ? cell.volume() : current.cell_volume();
+        const double denominator = cell.get_rho()*cell.get_cp()*volume;
+        if(denominator <= 0.0) return cell.get_T();
+        const double conduction = adaptive
+            ? compute_conduction_adaptive(x,y,z)
+            : compute_conduction(x,y,z);
+        const double convection = adaptive
+            ? compute_convection_adaptive(x,y,z)
+            : compute_convection(x,y,z);
+        const double generation = cell.get_qdot()*volume;
+        return cell.get_T() +
+            dt*(conduction+convection+generation)/denominator;
+    }
+
+    void advance_with_advection_subcycling(int step) {
+        // Lie split: advance all non-advection physics once at the global
+        // timestep, then advance only fluid advection using stable substeps.
+        for(int x=0; x<current.get_nx(); ++x)
+            for(int y=0; y<current.get_ny(); ++y)
+                for(int z=0; z<current.get_nz(); ++z) {
+                    const double temperature =
+                        compute_t_next_without_advection(x,y,z);
+                    validate_temperature(
+                        temperature,x,y,z,"non-advection update");
+                    Cell& target=next.at(x,y,z);
+                    target.set_T(temperature);
+                    if(target.is_fluid()) {
+                        target.set_rho(AirProperties::density(
+                            temperature,current.get_env().get_ambient_pressure()));
+                        target.set_mu(AirProperties::viscosity(temperature));
+                    }
+                }
+        update_face_wall_temperatures();
+        std::swap(current,next);
+
+        const double global_cfl=max_advection_cfl_for_dt(dt);
+        const int substeps=std::max(
+            1,static_cast<int>(std::ceil(global_cfl/advection_cfl_target)));
+        if(substeps > max_advection_substeps) {
+            throw std::runtime_error(
+                "Solver: required advection substeps (" +
+                std::to_string(substeps) +
+                ") exceed max_advection_substeps (" +
+                std::to_string(max_advection_substeps) + ").");
+        }
+        if(substeps != last_reported_advection_substeps) {
+            std::cout << "Advection substeps per global step: "
+                      << substeps << " (global CFL = "
+                      << global_cfl << ", substep dt = "
+                      << dt/static_cast<double>(substeps) << " s)\n";
+            last_reported_advection_substeps=substeps;
+        }
+
+        const double sub_dt=dt/static_cast<double>(substeps);
+        for(int sub=0; sub<substeps; ++sub) {
+            for(int x=0; x<current.get_nx(); ++x)
+                for(int y=0; y<current.get_ny(); ++y)
+                    for(int z=0; z<current.get_nz(); ++z) {
+                        const Cell& source=current.at(x,y,z);
+                        double temperature=source.get_T();
+                        if(source.is_intake()) {
+                            temperature=current.get_env().get_T_ambient();
+                        } else if(source.is_fluid()) {
+                            const double derivative=adaptive
+                                ? compute_advection_adaptive(x,y,z)
+                                : compute_advection(x,y,z);
+                            temperature += sub_dt*derivative;
+                        }
+                        validate_temperature(
+                            temperature,x,y,z,"advection substep");
+                        Cell& target=next.at(x,y,z);
+                        target.set_T(temperature);
+                        if(target.is_fluid()) {
+                            target.set_rho(AirProperties::density(
+                                temperature,current.get_env().get_ambient_pressure()));
+                            target.set_mu(AirProperties::viscosity(temperature));
+                        }
+                    }
+            auto& next_walls=next.get_wall_faces();
+            const auto& current_walls=current.get_wall_faces();
+            for(size_t wi=0; wi<current_walls.size(); ++wi)
+                next_walls[wi].temperature=current_walls[wi].temperature;
+            std::swap(current,next);
+        }
+        (void)step;
+    }
 
     void update_face_wall_temperatures() {
         if(!current.has_face_walls()) return;

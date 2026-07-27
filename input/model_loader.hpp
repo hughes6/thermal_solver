@@ -753,10 +753,18 @@ struct ModelLoader {
             model.simulation.max_cell_count = require_value<double>(simulation["max_cell_count"], "simulation.max_cell_count");
             model.simulation.max_megabyte_usage = require_value<double>(simulation["max_megabyte_usage"], "simulation.max_megabyte_usage");
             model.simulation.update_flow_interval = simulation["update_flow_interval"].value<int>().value_or(1);
+            model.simulation.advection_subcycling =
+                simulation["advection_subcycling"].value<bool>().value_or(false);
+            model.simulation.advection_cfl_target =
+                simulation["advection_cfl_target"].value<double>().value_or(0.8);
+            model.simulation.max_advection_substeps =
+                simulation["max_advection_substeps"].value<int>().value_or(10000);
 
             // ----------------------------------------Flow Solver-------------------------------------------
             const toml::table& flow_solver = require_table(root["flow_solver"], "simulation");
             model.flow_solver.enable_flow_solver = flow_solver["enable_flow_solver"].value<bool>().value_or(false);
+            model.flow_solver.pressure_method =
+                flow_solver["pressure_method"].value<std::string>().value_or("sor");
             model.flow_solver.resistivity = flow_solver["resistivity"].value<double>().value_or(4.5);
             model.flow_solver.tolerance = flow_solver["tolerance"].value<double>().value_or(1e-4);
             model.flow_solver.max_iterations = flow_solver["max_iterations"].value<int>().value_or(100);
@@ -1091,7 +1099,8 @@ struct ModelLoader {
                     *model.flow_solver.max_iterations,
                     *model.flow_solver.sor_omega,
                     *model.flow_solver.max_outer_iters,
-                    *model.flow_solver.flow_tolerance);
+                    *model.flow_solver.flow_tolerance,
+                    model.flow_solver.pressure_method);
                 coarse_flow.solve();
                 const double flow_scale = std::max({
                     std::abs(coarse_flow.total_source_m3s()),
@@ -1129,15 +1138,30 @@ struct ModelLoader {
                       << model.multistage.coarse_duration << " s\n";
             std::cout << "Planned coarse timesteps:   "
                       << coarse_timestep_count << "\n";
-            if(std::isfinite(coarse_thermal_estimate->recommended_dt_s) &&
-               model.multistage.coarse_dt >
-                   coarse_thermal_estimate->recommended_dt_s) {
+            const double coarse_dt_limit =
+                model.simulation.advection_subcycling
+                    ? 0.8*coarse_thermal_estimate
+                        ->max_stable_dt_conduction_s
+                    : coarse_thermal_estimate->recommended_dt_s;
+            if(model.simulation.advection_subcycling &&
+               std::isfinite(
+                   coarse_thermal_estimate->max_stable_dt_advection_s)) {
+                const int estimated_substeps=std::max(1,
+                    static_cast<int>(std::ceil(
+                        model.multistage.coarse_dt /
+                        (model.simulation.advection_cfl_target *
+                         coarse_thermal_estimate
+                            ->max_stable_dt_advection_s))));
+                std::cout << "Estimated coarse advection substeps: "
+                          << estimated_substeps << "\n";
+            }
+            if(std::isfinite(coarse_dt_limit) &&
+               model.multistage.coarse_dt > coarse_dt_limit) {
                 throw std::runtime_error(
                     "Configured coarse_dt = " +
                     std::to_string(model.multistage.coarse_dt) +
-                    " s exceeds the stable estimator recommendation of " +
-                    std::to_string(
-                        coarse_thermal_estimate->recommended_dt_s) +
+                    " s exceeds the non-subcycled stability limit of " +
+                    std::to_string(coarse_dt_limit) +
                     " s. The coarse transient was not started.");
             }
 
@@ -1159,9 +1183,30 @@ struct ModelLoader {
                 *model.flow_solver.max_iterations,
                 *model.flow_solver.sor_omega,
                 *model.flow_solver.max_outer_iters,
-                *model.flow_solver.flow_tolerance);
+                *model.flow_solver.flow_tolerance,
+                model.simulation.advection_subcycling,
+                model.simulation.advection_cfl_target,
+                model.simulation.max_advection_substeps,
+                "coarse_simulation.csv",
+                model.flow_solver.pressure_method);
             coarse_solver.solve();
             coarse_warm_start = coarse_solver.get_mesh();
+            double coarse_min_T=std::numeric_limits<double>::infinity();
+            double coarse_max_T=-std::numeric_limits<double>::infinity();
+            double coarse_total_watts=0.0;
+            std::size_t coarse_heated_cells=0;
+            for(const Cell& cell : coarse_warm_start->get_cells()) {
+                coarse_min_T=std::min(coarse_min_T,cell.get_T());
+                coarse_max_T=std::max(coarse_max_T,cell.get_T());
+                coarse_total_watts += cell.get_qdot()*cell.volume();
+                if(cell.get_qdot()>0.0) ++coarse_heated_cells;
+            }
+            std::cout << "Coarse thermal completion: Tmin = "
+                      << coarse_min_T << " C, Tmax = "
+                      << coarse_max_T << " C, heat-source cells = "
+                      << coarse_heated_cells << ", integrated power = "
+                      << coarse_total_watts << " W\n";
+            std::cout << "Coarse CSV: coarse_simulation.csv\n";
             std::cout << "----- Fine production stage -----\n";
         }
         Mesh mesh;
@@ -1213,7 +1258,17 @@ struct ModelLoader {
             const Mesh& coarse = *coarse_warm_start;
             std::size_t direct_transfers = 0;
             std::size_t neighbor_transfers = 0;
+            std::size_t wall_face_transfers = 0;
             std::size_t ambient_fallbacks = 0;
+            std::vector<std::vector<const Mesh::WallFace*>>
+                component_wall_faces(components.size());
+            for(const Mesh::WallFace& wall : coarse.get_wall_faces()) {
+                if(wall.active && wall.component_group >= 0 &&
+                   static_cast<size_t>(wall.component_group) <
+                       component_wall_faces.size()) {
+                    component_wall_faces[wall.component_group].push_back(&wall);
+                }
+            }
 
             for (int i = 0; i < mesh.get_nx(); ++i) {
                 for (int j = 0; j < mesh.get_ny(); ++j) {
@@ -1225,6 +1280,58 @@ struct ModelLoader {
                         const int ci = coarse.index_x(x);
                         const int cj = coarse.index_y(y);
                         const int ck = coarse.index_z(z);
+
+                        // Resolved fine enclosure walls have no solid-cell
+                        // counterpart in a face-wall coarse mesh. Transfer
+                        // from the nearest wall face belonging to the same
+                        // component instead of borrowing an electronics
+                        // heat-source temperature.
+                        const bool resolved_enclosure_wall =
+                            fine_cell.get_state() == Cell::State::Component &&
+                            std::abs(fine_cell.get_qdot()) <= 1e-15;
+                        if(resolved_enclosure_wall) {
+                            int owner = -1;
+                            constexpr double eps = 1e-9;
+                            for(size_t component_index=0;
+                                component_index<components.size();
+                                ++component_index) {
+                                const Component& component =
+                                    components[component_index];
+                                const auto corner=component.get_coords();
+                                if(x >= corner[0]-eps &&
+                                   x <= corner[0]+component.get_width_m()+eps &&
+                                   y >= corner[1]-eps &&
+                                   y <= corner[1]+component.get_depth_m()+eps &&
+                                   z >= corner[2]-eps &&
+                                   z <= corner[2]+component.get_height_m()+eps) {
+                                    owner=static_cast<int>(component_index);
+                                    break;
+                                }
+                            }
+                            if(owner >= 0 &&
+                               !component_wall_faces[owner].empty()) {
+                                const Mesh::WallFace* nearest=nullptr;
+                                double nearest_distance2=
+                                    std::numeric_limits<double>::infinity();
+                                for(const Mesh::WallFace* wall :
+                                    component_wall_faces[owner]) {
+                                    const auto center=
+                                        coarse.wall_face_center(*wall);
+                                    const double dx=center[0]-x;
+                                    const double dy=center[1]-y;
+                                    const double dz=center[2]-z;
+                                    const double distance2=
+                                        dx*dx+dy*dy+dz*dz;
+                                    if(distance2 < nearest_distance2) {
+                                        nearest_distance2=distance2;
+                                        nearest=wall;
+                                    }
+                                }
+                                fine_cell.set_T(nearest->temperature);
+                                ++wall_face_transfers;
+                                continue;
+                            }
+                        }
 
                         const Cell* source = nullptr;
                         if (coarse.in_bounds(ci, cj, ck)) {
@@ -1269,6 +1376,7 @@ struct ModelLoader {
             std::cout << "Warm-start temperature transfer: "
                       << direct_transfers << " direct, "
                       << neighbor_transfers << " nearby-phase, "
+                      << wall_face_transfers << " wall-face, "
                       << ambient_fallbacks << " ambient fallbacks.\n";
         }
         grapher.stamp_components();
@@ -1277,7 +1385,8 @@ struct ModelLoader {
         grapher.export_to_file("output.txt");
         if(model.flow_solver.enable_flow_solver) {
             FlowSolver flow_solver(mesh, *model.flow_solver.resistivity, *model.flow_solver.tolerance, *model.flow_solver.max_iterations, 
-                                *model.flow_solver.sor_omega, *model.flow_solver.max_outer_iters, *model.flow_solver.flow_tolerance);
+                                *model.flow_solver.sor_omega, *model.flow_solver.max_outer_iters, *model.flow_solver.flow_tolerance,
+                                model.flow_solver.pressure_method);
             flow_solver.solve(); // pre populate all velocity cells
         }
         int update_flow_interval = model.flow_solver.enable_flow_solver
@@ -1300,13 +1409,27 @@ struct ModelLoader {
                   << model.simulation.duration << " s\n";
         std::cout << "Planned fine timesteps:     "
                   << fine_timestep_count << "\n";
-        if(std::isfinite(thermal_estimate.recommended_dt_s) &&
-           model.simulation.dt > thermal_estimate.recommended_dt_s) {
+        const double fine_dt_limit =
+            model.simulation.advection_subcycling
+                ? 0.8*thermal_estimate.max_stable_dt_conduction_s
+                : thermal_estimate.recommended_dt_s;
+        if(model.simulation.advection_subcycling &&
+           std::isfinite(thermal_estimate.max_stable_dt_advection_s)) {
+            const int estimated_substeps=std::max(1,
+                static_cast<int>(std::ceil(
+                    model.simulation.dt /
+                    (model.simulation.advection_cfl_target *
+                     thermal_estimate.max_stable_dt_advection_s))));
+            std::cout << "Estimated fine advection substeps: "
+                      << estimated_substeps << "\n";
+        }
+        if(std::isfinite(fine_dt_limit) &&
+           model.simulation.dt > fine_dt_limit) {
             std::cerr
                 << "WARNING: configured fine dt = "
                 << model.simulation.dt
-                << " s exceeds the estimator recommendation of "
-                << thermal_estimate.recommended_dt_s << " s.\n";
+                << " s exceeds the non-subcycled stability limit of "
+                << fine_dt_limit << " s.\n";
         }
 
         if(coarse_thermal_estimate.has_value()) {
@@ -1338,7 +1461,12 @@ struct ModelLoader {
                     update_flow_interval,
                     *model.flow_solver.resistivity, *model.flow_solver.tolerance,
                     *model.flow_solver.max_iterations, *model.flow_solver.sor_omega,
-                    *model.flow_solver.max_outer_iters, *model.flow_solver.flow_tolerance);
+                    *model.flow_solver.max_outer_iters, *model.flow_solver.flow_tolerance,
+                    model.simulation.advection_subcycling,
+                    model.simulation.advection_cfl_target,
+                    model.simulation.max_advection_substeps,
+                    "simulation.csv",
+                    model.flow_solver.pressure_method);
 
 
         SimulationLogger logger(config);

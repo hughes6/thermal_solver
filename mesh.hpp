@@ -30,6 +30,7 @@ public:
         double cp = 0.0;
         double temperature = 20.0;
         bool active = true;
+        int component_group = -1;
     };
 
     struct InternalFanInterface {
@@ -156,7 +157,7 @@ public:
 
     void add_wall_face(int x, int y, int z, int axis, double thickness,
                        double conductivity, double rho, double cp,
-                       double temperature) {
+                       double temperature, int component_group = -1) {
         const int hx = x + (axis == 0);
         const int hy = y + (axis == 1);
         const int hz = z + (axis == 2);
@@ -168,7 +169,8 @@ public:
         if(wall_face_refs[slot] >= 0) return;
         wall_face_refs[slot] = static_cast<int32_t>(wall_faces.size());
         wall_faces.push_back(
-            {x, y, z, axis, thickness, conductivity, rho, cp, temperature, true});
+            {x, y, z, axis, thickness, conductivity, rho, cp,
+             temperature, true, component_group});
     }
 
     void open_wall_face(int x, int y, int z, int axis) {
@@ -189,6 +191,15 @@ public:
         if(wall.axis == 0) return x_bounds[wall.x + 1];
         if(wall.axis == 1) return y_bounds[wall.y + 1];
         return z_bounds[wall.z + 1];
+    }
+
+    std::array<double,3> wall_face_center(const WallFace& wall) const {
+        std::array<double,3> center{
+            cell_center_x(wall.x),
+            cell_center_y(wall.y),
+            cell_center_z(wall.z)};
+        center[wall.axis] = wall_face_coordinate(wall);
+        return center;
     }
 
     size_t idx(int x, int y, int z) const {
@@ -580,6 +591,15 @@ public:
                 for(auto& [i, j, k] : covered) {
                     Cell& cell = at(i, j, k);
                     // Overlap already validated at the geometry level.
+                    cell.set_T(env.get_T_ambient());
+                    cell.set_rho(env.get_rho());
+                    cell.set_cp(env.get_cp());
+                    cell.set_k(env.get_k());
+                    cell.set_mu(env.get_mu());
+                    cell.set_pr(env.get_pr());
+                    cell.set_qdot(0.0);
+                    cell.set_h(0.0);
+                    cell.set_flow_source(0.0);
                     cell.set_state(Cell::State::Vent);
                     cell.set_vent_conductance(C_per_cell);
                 }
@@ -717,6 +737,14 @@ public:
                 const int sz = nnz > 0.0 ? 1 : (nnz < 0.0 ? -1 : 0);
                 for (auto& [i, j, k] : covered) {
                     Cell& cell = at(i, j, k);
+                    cell.set_T(env.get_T_ambient());
+                    cell.set_rho(env.get_rho());
+                    cell.set_cp(env.get_cp());
+                    cell.set_k(env.get_k());
+                    cell.set_mu(env.get_mu());
+                    cell.set_pr(env.get_pr());
+                    cell.set_qdot(0.0);
+                    cell.set_h(0.0);
                     cell.set_state(Cell::State::Fan);
                     cell.set_vx(r.velocity_x());
                     cell.set_vy(r.velocity_y());
@@ -743,6 +771,7 @@ public:
                 }
             }
         }
+        conserve_internal_heat_source_power(c);
     }
 
     // Same structure as stamp_component(), field for field, region for
@@ -936,6 +965,15 @@ public:
                 for(auto& [i, j, k] : covered) {
                     Cell& cell = at(i, j, k);
                     // Overlap already validated at the geometry level.
+                    cell.set_T(env.get_T_ambient());
+                    cell.set_rho(env.get_rho());
+                    cell.set_cp(env.get_cp());
+                    cell.set_k(env.get_k());
+                    cell.set_mu(env.get_mu());
+                    cell.set_pr(env.get_pr());
+                    cell.set_qdot(0.0);
+                    cell.set_h(0.0);
+                    cell.set_flow_source(0.0);
                     cell.set_state(Cell::State::Vent);
                     cell.set_vent_conductance(C_per_cell);
                 }
@@ -1077,6 +1115,14 @@ public:
                     // not an exchange with ambient. The fan cell represents
                     // the downstream side of the interface; the immediately
                     // upstream cell receives an equal and opposite source.
+                    cell.set_T(env.get_T_ambient());
+                    cell.set_rho(env.get_rho());
+                    cell.set_cp(env.get_cp());
+                    cell.set_k(env.get_k());
+                    cell.set_mu(env.get_mu());
+                    cell.set_pr(env.get_pr());
+                    cell.set_qdot(0.0);
+                    cell.set_h(0.0);
                     cell.set_state(Cell::State::Fan);
                     cell.set_vx(r.velocity_x());
                     cell.set_vy(r.velocity_y());
@@ -1104,12 +1150,44 @@ public:
                 }
             }
         }
+        conserve_internal_heat_source_power(c);
+    }
+
+    void conserve_internal_heat_source_power(const Component& component) {
+        for(const InternalRegion& region : component.get_regions()) {
+            if(region.get_region_type() != RegionType::HeatSource) continue;
+            const auto position=region.get_global_position();
+            const auto size=region.get_size_m();
+            const int i0=index_x(position[0]);
+            const int j0=index_y(position[1]);
+            const int k0=index_z(position[2]);
+            const int i1=end_index_x(position[0]+size[0]);
+            const int j1=end_index_y(position[1]+size[1]);
+            const int k1=end_index_z(position[2]+size[2]);
+            double solid_volume=0.0;
+            for(int i=i0;i<i1;++i) for(int j=j0;j<j1;++j)
+                for(int k=k0;k<k1;++k)
+                    if(at(i,j,k).is_solid())
+                        solid_volume += at(i,j,k).volume();
+            if(region.get_watts()>0.0 && solid_volume<=0.0) {
+                throw std::runtime_error(
+                    "Internal heat source '" + region.get_name() +
+                    "' has no remaining solid cells after fan/vent stamping.");
+            }
+            const double qdot=solid_volume>0.0
+                ? region.get_watts()/solid_volume : 0.0;
+            for(int i=i0;i<i1;++i) for(int j=j0;j<j1;++j)
+                for(int k=k0;k<k1;++k)
+                    if(at(i,j,k).is_solid())
+                        at(i,j,k).set_qdot(qdot);
+        }
     }
 
     // Coarse-grid enclosure model: retain explicit internal heat-source,
     // fan, and vent stamps, but replace non-generating enclosure volume
     // with thermally massive, airflow-blocking faces.
     void stamp_component_face_walls_adaptive(const Component& c) {
+        const int component_group = next_wall_component_group++;
         if(std::abs(c.get_watts()) > 1e-12) {
             throw std::invalid_argument(
                 "Coarse face-wall mode requires component '" + c.get_name() +
@@ -1207,13 +1285,13 @@ public:
             }
             if(axis == 0)
                 for(int j=j0; j<j1; ++j) for(int k=k0; k<k1; ++k)
-                    add_wall_face(low,j,k,axis,t,c.get_k(),c.get_rho(),c.get_cp(),c.get_t());
+                    add_wall_face(low,j,k,axis,t,c.get_k(),c.get_rho(),c.get_cp(),c.get_t(),component_group);
             else if(axis == 1)
                 for(int i=i0; i<i1; ++i) for(int k=k0; k<k1; ++k)
-                    add_wall_face(i,low,k,axis,t,c.get_k(),c.get_rho(),c.get_cp(),c.get_t());
+                    add_wall_face(i,low,k,axis,t,c.get_k(),c.get_rho(),c.get_cp(),c.get_t(),component_group);
             else
                 for(int i=i0; i<i1; ++i) for(int j=j0; j<j1; ++j)
-                    add_wall_face(i,j,low,axis,t,c.get_k(),c.get_rho(),c.get_cp(),c.get_t());
+                    add_wall_face(i,j,low,axis,t,c.get_k(),c.get_rho(),c.get_cp(),c.get_t(),component_group);
         };
         add_plane(0,i0-1,thickness[0],origin[0]);
         add_plane(0,i1-1,thickness[1],origin[0]+outer[0]);
@@ -2006,6 +2084,7 @@ private:
     std::vector<InternalFanInterface> internal_fans;
     std::vector<int32_t> wall_face_refs;
     std::vector<WallFace> wall_faces;
+    int next_wall_component_group = 0;
 
     void build_bounds() {
         x_bounds.assign(nx + 1, 0.0);

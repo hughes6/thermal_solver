@@ -45,10 +45,14 @@ struct SimulationInput {
     int max_cell_count = 0;
     int max_megabyte_usage = 0;
     std::optional<int> update_flow_interval = 0;
+    bool advection_subcycling = false;
+    double advection_cfl_target = 0.8;
+    int max_advection_substeps = 10000;
 };
 
 struct FlowSolverInput {
     bool enable_flow_solver = false;
+    std::string pressure_method = "sor";
     std::optional<double> resistivity = 0.0;
     std::optional<double> tolerance = 0.0;
     std::optional<int> max_iterations = 0;

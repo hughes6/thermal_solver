@@ -7,6 +7,7 @@
 #include <iostream>
 #include <algorithm>
 #include <limits>
+#include <string>
 
 #include "mesh.hpp"
 #include "cell.hpp"
@@ -70,20 +71,26 @@ public:
                int max_iters_ = 20000,
                double sor_omega_ = 1.3,
                int max_outer_iters_ = 30,
-               double flow_tolerance_ = 1e-4) :
+               double flow_tolerance_ = 1e-4,
+               std::string pressure_method_ = "sor") :
                mesh(mesh_),
                linear_resistivity(linear_resistivity_),
                pressure_tolerance(tolerance_),
                max_pressure_iters(max_iters_),
                omega(sor_omega_),
                max_outer_iters(max_outer_iters_),
-               flow_tolerance(flow_tolerance_) 
+               flow_tolerance(flow_tolerance_),
+               pressure_method(std::move(pressure_method_))
                {
                     if(linear_resistivity < 0.0) {
                         throw std::invalid_argument("FlowSolver: resistivity must be >= 0");
                     }
                     if(omega <= 0.0 || omega >= 2.0) {
                         throw std::invalid_argument("FlowSolver: SOR omega must be in (0,2)");
+                    }
+                    if(pressure_method != "sor" && pressure_method != "pcg") {
+                        throw std::invalid_argument(
+                            "FlowSolver: pressure_method must be 'sor' or 'pcg'");
                     }
                }
     
@@ -207,6 +214,7 @@ private:
     double omega;
     int max_outer_iters;
     double flow_tolerance;
+    std::string pressure_method = "sor";
     bool last_outer_converged = false;
     double last_total_source = 0.0;
     double last_total_vent = 0.0;
@@ -614,6 +622,11 @@ private:
     }
 
     void solve_pressures() {
+        if(pressure_method == "pcg") solve_pressures_pcg();
+        else                         solve_pressures_sor();
+    }
+
+    void solve_pressures_sor() {
         for (int iter = 0; iter < max_pressure_iters; ++iter) {
             for (int x = 0; x < mesh.get_nx(); ++x) {
                 for (int y = 0; y < mesh.get_ny(); ++y) {
@@ -656,6 +669,142 @@ private:
         std::cerr << "FlowSolver: WARNING -- pressure solve reached "
                   << max_pressure_iters << " iterations; residual = "
                   << max_mass_residual() << " m^3/s.\n";
+    }
+
+    void solve_pressures_pcg() {
+        const size_t n = mesh.get_cell_count();
+        std::vector<double> x(n, 0.0), rhs(n, 0.0), residual(n, 0.0);
+        std::vector<double> z(n, 0.0), direction(n, 0.0);
+        std::vector<double> product(n, 0.0), diagonal(n, 0.0);
+        std::vector<unsigned char> active(n, 0);
+
+        for(int ix = 0; ix < mesh.get_nx(); ++ix) {
+            for(int iy = 0; iy < mesh.get_ny(); ++iy) {
+                for(int iz = 0; iz < mesh.get_nz(); ++iz) {
+                    const size_t i = cell_idx(ix, iy, iz);
+                    const Cell& cell = mesh.at(ix, iy, iz);
+                    if(!cell.is_fluid() || i == pressure_reference) continue;
+
+                    double d = vent_C[i] + fan_ground_C[i];
+                    for(const FaceLink& link : neighbors[i])
+                        d += link.conductance;
+                    for(const InternalCurveLink& link :
+                        internal_curve_neighbors[i])
+                        d += link.conductance;
+                    if(d <= 0.0) continue;
+
+                    active[i] = 1;
+                    diagonal[i] = d;
+                    rhs[i] = source_S[i];
+                    x[i] = cell.get_pressure();
+                }
+            }
+        }
+        if(pressure_reference < n) x[pressure_reference] = 0.0;
+
+        auto apply_matrix = [&](const std::vector<double>& input,
+                                std::vector<double>& output) {
+            std::fill(output.begin(), output.end(), 0.0);
+            for(size_t i = 0; i < n; ++i) {
+                if(!active[i]) continue;
+                double value = diagonal[i] * input[i];
+                for(const FaceLink& link : neighbors[i])
+                    value -= link.conductance *
+                        input[cell_idx(link.nx, link.ny, link.nz)];
+                for(const InternalCurveLink& link :
+                    internal_curve_neighbors[i])
+                    value -= link.conductance *
+                        input[cell_idx(link.nx, link.ny, link.nz)];
+                output[i] = value;
+            }
+        };
+        auto dot_active = [&](const std::vector<double>& a,
+                              const std::vector<double>& b) {
+            double sum = 0.0;
+            for(size_t i = 0; i < n; ++i)
+                if(active[i]) sum += a[i] * b[i];
+            return sum;
+        };
+        auto max_abs_active = [&](const std::vector<double>& values) {
+            double maximum = 0.0;
+            for(size_t i = 0; i < n; ++i)
+                if(active[i]) maximum =
+                    std::max(maximum, std::abs(values[i]));
+            return maximum;
+        };
+        auto write_pressures = [&]() {
+            for(int ix = 0; ix < mesh.get_nx(); ++ix)
+                for(int iy = 0; iy < mesh.get_ny(); ++iy)
+                    for(int iz = 0; iz < mesh.get_nz(); ++iz) {
+                        const size_t i = cell_idx(ix, iy, iz);
+                        if(mesh.at(ix, iy, iz).is_fluid())
+                            mesh.at(ix, iy, iz).set_pressure(
+                                i == pressure_reference ? 0.0 : x[i]);
+                    }
+        };
+
+        apply_matrix(x, product);
+        for(size_t i = 0; i < n; ++i) {
+            if(!active[i]) continue;
+            residual[i] = rhs[i] - product[i];
+            z[i] = residual[i] / diagonal[i];
+            direction[i] = z[i];
+        }
+
+        double residual_max = max_abs_active(residual);
+        if(residual_max < pressure_tolerance) {
+            write_pressures();
+            return;
+        }
+
+        double rz = dot_active(residual, z);
+        if(!(rz > 0.0) || !std::isfinite(rz))
+            throw std::runtime_error(
+                "FlowSolver: PCG pressure matrix is singular or invalid. "
+                "Check that every fluid region is connected to a vent, fan "
+                "boundary, or the pressure reference.");
+
+        for(int iter = 0; iter < max_pressure_iters; ++iter) {
+            apply_matrix(direction, product);
+            const double denominator = dot_active(direction, product);
+            if(!(denominator > 0.0) || !std::isfinite(denominator))
+                throw std::runtime_error(
+                    "FlowSolver: PCG lost positive definiteness. Check "
+                    "fluid connectivity and face conductances.");
+
+            const double alpha = rz / denominator;
+            for(size_t i = 0; i < n; ++i) {
+                if(!active[i]) continue;
+                x[i] += alpha * direction[i];
+                residual[i] -= alpha * product[i];
+            }
+
+            residual_max = max_abs_active(residual);
+            if(residual_max < pressure_tolerance) {
+                write_pressures();
+                std::cout << "FlowSolver: PCG pressure converged after "
+                          << iter + 1 << " iterations; residual = "
+                          << residual_max << " m^3/s.\n";
+                return;
+            }
+
+            for(size_t i = 0; i < n; ++i)
+                if(active[i]) z[i] = residual[i] / diagonal[i];
+            const double rz_new = dot_active(residual, z);
+            if(!std::isfinite(rz_new))
+                throw std::runtime_error(
+                    "FlowSolver: PCG pressure residual became non-finite.");
+            const double beta = rz_new / rz;
+            for(size_t i = 0; i < n; ++i)
+                if(active[i])
+                    direction[i] = z[i] + beta * direction[i];
+            rz = rz_new;
+        }
+
+        write_pressures();
+        std::cerr << "FlowSolver: WARNING -- PCG pressure solve reached "
+                  << max_pressure_iters << " iterations; residual = "
+                  << residual_max << " m^3/s.\n";
     }
 
     double max_mass_residual() const {
