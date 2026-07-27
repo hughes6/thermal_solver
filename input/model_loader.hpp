@@ -1033,7 +1033,7 @@ struct ModelLoader {
         // anything else. Both are resolution-independent - no dx/dy/dz involved.
         RackBoundsChecker::check_all(rack, components, fans, vents);
         CollisionChecker::check_all(components, fans, vents);
-
+        
         Mesh mesh;
         double graph_dx = model.mesh.dx;
         double graph_dy = model.mesh.dy;
@@ -1187,6 +1187,7 @@ struct ComponentLoader {
         component.set_rho_solid(model.material.density);
         component.set_k_solid(model.material.k);
         component.set_watts(model.watts);
+        component.set_coords_m(0.0, 0.0, 0.0);
         for(const InternalRegionInput& i : model.internal_regions) {
             component.add_region(build_internal_region(i, &fan_curve_library));
         }
