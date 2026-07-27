@@ -1,5 +1,5 @@
-#ifndef MODEL_LOADER_HPP
-#define MODEL_LOADER_HPP
+#ifndef THERMAL_MODEL_LOADER_HPP
+#define THERMAL_MODEL_LOADER_HPP
 
 #include <filesystem>
 #include <iostream>
@@ -7,9 +7,11 @@
 #include <string>
 
 #include "../logger.hpp"
+#include "../solver.hpp"
 #include "input_types.hpp"
 #include "../component_grapher.hpp"
 #include "../collision.hpp"
+#include "../mesh_refinement_planner.hpp"
 #include "../toml.hpp"
 
 
@@ -362,7 +364,9 @@ namespace {
         };
     }
 
-    InternalRegion build_internal_region(const InternalRegionInput& input) {
+    InternalRegion build_internal_region(
+        const InternalRegionInput& input,
+        const std::unordered_map<std::string, FanCurveInput>* curve_library = nullptr) {
         if(input.state == RegionState::Fan) {
             if(!input.fan.has_value()) throw std::runtime_error("Internal fan region is missing parsed fan data.");
             const FanInput& f = *input.fan;
@@ -378,6 +382,21 @@ namespace {
                 f.flow_type == FanFlowType::Intake ? FlowType::Intake : FlowType::Exhaust,
                 f.shape == FanShape::Circular ? ShapeType::Circular : ShapeType::Rectangular
             );
+            if(f.curve_name.has_value()) {
+                if(curve_library == nullptr) {
+                    throw std::runtime_error(
+                        "Internal fan '" + f.name + "' references curve '" +
+                        *f.curve_name + "' but no fan curve library was loaded.");
+                }
+                const auto it = curve_library->find(*f.curve_name);
+                if(it == curve_library->end()) {
+                    throw std::runtime_error(
+                        "Internal fan '" + f.name + "' references unknown curve '" +
+                        *f.curve_name + "'");
+                }
+                const FanCurveInput& curve = it->second;
+                fan.set_curve(curve.a, curve.b, curve.c, curve.rho_rated);
+            }
             return InternalRegion(fan);
         }
 
@@ -439,7 +458,7 @@ namespace {
         if(value =="velocity_z" || value == "vz") {
             return LogVariable::VelocityZ;
         }
-        if(value =="velocity_mag" || value == "vmag" || value == "velocity" || value == "v") {
+        if(value =="velocity_mag" || value == "vmag" || value == "velocity" || value == "v" || value == "velocity_magnitude") {
             return LogVariable::VelocityMagnitude;
         }
         if(value =="density" || value == "rho") {
@@ -482,7 +501,7 @@ namespace {
         throw std::runtime_error("Unknown cell selection: " + value);
     }
 
-    void parse_logger_summary_requests(const toml::array& summaries, LoggerInput cfg) {
+    void parse_logger_summary_requests(const toml::array& summaries, LoggerInput& cfg) {
         std::vector<LoggerSummaryInput> parsed_summaries;
         for(const toml::node& node : summaries) {
             const toml::table* summary_table = node.as_table();
@@ -521,7 +540,7 @@ namespace {
         cfg.summary_requests = std::move(parsed_summaries);
     }
 
-    void parse_logger_probes(const toml::array& probes, LoggerInput cfg) {
+    void parse_logger_probes(const toml::array& probes, LoggerInput& cfg) {
         std::vector<LoggerProbeInput> parsed_probes;
         for(const toml::node& node : probes) {
             const toml::table* probe_table = node.as_table();
@@ -564,7 +583,7 @@ namespace {
         cfg.probes = std::move(parsed_probes);
     }
 
-    void parse_logger(const toml::table& root, LoggerInput cfg) {
+    void parse_logger(const toml::table& root, LoggerInput& cfg) {
         const toml::table* logger_table = root["logger"].as_table();
 
         if(logger_table == nullptr) {
@@ -613,7 +632,7 @@ namespace {
         if(const toml::array* summaries = (*logger_table)["summary"].as_array()) {
             parse_logger_summary_requests(*summaries, cfg);
         }
-        if(const toml::array* probes = (*logger_table)["probes"].as_array()) {
+        if(const toml::array* probes = (*logger_table)["probe"].as_array()) {
             parse_logger_probes(*probes, cfg);
         }
 
@@ -627,6 +646,9 @@ namespace {
         }
         if(input.enable_field_logging) {
             config.enable_field_logging = *input.enable_field_logging;
+        }
+        if(input.enable_summary_logging) {
+            config.enable_summary_logging = *input.enable_summary_logging;
         }
         if(input.enable_probe_logging) {
             config.enable_probe_logging = *input.enable_probe_logging;
@@ -644,7 +666,7 @@ namespace {
             config.field_variables = *input.field_variables;
         }
         if(input.summary_requests) {
-            config.summary_requests;
+            config.summary_requests.clear();
             for(const LoggerSummaryInput& summary_input : *input.summary_requests) {
                 SummaryRequest request;
                 if(summary_input.name) {
@@ -678,6 +700,9 @@ namespace {
             config.probes.clear();
             for(const LoggerProbeInput& probe_input : *input.probes) {
                 Probe probe;
+                if(probe_input.name) {
+                    probe.name = *probe_input.name;
+                }
                 if(probe_input.x) {
                     probe.x = *probe_input.x;
                 }
@@ -750,9 +775,17 @@ struct ModelLoader {
 
             // ------------------------------------------Mesh------------------------------------------------
             const toml::table& mesh = require_table(root["mesh"],"mesh");
-            model.mesh.dx = require_value<double>(mesh["dx"], "mesh.dx");
-            model.mesh.dy = require_value<double>(mesh["dy"], "mesh.dy");
-            model.mesh.dz = require_value<double>(mesh["dz"], "mesh.dz");
+            model.mesh.adaptive = mesh["adaptive"].value<bool>().value_or(false);
+            if (model.mesh.adaptive) {
+                model.mesh.fine_dx = require_value<double>(mesh["fine_dx"], "mesh.fine_dx");
+                model.mesh.coarse_dx = require_value<double>(mesh["coarse_dx"], "mesh.coarse_dx");
+                model.mesh.refinement_margin =
+                    mesh["refinement_margin"].value<double>().value_or(0.0);
+            } else {
+                model.mesh.dx = require_value<double>(mesh["dx"], "mesh.dx");
+                model.mesh.dy = require_value<double>(mesh["dy"], "mesh.dy");
+                model.mesh.dz = require_value<double>(mesh["dz"], "mesh.dz");
+            }
 
             // ------------------------------------------Rack------------------------------------------------
             const toml::table& rack = require_table(root["rack"], "rack");
@@ -773,9 +806,10 @@ struct ModelLoader {
 
             // ------------------------------------------Global Objects---------------------------------------
             parse_logger(root, input);
-            if(input.template_file == "NULL") {
-                const toml::table& templat_cfg = require_table(root["template"], "logger.template");
-                parse_logger(templat_cfg, input);
+            if(input.template_file && *input.template_file != "NULL") {
+                const toml::table template_root =
+                    toml::parse_file(*input.template_file);
+                parse_logger(template_root, input);
             }
             config = std::move(make_logging_config(input));
 
@@ -815,9 +849,6 @@ struct ModelLoader {
         rack.set_h(model.rack.ambient.h);
         rack.set_rho(model.rack.ambient.rho);
         rack.set_t(model.rack.ambient.temperature);
-
-        Mesh mesh = Mesh().build_mesh(rack, model.mesh.dx, model.mesh.dy, model.mesh.dz, env, load);
-        Grapher grapher = Grapher(rack, model.mesh.dx, model.mesh.dy, model.mesh.dz);
 
         // Built up-front, geometry-checked as a whole, then stamped. Keeping the
         // "build" and "stamp" phases separate is what lets CollisionChecker see
@@ -867,7 +898,7 @@ struct ModelLoader {
             component.set_k_solid(c.material.k);
             component.set_watts(c.watts);
             for(const InternalRegionInput& i : c.internal_regions) {
-                component.add_region(build_internal_region(i));
+                component.add_region(build_internal_region(i, &fan_curve_library));
             }
             component.order_internal_regions();
             components.push_back(component);
@@ -1002,17 +1033,49 @@ struct ModelLoader {
         // anything else. Both are resolution-independent - no dx/dy/dz involved.
         RackBoundsChecker::check_all(rack, components, fans, vents);
         CollisionChecker::check_all(components, fans, vents);
+        
+        Mesh mesh;
+        double graph_dx = model.mesh.dx;
+        double graph_dy = model.mesh.dy;
+        double graph_dz = model.mesh.dz;
+        if (model.mesh.adaptive) {
+            const MeshRefinementPlan plan = MeshRefinementPlanner::plan(
+                rack, components, fans, vents,
+                model.mesh.fine_dx, model.mesh.coarse_dx,
+                model.mesh.refinement_margin);
+            mesh = Mesh().build_adaptive_mesh(
+                rack, plan.dxs, plan.dys, plan.dzs, env, load);
+            // Grapher remains a lightweight uniform ASCII geometry preview.
+            // Use the fine spacing so it does not hide resolved features.
+            graph_dx = graph_dy = graph_dz = model.mesh.fine_dx;
+        } else {
+            mesh = Mesh().build_mesh(
+                rack, model.mesh.dx, model.mesh.dy, model.mesh.dz, env, load);
+        }
+        Grapher grapher(rack, graph_dx, graph_dy, graph_dz);
 
         for(const Component& component : components) {
-            mesh.stamp_component(component);
+            if(model.mesh.adaptive) {
+                mesh.stamp_component_adaptive(component);
+            } else {
+                mesh.stamp_component(component);
+            }
             grapher.add_component(component);
         }
         for(const Fan& fan : fans) {
-            mesh.stamp_fan(fan);
+            if(model.mesh.adaptive) {
+                mesh.stamp_fan_adaptive(fan);
+            } else {
+                mesh.stamp_fan(fan);
+            }
             grapher.add_fan(fan);
         }
         for(const Vent& vent : vents) {
-            mesh.stamp_vent(vent);
+            if(model.mesh.adaptive) {
+                mesh.stamp_vent_adaptive(vent);
+            } else {
+                mesh.stamp_vent(vent);
+            }
             grapher.add_vent(vent);
         }
 
@@ -1041,6 +1104,8 @@ struct ModelLoader {
         logger.initialize(mesh);
         solver.set_logger(logger);
         solver.solve();
+
+        mesh.check_stamps();
     }
 };
 
@@ -1048,9 +1113,14 @@ struct ModelLoader {
 
 struct ComponentLoader {
     ComponentInput model;
+    std::unordered_map<std::string, FanCurveInput> fan_curve_library;
     std::unordered_map<std::string, ComponentInput> component_template_cache; 
 
     ComponentLoader() = default;
+
+    void load_fan_curves(const std::filesystem::path& library_path) {
+        fan_curve_library = load_fan_curve_library(library_path);
+    }
 
 
     void load_component(const std::filesystem::path& component_path) 
@@ -1117,8 +1187,9 @@ struct ComponentLoader {
         component.set_rho_solid(model.material.density);
         component.set_k_solid(model.material.k);
         component.set_watts(model.watts);
+        component.set_coords_m(0.0, 0.0, 0.0);
         for(const InternalRegionInput& i : model.internal_regions) {
-            component.add_region(build_internal_region(i));
+            component.add_region(build_internal_region(i, &fan_curve_library));
         }
         component.order_internal_regions();
         grapher.add_component(component);
