@@ -225,6 +225,13 @@ struct InternalRegion {
     // getters
     std::string get_name() const { return name; }
     RegionType get_region_type() const { return region_type; }
+    std::string get_region_type_t() const { 
+        if(region_type == RegionType::Air) return "air";
+        if(region_type == RegionType::HeatSource) return "solid";
+        if(region_type == RegionType::Fan) return "fan";
+        if(region_type == RegionType::Vent) return "vent";
+        return "uninitialized";
+    }
     FlowType get_flow_type() const { return flow_type; }
     ShapeType get_shape_type() const { return shape_type; }
     std::array<double, 3> get_size_m() const { return size_m; }
@@ -312,14 +319,16 @@ struct InternalRegion {
     void validate_air() {
         validate_size();
     }
+
     void validate_fan() {
-        validate_size();
+        if(shape_type == ShapeType::Rectangular) validate_size();
         if(shape_type == ShapeType::Rectangular && diameter != 0.0) throw std::invalid_argument("InternalRegion: rectangular fan has diameter defined.");
         if(shape_type == ShapeType::Circular && (size_m[0] != 0.0 || size_m[1] != 0.0 || size_m[2] != 0.0)) throw std::invalid_argument("InternalRegion: circular fan has size vector");
         if(cfm < 0.0) throw std::invalid_argument("InternalRegion: fan cfm cannot be < 0.0.");
     }
+
     void validate_vent() {
-        validate_size();
+        if(shape_type == ShapeType::Rectangular) validate_size();
         if(free_area_ratio < 0.0 || free_area_ratio > 1.0) throw std::invalid_argument("InternalRegion: vent free area ration needs to be > 0.0 and < 1.0.");
     }
 
@@ -576,20 +585,21 @@ struct Component {
                 (std::abs(direction[1]) >= std::abs(direction[2]) ? 1 : 2);
 
             for(int axis = 0; axis < 3; ++axis) {
-                const double half_extent =
-                    axis == normal_axis ? 0.0 :
-                    (r.is_circular() ? r.get_diameter() / 2.0
-                                     : loc_size[axis] / 2.0);
-                if(local[axis] - half_extent < -eps ||
+                const double half_extent =  axis == normal_axis ? 0.0 : (r.is_circular() ? r.get_diameter() / 2.0 : 0.0);
+                if(local[axis] - half_extent < - eps ||
                    local[axis] + half_extent > component_size[axis] + eps) {
+                    std::cout << "half extent: " << half_extent << std::endl;
+                    std::cout << "normal axis: " << normal_axis << std::endl;
+                    std::cout << "loc - half: " << local[axis] - half_extent << " eps: " << eps << std::endl;
+                    std::cout << "loc + half: " << local[axis] + half_extent << " com_size: " << component_size[axis] + eps << std::endl;
+                    std::cout << "axis: " << axis << " comp: " << component_size[axis] << " int: " << local[axis] << std::endl;
+                    std::cout << "axis: " << axis << " comp: " << component_size[axis] << " int: " << local[axis] << std::endl;
                     throw std::invalid_argument(
-                        "Component:InternalRegion " + r.get_name() +
-                        " - fan/vent footprint extends outside component bounds.");
+                        "Component:InternalRegion " + r.get_name() + " - fan/vent footprint extends outside component bounds.");
                 }
             }
             return;
         }
-
         std::array<double, 3> loc = local_to_global(local);
         if(loc[0] < bot_left_corner_coords[0] - eps|| loc[0] + loc_size[0] > bot_left_corner_coords[0] + width_m + eps) {
             std::cout << "loc x min: " << loc[0] << " comp x min: " << bot_left_corner_coords[0];
@@ -611,6 +621,7 @@ struct Component {
     void validate_fan_vent(InternalRegion r) {
         constexpr double eps = 1e-9;
         const std::array<double, 3> loc = r.get_local_position();
+        const std::array<double, 3> loc_size = r.get_size_m();
         const std::array<double, 3> component_size{width_m, depth_m, height_m};
         int lies_on_face = 0;
         for(int axis = 0; axis < 3; ++axis) {
@@ -619,12 +630,21 @@ struct Component {
                 ++lies_on_face;
             }
         }
+        if(loc[0] < -eps || loc[0] + loc_size[0] > component_size[0] + eps) {
+            throw std::invalid_argument("Component:InternalRegion: " + r.get_name() + " - fan/vent x out of component bounds.");
+        }
+        if(loc[1] < -eps || loc[1] + loc_size[1] > component_size[1] + eps) {
+            throw std::invalid_argument("Component:InternalRegion: " + r.get_name() + " - fan/vent y out of component bounds.");
+        }
+        if(loc[2] < -eps || loc[2] + loc_size[2] > component_size[2] + eps) {
+            throw std::invalid_argument("Component:InternalRegion: " + r.get_name() + " - fan/vent z out of component bounds.");
+        }
         if(lies_on_face > 1) {
             throw std::invalid_argument("Component:InternalRegion: " + r.get_name() + " - fan/vent intercepts more than 1 face.");
         }
-        if(lies_on_face < 1) {
-            throw std::invalid_argument("Component:InternalRegion: " + r.get_name() + " - fan/vent does not intercept any component face.");
-        }
+        // if(lies_on_face < 1) {
+        //     throw std::invalid_argument("Component:InternalRegion: " + r.get_name() + " - fan/vent does not intercept any component face.");
+        // }
     }
 };
 
