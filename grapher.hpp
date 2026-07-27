@@ -181,6 +181,8 @@ public:
                 const auto size = region.get_size_m();
                 const auto local = region.get_local_position();
                 const auto global = region.get_global_position();
+                const auto direction = region.get_direction();
+                const auto diameter = region.get_diameter();
 
                 const char* type = "Uninitialized";
                 switch(region.get_region_type()) {
@@ -196,6 +198,8 @@ public:
                 fout << "    size: " << size[0] << " " << size[1] << " " << size[2] << " m\n";
                 fout << "    local_position: " << local[0] << " " << local[1] << " " << local[2] << " m\n";
                 fout << "    global_position: " << global[0] << " " << global[1] << " " << global[2] << " m\n";
+                fout << "    diameter: " << diameter << " m\n";
+                fout << "    direction: " << direction[0] << " " << direction[1] << " " << direction[2] << " m\n";
                 if(region.get_region_type() == RegionType::HeatSource) {
                     fout << "    watts: " << region.get_watts() << " W\n";
                     fout << "    k: " << region.get_k() << " W/m-K\n";
