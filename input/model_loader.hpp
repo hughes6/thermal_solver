@@ -759,7 +759,10 @@ struct ModelLoader {
                 simulation["advection_cfl_target"].value<double>().value_or(0.8);
             model.simulation.max_advection_substeps =
                 simulation["max_advection_substeps"].value<int>().value_or(10000);
-
+            model.simulation.multithreading = 
+                simulation["multithreading"].value<bool>().value_or(false);
+            model.simulation.cores =
+                simulation["cores"].value<int>().value_or(1);
             // ----------------------------------------Flow Solver-------------------------------------------
             const toml::table& flow_solver = require_table(root["flow_solver"], "simulation");
             model.flow_solver.enable_flow_solver = flow_solver["enable_flow_solver"].value<bool>().value_or(false);
@@ -809,7 +812,9 @@ struct ModelLoader {
                     model.multistage.coarse_update_flow_interval =
                         (*multistage)["coarse_update_flow_interval"]
                             .value<int>().value_or(-1);
-
+                    model.multistage.coarse_output_interval = 
+                        (*multistage)["coarse_output_interval"]
+                            .value<int>().value_or(-1);
                     const toml::table& coarse_mesh = require_table(
                         (*multistage)["coarse_mesh"], "multistage.coarse_mesh");
                     model.multistage.coarse_mesh.adaptive = true;
@@ -1169,14 +1174,14 @@ struct ModelLoader {
                 model.flow_solver.enable_flow_solver
                     ? model.multistage.coarse_update_flow_interval
                     : -1;
+            const int coarse_output_interval = model.multistage.coarse_output_interval == -1 ? 
+            std::max(1, static_cast<int>(std::ceil(model.multistage.coarse_duration/model.multistage.coarse_dt))) : model.multistage.coarse_output_interval;
             Solver coarse_solver(
                 coarse_mesh,
                 model.multistage.coarse_dt,
                 model.multistage.coarse_duration,
                 false,
-                std::max(1, static_cast<int>(std::ceil(
-                    model.multistage.coarse_duration /
-                    model.multistage.coarse_dt))),
+                coarse_output_interval,
                 coarse_flow_interval,
                 *model.flow_solver.resistivity,
                 *model.flow_solver.tolerance,
@@ -1189,6 +1194,12 @@ struct ModelLoader {
                 model.simulation.max_advection_substeps,
                 "coarse_simulation.csv",
                 model.flow_solver.pressure_method);
+
+   
+            if(model.simulation.multithreading) {
+                coarse_solver.set_cores(model.simulation.cores);
+            }
+            
             coarse_solver.solve();
             coarse_warm_start = coarse_solver.get_mesh();
             double coarse_min_T=std::numeric_limits<double>::infinity();
@@ -1468,6 +1479,9 @@ struct ModelLoader {
                     "simulation.csv",
                     model.flow_solver.pressure_method);
 
+        if(model.simulation.multithreading) {
+            solver.set_cores(model.simulation.cores);
+        }
 
         SimulationLogger logger(config);
         logger.initialize(mesh);
