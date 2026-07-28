@@ -48,6 +48,8 @@ struct SimulationInput {
     bool advection_subcycling = false;
     double advection_cfl_target = 0.8;
     int max_advection_substeps = 10000;
+    bool multithreading = false;
+    int cores = 1;
 };
 
 struct FlowSolverInput {
@@ -122,6 +124,7 @@ struct MultiStageInput {
     bool enabled = false;
     double coarse_dt = 0.0;
     double coarse_duration = 0.0;
+    double coarse_output_interval = -1;
     int coarse_update_flow_interval = -1;
     MeshInput coarse_mesh;
 };
