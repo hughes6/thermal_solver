@@ -3,6 +3,11 @@ $ErrorActionPreference = "Stop"
 $tests = @(
     "pcg_flow_test",
     "advection_subcycling_test",
+<<<<<<< Updated upstream
+=======
+    "multithreading_test",
+    "openfoam_export_test",
+>>>>>>> Stashed changes
     "face_wall_test",
     "model_config_test"
 )

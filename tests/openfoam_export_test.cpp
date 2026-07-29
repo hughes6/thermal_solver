@@ -1,0 +1,145 @@
+#include <cassert>
+#include <filesystem>
+#include <fstream>
+#include <iostream>
+#include <sstream>
+
+#include "openfoam_exporter.hpp"
+
+int main(int argc, char** argv) {
+    Environment env(30.0,0.0,20.0,1005.0,0.02587,
+                    0.000018,0.71,1.225);
+    Workload load(10000,1000000,100000,100);
+    Rack rack=Rack::from_meters(0.3,0.2,0.2);
+    rack.set_t(20.0);
+    rack.set_cp(1005.0);
+    rack.set_k(0.02587);
+    rack.set_rho(1.225);
+    Mesh mesh=Mesh().build_mesh(rack,0.1,0.1,0.1,env,load);
+
+    Component component =
+        Component::from_meters(0.1,0.1,0.1,"test heater");
+    component.set_coords_m(0.1,0.0,0.0);
+    component.set_t(30.0);
+    component.set_rho_solid(2700.0);
+    component.set_cp(900.0);
+    component.set_k_solid(150.0);
+    component.set_watts(0.0);
+    InternalRegion heat_source(
+        "test_heat_source",{0.1,0.1,0.1},{0.0,0.0,0.0},
+        900.0,2700.0,150.0,10.0);
+    component.add_region(heat_source);
+    component.order_internal_regions();
+    mesh.stamp_component_for_openfoam(component);
+
+    Fan inlet(
+        "test_inlet",10.0,0.0,{0.1,0.0,0.1},
+        {0.05,0.0,0.05},{0.0,1.0,0.0},
+        FlowType::Intake,ShapeType::Rectangular);
+    Vent outlet(
+        "test_outlet",{0.1,0.0,0.1},1.0,0.0,0.65,
+        {0.25,0.2,0.15},{0.0,1.0,0.0},
+        VentShapeType::Rectangular);
+    mesh.stamp_fan_for_openfoam(inlet);
+    mesh.stamp_vent_for_openfoam(outlet);
+
+    assert(mesh.has_openfoam_export_metadata());
+    assert(mesh.get_openfoam_component_regions().size()==1);
+    assert(mesh.get_openfoam_cell_metadata()[mesh.idx(1,0,0)]
+               .region_type ==
+           Mesh::OpenFoamCellMetadata::RegionType::Solid);
+    assert(mesh.get_openfoam_cell_metadata()[mesh.idx(0,0,0)]
+               .region_type ==
+           Mesh::OpenFoamCellMetadata::RegionType::Fluid);
+
+    const bool keep_case = argc > 1;
+    const std::filesystem::path case_path =
+        keep_case
+            ? std::filesystem::path(argv[1])
+            : std::filesystem::temp_directory_path() /
+                "thermal_solver_openfoam_export_test";
+    OpenFoamExporter::export_mesh(
+        mesh,
+        {.case_directory=case_path,
+         .overwrite=true,
+         .parallel_processes=2,
+         .end_time=12.5,
+         .initial_time_step=0.005,
+         .maximum_time_step=0.25,
+         .maximum_courant_number=0.4,
+         .field_write_interval=2.5,
+         .report_interval=0.5,
+         .use_k_omega_sst=true,
+         .inlet_turbulence_intensity=0.05,
+         .turbulence_length_scale=0.01,
+         .turbulent_prandtl_number=0.85});
+
+    for(const char* file :
+        {"points","faces","owner","neighbour","boundary","cellZones"})
+        assert(std::filesystem::is_regular_file(
+            case_path/"constant"/"polyMesh"/file));
+    assert(std::filesystem::is_regular_file(
+        case_path/"system"/"controlDict"));
+    std::ifstream control_file(case_path/"system"/"controlDict");
+    std::ostringstream control_text;
+    control_text << control_file.rdbuf();
+    control_file.close();
+    assert(control_text.str().find("endTime         12.5;") !=
+           std::string::npos);
+    assert(control_text.str().find("deltaT          0.005") !=
+           std::string::npos);
+    assert(control_text.str().find("maxDeltaT       0.25;") !=
+           std::string::npos);
+    assert(control_text.str().find("writeControl    adjustableRunTime;") !=
+           std::string::npos);
+    assert(control_text.str().find("type yPlus;") != std::string::npos);
+    assert(std::filesystem::is_regular_file(
+        case_path/"constant"/"polyMesh"/"sets"/"test_heat_source_0"));
+    assert(std::filesystem::is_regular_file(
+        case_path/"constant"/"openfoamExportProperties"));
+    assert(std::filesystem::is_regular_file(
+        case_path/"0"/"heatSourceMask_0"));
+    assert(std::filesystem::is_regular_file(
+        case_path/"system"/"topoSetDict_test_heat_source_0"));
+    assert(std::filesystem::is_regular_file(
+        case_path/"prepare_regions.sh"));
+    assert(std::filesystem::is_regular_file(case_path/"run_cht.sh"));
+    assert(std::filesystem::is_regular_file(case_path/"run_parallel.sh"));
+    assert(std::filesystem::is_regular_file(
+        case_path/"system"/"decomposeParDict"));
+    assert(std::filesystem::is_regular_file(
+        case_path/"system"/"fluid"/"decomposeParDict"));
+    assert(std::filesystem::is_regular_file(
+        case_path/"system"/"test_heater_0"/"decomposeParDict"));
+    assert(std::filesystem::is_regular_file(
+        case_path/"system"/"topoSetDict_fluid_interfaces"));
+    assert(std::filesystem::is_regular_file(case_path/"0"/"fluid"/"T"));
+    assert(std::filesystem::is_regular_file(case_path/"0"/"fluid"/"U"));
+    assert(std::filesystem::is_regular_file(case_path/"0"/"fluid"/"k"));
+    assert(std::filesystem::is_regular_file(case_path/"0"/"fluid"/"omega"));
+    assert(std::filesystem::is_regular_file(case_path/"0"/"fluid"/"nut"));
+    assert(std::filesystem::is_regular_file(
+        case_path/"0"/"test_heater_0"/"T"));
+    assert(std::filesystem::is_regular_file(
+        case_path/"constant"/"fluid"/"thermophysicalProperties"));
+    assert(std::filesystem::is_regular_file(
+        case_path/"constant"/"test_heater_0"/"thermophysicalProperties"));
+    assert(std::filesystem::is_regular_file(
+        case_path/"constant"/"test_heater_0"/"fvOptions"));
+    assert(std::filesystem::is_regular_file(
+        case_path/"system"/"fluid"/"fvSolution"));
+    assert(std::filesystem::is_regular_file(
+        case_path/"system"/"test_heater_0"/"fvSchemes"));
+    std::ifstream boundary_file(
+        case_path/"constant"/"polyMesh"/"boundary");
+    std::ostringstream boundary_text;
+    boundary_text << boundary_file.rdbuf();
+    boundary_file.close();
+    assert(boundary_text.str().find("rack_walls") != std::string::npos);
+    assert(boundary_text.str().find("test_inlet") != std::string::npos);
+    assert(boundary_text.str().find("test_outlet") != std::string::npos);
+
+    std::cout << case_path.string() << '\n';
+    if(!keep_case) std::filesystem::remove_all(case_path);
+    std::cout << "openfoam_export_test PASSED\n";
+}

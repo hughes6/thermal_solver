@@ -10,6 +10,7 @@
 #include <iomanip>
 #include <cstdint>
 #include <limits>
+#include <string>
 
 #include "cell.hpp"
 #include "component.hpp"
@@ -21,6 +22,73 @@
 
 class Mesh {
 public:
+    struct OpenFoamCellMetadata {
+        enum class RegionType : unsigned char {
+            Fluid,
+            Solid
+        };
+
+        RegionType region_type = RegionType::Fluid;
+        int component_id = -1;
+        int material_id = -1;
+        int heat_source_id = -1;
+    };
+
+    struct OpenFoamComponentRegion {
+        int id = -1;
+        std::string name;
+        double conductivity = 0.0;
+        double rho = 0.0;
+        double cp = 0.0;
+    };
+
+    struct OpenFoamHeatSourceRegion {
+        int id = -1;
+        int component_id = -1;
+        std::string name;
+        double watts = 0.0;
+    };
+
+    struct OpenFoamBoundaryPatch {
+        enum class Kind : unsigned char {
+            Inlet,
+            Outlet,
+            Vent
+        };
+
+        int id = -1;
+        std::string name;
+        Kind kind = Kind::Vent;
+        double vent_free_area_m2 = 0.0;
+        double vent_discharge_coefficient = 0.0;
+        bool fan_has_curve = false;
+        double fan_curve_a = 0.0;
+        double fan_curve_b = 0.0;
+        double fan_curve_c = 0.0;
+        double fan_rated_density = 1.2;
+        double fan_reference_flow_m3s = 0.0;
+        std::array<double,3> direction{0.0,0.0,0.0};
+        std::vector<std::size_t> adjacent_cells;
+        double source_zone_thickness = 0.0;
+    };
+
+    struct OpenFoamInternalFlowDevice {
+        enum class Kind : unsigned char { Fan, Vent };
+        int id = -1;
+        std::string name;
+        Kind kind = Kind::Vent;
+        std::array<double,3> direction{0.0,0.0,0.0};
+        std::vector<std::size_t> cells;
+        double thickness = 0.0;
+        double free_area_m2 = 0.0;
+        double discharge_coefficient = 0.0;
+        double curve_a = 0.0;
+        double curve_b = 0.0;
+        double curve_c = 0.0;
+        double rated_density = 1.2;
+        double reference_flow_m3s = 0.0;
+    };
+
     struct WallFace {
         int x = 0, y = 0, z = 0; // lower-coordinate cell
         int axis = 0;             // 0=x, 1=y, 2=z
@@ -121,6 +189,44 @@ public:
 
     const Environment& get_env() const { return env; }
     const std::vector<Cell>& get_cells() const { return cells; }
+    const std::vector<double>& get_x_bounds() const { return x_bounds; }
+    const std::vector<double>& get_y_bounds() const { return y_bounds; }
+    const std::vector<double>& get_z_bounds() const { return z_bounds; }
+    bool has_openfoam_export_metadata() const {
+        return openfoam_cell_metadata.size() == get_cell_count();
+    }
+    const std::vector<OpenFoamCellMetadata>&
+    get_openfoam_cell_metadata() const {
+        if(!has_openfoam_export_metadata()) {
+            throw std::logic_error(
+                "Mesh: OpenFOAM export metadata has not been enabled.");
+        }
+        return openfoam_cell_metadata;
+    }
+    const std::vector<OpenFoamComponentRegion>&
+    get_openfoam_component_regions() const {
+        return openfoam_component_regions;
+    }
+    const std::vector<OpenFoamHeatSourceRegion>&
+    get_openfoam_heat_source_regions() const {
+        return openfoam_heat_source_regions;
+    }
+    const std::vector<OpenFoamBoundaryPatch>&
+    get_openfoam_boundary_patches() const {
+        return openfoam_boundary_patches;
+    }
+    const std::vector<OpenFoamInternalFlowDevice>&
+    get_openfoam_internal_flow_devices() const {
+        return openfoam_internal_flow_devices;
+    }
+    int get_openfoam_boundary_patch_id(
+        int x, int y, int z, int axis, int side) const {
+        if(axis < 0 || axis > 2 || side < 0 || side > 1 ||
+           !in_bounds(x,y,z) || openfoam_boundary_patch_ids.empty())
+            return -1;
+        return openfoam_boundary_patch_ids[
+            idx(x,y,z)*6u + static_cast<std::size_t>(axis*2+side)];
+    }
     const std::vector<InternalFanInterface>& get_internal_fans() const {
         return internal_fans;
     }
@@ -391,6 +497,248 @@ public:
         }
 
         return mesh;
+    }
+
+    // Additive OpenFOAM stamping path. Existing stamp_component() and
+    // stamp_component_adaptive() behavior remains unchanged. Call this
+    // sibling instead when the finished mesh will be exported.
+    void stamp_component_for_openfoam(const Component& component) {
+        enable_openfoam_export_metadata();
+
+        const int component_id =
+            static_cast<int>(openfoam_component_regions.size());
+        openfoam_component_regions.push_back(
+            {component_id,
+             component.get_name(),
+             component.get_k(),
+             component.get_rho(),
+             component.get_cp()});
+
+        // Preserve the exact established stamping behavior, including its
+        // uniform/adaptive dispatch and internal-region ordering.
+        stamp_component(component);
+
+        const auto origin = component.get_coords();
+        const int i0 = std::max(0, index_x(origin[0]));
+        const int j0 = std::max(0, index_y(origin[1]));
+        const int k0 = std::max(0, index_z(origin[2]));
+        const int i1 = std::min(
+            nx, end_index_x(origin[0] + component.get_width_m()));
+        const int j1 = std::min(
+            ny, end_index_y(origin[1] + component.get_depth_m()));
+        const int k1 = std::min(
+            nz, end_index_z(origin[2] + component.get_height_m()));
+
+        for(int i = i0; i < i1; ++i) {
+            for(int j = j0; j < j1; ++j) {
+                for(int k = k0; k < k1; ++k) {
+                    if(!at(i,j,k).is_solid()) continue;
+                    OpenFoamCellMetadata& metadata =
+                        openfoam_cell_metadata[idx(i,j,k)];
+                    metadata.region_type =
+                        OpenFoamCellMetadata::RegionType::Solid;
+                    metadata.component_id = component_id;
+                    metadata.material_id = component_id;
+                }
+            }
+        }
+
+        for(const InternalRegion& region : component.get_regions()) {
+            if(region.get_region_type() != RegionType::HeatSource) continue;
+            const int source_id =
+                static_cast<int>(openfoam_heat_source_regions.size());
+            openfoam_heat_source_regions.push_back(
+                {source_id, component_id, region.get_name(),
+                 region.get_watts()});
+
+            const auto position = region.get_global_position();
+            const auto size = region.get_size_m();
+            const int si0 = std::max(0, index_x(position[0]));
+            const int sj0 = std::max(0, index_y(position[1]));
+            const int sk0 = std::max(0, index_z(position[2]));
+            const int si1 = std::min(nx, end_index_x(position[0] + size[0]));
+            const int sj1 = std::min(ny, end_index_y(position[1] + size[1]));
+            const int sk1 = std::min(nz, end_index_z(position[2] + size[2]));
+            for(int i = si0; i < si1; ++i) {
+                for(int j = sj0; j < sj1; ++j) {
+                    for(int k = sk0; k < sk1; ++k) {
+                        if(at(i,j,k).is_solid())
+                            openfoam_cell_metadata[idx(i,j,k)]
+                                .heat_source_id = source_id;
+                    }
+                }
+            }
+        }
+
+        for(const InternalRegion& region : component.get_regions()) {
+            if(region.get_region_type() != RegionType::Fan &&
+               region.get_region_type() != RegionType::Vent)
+                continue;
+            const auto center = region.get_global_position();
+            const auto direction = region.get_direction();
+            const auto size = region.get_size_m();
+            const int normal_axis =
+                std::abs(direction[0]) >= std::abs(direction[1]) &&
+                std::abs(direction[0]) >= std::abs(direction[2]) ? 0 :
+                (std::abs(direction[1]) >= std::abs(direction[2]) ? 1 : 2);
+            const double domain_extent =
+                normal_axis == 0 ? x_bounds.back() :
+                (normal_axis == 1 ? y_bounds.back() : z_bounds.back());
+            const double boundary_tolerance =
+                1e-9*std::max(1.0,std::abs(domain_extent));
+            const bool on_ambient_boundary =
+                std::abs(center[normal_axis]) <= boundary_tolerance ||
+                std::abs(center[normal_axis]-domain_extent) <=
+                    boundary_tolerance;
+            if(on_ambient_boundary) {
+                const int patch_id =
+                    static_cast<int>(openfoam_boundary_patches.size());
+                const bool fan =
+                    region.get_region_type() == RegionType::Fan;
+                OpenFoamBoundaryPatch::Kind kind =
+                    OpenFoamBoundaryPatch::Kind::Vent;
+                if(fan)
+                    kind = region.get_flow_type() == FlowType::Intake
+                        ? OpenFoamBoundaryPatch::Kind::Inlet
+                        : OpenFoamBoundaryPatch::Kind::Outlet;
+                openfoam_boundary_patches.push_back(
+                    {patch_id,
+                     component.get_name()+"_"+region.get_name(),
+                     kind,
+                     fan ? 0.0 : region.free_area(),
+                     fan ? 0.0 : region.get_cd(),
+                     fan && region.has_curve(),
+                     region.get_curve_a(),region.get_curve_b(),
+                     region.get_curve_c(),region.get_fan_rho_rated(),
+                     region.flow_m3s()});
+                const auto flow_direction =
+                    fan ? region.get_velocity_direction() : direction;
+                const std::size_t marked=mark_openfoam_boundary_opening(
+                    center,flow_direction,size,region.get_diameter(),
+                    region.is_circular(),
+                    fan ? Cell::State::Fan : Cell::State::Vent,
+                    patch_id);
+                if(marked==0)
+                    throw std::runtime_error(
+                        "OpenFOAM ambient-connected component device '"+
+                        component.get_name()+"/"+region.get_name()+
+                        "' did not cover an exterior fluid face.");
+                populate_openfoam_boundary_source_zone(
+                    patch_id,flow_direction);
+                continue;
+            }
+            const int plane_index =
+                normal_axis == 0 ? index_x(center[0]) :
+                (normal_axis == 1 ? index_y(center[1]) : index_z(center[2]));
+            std::vector<std::size_t> selected;
+            for(int i=0; i<nx; ++i) for(int j=0; j<ny; ++j)
+                for(int k=0; k<nz; ++k) {
+                    const int normal_index =
+                        normal_axis == 0 ? i : (normal_axis == 1 ? j : k);
+                    if(normal_index != plane_index) continue;
+                    const std::array<double,3> point{
+                        cell_center_x(i),cell_center_y(j),cell_center_z(k)};
+                    bool inside = true;
+                    for(int axis=0; axis<3; ++axis) {
+                        if(axis == normal_axis) continue;
+                        const double half =
+                            region.is_circular()
+                                ? region.get_diameter()/2.0
+                                : size[axis]/2.0;
+                        inside = inside &&
+                            std::abs(point[axis]-center[axis]) <= half+1e-12;
+                    }
+                    if(region.is_circular()) {
+                        double radius_squared = 0.0;
+                        for(int axis=0; axis<3; ++axis)
+                            if(axis != normal_axis)
+                                radius_squared +=
+                                    (point[axis]-center[axis])*
+                                    (point[axis]-center[axis]);
+                        inside = radius_squared <=
+                            region.get_diameter()*region.get_diameter()/4.0;
+                    }
+                    if(inside && at(i,j,k).is_fluid())
+                        selected.push_back(idx(i,j,k));
+                }
+            if(selected.empty())
+                throw std::runtime_error(
+                    "OpenFOAM internal flow device '" + region.get_name() +
+                    "' selected no fluid cells.");
+            const double thickness =
+                normal_axis == 0
+                    ? at(plane_index,0,0).get_dx()
+                    : (normal_axis == 1
+                        ? at(0,plane_index,0).get_dy()
+                        : at(0,0,plane_index).get_dz());
+            openfoam_internal_flow_devices.push_back(
+                {static_cast<int>(openfoam_internal_flow_devices.size()),
+                 region.get_name(),
+                 region.get_region_type() == RegionType::Fan
+                    ? OpenFoamInternalFlowDevice::Kind::Fan
+                    : OpenFoamInternalFlowDevice::Kind::Vent,
+                 direction,selected,thickness,
+                 region.get_region_type() == RegionType::Vent
+                    ? region.free_area() : 0.0,
+                 region.get_region_type() == RegionType::Vent
+                    ? region.get_cd() : 0.0,
+                 region.get_curve_a(),region.get_curve_b(),
+                 region.get_curve_c(),region.get_fan_rho_rated(),
+                 region.flow_m3s()});
+        }
+    }
+
+    void stamp_fan_for_openfoam(const Fan& fan) {
+        enable_openfoam_export_metadata();
+        const int patch_id =
+            static_cast<int>(openfoam_boundary_patches.size());
+        openfoam_boundary_patches.push_back(
+            {patch_id, fan.get_name(),
+             fan.get_type_t() == FlowType::Intake
+                 ? OpenFoamBoundaryPatch::Kind::Inlet
+                 : OpenFoamBoundaryPatch::Kind::Outlet,
+             0.0, 0.0,
+             fan.has_curve(), fan.get_curve_a(), fan.get_curve_b(),
+             fan.get_curve_c(), fan.get_rho_rated(), fan.flow_m3s()});
+
+        stamp_fan(fan);
+        const std::size_t marked = mark_openfoam_boundary_opening(
+            fan.get_center(), fan.direction, fan.get_size_m(),
+            fan.get_diameter(),
+            fan.get_shape_t() == ShapeType::Circular,
+            fan.get_type_t() == FlowType::Intake
+                ? Cell::State::Intake
+                : Cell::State::Exhaust,
+            patch_id);
+        if(marked == 0)
+            throw std::runtime_error(
+                "OpenFOAM fan patch '" + fan.get_name() +
+                "' did not cover an exterior mesh face.");
+        populate_openfoam_boundary_source_zone(
+            patch_id, fan.direction);
+    }
+
+    void stamp_vent_for_openfoam(const Vent& vent) {
+        enable_openfoam_export_metadata();
+        const int patch_id =
+            static_cast<int>(openfoam_boundary_patches.size());
+        openfoam_boundary_patches.push_back(
+            {patch_id, vent.get_name(),
+             OpenFoamBoundaryPatch::Kind::Vent,
+             vent.free_area(), vent.get_cd()});
+
+        stamp_vent(vent);
+        const std::size_t marked = mark_openfoam_boundary_opening(
+            vent.get_center(), vent.get_direction(), vent.get_size_m(),
+            vent.get_diameter(),
+            vent.get_shape() == VentShapeType::Circular,
+            Cell::State::Vent, patch_id);
+        if(marked == 0)
+            throw std::runtime_error(
+                "OpenFOAM vent patch '" + vent.get_name() +
+                "' did not cover an exterior mesh face.");
+        populate_openfoam_boundary_source_zone(
+            patch_id, vent.get_direction());
     }
 
     void stamp_component(const Component& c) {
@@ -2081,10 +2429,147 @@ private:
     Workload load;
 
     std::vector<Cell> cells;
+    std::vector<OpenFoamCellMetadata> openfoam_cell_metadata;
+    std::vector<OpenFoamComponentRegion> openfoam_component_regions;
+    std::vector<OpenFoamHeatSourceRegion> openfoam_heat_source_regions;
+    std::vector<OpenFoamBoundaryPatch> openfoam_boundary_patches;
+    std::vector<OpenFoamInternalFlowDevice>
+        openfoam_internal_flow_devices;
+    std::vector<int> openfoam_boundary_patch_ids;
     std::vector<InternalFanInterface> internal_fans;
     std::vector<int32_t> wall_face_refs;
     std::vector<WallFace> wall_faces;
     int next_wall_component_group = 0;
+
+    void enable_openfoam_export_metadata() {
+        if(openfoam_cell_metadata.empty()) {
+            openfoam_cell_metadata.assign(
+                get_cell_count(), OpenFoamCellMetadata{});
+            openfoam_boundary_patch_ids.assign(
+                get_cell_count()*6u, -1);
+        }
+    }
+
+    std::size_t mark_openfoam_boundary_opening(
+        const std::array<double,3>& center,
+        const std::array<double,3>& direction,
+        const std::array<double,3>& size,
+        double diameter,
+        bool circular,
+        Cell::State expected_state,
+        int patch_id) {
+        const double ax = std::abs(direction[0]);
+        const double ay = std::abs(direction[1]);
+        const double az = std::abs(direction[2]);
+        const int axis =
+            ax >= ay && ax >= az ? 0 : (ay >= az ? 1 : 2);
+        const std::array<const std::vector<double>*,3> bounds{
+            &x_bounds,&y_bounds,&z_bounds};
+        const double extent = bounds[axis]->back();
+        const double tolerance =
+            1e-9 * std::max(1.0,std::abs(extent));
+        int side = -1;
+        if(std::abs(center[axis]) <= tolerance) side = 0;
+        else if(std::abs(center[axis]-extent) <= tolerance) side = 1;
+        if(side < 0)
+            throw std::invalid_argument(
+                "OpenFOAM boundary opening center is not on the rack exterior.");
+
+        const int first_tangent = axis == 0 ? 1 : 0;
+        const int second_tangent = axis == 2 ? 1 : 2;
+        const double radius = 0.5*diameter;
+        std::size_t marked = 0;
+
+        for(int a=0; a<(first_tangent==0 ? nx :
+                        first_tangent==1 ? ny : nz); ++a) {
+            for(int b=0; b<(second_tangent==0 ? nx :
+                            second_tangent==1 ? ny : nz); ++b) {
+                std::array<int,3> cell_index{0,0,0};
+                cell_index[axis] =
+                    side == 0 ? 0 :
+                    (axis == 0 ? nx-1 : axis == 1 ? ny-1 : nz-1);
+                cell_index[first_tangent] = a;
+                cell_index[second_tangent] = b;
+
+                const std::array<double,3> cell_center{
+                    cell_center_x(cell_index[0]),
+                    cell_center_y(cell_index[1]),
+                    cell_center_z(cell_index[2])};
+                bool covered = false;
+                if(circular) {
+                    const double da =
+                        cell_center[first_tangent]-center[first_tangent];
+                    const double db =
+                        cell_center[second_tangent]-center[second_tangent];
+                    covered = da*da+db*db <= radius*radius+tolerance;
+                } else {
+                    covered =
+                        std::abs(cell_center[first_tangent]-
+                                 center[first_tangent])
+                            <= 0.5*size[first_tangent]+tolerance &&
+                        std::abs(cell_center[second_tangent]-
+                                 center[second_tangent])
+                            <= 0.5*size[second_tangent]+tolerance;
+                }
+                if(!covered ||
+                   at(cell_index[0],cell_index[1],cell_index[2])
+                       .get_state() != expected_state)
+                    continue;
+
+                openfoam_boundary_patch_ids[
+                    idx(cell_index[0],cell_index[1],cell_index[2])*6u +
+                    static_cast<std::size_t>(axis*2+side)] = patch_id;
+                ++marked;
+            }
+        }
+        return marked;
+    }
+
+    void populate_openfoam_boundary_source_zone(
+        int patch_id, const std::array<double,3>& direction) {
+        auto& patch =
+            openfoam_boundary_patches.at(static_cast<std::size_t>(patch_id));
+        patch.direction = direction;
+        std::vector<unsigned char> selected(get_cell_count(),0);
+        const bool fan =
+            patch.kind==OpenFoamBoundaryPatch::Kind::Inlet ||
+            patch.kind==OpenFoamBoundaryPatch::Kind::Outlet;
+        for(int i=0;i<nx;++i) for(int j=0;j<ny;++j)
+            for(int k=0;k<nz;++k)
+                for(int face=0;face<6;++face) {
+                    const std::size_t boundary_cell=idx(i,j,k);
+                    if(openfoam_boundary_patch_ids[
+                           boundary_cell*6u+
+                           static_cast<std::size_t>(face)]!=patch_id)
+                        continue;
+                    std::array<int,3> source{i,j,k};
+                    if(fan) {
+                        const int axis=face/2;
+                        const int side=face%2;
+                        source[axis]+=side==0 ? 1 : -1;
+                        if(!in_bounds(source[0],source[1],source[2]) ||
+                           !at(source[0],source[1],source[2]).is_fluid())
+                            throw std::runtime_error(
+                                "OpenFOAM ambient fan '"+patch.name+
+                                "' has no inboard fluid layer for its "
+                                "momentum-source zone.");
+                    }
+                    selected[idx(source[0],source[1],source[2])]=1;
+                }
+        for(std::size_t cell=0; cell<selected.size(); ++cell)
+            if(selected[cell]) patch.adjacent_cells.push_back(cell);
+
+        const double ax=std::abs(direction[0]);
+        const double ay=std::abs(direction[1]);
+        const double az=std::abs(direction[2]);
+        const int axis=ax>=ay && ax>=az ? 0 : (ay>=az ? 1 : 2);
+        if(!patch.adjacent_cells.empty()) {
+            const Cell& cell=cells.at(patch.adjacent_cells.front());
+            patch.source_zone_thickness =
+                axis==0 ? cell.get_dx() :
+                (axis==1 ? cell.get_dy() : cell.get_dz());
+        }
+    }
 
     void build_bounds() {
         x_bounds.assign(nx + 1, 0.0);
