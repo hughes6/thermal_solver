@@ -144,6 +144,9 @@ int main() {
     assert(screening.mesh.refinement_margin == 0.005);
     assert(
         screening.openfoam_solver.thermal_only_maximum_time_step == 10.0);
+    assert(screening.openfoam_solver.airflow_refresh_duration == 0.02);
+    assert(
+        screening.openfoam_solver.maximum_device_flow_change_fraction == 0.03);
     // Inline test-model values remain authoritative over profile defaults.
     assert(screening.openfoam_solver.airflow_refresh_interval == 5.0);
     assert(screening.openfoam_solver.report_interval == 1.0);
@@ -294,6 +297,10 @@ int main() {
         "thermal_metrics_converged") != std::string::npos);
     assert(run_parallel.find(
         ".thermal_convergence_state") != std::string::npos);
+    assert(run_parallel.find(
+        "-name 'volFieldValue*.dat'") != std::string::npos);
+    assert(run_parallel.find(
+        "sort -g -k1,1 | tail -1") != std::string::npos);
     assert(run_parallel.find(
         "peakChange=$scaled_delta K/300s") != std::string::npos);
     assert(run_parallel.find(

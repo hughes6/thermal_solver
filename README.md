@@ -17,6 +17,12 @@ The most capable configuration currently supported is:
 - fixed-CFM or pressure-flow fan curves
 - PCG or SOR pressure solution
 - explicit thermal integration with optional advection subcycling
+- optional OpenFOAM 2606 conjugate heat-transfer export
+- k-omega SST turbulence, gravity, temperature-dependent air, fan curves, and
+  vent pressure losses in exported OpenFOAM cases
+- screening and in-depth OpenFOAM mesh/solver profiles
+- multirate OpenFOAM execution with implicit thermal-only steps, periodic
+  airflow refreshes, restart support, and automatic convergence stopping
 - field, summary, and point-probe logging
 
 The simpler modes remain supported. A model can use a single adaptive mesh, a
@@ -66,8 +72,8 @@ has `depth = 0`.
 From the project directory in PowerShell:
 
 ```powershell
-g++ -std=c++17 -O3 -DNDEBUG .\model_runner.cpp -o model
-.\model
+g++ -std=c++17 -O3 -DNDEBUG -fopenmp .\model_runner.cpp -o model.exe
+.\model.exe
 ```
 
 `model_runner.cpp` currently loads:
@@ -79,13 +85,25 @@ loader.load_model("library/models/model.toml");
 loader.run();
 ```
 
-To run a different model, change the path supplied to `load_model`.
+To run a different model, pass it on the command line. The optional second
+argument selects a different fan-curve library:
+
+```powershell
+.\model.exe library\models\model.toml
+.\model.exe library\models\model.toml library\fan_curves\fan_curves.toml
+```
+
+The loader decides what happens from `[openfoam_solver].enabled`:
+
+- `false` or an omitted section runs the native explicit solver.
+- `true` exports a complete OpenFOAM case and prints the WSL commands needed
+  to prepare and run it.
 
 For a debug build:
 
 ```powershell
-g++ -std=c++17 -O0 -g .\model_runner.cpp -o model_debug
-.\model_debug
+g++ -std=c++17 -O0 -g -fopenmp .\model_runner.cpp -o model_debug.exe
+.\model_debug.exe
 ```
 
 Use the optimized build for production runs. Flow and thermal loops touch every
@@ -1243,3 +1261,773 @@ when advection subcycling is enabled.
 - Inspect the maximum velocity and minimum realized spacing.
 - Increase `advection_cfl_target` only up to `1.0`.
 - Do not exceed the explicit stability target merely to suppress the warning.
+
+## 12. OpenFOAM backend overview
+
+The OpenFOAM path uses the same rack, component, internal-region, material,
+heat-load, fan, vent, fan-curve, environment, and simulation-duration data as
+the native solver. It is an alternative backend selected from the model TOML;
+it does not remove or replace the native solver.
+
+The workflow is:
+
+1. `model_runner.cpp` loads the fan-curve library and model TOML.
+2. Reusable component and OpenFOAM profile templates are merged into the model.
+3. The normal mesh planner builds the rectilinear rack mesh.
+4. Components, internal air/solid regions, rack openings, and internal devices
+   are stamped into that mesh.
+5. The OpenFOAM exporter creates fluid and solid regions, boundary patches,
+   material dictionaries, heat sources, fan/porosity sources, initial fields,
+   solver dictionaries, geometry metadata, and run scripts.
+6. The generated case is run inside WSL2 with OpenFOAM 2606.
+7. Results can be opened in ParaView or plotted directly with
+   `plot/heat_animation.py`.
+
+The exported solver is a compressible conjugate heat-transfer model:
+
+- fluid and solid energy equations are coupled
+- air density follows the perfect-gas relation
+- viscosity follows the Sutherland model when
+  `temperature_dependent_air = true`
+- gravity is included through `p_rgh`
+- k-omega SST supplies the RANS turbulence closure
+- component material `rho`, `cp`, and `k` become solid-region properties
+- internal-region and component watts become volumetric energy sources
+- fan curves find their operating points against system resistance
+- vents use their existing `free_area_ratio` and
+  `vent_discharge_coeff` values
+
+Rack-boundary fans and vents connect to ambient. A component intake vent on
+the component boundary opens its internal air region to rack air; if the rack
+side is itself open to ambient through a rack vent or intake, the fan-induced
+pressure field draws ambient air through that path. Internal fans that do not
+touch an exterior boundary remain internal momentum sources and circulate air
+between their upstream and downstream internal fluid cells.
+
+The exporter rejects or warns about common topology mistakes, including an
+internal fan without fluid immediately upstream/downstream and intake/exhaust
+directions inconsistent with an exterior boundary.
+
+## 13. Selecting OpenFOAM from the model TOML
+
+The smallest model-side section is:
+
+```toml
+[openfoam_solver]
+enabled = true
+template = "library/openfoam_cfg/screening_foam_cfg.toml"
+case_directory = "C:/OpenFOAM/thermal_sim_v2/my_screening_case"
+```
+
+Use forward slashes in Windows TOML paths. Avoid spaces in the exported case
+path because MPI/OpenFOAM shell tooling is substantially more reliable without
+them.
+
+To switch back to the native solver without changing the rack model:
+
+```toml
+[openfoam_solver]
+enabled = false
+```
+
+The normal `[simulation].duration` remains authoritative for the default
+OpenFOAM end time. A run-script command may explicitly override it, for
+example `--multirate 18000`.
+
+### 13.1 Template and override precedence
+
+OpenFOAM settings are merged in this order, with later values winning:
+
+1. built-in C++ defaults
+2. the file named by `[openfoam_solver].template`
+3. values written directly in the model's `[openfoam_solver]`
+4. `[openfoam_solver.gravity]` and `[openfoam_solver.mesh]` inline overrides
+
+An OpenFOAM profile may include a top-level `[mesh]`. That mesh replaces the
+model's root `[mesh]` for OpenFOAM export only. This is how the same physical
+model can use a fast screening mesh or a denser validation mesh. The highest
+priority mesh override is:
+
+```toml
+[openfoam_solver.mesh]
+adaptive = true
+fine_dx = 0.025
+coarse_dx = 0.15
+refinement_margin = 0.01
+```
+
+The root `[mesh]` remains the native solver mesh. Older OpenFOAM templates that
+do not contain `[mesh]` preserve the root model mesh.
+
+### 13.2 Included profiles
+
+Three reusable profiles are in `library/openfoam_cfg`:
+
+| Profile | Intended use |
+|---|---|
+| `default_foam_cfg.toml` | General starting point and compatibility default. |
+| `screening_foam_cfg.toml` | Faster ballpark tuning of heat loads, fan curves, vent resistance, and layout. |
+| `indepth_foam_cfg.toml` | Final transient and design validation with stricter airflow and thermal criteria. |
+
+For screening:
+
+```toml
+template = "library/openfoam_cfg/screening_foam_cfg.toml"
+case_directory = "C:/OpenFOAM/thermal_sim_v2/production_rack_screening"
+```
+
+For in-depth validation:
+
+```toml
+template = "library/openfoam_cfg/indepth_foam_cfg.toml"
+case_directory = "C:/OpenFOAM/thermal_sim_v2/production_rack"
+```
+
+Always use different case directories for screening and in-depth cases.
+`overwrite = true` deliberately replaces an existing exported case and its
+restart/convergence state.
+
+## 14. How coarse and fine OpenFOAM mesh settings work
+
+Both included OpenFOAM profiles use the same adaptive rectilinear planner:
+
+```toml
+[mesh]
+adaptive = true
+fine_dx = 0.02
+coarse_dx = 0.20
+refinement_margin = 0.005
+```
+
+The three values have distinct jobs:
+
+- `fine_dx` is the target spacing in refinement bands surrounding component
+  faces, internal-region boundaries, fans, and vents.
+- `coarse_dx` is the target spacing in open rack volumes away from stamped
+  geometry.
+- `refinement_margin` expands each fine band beyond the geometry surface. It
+  changes where fine cells are used, not the physical component dimensions.
+
+Exact geometry cuts are always inserted at important boundaries. Therefore,
+`fine_dx` and `coarse_dx` are targets rather than guaranteed minimum cell
+widths. A small clearance or two nearby exact cuts can create a cell narrower
+than `fine_dx`.
+
+The screening profile currently uses:
+
+```toml
+fine_dx = 0.02
+coarse_dx = 0.20
+refinement_margin = 0.005
+```
+
+The in-depth profile uses:
+
+```toml
+fine_dx = 0.02
+coarse_dx = 0.10
+refinement_margin = 0.02
+```
+
+The local fine spacing remains 20 mm in both because the current Trenton rear
+fan and nearby enclosure clearance require it to preserve valid upstream and
+downstream fluid cells. Screening is accelerated by coarsening open rack
+volume, shrinking the refinement halo, writing less often, using larger
+implicit thermal steps, and refreshing airflow less often. Blindly increasing
+`fine_dx` can delete a thin air channel or strand a fan against solid cells.
+
+When making a new component more accurate:
+
+1. Place fans slightly inside the enclosure when they are internal devices.
+2. Ensure an air region reaches both sides of every internal fan plane.
+3. Keep boundary vents on the component face they open.
+4. Run a mesh/export smoke test.
+5. Check the printed cell count and any minimum-cell-width warnings.
+6. Compare screening results at two mesh resolutions before treating a hotspot
+   as mesh-independent.
+
+The native solver's `[multistage.coarse_mesh]` is a different concept. It is a
+coarse warm-start mesh used only by the native explicit backend. The
+OpenFOAM-profile `[mesh]` directly controls the exported OpenFOAM case.
+
+## 15. Every OpenFOAM profile setting
+
+### 15.1 Case, parallelism, and output
+
+| Setting | Meaning |
+|---|---|
+| `enabled` | Selects OpenFOAM export instead of running the native solver. |
+| `template` | Reusable OpenFOAM TOML profile loaded before inline overrides. |
+| `case_directory` | Destination for the generated case. Relative paths are relative to the project; absolute Windows paths are supported. |
+| `overwrite` | Allows a new export to replace the existing case directory and old restart markers. |
+| `parallel_processes` | Default MPI process count written into instructions and decomposition settings. |
+| `maximum_time_step` | Largest timestep during fully coupled airflow/CHT stages. |
+| `maximum_courant_number` | Coupled-stage `maxCo`; OpenFOAM reduces `deltaT` to satisfy it. |
+| `field_write_interval` | Simulated seconds between full restart/visualization field writes. |
+| `saved_time_directories` | Number of recent field time directories retained through `purgeWrite`. |
+| `report_interval` | Simulated seconds between function-object reports such as temperature extrema, component averages, mass flow, and y-plus. |
+
+`field_write_interval` controls large field output. `report_interval` controls
+small diagnostic output. They do not have to match.
+
+### 15.2 Turbulence, air properties, gravity, fans, and vents
+
+| Setting | Meaning |
+|---|---|
+| `use_k_omega_sst` | Enables the k-omega SST RANS model and its `k`, `omega`, and `nut` fields. |
+| `inlet_turbulence_intensity` | Fractional inlet turbulence intensity; `0.05` means 5%. |
+| `turbulence_length_scale` | Inlet turbulence length scale in meters. |
+| `turbulent_prandtl_number` | Turbulent Prandtl number used for turbulent heat transport. |
+| `temperature_dependent_air` | Uses perfect-gas density and temperature-dependent Sutherland viscosity. |
+| `sutherland_temperature` | Sutherland temperature constant in kelvin. |
+| `use_vent_pressure_loss` | Converts vent free area and discharge coefficient into porous/orifice resistance. |
+| `use_fan_curves` | Uses referenced P-Q curves instead of treating every fan as fixed flow. |
+| `fan_curve_extension_multiplier` | Limits how far the numerical fan curve may be extended beyond its nominal flow range. |
+| `gravity.x/y/z` | Gravity vector in m/s²; the default is `(0, 0, -9.80665)`. |
+
+The component or rack vent remains authoritative for
+`free_area_ratio` and `vent_discharge_coeff`; do not duplicate them in the
+OpenFOAM profile. Fan `curve`, `cfm`, `flow_type`, direction, and geometry also
+remain in the component/model TOML.
+
+### 15.3 Startup and multirate thermal execution
+
+| Setting | Meaning |
+|---|---|
+| `use_multirate_thermal` | Alternates expensive fully coupled airflow windows with implicit thermal-only periods that hold airflow fixed. |
+| `airflow_warmup_time` | Safety limit, in physical seconds, for finding the initial airflow operating point. Adaptive initialization may stop much earlier. |
+| `use_fan_startup_ramp` | Gradually scales fan sources from zero to full strength to avoid an impulsive startup. |
+| `fan_startup_ramp_time` | Total physical duration of the fan ramp. |
+| `fan_startup_ramp_steps` | Number of discrete fan-scale stages in the ramp. |
+| `initial_airflow_check_interval` | Physical seconds between initial-airflow convergence checks. |
+| `minimum_initial_airflow_duration` | Minimum post-ramp physical airflow duration before convergence can be accepted. |
+| `thermal_only_maximum_time_step` | Maximum implicit timestep while velocity/pressure are held fixed. This is the main thermal acceleration control. |
+| `thermal_only_maximum_courant_number` | Safety Courant bound used in thermal-only mode. The velocity field is frozen, so this is intentionally much larger than coupled `maxCo`. |
+| `airflow_refresh_interval` | Thermal simulated seconds between fully coupled airflow refreshes. |
+
+OpenFOAM's energy equation is implicit, so a thermal-only timestep may be far
+larger than the fully coupled CFD timestep. A large implicit step can be stable
+without being accurate; use screening for tuning and in-depth results for final
+claims.
+
+### 15.4 Adaptive airflow refresh
+
+| Setting | Meaning |
+|---|---|
+| `airflow_refresh_duration` | Minimum physical duration of a refresh before flow metrics may accept it. |
+| `use_adaptive_airflow_refresh` | Stops a refresh when mass balance, device-flow change, and direction checks pass. |
+| `airflow_refresh_maximum_courant_number` | `maxCo` during refresh windows. |
+| `airflow_refresh_check_interval` | Physical seconds added between refresh convergence checks. |
+| `maximum_airflow_refresh_duration` | Safety limit; failure to converge before this duration stops the run with an error. |
+| `maximum_mass_imbalance_fraction` | Maximum exterior net mass imbalance divided by half the sum of absolute exterior mass flows. |
+| `maximum_device_flow_change_fraction` | Maximum relative change in tracked fan/device flow between comparison windows. |
+
+At least one measurement establishes a baseline before a flow-change decision
+can pass. Flow direction checks ensure intake/exhaust devices are operating in
+their intended directions.
+
+The screening profile uses a short `airflow_refresh_duration = 0.02` and a 3%
+device-flow tolerance to avoid chasing coarse-mesh numerical noise. The
+in-depth profile uses a longer minimum refresh and a stricter 2% tolerance.
+
+### 15.5 Automatic thermal convergence
+
+| Setting | Meaning |
+|---|---|
+| `stop_when_thermally_converged` | Allows a requested long run to stop early after both thermal and airflow criteria pass. |
+| `minimum_thermal_convergence_time` | Earliest simulated time at which thermal convergence may be accepted. |
+| `thermal_convergence_reference_interval` | Reference seconds used to normalize temperature changes from checkpoints with different spacing. |
+| `maximum_temperature_change` | Maximum allowed global peak-temperature change, in K per reference interval. |
+| `maximum_component_average_temperature_change` | Maximum allowed component volume-average change, in K per reference interval. |
+| `thermal_convergence_required_checkpoints` | Number of consecutive accepted thermal checkpoints required. |
+
+At each checkpoint the run script records:
+
+- fluid peak temperature
+- volume-average temperature of every exported component solid region
+- exterior mass imbalance
+- tracked fan/device-flow change
+- fan direction validity
+
+The state is persisted in hidden case files so a restarted run continues the
+convergence history. OpenFOAM may rotate function-object files after a restart
+(`volFieldValue_*.dat`); the generated parser reads both original and rotated
+files.
+
+## 16. Exporting and running the OpenFOAM suite from TOML
+
+### 16.1 Build the TOML runner
+
+From PowerShell in the project directory:
+
+```powershell
+g++ -std=c++17 -O3 -DNDEBUG -fopenmp .\model_runner.cpp -o model.exe
+```
+
+Export the default model:
+
+```powershell
+.\model.exe .\library\models\model.toml
+```
+
+The runner loads `library/fan_curves/fan_curves.toml` by default. To select a
+different library:
+
+```powershell
+.\model.exe .\library\models\model.toml .\library\fan_curves\fan_curves.toml
+```
+
+When OpenFOAM is enabled, this command exports only; it does not launch WSL or
+the CFD solver. The final console output prints copy-ready WSL commands.
+
+`foam_main.cpp` is a direct C++ demonstration/export smoke case. It is useful
+for development, but the TOML-driven production entry point is
+`model_runner.cpp`.
+
+### 16.2 Confirm OpenFOAM in WSL2
+
+Open an Ubuntu WSL terminal:
+
+```bash
+env -u LD_LIBRARY_PATH bash -lc 'source /usr/lib/openfoam/openfoam2606/etc/bashrc && foamVersion'
+```
+
+If an old OpenFOAM installation added incompatible libraries to
+`LD_LIBRARY_PATH`, clearing that variable avoids errors such as missing modern
+`GLIBCXX` symbols in Ubuntu tools.
+
+The generated run scripts locate/source OpenFOAM, but this command is a useful
+installation check:
+
+```bash
+source /usr/lib/openfoam/openfoam2606/etc/bashrc
+which decomposePar
+which reconstructPar
+foamVersion
+```
+
+### 16.3 Convert a Windows case path to WSL
+
+Windows:
+
+```text
+C:/OpenFOAM/thermal_sim_v2/production_rack_screening
+```
+
+WSL:
+
+```text
+/mnt/c/OpenFOAM/thermal_sim_v2/production_rack_screening
+```
+
+Run directly from the exported Windows directory:
+
+```bash
+cd /mnt/c/OpenFOAM/thermal_sim_v2/production_rack_screening
+./run_parallel.sh 4 --multirate 18000
+```
+
+For better I/O performance on large cases, copy the case to WSL's native
+filesystem:
+
+```bash
+mkdir -p ~/OpenFOAM/cases
+cp -a /mnt/c/OpenFOAM/thermal_sim_v2/production_rack_screening \
+  ~/OpenFOAM/cases/
+cd ~/OpenFOAM/cases/production_rack_screening
+./run_parallel.sh 4 --multirate 18000 2>&1 | tee log.screening18000
+```
+
+### 16.4 Generated run modes
+
+From inside the case directory:
+
+```bash
+# Serial preparation and conventional coupled run
+./run_cht.sh
+
+# Parallel conventional coupled run to the TOML duration
+./run_parallel.sh 4
+
+# Parallel conventional run with an explicit end time
+./run_parallel.sh 4 run 18000
+
+# Restartable initial warm start
+./run_parallel.sh 4 --warm-start 5
+
+# Recommended accelerated airflow/thermal schedule
+./run_parallel.sh 4 --multirate 18000
+```
+
+The multirate sequence is:
+
+1. prepare/decompose the regions if needed
+2. ramp fan strength
+3. find the initial airflow operating point
+4. freeze airflow and advance the implicit energy equations
+5. periodically unfreeze and refresh airflow
+6. evaluate thermal and airflow convergence
+7. stop early when configured criteria pass, or continue to the requested end
+   time
+8. reconstruct the latest result for visualization
+
+The script reuses valid processor partitions and the latest saved time. If a
+refresh was interrupted, `.airflow_refresh_pending` causes it to be retried.
+Do not delete hidden marker/state files when you intend to resume.
+
+### 16.5 How OpenFOAM saves fields and resumes in time segments
+
+OpenFOAM saves a simulation state in directories named by **simulated time**.
+The initial condition is in `0`; later directories may be named `300`, `600`,
+`900`, and so on. Each saved time contains the fields needed to resume, such
+as temperature `T`, velocity `U`, pressure `p`/`p_rgh`, density-related state,
+and turbulence fields. Solid and fluid fields are stored separately by region.
+
+In a parallel run, the authoritative restart data remains decomposed:
+
+```text
+processor0/300/fluid/T
+processor0/300/Dell_PowerEdge_R470_1U_1/T
+processor1/300/...
+processor2/300/...
+processor3/300/...
+```
+
+Every `processorN` directory owns its portion of the mesh and fields. A
+reconstructed time appears at the case root:
+
+```text
+300/fluid/T
+300/Dell_PowerEdge_R470_1U_1/T
+```
+
+Reconstructed data is convenient for ParaView and Python, but the generated
+runner finds and resumes from the latest **processor** time. At the end of a
+run it reconstructs the latest time with `reconstructPar -allRegions`.
+
+The important time controls are:
+
+- `startFrom` selects whether OpenFOAM begins from the original start time or
+  a specified/latest saved time.
+- `startTime` is the absolute simulated time of the current segment.
+- `endTime` is an absolute target, not the length of the segment.
+- `writeInterval` determines when complete restart/visualization fields are
+  written.
+- `purgeWrite`, generated from `saved_time_directories`, keeps only the newest
+  configured number of field directories to bound disk usage.
+
+Therefore, the segment from 300 to 600 seconds uses `startTime = 300` and
+`endTime = 600`; it does **not** use `endTime = 300` again. Time and thermal
+history continue from the saved 300-second fields.
+
+#### Manually run 0–300, 300–600, and 600–900
+
+Use `--warm-start` with successive absolute end times:
+
+```bash
+cd ~/OpenFOAM/cases/production_rack_screening
+
+# Starts from 0 and saves/reconstructs the state at t=300 s.
+./run_parallel.sh 4 --warm-start 300 2>&1 | tee log.0-300
+
+# Detects processor*/300, resumes it, and advances to t=600 s.
+./run_parallel.sh 4 --warm-start 600 2>&1 | tee log.300-600
+
+# Detects processor*/600 and advances to t=900 s.
+./run_parallel.sh 4 --warm-start 900 2>&1 | tee log.600-900
+```
+
+Each invocation asks `foamListTimes -processor -latestTime` for the newest
+valid decomposed state. The runner rejects an end time that is not greater
+than the latest saved time. It also updates the saved `uniform/time` timestep
+metadata so OpenFOAM does not inherit an inappropriate timestep from the
+previous mode.
+
+These manual warm-start segments are fully coupled CHT runs. For long thermal
+transients, multirate mode is normally faster.
+
+#### Automatically use 300-second multirate segments
+
+Set the profile to refresh airflow every 300 simulated seconds:
+
+```toml
+[openfoam_solver]
+use_multirate_thermal = true
+airflow_refresh_interval = 300.0
+field_write_interval = 300.0
+report_interval = 60.0
+saved_time_directories = 4
+```
+
+Then launch one continuous request:
+
+```bash
+./run_parallel.sh 4 --multirate 18000 2>&1 | tee log.multirate18000
+```
+
+The script handles the sequence internally:
+
+```text
+initial airflow -> thermal to 300 -> airflow refresh
+                -> thermal 300–600 -> airflow refresh
+                -> thermal 600–900 -> airflow refresh -> ...
+```
+
+At each thermal stage boundary, the runner sets an absolute target, writes a
+complete decomposed restart state, checks convergence, and continues from that
+state. The airflow refresh advances physical CFD time by a small amount, so
+actual directory names can be slightly above a round boundary—for example
+`600.03` after a 0.03-second refresh. The next thermal segment starts from that
+exact saved time; no thermal history is lost.
+
+`field_write_interval` controls full field data used for restart and spatial
+visualization. `report_interval` controls smaller function-object results in
+`postProcessing`, including temperature extrema, component averages, mass
+flows, and y-plus. Logs written with `tee` are plain-text solver histories and
+are independent of the OpenFOAM field directories.
+
+If you need to retain 300, 600, 900, and additional earlier field snapshots
+simultaneously, increase `saved_time_directories`. With the default value of
+three, older full field directories are purged as newer ones are written, but
+the smaller `postProcessing` histories and text log remain available.
+
+Useful inspection commands are:
+
+```bash
+# List reconstructed root times.
+foamListTimes -case .
+
+# List decomposed restart times and print the latest one.
+foamListTimes -case . -processor
+foamListTimes -case . -processor -latestTime
+
+# Reconstruct a particular retained time for plotting.
+reconstructPar -case . -allRegions -time 600
+
+# Reconstruct only the latest retained processor time.
+latest=$(foamListTimes -case . -processor -latestTime | tail -1)
+reconstructPar -case . -allRegions -time "$latest"
+```
+
+Do not manually copy only one processor directory or only one region. A valid
+parallel restart requires the matching time directory for every processor and
+all regions.
+
+### 16.6 Generated case contents
+
+Important generated files include:
+
+| Path | Purpose |
+|---|---|
+| `geometry.txt` | Rack, component, internal-region, fan, and vent geometry used by the Python overlay. |
+| `constant/polyMesh` | Exported rectilinear volume mesh. |
+| `constant/regionProperties` | Fluid/solid region list for CHT. |
+| `constant/g` | Gravity vector. |
+| `constant/fluid/thermophysicalProperties` | Temperature-dependent air model. |
+| `constant/fluid/fvOptions` | Fan, vent/porosity, and fluid source definitions. |
+| `constant/<solid>/thermophysicalProperties` | Component material properties. |
+| `constant/<solid>/fvOptions` | Volumetric heat sources. |
+| `0/<region>` | Initial temperature, pressure, velocity, and turbulence fields. |
+| `system/controlDict` | Time, write, function-object, and run controls. |
+| `system/<region>/fvSchemes` | Discretization schemes. |
+| `system/<region>/fvSolution` | Linear solvers and coupling controls. |
+| `prepare_regions.sh` | Region preparation helper. |
+| `run_cht.sh` | Serial case runner. |
+| `run_parallel.sh` | Parallel, restart, warm-start, and multirate runner. |
+| `postProcessing` | Temperature ranges/averages, flow reports, and y-plus data. |
+
+## 17. Viewing and plotting temperatures
+
+### 17.1 ParaView
+
+After a run reconstructs its latest fields:
+
+```bash
+cd ~/OpenFOAM/cases/production_rack_screening
+touch production_rack_screening.foam
+paraFoam -builtin
+```
+
+If WSL GUI support is unavailable, open the reconstructed case from a Windows
+ParaView installation. Color the fluid or solid region by `T`. OpenFOAM stores
+temperature in kelvin.
+
+Useful views:
+
+- a `y`-normal slice for front-to-rear airflow/temperature structure
+- component solid surfaces colored by `T`
+- velocity glyphs or streamlines from `U`
+- pressure colored by `p_rgh`
+- `k`, `omega`, `nut`, and wall `yPlus` when checking turbulence behavior
+
+### 17.2 Python/PyVista OpenFOAM overlay
+
+Install plotting dependencies in the Python environment used from PowerShell:
+
+```powershell
+python -m pip install pyvista matplotlib numpy
+```
+
+Plot the latest result with rack/component geometry overlaid:
+
+```powershell
+python .\plot\heat_animation.py `
+  --format openfoam `
+  --case "C:\OpenFOAM\thermal_sim_v2\production_rack_screening" `
+  --time latest
+```
+
+Save a PNG:
+
+```powershell
+python .\plot\heat_animation.py `
+  --format openfoam `
+  --case "C:\OpenFOAM\thermal_sim_v2\production_rack_screening" `
+  --time latest `
+  --slice-axis y `
+  --temperature-units C `
+  --output .\plot\screening_latest.png `
+  --save
+```
+
+Select a specific time and physical slice coordinate:
+
+```powershell
+python .\plot\heat_animation.py `
+  --format openfoam `
+  --case "C:\OpenFOAM\thermal_sim_v2\production_rack_screening" `
+  --time 4800 `
+  --slice-axis z `
+  --slice-position 0.50 `
+  --opacity 0.85 `
+  --output .\plot\screening_z_050.png `
+  --save
+```
+
+OpenFOAM plotting options:
+
+| Option | Meaning |
+|---|---|
+| `--case` | Case directory; required for OpenFOAM input. |
+| `--time latest` | Latest available time, or provide a numeric time. |
+| `--rack` | Optional geometry report; defaults to `<case>/geometry.txt`. |
+| `--slice-axis x/y/z` | Slice normal. |
+| `--slice-axis none` | Render region surfaces instead of a slice. |
+| `--slice-position` | Physical coordinate of the slice; defaults to each region midpoint. |
+| `--temperature-units C/K` | Display units. |
+| `--opacity` | Geometry/field opacity. |
+| `--stride` | Plot every Nth cell when a lighter visualization is needed. |
+| `--output` | Saved image path. |
+| `--save` | Save instead of opening the interactive window. |
+
+The script creates a harmless `.foam` reader marker in the case directory when
+needed and supports reconstructed or decomposed cases. OpenFOAM mode reads
+fields directly; no CSV conversion step is required.
+
+### 17.3 Native-solver plotting
+
+The original CSV workflow remains available:
+
+```powershell
+python .\plot\heat_animation.py `
+  --format native `
+  --sim .\simulation.csv `
+  --rack .\output.txt
+```
+
+Save an animation:
+
+```powershell
+python .\plot\heat_animation.py `
+  --format native `
+  --sim .\simulation.csv `
+  --rack .\output.txt `
+  --output .\plot\rack_temperature_animation.mp4 `
+  --fps 15 `
+  --skip 2 `
+  --save
+```
+
+## 18. OpenFOAM troubleshooting and recommended workflow
+
+### Package commands fail with `GLIBCXX_* not found`
+
+An old OpenFOAM environment is ahead of Ubuntu's system libraries. Run package
+tools without the inherited library path:
+
+```bash
+env -u LD_LIBRARY_PATH sudo apt-get update
+env -u LD_LIBRARY_PATH sudo apt-get install -y openfoam2606-default
+```
+
+Remove or update any shell startup line that automatically sources an obsolete
+OpenFOAM release before normal Ubuntu commands.
+
+### `Unable to locate package openfoam2606-default`
+
+Confirm the OpenFOAM repository is installed for the Ubuntu release, run
+`env -u LD_LIBRARY_PATH sudo apt-get update`, then inspect:
+
+```bash
+env -u LD_LIBRARY_PATH apt-cache policy openfoam2606-default
+```
+
+### Internal fan has no upstream/downstream fluid cell
+
+- keep the fan center inside its intended internal air region
+- leave fluid clearance on both sides of the fan plane
+- ensure the direction vector points from upstream to downstream
+- keep the local `fine_dx` small enough to resolve that clearance
+- do not treat a component-boundary opening as an internal fan unless it has
+  fluid on both sides
+
+### Coupled timestep is extremely small
+
+That is normal when fast fan jets cross small cells. OpenFOAM's energy equation
+is implicit, but the coupled momentum/pressure stages remain Courant-limited.
+Use:
+
+- fan startup ramping
+- adaptive initial-airflow convergence
+- multirate thermal mode
+- larger implicit thermal-only steps
+- periodic short airflow refreshes
+- a screening mesh/profile for tuning
+
+Do not simply raise coupled `maximum_courant_number` until the solver becomes
+unstable. Check pressure residuals, continuity, directions, and fan flows.
+
+### Results are implausibly hot
+
+Check, in this order:
+
+1. integrated watts for every component/internal solid region
+2. whether watts were accidentally assigned to both the component shell and
+   its internal heat-source regions
+3. fan operating-point flows and directions
+4. exterior intake area, free-area ratio, and discharge coefficient
+5. internal air paths and blocked clearances
+6. component material density, heat capacity, and conductivity
+7. mesh sensitivity
+8. comparison with thermal-camera or probe measurements
+
+For calibration when equipment cannot be shut down, record steady surface
+temperatures and ambient/intake temperature under known operating workloads.
+Tune uncertain heat allocation and contact/effective conductivity against
+those measurements, then validate on a different workload rather than fitting
+and validating on the same data.
+
+### Recommended end-to-end workflow
+
+1. Build and export with `screening_foam_cfg.toml`.
+2. Run a short multirate screening case.
+3. Inspect airflow mass balance, device flow, directions, and temperature
+   bounds.
+4. Tune uncertain watts, fan curves, vents, and layout.
+5. Repeat until the ballpark model is credible.
+6. Switch to `indepth_foam_cfg.toml` and a new case directory.
+7. Run to automatic thermal and airflow convergence or the required end time.
+8. Compare screening and in-depth component averages, peak location, exterior
+   mass flow, and fan operating points.
+9. Plot the final fields and archive the model TOML, profile, case log, and
+   convergence state together.
