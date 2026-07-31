@@ -1,8 +1,15 @@
-"""Animate the 3-D rack temperature field with exported rack geometry.
+"""Visualize native or OpenFOAM rack temperature fields with rack geometry.
 
 Usage:
   python heat_animation.py --sim simulation.csv --rack output.txt
   python heat_animation.py --sim simulation.csv --rack output.txt --save
+  python heat_animation.py --format openfoam --case openfoam_cases/my_model
+  python heat_animation.py --format openfoam --case openfoam_cases/my_model --time 3600 --save
+
+OpenFOAM mode uses PyVista's OpenFOAM reader, so no intermediate CSV is
+required. Install its optional dependency with ``python -m pip install
+pyvista``. The case may be reconstructed or decomposed; a harmless ``.foam``
+reader marker is created in the case directory when needed.
 """
 from __future__ import annotations
 
@@ -11,14 +18,6 @@ import itertools
 import re
 from dataclasses import dataclass, field
 from pathlib import Path
-
-import matplotlib.pyplot as plt
-import matplotlib.patches as mpatches
-from matplotlib.animation import FuncAnimation
-from mpl_toolkits.mplot3d import art3d
-import numpy as np
-import pandas as pd
-
 
 @dataclass
 class InternalRegionGeom:
@@ -273,21 +272,25 @@ def draw_opening(ax, opening: OpeningGeom, color):
     ax.quiver(x, y, z, *(direction * scale * 0.8), color=color, linewidth=2, arrow_length_ratio=0.25)
 
 
-def main() -> None:
-    parser = argparse.ArgumentParser()
-    parser.add_argument("-s", "--save", action="store_true")
-    parser.add_argument("--sim", default="simulation.csv")
-    parser.add_argument("--rack", default="output.txt")
-    parser.add_argument("--fps", type=int, default=15)
-    parser.add_argument("--skip", type=int, default=1)
-    parser.add_argument("--output", default="rack_temperature_animation.mp4")
-    parser.add_argument("--stride", type=int, default=1, help="Plot every Nth cell")
-    args = parser.parse_args()
+def run_native(args: argparse.Namespace) -> None:
+    global np, pd, plt, mpatches, FuncAnimation, art3d
+    try:
+        import numpy as np
+        import pandas as pd
+        import matplotlib.pyplot as plt
+        import matplotlib.patches as mpatches
+        from matplotlib.animation import FuncAnimation
+        from mpl_toolkits.mplot3d import art3d
+    except ImportError as exc:
+        raise SystemExit(
+            "Native visualization requires NumPy, pandas, and Matplotlib. Install them with:\n"
+            "  python -m pip install numpy pandas matplotlib"
+        ) from exc
 
     dx, dy, dz = read_spacing(args.sim)
     df = pd.read_csv(args.sim, skiprows=[1])
     try:
-        rack = parse_rack_file(args.rack)
+        rack = parse_rack_file(args.rack or "output.txt")
     except (FileNotFoundError, ValueError) as exc:
         print(f"Warning: {exc}; inferring rack dimensions from the CSV")
         rack = infer_rack(df, dx, dy, dz)
@@ -361,6 +364,319 @@ def main() -> None:
         print(f"Saved: {args.output}")
     else:
         plt.show()
+
+
+def iter_pyvista_datasets(dataset):
+    """Yield leaf datasets from an arbitrarily nested PyVista MultiBlock."""
+    if dataset is None:
+        return
+    if hasattr(dataset, "n_blocks"):
+        for block in dataset:
+            yield from iter_pyvista_datasets(block)
+    elif getattr(dataset, "n_cells", 0) or getattr(dataset, "n_points", 0):
+        yield dataset
+
+
+def dataset_with_temperature(dataset, temperature_units: str):
+    """Return (dataset, scalar_name), accepting either cell or point T data."""
+    if "T" not in dataset.cell_data and "T" not in dataset.point_data:
+        return None, None
+    if temperature_units == "K":
+        return dataset, "T"
+
+    converted = dataset.copy(deep=False)
+    if "T" in converted.cell_data:
+        converted.cell_data["T_C"] = np.asarray(converted.cell_data["T"]) - 273.15
+    if "T" in converted.point_data:
+        converted.point_data["T_C"] = np.asarray(converted.point_data["T"]) - 273.15
+    return converted, "T_C"
+
+
+def select_openfoam_time(reader, requested: str) -> float:
+    times = [float(value) for value in reader.time_values]
+    if not times:
+        raise ValueError("The OpenFOAM case contains no readable result times")
+    if requested.lower() == "latest":
+        selected = max(times)
+    else:
+        target = float(requested)
+        selected = min(times, key=lambda value: abs(value - target))
+        tolerance = 1.0e-8 * max(1.0, abs(target))
+        if abs(selected - target) > tolerance:
+            print(f"Warning: time {target:g} is unavailable; using nearest time {selected:g}")
+    reader.set_active_time_value(selected)
+    return selected
+
+
+def add_pyvista_box(plotter, pv, origin, size, color, width=2.0, label=None,
+                    style="wireframe"):
+    x, y, z = origin
+    sx, sy, sz = size
+    box = pv.Box(bounds=(x, x + sx, y, y + sy, z, z + sz))
+    plotter.add_mesh(box, color=color, style=style, line_width=width,
+                     opacity=0.8, label=label)
+
+
+def add_pyvista_geometry(plotter, pv, rack: RackGeom) -> None:
+    add_pyvista_box(
+        plotter, pv, (0, 0, 0), (rack.width, rack.depth, rack.height),
+        "black", width=3, label="Rack"
+    )
+    palette = itertools.cycle([
+        "dodgerblue", "gold", "mediumorchid", "limegreen", "cyan", "salmon"
+    ])
+    for comp in rack.components:
+        color = next(palette)
+        add_pyvista_box(
+            plotter, pv, comp.origin, (comp.width, comp.depth, comp.height),
+            color, label=f"Component: {comp.name}"
+        )
+        for region in comp.regions:
+            region_color = {
+                "air": "deepskyblue",
+                "heatsource": "orangered",
+            }.get(region.kind.lower(), "limegreen")
+            add_pyvista_box(
+                plotter, pv, region.origin, region.size, region_color,
+                width=3, label=f"Internal region: {region.kind}"
+            )
+
+    if rack.openings:
+        centers = np.asarray([opening.center for opening in rack.openings], dtype=float)
+        vectors = np.asarray([opening.direction for opening in rack.openings], dtype=float)
+        lengths = np.linalg.norm(vectors, axis=1)
+        nonzero = lengths > 0
+        vectors[nonzero] /= lengths[nonzero, None]
+        scale = max(rack.width, rack.depth, rack.height) * 0.045
+        plotter.add_arrows(centers, vectors * scale, color="white", label="Fans / vents")
+        plotter.add_point_labels(
+            centers, [opening.name for opening in rack.openings],
+            font_size=9, point_size=4, text_color="white", shape_opacity=0.25
+        )
+
+
+def run_openfoam(args: argparse.Namespace) -> None:
+    global np
+    try:
+        import numpy as np
+        import pyvista as pv
+    except ImportError as exc:
+        raise SystemExit(
+            "OpenFOAM visualization requires NumPy and PyVista. Install them with:\n"
+            "  python -m pip install pyvista"
+        ) from exc
+
+    case_directory = Path(args.case).expanduser().resolve()
+    if not (case_directory / "system" / "controlDict").is_file():
+        raise SystemExit(f"Not an OpenFOAM case: {case_directory}")
+
+    marker = case_directory / f"{case_directory.name}.foam"
+    marker.touch(exist_ok=True)
+    reader = pv.POpenFOAMReader(str(marker))
+    # vtkPOpenFOAMReader defaults to reconstructed mode and will otherwise
+    # silently ignore newer processor*/<time> results during a parallel run.
+    if any(case_directory.glob("processor[0-9]*")):
+        reader.case_type = "decomposed"
+    reader.cell_to_point_creation = True
+    try:
+        reader.enable_all_patch_arrays()
+    except AttributeError:
+        pass
+    selected_time = select_openfoam_time(reader, args.time)
+    multiblock = reader.read()
+
+    rack = None
+    rack_path = Path(args.rack) if args.rack else case_directory / "geometry.txt"
+    try:
+        rack = parse_rack_file(str(rack_path))
+    except (FileNotFoundError, ValueError) as exc:
+        print(f"Warning: {exc}; showing the exact OpenFOAM mesh without box overlays")
+
+    plotter = pv.Plotter(off_screen=args.save, window_size=(1600, 1000))
+    plotted = 0
+    scalar_ranges: list[tuple[float, float]] = []
+    prepared = []
+    for leaf in iter_pyvista_datasets(multiblock):
+        leaf, scalar_name = dataset_with_temperature(leaf, args.temperature_units)
+        if leaf is None:
+            continue
+        values = (leaf.cell_data.get(scalar_name)
+                  if scalar_name in leaf.cell_data else leaf.point_data.get(scalar_name))
+        finite = np.asarray(values)[np.isfinite(values)]
+        if finite.size:
+            scalar_ranges.append((float(finite.min()), float(finite.max())))
+        prepared.append((leaf, scalar_name))
+
+    if not prepared:
+        raise SystemExit(
+            f"No T field was found at OpenFOAM time {selected_time:g}. "
+            "Confirm that this is a written result time."
+        )
+
+    mesh_bounds = (
+        min(leaf.bounds[0] for leaf, _ in prepared),
+        max(leaf.bounds[1] for leaf, _ in prepared),
+        min(leaf.bounds[2] for leaf, _ in prepared),
+        max(leaf.bounds[3] for leaf, _ in prepared),
+        min(leaf.bounds[4] for leaf, _ in prepared),
+        max(leaf.bounds[5] for leaf, _ in prepared),
+    )
+    mesh_size = tuple(
+        mesh_bounds[2 * axis + 1] - mesh_bounds[2 * axis] for axis in range(3)
+    )
+    if rack is not None:
+        rack_size = (rack.width, rack.depth, rack.height)
+        mismatch = any(
+            abs(expected - actual) > 0.05 * max(expected, actual, 1.0e-12)
+            for expected, actual in zip(rack_size, mesh_size)
+        )
+        if mismatch:
+            print(
+                "Warning: rack geometry dimensions "
+                f"{rack_size} do not match OpenFOAM mesh dimensions {mesh_size}; "
+                "ignoring the stale geometry overlay"
+            )
+            rack = None
+
+    common_range = (
+        min(value[0] for value in scalar_ranges),
+        max(value[1] for value in scalar_ranges),
+    )
+    axis = args.slice_axis.lower()
+    normal_by_axis = {"x": (1, 0, 0), "y": (0, 1, 0), "z": (0, 0, 1)}
+    axis_index = {"x": 0, "y": 1, "z": 2}.get(axis)
+    slice_position = args.slice_position
+    if axis_index is not None and slice_position is None:
+        if rack is not None:
+            slice_position = mesh_bounds[2 * axis_index] + (
+                rack.width, rack.depth, rack.height
+            )[axis_index] / 2
+        else:
+            low = mesh_bounds[2 * axis_index]
+            high = mesh_bounds[2 * axis_index + 1]
+            slice_position = (low + high) / 2
+
+    hottest_value = -np.inf
+    hottest_point = None
+    for leaf, scalar_name in prepared:
+        if scalar_name in leaf.cell_data:
+            values = np.asarray(leaf.cell_data[scalar_name])
+            if values.size and np.isfinite(values).any():
+                index = int(np.nanargmax(values))
+                value = float(values[index])
+                point = leaf.cell_centers().points[index]
+            else:
+                value = -np.inf
+                point = None
+        else:
+            values = np.asarray(leaf.point_data[scalar_name])
+            if values.size and np.isfinite(values).any():
+                index = int(np.nanargmax(values))
+                value = float(values[index])
+                point = leaf.points[index]
+            else:
+                value = -np.inf
+                point = None
+        if value > hottest_value:
+            hottest_value, hottest_point = value, point
+
+        shown = leaf
+        if axis != "none":
+            bounds = leaf.bounds
+            low, high = bounds[2 * axis_index], bounds[2 * axis_index + 1]
+            if slice_position < low or slice_position > high:
+                continue
+            origin = list(leaf.center)
+            origin[axis_index] = slice_position
+            shown = leaf.slice(normal=normal_by_axis[axis], origin=origin)
+            if shown.n_cells == 0:
+                continue
+        plotter.add_mesh(
+            shown, scalars=scalar_name, cmap="inferno", clim=common_range,
+            opacity=args.opacity, show_scalar_bar=(plotted == 0),
+            scalar_bar_args={"title": f"Temperature ({args.temperature_units})"},
+        )
+        outline = shown.extract_feature_edges(
+            boundary_edges=True, feature_edges=False,
+            manifold_edges=False, non_manifold_edges=False
+        )
+        if outline.n_cells:
+            plotter.add_mesh(outline, color="white", line_width=1.2)
+        plotted += 1
+
+    if not plotted:
+        raise SystemExit("The requested slice does not intersect any temperature region")
+    if rack is not None:
+        add_pyvista_geometry(plotter, pv, rack)
+    if hottest_point is not None:
+        point = np.asarray(hottest_point, dtype=float).reshape(1, 3)
+        plotter.add_mesh(
+            pv.Sphere(radius=0.008, center=hottest_point), color="cyan",
+            label="Global hotspot"
+        )
+        plotter.add_point_labels(
+            point, [f"Max: {hottest_value:.1f} {args.temperature_units}"],
+            font_size=11, point_size=0, text_color="cyan", shape_opacity=0.35
+        )
+
+    plotter.add_text(
+        f"OpenFOAM temperature — t = {selected_time:g} s",
+        position="upper_left", font_size=13
+    )
+    plotter.add_axes()
+    plotter.show_grid()
+    plotter.view_isometric()
+    if args.save:
+        output = Path(args.output)
+        if output.suffix.lower() not in {".png", ".jpg", ".jpeg", ".tif", ".tiff"}:
+            output = output.with_suffix(".png")
+        plotter.show(screenshot=str(output), auto_close=True)
+        print(f"Saved: {output.resolve()}")
+    else:
+        plotter.show()
+
+
+def build_argument_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser()
+    parser.add_argument(
+        "--format", choices=("native", "openfoam"), default="native",
+        help="Input type; native preserves the original simulation.csv workflow"
+    )
+    parser.add_argument("-s", "--save", action="store_true")
+    parser.add_argument("--sim", default="simulation.csv")
+    parser.add_argument(
+        "--rack",
+        help="Geometry report; OpenFOAM mode defaults to <case>/geometry.txt"
+    )
+    parser.add_argument("--case", help="OpenFOAM case directory")
+    parser.add_argument("--time", default="latest", help="OpenFOAM time or 'latest'")
+    parser.add_argument(
+        "--slice-axis", choices=("x", "y", "z", "none"), default="y",
+        help="OpenFOAM slice normal; 'none' renders region surfaces"
+    )
+    parser.add_argument(
+        "--slice-position", type=float,
+        help="Physical slice coordinate; defaults to each mesh region's midpoint"
+    )
+    parser.add_argument(
+        "--temperature-units", choices=("C", "K"), default="C"
+    )
+    parser.add_argument("--opacity", type=float, default=0.9)
+    parser.add_argument("--fps", type=int, default=15)
+    parser.add_argument("--skip", type=int, default=1)
+    parser.add_argument("--output", default="rack_temperature_animation.mp4")
+    parser.add_argument("--stride", type=int, default=1, help="Plot every Nth cell")
+    return parser
+
+
+def main() -> None:
+    args = build_argument_parser().parse_args()
+    if args.format == "openfoam":
+        if not args.case:
+            raise SystemExit("--case is required when --format openfoam is selected")
+        run_openfoam(args)
+    else:
+        run_native(args)
 
 
 if __name__ == "__main__":

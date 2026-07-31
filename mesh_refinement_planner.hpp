@@ -174,10 +174,11 @@ private:
 
         std::sort(cuts.begin(), cuts.end());
         constexpr double cut_eps = 1e-12;
+        const double minimum_interval = 0.05*fine_dx;
         std::vector<double> unique_cuts;
         for (double cut : cuts) {
             if (unique_cuts.empty() ||
-                std::abs(cut - unique_cuts.back()) > cut_eps) {
+                std::abs(cut - unique_cuts.back()) >= minimum_interval) {
                 unique_cuts.push_back(cut);
             }
         }
@@ -200,34 +201,43 @@ private:
             return false;
         };
 
+        // Partition every interval evenly instead of greedily laying down
+        // target-sized cells and leaving a microscopic remainder before an
+        // exact feature plane.
+        std::vector<double> breakpoints=cuts;
+        for(const auto& band : merged) {
+            breakpoints.push_back(band.first);
+            breakpoints.push_back(band.second);
+        }
+        std::sort(breakpoints.begin(),breakpoints.end());
+        std::vector<double> clean_breakpoints;
+        for(double point : breakpoints) {
+            point=std::clamp(point,0.0,extent);
+            if(clean_breakpoints.empty() ||
+               point-clean_breakpoints.back()>=minimum_interval)
+                clean_breakpoints.push_back(point);
+        }
+        if(clean_breakpoints.empty() ||
+           clean_breakpoints.front()>cut_eps)
+            clean_breakpoints.insert(clean_breakpoints.begin(),0.0);
+        if(extent-clean_breakpoints.back()<minimum_interval)
+            clean_breakpoints.back()=extent;
+        else if(extent-clean_breakpoints.back()>cut_eps)
+            clean_breakpoints.push_back(extent);
+
         std::vector<double> widths;
-        double position = 0.0;
-        while (position < extent - cut_eps) {
-            double width = is_fine(position) ? fine_dx : coarse_dx;
-
-            // Stop at refinement-band boundaries.
-            for (const auto& band : merged) {
-                if (band.first > position + cut_eps)
-                    width = std::min(width, band.first - position);
-                if (band.second > position + cut_eps)
-                    width = std::min(width, band.second - position);
-            }
-
-            // Stop at exact component/internal-region boundaries.
-            for (double cut : cuts) {
-                if (cut > position + cut_eps) {
-                    width = std::min(width, cut - position);
-                    break;
-                }
-            }
-
-            width = std::min(width, extent - position);
-            if (width <= cut_eps) {
-                throw std::runtime_error(
-                    "MeshRefinementPlanner generated a zero-width cell.");
-            }
-            widths.push_back(width);
-            position += width;
+        for(std::size_t i=1;i<clean_breakpoints.size();++i) {
+            const double begin=clean_breakpoints[i-1];
+            const double end=clean_breakpoints[i];
+            const double length=end-begin;
+            if(length<=cut_eps) continue;
+            const double target=
+                is_fine(0.5*(begin+end)) ? fine_dx : coarse_dx;
+            const int count=std::max(
+                1,static_cast<int>(std::ceil(length/target)));
+            const double width=length/static_cast<double>(count);
+            widths.insert(
+                widths.end(),static_cast<std::size_t>(count),width);
         }
 
         if (widths.empty()) widths.push_back(extent);

@@ -1709,6 +1709,12 @@ public:
         std::vector<std::array<int, 3>> covered;
 
         auto stamp_cell = [&](int i, int j, int k) {
+            // A device centered on a positive domain face maps to the
+            // one-past-end grid line. Stamp its adjacent interior cell,
+            // matching the existing exterior-vent behavior.
+            if(i == nx) --i;
+            if(j == ny) --j;
+            if(k == nz) --k;
             if(!in_bounds(i, j, k)) return;
             covered.push_back({i, j, k});
         };
@@ -1877,6 +1883,9 @@ public:
         std::vector<std::array<int, 3>> covered;
 
         auto stamp_cell = [&](int i, int j, int k) {
+            if(i == nx) --i;
+            if(j == ny) --j;
+            if(k == nz) --k;
             if(!in_bounds(i, j, k)) return;
             covered.push_back({i, j, k});
         };

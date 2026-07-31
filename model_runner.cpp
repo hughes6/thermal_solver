@@ -4,7 +4,6 @@
 #include <memory>
 #include <iomanip>
 #include <cmath>
-#include <stdexcept>
 
 #include "cell.hpp"
 #include "collision.hpp"
@@ -35,27 +34,14 @@ int main(int argc, char* argv[]) {
   // loader.load_component("library/components/tripplite_b020_u08_19_ip_kvm.toml");
   // loader.run();
 
-
-  if(argc > 1) {
-    ModelLoader loader;
-    loader.load_fan_curves("library/fan_curves/fan_curves.toml");  
-    std::string path = "library/models/";
-    std::string arg1 = "";
-    try {
-      arg1 += argv[1];
-    } catch(const std::exception& e) {
-      std::cerr << "error processing arg: " << e.what() << "\n";
-      return 1;
-    }
-    path += arg1;
-    loader.load_model(path);
-    loader.run();
-  } else {
-    ModelLoader loader;
-    loader.load_fan_curves("library/fan_curves/fan_curves.toml");  
-    loader.load_model("library/models/model.toml");
-    loader.run();
-  }
+  ModelLoader loader;
+  const std::filesystem::path model_path =
+      argc > 1 ? argv[1] : "library/models/model.toml";
+  const std::filesystem::path fan_curve_path =
+      argc > 2 ? argv[2] : "library/fan_curves/fan_curves.toml";
+  loader.load_fan_curves(fan_curve_path);
+  loader.load_model(model_path);
+  loader.run();
 
   return 0;
 }

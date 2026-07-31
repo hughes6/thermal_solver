@@ -1,11 +1,23 @@
+#include <algorithm>
 #include <cassert>
+#include <cctype>
 #include <cmath>
+#include <filesystem>
+#include <fstream>
 #include <iostream>
+#include <sstream>
 
 #include "../grapher.hpp"
 #include "../input/model_loader.hpp"
 
 int main() {
+    auto read_file=[](const std::filesystem::path& path) {
+        std::ifstream input(path);
+        std::ostringstream contents;
+        contents << input.rdbuf();
+        return contents.str();
+    };
+
     ModelLoader loader;
     loader.load_fan_curves("library/fan_curves/fan_curves.toml");
     loader.load_model("library/models/model.toml");
@@ -25,6 +37,315 @@ int main() {
     assert(!model.components.empty());
     assert(!model.fans.empty());
     assert(!model.vents.empty());
+    const auto occurrence_count=[](
+        const std::string& text, const std::string& pattern) {
+        std::size_t count=0;
+        for(std::size_t at=0;
+            (at=text.find(pattern,at))!=std::string::npos;
+            at+=pattern.size())
+            ++count;
+        return count;
+    };
+    assert(occurrence_count(
+        read_file("library/components/eaton_2U_UPS.toml"),
+        "curve = \"generic_80mm_low_speed\"")==1);
+    assert(occurrence_count(
+        read_file("library/components/DELL_R470.toml"),
+        "curve = \"generic_80mm_low_speed\"")==6);
+    assert(model.openfoam_solver.enabled);
+    assert(model.openfoam_solver.template_file ==
+           "library/openfoam_cfg/indepth_foam_cfg.toml");
+    assert(model.mesh.adaptive);
+    assert(model.mesh.fine_dx == 0.02);
+    assert(model.mesh.coarse_dx == 0.10);
+
+    ModelLoader legacy_loader;
+    legacy_loader.load_model("library/tests/valid_model.toml");
+    assert(!legacy_loader.model.openfoam_solver.enabled);
+    assert(!legacy_loader.model.openfoam_solver.template_file.has_value());
+
+    ModelLoader foam_loader;
+    foam_loader.load_model("library/tests/openfoam_model.toml");
+#ifdef _WIN32
+    {
+        const std::string resolved_test_case=std::filesystem::absolute(
+            foam_loader.model.openfoam_solver.case_directory).string();
+        if(std::any_of(
+               resolved_test_case.begin(),resolved_test_case.end(),
+               [](const unsigned char character) {
+                   return std::isspace(character)!=0;
+               }))
+            foam_loader.model.openfoam_solver.case_directory=
+                std::filesystem::temp_directory_path()/
+                "thermal_sim_openfoam_test";
+    }
+#endif
+    const ModelInput& foam=foam_loader.model;
+    assert(foam.openfoam_solver.enabled);
+    assert(foam.openfoam_solver.template_file ==
+           "library/openfoam_cfg/default_foam_cfg.toml");
+    // Inline model values override the reusable template.
+    assert(foam.openfoam_solver.parallel_processes == 2);
+    assert(foam.openfoam_solver.field_write_interval == 5.0);
+    assert(foam.openfoam_solver.saved_time_directories == 3);
+    // Unspecified values are inherited from the template.
+    assert(foam.openfoam_solver.overwrite);
+    assert(foam.openfoam_solver.temperature_dependent_air);
+    assert(foam.openfoam_solver.maximum_courant_number == 1.0);
+    assert(foam.openfoam_solver.use_fan_startup_ramp);
+    assert(foam.openfoam_solver.fan_startup_ramp_time == 0.05);
+    assert(foam.openfoam_solver.fan_startup_ramp_steps == 5);
+    assert(foam.openfoam_solver.initial_airflow_check_interval == 0.01);
+    assert(foam.openfoam_solver.minimum_initial_airflow_duration == 0.02);
+    assert(foam.openfoam_solver.thermal_only_maximum_time_step == 5.0);
+    assert(foam.openfoam_solver.airflow_refresh_check_interval == 0.01);
+    assert(
+        foam.openfoam_solver.airflow_refresh_maximum_courant_number == 10.0);
+    assert(foam.openfoam_solver.stop_when_thermally_converged);
+    assert(foam.openfoam_solver.minimum_thermal_convergence_time == 3600.0);
+    assert(
+        foam.openfoam_solver.thermal_convergence_reference_interval == 300.0);
+    assert(foam.openfoam_solver.maximum_temperature_change == 0.1);
+    assert(
+        foam.openfoam_solver.maximum_component_average_temperature_change ==
+        0.05);
+    assert(
+        foam.openfoam_solver.thermal_convergence_required_checkpoints == 2);
+    assert(std::abs(foam.openfoam_solver.gravity.z+9.80665) < 1e-12);
+    // Simulation time remains authoritative in the model, not the template.
+    assert(foam.simulation.duration == 10.0);
+
+    const auto load_fidelity_profile=[&](
+        const std::string& profile_name) {
+        std::string profile_model=
+            read_file("library/tests/openfoam_model.toml");
+        const std::string default_profile=
+            "library/openfoam_cfg/default_foam_cfg.toml";
+        const std::string selected_profile=
+            "library/openfoam_cfg/"+profile_name+"_foam_cfg.toml";
+        const std::size_t profile_at=profile_model.find(default_profile);
+        assert(profile_at != std::string::npos);
+        profile_model.replace(
+            profile_at,default_profile.size(),selected_profile);
+        const std::filesystem::path profile_path=
+            ".codex-foam-regions/"+profile_name+"_profile_model.toml";
+        std::filesystem::create_directories(profile_path.parent_path());
+        std::ofstream output(profile_path);
+        output << profile_model;
+        output.close();
+        ModelLoader loader;
+        loader.load_model(profile_path);
+        return loader.model;
+    };
+    const ModelInput screening=load_fidelity_profile("screening");
+    assert(screening.mesh.adaptive);
+    assert(screening.mesh.fine_dx == 0.02);
+    assert(screening.mesh.coarse_dx == 0.20);
+    assert(screening.mesh.refinement_margin == 0.005);
+    assert(
+        screening.openfoam_solver.thermal_only_maximum_time_step == 10.0);
+    // Inline test-model values remain authoritative over profile defaults.
+    assert(screening.openfoam_solver.airflow_refresh_interval == 5.0);
+    assert(screening.openfoam_solver.report_interval == 1.0);
+    assert(screening.openfoam_solver.maximum_temperature_change == 0.25);
+
+    const ModelInput indepth=load_fidelity_profile("indepth");
+    assert(indepth.mesh.adaptive);
+    assert(indepth.mesh.fine_dx == 0.02);
+    assert(indepth.mesh.coarse_dx == 0.10);
+    assert(indepth.mesh.refinement_margin == 0.02);
+    assert(indepth.openfoam_solver.thermal_only_maximum_time_step == 5.0);
+    assert(indepth.openfoam_solver.maximum_temperature_change == 0.10);
+
+    ModelLoader unsafe_path_loader;
+    unsafe_path_loader.load_model("library/tests/openfoam_model.toml");
+    unsafe_path_loader.model.openfoam_solver.case_directory=
+        ".codex-foam-regions/unsafe case";
+    bool rejected_unsafe_path=false;
+    try {
+        unsafe_path_loader.run();
+    } catch(const std::runtime_error& error) {
+        rejected_unsafe_path=
+            std::string(error.what()).find(
+                "OpenFOAM MPI does not support") != std::string::npos;
+    }
+    assert(rejected_unsafe_path);
+
+    const std::filesystem::path case_directory=
+        foam.openfoam_solver.case_directory;
+    std::filesystem::create_directories(case_directory);
+    {
+        std::ofstream stale_marker(
+            case_directory/".openfoam_regions_prepared");
+        stale_marker << "stale\n";
+        std::ofstream stale_thermal_state(
+            case_directory/".thermal_convergence_state");
+        stale_thermal_state << "stale\n";
+        std::ofstream stale_thermal_streak(
+            case_directory/".thermal_convergence_streak");
+        stale_thermal_streak << "9\n";
+    }
+    std::filesystem::create_directories(case_directory/"0.25");
+    std::filesystem::create_directories(case_directory/"processor0");
+    std::filesystem::create_directories(case_directory/"postProcessing");
+    std::ostringstream export_output;
+    std::streambuf* original_output=std::cout.rdbuf(export_output.rdbuf());
+    foam_loader.run();
+    std::cout.rdbuf(original_output);
+    assert(export_output.str().find(
+        "Run from a WSL terminal with:") != std::string::npos);
+    assert(export_output.str().find(
+        "./run_parallel.sh 2 --multirate 10") != std::string::npos);
+#ifdef _WIN32
+    const std::size_t wsl_command=export_output.str().find("  cd '/mnt/");
+    assert(wsl_command != std::string::npos);
+    const std::size_t wsl_command_end=
+        export_output.str().find('\n',wsl_command);
+    assert(export_output.str().substr(
+        wsl_command,wsl_command_end-wsl_command).find('\\') ==
+        std::string::npos);
+#endif
+    assert(!std::filesystem::exists(
+        case_directory/".openfoam_regions_prepared"));
+    assert(!std::filesystem::exists(
+        case_directory/".thermal_convergence_state"));
+    assert(!std::filesystem::exists(
+        case_directory/".thermal_convergence_streak"));
+    assert(!std::filesystem::exists(case_directory/"0.25"));
+    assert(!std::filesystem::exists(case_directory/"processor0"));
+    assert(!std::filesystem::exists(case_directory/"postProcessing"));
+    assert(std::filesystem::is_directory(case_directory/"0"));
+    assert(std::filesystem::is_regular_file(
+        case_directory/"system/controlDict"));
+    assert(std::filesystem::is_regular_file(
+        case_directory/"prepare_regions.sh"));
+    assert(std::filesystem::is_regular_file(
+        case_directory/"geometry.txt"));
+    const std::string geometry=
+        read_file(case_directory/"geometry.txt");
+    assert(geometry.find("Rack dimensions:") != std::string::npos);
+    assert(geometry.find("Component 1: heated block") != std::string::npos);
+    const std::string control=
+        read_file(case_directory/"system/controlDict");
+    const std::string decomposition=
+        read_file(case_directory/"system/decomposeParDict");
+    const std::string gravity=
+        read_file(case_directory/"constant/g");
+    const std::string fluid_solution=
+        read_file(case_directory/"system/fluid/fvSolution");
+    const std::string solid_temperature=
+        read_file(case_directory/"0/heated_block_0/T");
+    const std::string run_parallel=
+        read_file(case_directory/"run_parallel.sh");
+    assert(control.find("endTime         10") != std::string::npos);
+    assert(control.find("deltaT          0.01") != std::string::npos);
+    assert(control.find("purgeWrite      3") != std::string::npos);
+    assert(control.find("writeFormat     binary") != std::string::npos);
+    assert(control.find("timePrecision   12") != std::string::npos);
+    assert(decomposition.find("numberOfSubdomains 2") != std::string::npos);
+    assert(gravity.find("(0 0 -9.80665)") != std::string::npos);
+    assert(fluid_solution.find("pRefCell") != std::string::npos);
+    assert(solid_temperature.find("\".*\"") != std::string::npos);
+    assert(solid_temperature.find("type zeroGradient") != std::string::npos);
+    assert(std::filesystem::is_regular_file(
+        case_directory/"constant/fluid/fvOptions.fullFan"));
+    assert(run_parallel.find("run_fan_ramp") != std::string::npos);
+    assert(run_parallel.find("Fan ramp stage") != std::string::npos);
+    assert(run_parallel.find("adaptive_initial_airflow") !=
+           std::string::npos);
+    assert(run_parallel.find("internal_fan_names") != std::string::npos);
+    assert(run_parallel.find("Properties") != std::string::npos);
+    const std::size_t internal_fan_check=
+        run_parallel.find("Internal fan not producing positive through-flow");
+    assert(internal_fan_check != std::string::npos);
+    assert(internal_fan_check >
+           run_parallel.find("for name in \"${internal_fan_names[@]}\""));
+    assert(run_parallel.find(
+        "Initial airflow failed to converge") != std::string::npos);
+    assert(run_parallel.find(
+        "printf \"%.17g\", remaining/n") != std::string::npos);
+    assert(run_parallel.find(
+        "x=(int(a/d)+1)*d") != std::string::npos);
+    assert(run_parallel.find(
+        "if(x<=a+1e-9)x+=d") != std::string::npos);
+    assert(run_parallel.find(
+        "half=remaining/2") != std::string::npos);
+    assert(run_parallel.find(
+        "${saved_time}/uniform/time") != std::string::npos);
+    assert(run_parallel.find(
+        "restart_dt=$(awk") != std::string::npos);
+    assert(run_parallel.find(
+        "-entry deltaT0") != std::string::npos);
+    assert(run_parallel.find(
+        "Solver stage failed to reach target time") != std::string::npos);
+    assert(run_parallel.find(
+        "tolerance=1e-6*scale") != std::string::npos);
+    assert(run_parallel.find(
+        "-entry startTime -set \"$current\"") != std::string::npos);
+    assert(run_parallel.find(
+        "foamDictionary -precision 16") != std::string::npos);
+    assert(run_parallel.find(
+        "-allRegions -time \"$reconstruct_time\"") != std::string::npos);
+    assert(run_parallel.find(
+        ".airflow_refresh_pending") != std::string::npos);
+    assert(run_parallel.find(
+        "Retrying interrupted airflow refresh") != std::string::npos);
+    assert(run_parallel.find(
+        "thermal_metrics_converged") != std::string::npos);
+    assert(run_parallel.find(
+        ".thermal_convergence_state") != std::string::npos);
+    assert(run_parallel.find(
+        "peakChange=$scaled_delta K/300s") != std::string::npos);
+    assert(run_parallel.find(
+        "Thermal convergence checkpoint $streak/2 accepted") !=
+        std::string::npos);
+    assert(run_parallel.find(
+        "\"$airflow_validated\" == 1") != std::string::npos);
+    assert(run_parallel.find(
+        "Thermal and airflow convergence criteria satisfied") !=
+        std::string::npos);
+    assert(run_parallel.find(
+        "Reusing $processes valid processor partitions") !=
+        std::string::npos);
+    assert(run_parallel.find(
+        "system/controlDict\" -entry deltaT -set") != std::string::npos);
+    assert(run_parallel.find(
+        "system/controlDict\" -entry writeInterval -set") !=
+        std::string::npos);
+    assert(run_parallel.find(
+        "touch \"$initial_convergence_marker\"") != std::string::npos);
+    assert(run_parallel.find(
+        "[[ ! -f \"$initial_convergence_marker\" ]]") !=
+        std::string::npos);
+    assert(run_parallel.find(
+        "trap restore_full_fan_options EXIT INT TERM") !=
+        std::string::npos);
+    assert(run_parallel.find(
+        "\"$processor_dir/constant/fluid/fvOptions\"") !=
+        std::string::npos);
+    assert(run_parallel.find("gsub(/[()\\r]/") != std::string::npos);
+    assert(run_parallel.find("Fan ramp scaling verification failed") !=
+           std::string::npos);
+    assert(run_parallel.find(
+        "x=duration*i/n; print (x<limit?x:limit)") !=
+        std::string::npos);
+    assert(run_parallel.find("then continue; fi") != std::string::npos);
+    assert(run_parallel.find("x=target/duration") != std::string::npos);
+    assert(run_parallel.find("-latestTime -withZero") ==
+           std::string::npos);
+
+    Rack planner_rack=Rack::from_meters(0.4,0.4,0.4,"planner test");
+    Component nearly_aligned=
+        Component::from_meters(0.1,0.1,0.1,"nearly aligned");
+    nearly_aligned.set_coords_m(0.1000196,0.1,0.1);
+    const MeshRefinementPlan refinement=MeshRefinementPlanner::plan(
+        planner_rack,{nearly_aligned},{},{},0.02,0.10,0.02);
+    const auto minimum_width=[](const std::vector<double>& widths) {
+        return *std::min_element(widths.begin(),widths.end());
+    };
+    assert(minimum_width(refinement.dxs)>=0.001-1e-12);
+    assert(minimum_width(refinement.dys)>=0.001-1e-12);
+    assert(minimum_width(refinement.dzs)>=0.001-1e-12);
 
     std::cout << "model_config_test PASSED\n";
 }

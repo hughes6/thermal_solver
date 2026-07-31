@@ -1,6 +1,8 @@
 #ifndef THERMAL_MODEL_LOADER_HPP
 #define THERMAL_MODEL_LOADER_HPP
 
+#include <algorithm>
+#include <cctype>
 #include <filesystem>
 #include <iostream>
 #include <unordered_map>
@@ -13,6 +15,7 @@
 #include "../component_grapher.hpp"
 #include "../collision.hpp"
 #include "../mesh_refinement_planner.hpp"
+#include "../openfoam_exporter.hpp"
 #include "../thermal_estimator.hpp"
 #include "../toml.hpp"
 
@@ -759,10 +762,7 @@ struct ModelLoader {
                 simulation["advection_cfl_target"].value<double>().value_or(0.8);
             model.simulation.max_advection_substeps =
                 simulation["max_advection_substeps"].value<int>().value_or(10000);
-            model.simulation.multithreading = 
-                simulation["multithreading"].value<bool>().value_or(false);
-            model.simulation.cores =
-                simulation["cores"].value<int>().value_or(1);
+
             // ----------------------------------------Flow Solver-------------------------------------------
             const toml::table& flow_solver = require_table(root["flow_solver"], "simulation");
             model.flow_solver.enable_flow_solver = flow_solver["enable_flow_solver"].value<bool>().value_or(false);
@@ -812,9 +812,7 @@ struct ModelLoader {
                     model.multistage.coarse_update_flow_interval =
                         (*multistage)["coarse_update_flow_interval"]
                             .value<int>().value_or(-1);
-                    model.multistage.coarse_output_interval = 
-                        (*multistage)["coarse_output_interval"]
-                            .value<int>().value_or(-1);
+
                     const toml::table& coarse_mesh = require_table(
                         (*multistage)["coarse_mesh"], "multistage.coarse_mesh");
                     model.multistage.coarse_mesh.adaptive = true;
@@ -825,6 +823,177 @@ struct ModelLoader {
                     model.multistage.coarse_mesh.refinement_margin =
                         coarse_mesh["refinement_margin"].value<double>().value_or(0.0);
                 }
+            }
+            // Optional backend. Its absence preserves every legacy TOML and
+            // keeps the native solver authoritative.
+            if(const toml::table* foam=root["openfoam_solver"].as_table()) {
+                auto& cfg=model.openfoam_solver;
+                toml::table template_root;
+                const toml::table* template_cfg=nullptr;
+                cfg.template_file=(*foam)["template"].value<std::string>();
+                if(cfg.template_file) {
+                    template_root=toml::parse_file(*cfg.template_file);
+                    template_cfg=template_root["openfoam_solver"].as_table();
+                    if(!template_cfg)
+                        throw std::runtime_error(
+                            "OpenFOAM configuration template '" +
+                            *cfg.template_file +
+                            "' must contain [openfoam_solver].");
+                }
+                auto value=[&](std::string_view key) {
+                    const auto local=(*foam)[key];
+                    if(local) return local;
+                    return template_cfg
+                        ? (*template_cfg)[key] : (*foam)[key];
+                };
+                // A fidelity profile may optionally carry mesh controls in
+                // its top-level [mesh] table. Selecting such a profile is an
+                // explicit request to replace the model's base mesh settings.
+                // A nested [openfoam_solver.mesh] table remains the
+                // highest-priority per-model override.
+                const toml::table* profile_mesh=
+                    cfg.template_file ? template_root["mesh"].as_table()
+                                      : nullptr;
+                const toml::table* local_profile_mesh=
+                    (*foam)["mesh"].as_table();
+                const toml::table* selected_mesh=
+                    local_profile_mesh ? local_profile_mesh : profile_mesh;
+                if(selected_mesh) {
+                    model.mesh.adaptive=
+                        (*selected_mesh)["adaptive"]
+                            .value<bool>().value_or(false);
+                    if(model.mesh.adaptive) {
+                        model.mesh.fine_dx=require_value<double>(
+                            (*selected_mesh)["fine_dx"],
+                            "openfoam_solver.mesh.fine_dx");
+                        model.mesh.coarse_dx=require_value<double>(
+                            (*selected_mesh)["coarse_dx"],
+                            "openfoam_solver.mesh.coarse_dx");
+                        model.mesh.refinement_margin=
+                            (*selected_mesh)["refinement_margin"]
+                                .value<double>().value_or(0.0);
+                    } else {
+                        model.mesh.dx=require_value<double>(
+                            (*selected_mesh)["dx"],
+                            "openfoam_solver.mesh.dx");
+                        model.mesh.dy=require_value<double>(
+                            (*selected_mesh)["dy"],
+                            "openfoam_solver.mesh.dy");
+                        model.mesh.dz=require_value<double>(
+                            (*selected_mesh)["dz"],
+                            "openfoam_solver.mesh.dz");
+                    }
+                }
+                cfg.enabled=value("enabled").value<bool>().value_or(false);
+                cfg.case_directory=value("case_directory")
+                    .value<std::string>().value_or(
+                        ("openfoam_cases/"+model_path.stem().string()));
+                cfg.overwrite=value("overwrite").value<bool>().value_or(false);
+                cfg.parallel_processes=value("parallel_processes")
+                    .value<int>().value_or(4);
+                cfg.maximum_time_step=value("maximum_time_step")
+                    .value<double>().value_or(1.0);
+                cfg.maximum_courant_number=value("maximum_courant_number")
+                    .value<double>().value_or(1.0);
+                cfg.field_write_interval=value("field_write_interval")
+                    .value<double>().value_or(60.0);
+                cfg.saved_time_directories=value("saved_time_directories")
+                    .value<int>().value_or(3);
+                cfg.report_interval=value("report_interval")
+                    .value<double>().value_or(10.0);
+                cfg.use_k_omega_sst=value("use_k_omega_sst")
+                    .value<bool>().value_or(true);
+                cfg.inlet_turbulence_intensity=
+                    value("inlet_turbulence_intensity")
+                        .value<double>().value_or(0.05);
+                cfg.turbulence_length_scale=
+                    value("turbulence_length_scale")
+                        .value<double>().value_or(0.01);
+                cfg.turbulent_prandtl_number=
+                    value("turbulent_prandtl_number")
+                        .value<double>().value_or(0.85);
+                cfg.temperature_dependent_air=
+                    value("temperature_dependent_air")
+                        .value<bool>().value_or(true);
+                if(const toml::table* gravity=value("gravity").as_table())
+                    cfg.gravity=parse_direction(
+                        *gravity,"openfoam_solver.gravity");
+                cfg.sutherland_temperature=
+                    value("sutherland_temperature")
+                        .value<double>().value_or(110.4);
+                cfg.use_vent_pressure_loss=
+                    value("use_vent_pressure_loss")
+                        .value<bool>().value_or(true);
+                cfg.use_fan_curves=value("use_fan_curves")
+                    .value<bool>().value_or(true);
+                cfg.fan_curve_extension_multiplier=
+                    value("fan_curve_extension_multiplier")
+                        .value<double>().value_or(2.0);
+                cfg.use_multirate_thermal=
+                    value("use_multirate_thermal")
+                        .value<bool>().value_or(true);
+                cfg.airflow_warmup_time=value("airflow_warmup_time")
+                    .value<double>().value_or(5.0);
+                cfg.use_fan_startup_ramp=value("use_fan_startup_ramp")
+                    .value<bool>().value_or(true);
+                cfg.fan_startup_ramp_time=value("fan_startup_ramp_time")
+                    .value<double>().value_or(0.05);
+                cfg.fan_startup_ramp_steps=value("fan_startup_ramp_steps")
+                    .value<int>().value_or(5);
+                cfg.initial_airflow_check_interval=
+                    value("initial_airflow_check_interval")
+                        .value<double>().value_or(0.01);
+                cfg.minimum_initial_airflow_duration=
+                    value("minimum_initial_airflow_duration")
+                        .value<double>().value_or(0.02);
+                cfg.thermal_only_maximum_time_step=
+                    value("thermal_only_maximum_time_step")
+                        .value<double>().value_or(1.0);
+                cfg.thermal_only_maximum_courant_number=
+                    value("thermal_only_maximum_courant_number")
+                        .value<double>().value_or(1000.0);
+                cfg.airflow_refresh_interval=
+                    value("airflow_refresh_interval")
+                        .value<double>().value_or(300.0);
+                cfg.airflow_refresh_duration=
+                    value("airflow_refresh_duration")
+                        .value<double>().value_or(1.0);
+                cfg.use_adaptive_airflow_refresh=
+                    value("use_adaptive_airflow_refresh")
+                        .value<bool>().value_or(true);
+                cfg.airflow_refresh_maximum_courant_number=
+                    value("airflow_refresh_maximum_courant_number")
+                        .value<double>().value_or(10.0);
+                cfg.airflow_refresh_check_interval=
+                    value("airflow_refresh_check_interval")
+                        .value<double>().value_or(0.01);
+                cfg.maximum_airflow_refresh_duration=
+                    value("maximum_airflow_refresh_duration")
+                        .value<double>().value_or(0.2);
+                cfg.maximum_mass_imbalance_fraction=
+                    value("maximum_mass_imbalance_fraction")
+                        .value<double>().value_or(0.01);
+                cfg.maximum_device_flow_change_fraction=
+                    value("maximum_device_flow_change_fraction")
+                        .value<double>().value_or(0.02);
+                cfg.stop_when_thermally_converged=
+                    value("stop_when_thermally_converged")
+                        .value<bool>().value_or(true);
+                cfg.minimum_thermal_convergence_time=
+                    value("minimum_thermal_convergence_time")
+                        .value<double>().value_or(3600.0);
+                cfg.thermal_convergence_reference_interval=
+                    value("thermal_convergence_reference_interval")
+                        .value<double>().value_or(300.0);
+                cfg.maximum_temperature_change=
+                    value("maximum_temperature_change")
+                        .value<double>().value_or(0.1);
+                cfg.maximum_component_average_temperature_change=
+                    value("maximum_component_average_temperature_change")
+                        .value<double>().value_or(0.05);
+                cfg.thermal_convergence_required_checkpoints=
+                    value("thermal_convergence_required_checkpoints")
+                        .value<int>().value_or(2);
             }
             // ------------------------------------------Rack------------------------------------------------
             const toml::table& rack = require_table(root["rack"], "rack");
@@ -1076,7 +1245,7 @@ struct ModelLoader {
         std::optional<Mesh> coarse_warm_start;
         std::optional<ThermalTimeEstimate> coarse_thermal_estimate;
         std::size_t coarse_timestep_count = 0;
-        if (model.multistage.enabled) {
+        if (model.multistage.enabled && !model.openfoam_solver.enabled) {
             std::cout << "----- Coarse warm-start stage -----\n";
             const MeshInput& coarse_cfg = model.multistage.coarse_mesh;
             const MeshRefinementPlan coarse_plan = MeshRefinementPlanner::plan(
@@ -1174,14 +1343,14 @@ struct ModelLoader {
                 model.flow_solver.enable_flow_solver
                     ? model.multistage.coarse_update_flow_interval
                     : -1;
-            const int coarse_output_interval = model.multistage.coarse_output_interval == -1 ? 
-            std::max(1, static_cast<int>(std::ceil(model.multistage.coarse_duration/model.multistage.coarse_dt))) : model.multistage.coarse_output_interval;
             Solver coarse_solver(
                 coarse_mesh,
                 model.multistage.coarse_dt,
                 model.multistage.coarse_duration,
                 false,
-                coarse_output_interval,
+                std::max(1, static_cast<int>(std::ceil(
+                    model.multistage.coarse_duration /
+                    model.multistage.coarse_dt))),
                 coarse_flow_interval,
                 *model.flow_solver.resistivity,
                 *model.flow_solver.tolerance,
@@ -1194,12 +1363,6 @@ struct ModelLoader {
                 model.simulation.max_advection_substeps,
                 "coarse_simulation.csv",
                 model.flow_solver.pressure_method);
-
-   
-            if(model.simulation.multithreading) {
-                coarse_solver.set_cores(model.simulation.cores);
-            }
-            
             coarse_solver.solve();
             coarse_warm_start = coarse_solver.get_mesh();
             double coarse_min_T=std::numeric_limits<double>::infinity();
@@ -1241,7 +1404,9 @@ struct ModelLoader {
         Grapher grapher(rack, graph_dx, graph_dy, graph_dz);
 
         for(const Component& component : components) {
-            if(model.mesh.adaptive) {
+            if(model.openfoam_solver.enabled) {
+                mesh.stamp_component_for_openfoam(component);
+            } else if(model.mesh.adaptive) {
                 mesh.stamp_component_adaptive(component);
             } else {
                 mesh.stamp_component(component);
@@ -1249,7 +1414,9 @@ struct ModelLoader {
             grapher.add_component(component);
         }
         for(const Fan& fan : fans) {
-            if(model.mesh.adaptive) {
+            if(model.openfoam_solver.enabled) {
+                mesh.stamp_fan_for_openfoam(fan);
+            } else if(model.mesh.adaptive) {
                 mesh.stamp_fan_adaptive(fan);
             } else {
                 mesh.stamp_fan(fan);
@@ -1257,12 +1424,128 @@ struct ModelLoader {
             grapher.add_fan(fan);
         }
         for(const Vent& vent : vents) {
-            if(model.mesh.adaptive) {
+            if(model.openfoam_solver.enabled) {
+                mesh.stamp_vent_for_openfoam(vent);
+            } else if(model.mesh.adaptive) {
                 mesh.stamp_vent_adaptive(vent);
             } else {
                 mesh.stamp_vent(vent);
             }
             grapher.add_vent(vent);
+        }
+
+        if(model.openfoam_solver.enabled) {
+            const auto& cfg=model.openfoam_solver;
+            OpenFoamExportOptions options{
+                .case_directory=cfg.case_directory,
+                .overwrite=cfg.overwrite,
+                .parallel_processes=cfg.parallel_processes,
+                .end_time=model.simulation.duration,
+                .initial_time_step=model.simulation.dt,
+                .maximum_time_step=cfg.maximum_time_step,
+                .maximum_courant_number=cfg.maximum_courant_number,
+                .field_write_interval=cfg.field_write_interval,
+                .saved_time_directories=cfg.saved_time_directories,
+                .report_interval=cfg.report_interval,
+                .use_k_omega_sst=cfg.use_k_omega_sst,
+                .inlet_turbulence_intensity=
+                    cfg.inlet_turbulence_intensity,
+                .turbulence_length_scale=cfg.turbulence_length_scale,
+                .turbulent_prandtl_number=cfg.turbulent_prandtl_number,
+                .temperature_dependent_air=cfg.temperature_dependent_air,
+                .gravity={cfg.gravity.x,cfg.gravity.y,cfg.gravity.z},
+                .sutherland_temperature=cfg.sutherland_temperature,
+                .use_vent_pressure_loss=cfg.use_vent_pressure_loss,
+                .use_fan_curves=cfg.use_fan_curves,
+                .fan_curve_extension_multiplier=
+                    cfg.fan_curve_extension_multiplier,
+                .use_multirate_thermal=cfg.use_multirate_thermal,
+                .airflow_warmup_time=cfg.airflow_warmup_time,
+                .use_fan_startup_ramp=cfg.use_fan_startup_ramp,
+                .fan_startup_ramp_time=cfg.fan_startup_ramp_time,
+                .fan_startup_ramp_steps=cfg.fan_startup_ramp_steps,
+                .initial_airflow_check_interval=
+                    cfg.initial_airflow_check_interval,
+                .minimum_initial_airflow_duration=
+                    cfg.minimum_initial_airflow_duration,
+                .frozen_flow_maximum_time_step=
+                    cfg.thermal_only_maximum_time_step,
+                .frozen_flow_maximum_courant_number=
+                    cfg.thermal_only_maximum_courant_number,
+                .airflow_refresh_interval=cfg.airflow_refresh_interval,
+                .airflow_refresh_duration=cfg.airflow_refresh_duration,
+                .use_adaptive_airflow_refresh=
+                    cfg.use_adaptive_airflow_refresh,
+                .airflow_refresh_maximum_courant_number=
+                    cfg.airflow_refresh_maximum_courant_number,
+                .airflow_refresh_check_interval=
+                    cfg.airflow_refresh_check_interval,
+                .maximum_airflow_refresh_duration=
+                    cfg.maximum_airflow_refresh_duration,
+                .maximum_mass_imbalance_fraction=
+                    cfg.maximum_mass_imbalance_fraction,
+                .maximum_device_flow_change_fraction=
+                    cfg.maximum_device_flow_change_fraction,
+                .stop_when_thermally_converged=
+                    cfg.stop_when_thermally_converged,
+                .minimum_thermal_convergence_time=
+                    cfg.minimum_thermal_convergence_time,
+                .thermal_convergence_reference_interval=
+                    cfg.thermal_convergence_reference_interval,
+                .maximum_temperature_change=
+                    cfg.maximum_temperature_change,
+                .maximum_component_average_temperature_change=
+                    cfg.maximum_component_average_temperature_change,
+                .thermal_convergence_required_checkpoints=
+                    cfg.thermal_convergence_required_checkpoints
+            };
+            const std::filesystem::path absolute_case_directory=
+                std::filesystem::absolute(options.case_directory);
+            const std::string native_case_directory=
+                absolute_case_directory.string();
+            if(std::any_of(
+                   native_case_directory.begin(),native_case_directory.end(),
+                   [](const unsigned char character) {
+                       return std::isspace(character)!=0;
+                   }))
+                throw std::runtime_error(
+                    "OpenFOAM case_directory resolves to a path containing "
+                    "whitespace, which OpenFOAM MPI does not support: '" +
+                    native_case_directory +
+                    "'. Set openfoam_solver.case_directory to an absolute "
+                    "path without spaces (for example "
+                    "\"C:/OpenFOAM/my_model\").");
+            OpenFoamExporter::export_mesh(mesh,options);
+            // Keep the source geometry beside the exact OpenFOAM mesh. The
+            // Python visualizer uses this for component names, internal-region
+            // boxes, and fan/vent arrows without relying on a stale output.txt
+            // from another model run.
+            grapher.export_to_file(
+                (absolute_case_directory/"geometry.txt").string());
+            std::string launch_directory=absolute_case_directory.string();
+#ifdef _WIN32
+            if(launch_directory.size()>=3 &&
+               std::isalpha(
+                   static_cast<unsigned char>(launch_directory[0])) &&
+               launch_directory[1]==':') {
+                const char drive=static_cast<char>(std::tolower(
+                    static_cast<unsigned char>(launch_directory[0])));
+                launch_directory="/mnt/" + std::string(1,drive) +
+                    launch_directory.substr(2);
+            }
+            std::replace(
+                launch_directory.begin(),launch_directory.end(),'\\','/');
+#endif
+            std::cout
+                << "OpenFOAM backend selected; case exported to "
+                << absolute_case_directory
+                << "\nNative transient solver was not run.\n"
+                << "Run from a WSL terminal with:\n  cd '"
+                << launch_directory << "' && ./run_parallel.sh "
+                << cfg.parallel_processes
+                << (cfg.use_multirate_thermal ? " --multirate " : " ")
+                << model.simulation.duration << '\n';
+            return;
         }
 
         if (coarse_warm_start.has_value()) {
@@ -1479,9 +1762,6 @@ struct ModelLoader {
                     "simulation.csv",
                     model.flow_solver.pressure_method);
 
-        if(model.simulation.multithreading) {
-            solver.set_cores(model.simulation.cores);
-        }
 
         SimulationLogger logger(config);
         logger.initialize(mesh);

@@ -8,6 +8,7 @@
 #include "component.hpp"
 #include "environment.hpp"
 #include "fan.hpp"
+#include "grapher.hpp"
 #include "mesh.hpp"
 #include "openfoam_exporter.hpp"
 #include "rack.hpp"
@@ -38,111 +39,102 @@ int main(int argc, char* argv[]) {
             100);       // maximum output writes
 
         Rack rack = Rack::from_meters(
-            0.40, 0.60, 0.40, "OpenFOAM example rack");
+            0.60, 0.80, 0.60, "OpenFOAM multi-device rack");
         rack.set_t(20.0);
         rack.set_cp(environment.get_cp());
         rack.set_k(environment.get_k());
         rack.set_rho(environment.get_rho());
 
-        Component server = Component::from_meters(
-            0.20, 0.30, 0.20, "example_server");
-        server.set_coords_m(0.10, 0.15, 0.10);
-        server.set_t(20.0);
-        server.set_rho_solid(2700.0);
-        server.set_cp(900.0);
-        server.set_k_solid(150.0);
-        server.set_watts(0.0);
+        std::vector<Component> components;
+        auto add_server = [&](const std::string& name, double x,
+                              double heat_load, double fan_cfm) {
+            Component server = Component::from_meters(
+                0.20, 0.40, 0.20, name);
+            server.set_coords_m(x, 0.20, 0.20);
+            server.set_t(20.0);
+            server.set_rho_solid(2700.0);
+            server.set_cp(900.0);
+            server.set_k_solid(150.0);
+            server.set_watts(0.0);
 
-        InternalRegion air_channel(
-            "server_air_channel",
-            {0.05, 0.30, 0.20},
-            {0.00, 0.00, 0.00});
-        server.add_region(air_channel);
+            server.add_region(InternalRegion(
+                name + "_air_channel",
+                {0.10, 0.40, 0.20},
+                {0.00, 0.00, 0.00}));
 
-        Fan server_internal_fan(
-            "server_internal_fan",
-            80.0,
-            0.0,
-            {0.05, 0.0, 0.20},
-            {0.025, 0.10, 0.10},
-            {0.0, 1.0, 0.0},
-            FlowType::Intake,
-            ShapeType::Rectangular);
-        constexpr double internal_fan_free_flow =
-            80.0 * Fan::CFM_TO_M3S;
-        server_internal_fan.set_curve(
-            12.0, 0.0,
-            12.0/(internal_fan_free_flow*internal_fan_free_flow),
-            1.2);
-        server.add_region(InternalRegion(server_internal_fan));
+            Fan internal_fan(
+                name + "_internal_fan", fan_cfm, 0.0,
+                {0.05, 0.0, 0.20}, {0.025, 0.10, 0.10},
+                {0.0, 1.0, 0.0}, FlowType::Intake,
+                ShapeType::Rectangular);
+            const double free_flow = fan_cfm * Fan::CFM_TO_M3S;
+            internal_fan.set_curve(
+                12.0, 0.0, 12.0/(free_flow*free_flow), 1.2);
+            server.add_region(InternalRegion(internal_fan));
 
-        Vent server_internal_vent(
-            "server_internal_vent",
-            {0.05, 0.0, 0.20},
-            0.75,
-            0.0,
-            0.65,
-            {0.025, 0.20, 0.10},
-            {0.0, 1.0, 0.0},
-            VentShapeType::Rectangular);
-        server.add_region(InternalRegion(server_internal_vent));
+            server.add_region(InternalRegion(Vent(
+                name + "_internal_vent",
+                {0.05, 0.0, 0.20}, 0.72, 0.0, 0.62,
+                {0.025, 0.30, 0.10}, {0.0, 1.0, 0.0},
+                VentShapeType::Rectangular)));
 
-        InternalRegion processor(
-            "processor_heat_source",
-            {0.05, 0.10, 0.05},
-            {0.10, 0.10, 0.075},
-            700.0,      // Cp, J/(kg K)
-            2300.0,     // density, kg/m^3
-            120.0,      // conductivity, W/(m K)
-            250.0);     // heat load, W
-        server.add_region(processor);
-        server.order_internal_regions();
+            server.add_region(InternalRegion(
+                name + "_processor",
+                {0.10, 0.10, 0.05},
+                {0.10, 0.15, 0.075},
+                700.0, 2300.0, 120.0, heat_load));
+            server.order_internal_regions();
+            components.push_back(server);
+        };
+        add_server("server_left", 0.05, 250.0, 80.0);
+        add_server("server_right", 0.30, 325.0, 95.0);
 
-        Fan inlet_fan_left(
-            "rack_inlet_left",
-            55.0,                 // fixed-flow fallback, CFM
-            0.0,
-            {0.10, 0.0, 0.20},   // rectangular footprint
-            {0.15, 0.0, 0.20},   // center on the y-min rack face
-            {0.0, 1.0, 0.0},
-            FlowType::Intake,
-            ShapeType::Rectangular);
-        constexpr double left_fan_free_flow_m3s =
-            55.0 * Fan::CFM_TO_M3S;
-        inlet_fan_left.set_curve(
-            18.0, 0.0,
-            18.0/(left_fan_free_flow_m3s*left_fan_free_flow_m3s),
-            1.2);
+        std::vector<Fan> fans;
+        auto add_boundary_fan =
+            [&](const std::string& name, double cfm, double shutoff_pressure,
+                const std::array<double,3>& center,
+                const std::array<double,3>& direction, FlowType flow_type) {
+                Fan fan(
+                    name, cfm, 0.0, {0.20, 0.0, 0.20}, center, direction,
+                    flow_type, ShapeType::Rectangular);
+                const double free_flow = cfm * Fan::CFM_TO_M3S;
+                fan.set_curve(
+                    shutoff_pressure, 0.0,
+                    shutoff_pressure/(free_flow*free_flow), 1.2);
+                fans.push_back(fan);
+            };
 
-        Fan inlet_fan_right(
-            "rack_inlet_right",
-            45.0,                 // fixed-flow fallback, CFM
-            0.0,
-            {0.10, 0.0, 0.20},
-            {0.25, 0.0, 0.20},
-            {0.0, 1.0, 0.0},
-            FlowType::Intake,
-            ShapeType::Rectangular);
-        constexpr double right_fan_free_flow_m3s =
-            45.0 * Fan::CFM_TO_M3S;
-        inlet_fan_right.set_curve(
-            22.0, 0.0,
-            22.0/(right_fan_free_flow_m3s*right_fan_free_flow_m3s),
-            1.2);
+        add_boundary_fan(
+            "rack_inlet_lower_left", 55.0, 38.0,
+            {0.15, 0.0, 0.15}, {0.0, 1.0, 0.0}, FlowType::Intake);
+        add_boundary_fan(
+            "rack_inlet_lower_right", 48.0, 40.0,
+            {0.45, 0.0, 0.15}, {0.0, 1.0, 0.0}, FlowType::Intake);
+        add_boundary_fan(
+            "rack_inlet_upper_left", 60.0, 36.0,
+            {0.15, 0.0, 0.45}, {0.0, 1.0, 0.0}, FlowType::Intake);
+        add_boundary_fan(
+            "rack_inlet_upper_right", 52.0, 42.0,
+            {0.45, 0.0, 0.45}, {0.0, 1.0, 0.0}, FlowType::Intake);
 
-        Vent outlet_vent(
-            "rack_outlet",
-            {0.20, 0.0, 0.20},   // rectangular footprint
-            0.80,                 // free-area ratio
-            0.0,
-            0.65,                 // discharge coefficient
-            {0.20, 0.60, 0.20},  // center on the y-max rack face
-            {0.0, 1.0, 0.0},
-            VentShapeType::Rectangular);
-
-        std::vector<Component> components{server};
-        std::vector<Fan> fans{inlet_fan_left,inlet_fan_right};
-        std::vector<Vent> vents{outlet_vent};
+        std::vector<Vent> vents{
+            Vent(
+                "rack_outlet_lower_left", {0.20, 0.0, 0.20},
+                0.80, 0.0, 0.66, {0.15, 0.80, 0.15},
+                {0.0, 1.0, 0.0}, VentShapeType::Rectangular),
+            Vent(
+                "rack_outlet_lower_right", {0.20, 0.0, 0.20},
+                0.78, 0.0, 0.64, {0.45, 0.80, 0.15},
+                {0.0, 1.0, 0.0}, VentShapeType::Rectangular),
+            Vent(
+                "rack_outlet_upper_left", {0.20, 0.0, 0.20},
+                0.74, 0.0, 0.61, {0.15, 0.80, 0.45},
+                {0.0, 1.0, 0.0}, VentShapeType::Rectangular),
+            Vent(
+                "rack_outlet_upper_right", {0.20, 0.0, 0.20},
+                0.70, 0.0, 0.58, {0.45, 0.80, 0.45},
+                {0.0, 1.0, 0.0}, VentShapeType::Rectangular)
+        };
         CollisionChecker::check_all(components, fans, vents);
 
         constexpr double dx = 0.05;
@@ -190,25 +182,43 @@ int main(int argc, char* argv[]) {
             // dependent density until the next airflow refresh.
             .use_multirate_thermal = true,
             .airflow_warmup_time = 5.0,
-            .frozen_flow_maximum_time_step = 1.0,
+            .frozen_flow_maximum_time_step = 5.0,
             .frozen_flow_maximum_courant_number = 1000.0,
-            .airflow_refresh_interval = 300.0,
+            .airflow_refresh_interval = 1200.0,
             .airflow_refresh_duration = 1.0,
             .use_adaptive_airflow_refresh = true,
             .airflow_refresh_check_interval = 1.0,
             .maximum_airflow_refresh_duration = 20.0,
             .maximum_mass_imbalance_fraction = 0.01,
-            .maximum_device_flow_change_fraction = 0.02
+            .maximum_device_flow_change_fraction = 0.02,
+            .stop_when_thermally_converged = true,
+            .minimum_thermal_convergence_time = 3600.0,
+            .thermal_convergence_reference_interval = 300.0,
+            .maximum_temperature_change = 0.1,
+            .maximum_component_average_temperature_change = 0.05,
+            .thermal_convergence_required_checkpoints = 2
         };
         OpenFoamExporter::export_mesh(mesh, export_options);
+        Grapher geometry_export(rack, dx, dy, dz);
+        for(const Component& component : components)
+            geometry_export.add_component(component);
+        for(const Fan& fan : fans)
+            geometry_export.add_fan(fan);
+        for(const Vent& vent : vents)
+            geometry_export.add_vent(vent);
+        geometry_export.export_to_file(
+            (case_directory/"geometry.txt").string());
 
         const std::vector<std::filesystem::path> required_case_files{
+            "geometry.txt",
             "constant/polyMesh/points",
             "constant/regionProperties",
             "constant/g",
             "constant/fluid/thermophysicalProperties",
-            "constant/example_server_0/thermophysicalProperties",
-            "constant/example_server_0/fvOptions",
+            "constant/server_left_0/thermophysicalProperties",
+            "constant/server_left_0/fvOptions",
+            "constant/server_right_1/thermophysicalProperties",
+            "constant/server_right_1/fvOptions",
             "0/fluid/T",
             "0/fluid/U",
             "0/fluid/p",
@@ -216,11 +226,14 @@ int main(int argc, char* argv[]) {
             "0/fluid/k",
             "0/fluid/omega",
             "0/fluid/nut",
-            "0/example_server_0/T",
+            "0/server_left_0/T",
+            "0/server_right_1/T",
             "system/fluid/fvSchemes",
             "system/fluid/fvSolution",
-            "system/example_server_0/fvSchemes",
-            "system/example_server_0/fvSolution",
+            "system/server_left_0/fvSchemes",
+            "system/server_left_0/fvSolution",
+            "system/server_right_1/fvSchemes",
+            "system/server_right_1/fvSolution",
             "system/decomposeParDict",
             "prepare_regions.sh",
             "run_cht.sh",
@@ -235,8 +248,8 @@ int main(int argc, char* argv[]) {
         }
 
         double exported_watts = 0.0;
-        for(const Cell& cell : mesh.get_cells())
-            exported_watts += cell.get_qdot() * cell.volume();
+        for(const auto& source : mesh.get_openfoam_heat_source_regions())
+            exported_watts += source.watts;
 
         std::cout
             << "Runnable OpenFOAM CHT case exported to: "
@@ -246,7 +259,7 @@ int main(int argc, char* argv[]) {
             << mesh.get_openfoam_component_regions().size() << '\n'
             << "Heat-source regions: "
             << mesh.get_openfoam_heat_source_regions().size() << '\n'
-            << "Stamped heat load: " << exported_watts << " W\n"
+            << "Exported OpenFOAM heat load: " << exported_watts << " W\n"
             << "Simulation duration: " << export_options.end_time << " s\n"
             << "Initial/max timestep: "
             << export_options.initial_time_step << " / "

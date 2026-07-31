@@ -48,8 +48,6 @@ struct SimulationInput {
     bool advection_subcycling = false;
     double advection_cfl_target = 0.8;
     int max_advection_substeps = 10000;
-    bool multithreading = false;
-    int cores = 1;
 };
 
 struct FlowSolverInput {
@@ -124,9 +122,54 @@ struct MultiStageInput {
     bool enabled = false;
     double coarse_dt = 0.0;
     double coarse_duration = 0.0;
-    double coarse_output_interval = -1;
     int coarse_update_flow_interval = -1;
     MeshInput coarse_mesh;
+};
+
+struct OpenFoamSolverInput {
+    bool enabled = false;
+    std::optional<std::string> template_file;
+    std::filesystem::path case_directory = "openfoam_cases/model";
+    bool overwrite = false;
+    int parallel_processes = 4;
+    double maximum_time_step = 1.0;
+    double maximum_courant_number = 1.0;
+    double field_write_interval = 60.0;
+    int saved_time_directories = 3;
+    double report_interval = 10.0;
+    bool use_k_omega_sst = true;
+    double inlet_turbulence_intensity = 0.05;
+    double turbulence_length_scale = 0.01;
+    double turbulent_prandtl_number = 0.85;
+    bool temperature_dependent_air = true;
+    DirectionInput gravity{0.0,0.0,-9.80665};
+    double sutherland_temperature = 110.4;
+    bool use_vent_pressure_loss = true;
+    bool use_fan_curves = true;
+    double fan_curve_extension_multiplier = 2.0;
+    bool use_multirate_thermal = true;
+    double airflow_warmup_time = 5.0;
+    bool use_fan_startup_ramp = true;
+    double fan_startup_ramp_time = 0.05;
+    int fan_startup_ramp_steps = 5;
+    double initial_airflow_check_interval = 0.01;
+    double minimum_initial_airflow_duration = 0.02;
+    double thermal_only_maximum_time_step = 1.0;
+    double thermal_only_maximum_courant_number = 1000.0;
+    double airflow_refresh_interval = 300.0;
+    double airflow_refresh_duration = 1.0;
+    bool use_adaptive_airflow_refresh = true;
+    double airflow_refresh_maximum_courant_number = 10.0;
+    double airflow_refresh_check_interval = 0.01;
+    double maximum_airflow_refresh_duration = 0.2;
+    double maximum_mass_imbalance_fraction = 0.01;
+    double maximum_device_flow_change_fraction = 0.02;
+    bool stop_when_thermally_converged = true;
+    double minimum_thermal_convergence_time = 3600.0;
+    double thermal_convergence_reference_interval = 300.0;
+    double maximum_temperature_change = 0.1;
+    double maximum_component_average_temperature_change = 0.05;
+    int thermal_convergence_required_checkpoints = 2;
 };
 
 // -------------------------------------------------------------
@@ -269,6 +312,7 @@ struct ModelInput {
     FlowSolverInput flow_solver;
     MeshInput mesh;
     MultiStageInput multistage;
+    OpenFoamSolverInput openfoam_solver;
     RackInput rack;
 
     std::vector<ComponentInput> components;

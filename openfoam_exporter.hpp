@@ -8,6 +8,7 @@
 #include <cctype>
 #include <filesystem>
 #include <fstream>
+#include <limits>
 #include <stdexcept>
 #include <string>
 #include <vector>
@@ -23,6 +24,7 @@ struct OpenFoamExportOptions {
     double maximum_time_step = 1.0;
     double maximum_courant_number = 0.5;
     double field_write_interval = 60.0;
+    int saved_time_directories = 3;
     double report_interval = 10.0;
     bool use_k_omega_sst = false;
     double inlet_turbulence_intensity = 0.05;
@@ -36,6 +38,11 @@ struct OpenFoamExportOptions {
     double fan_curve_extension_multiplier = 2.0;
     bool use_multirate_thermal = false;
     double airflow_warmup_time = 5.0;
+    bool use_fan_startup_ramp = true;
+    double fan_startup_ramp_time = 0.05;
+    int fan_startup_ramp_steps = 5;
+    double initial_airflow_check_interval = 0.01;
+    double minimum_initial_airflow_duration = 0.02;
     // Retain these names until the TOML schema is finalized. They control the
     // thermal-only stage, not OpenFOAM's native frozenFlow implementation.
     double frozen_flow_maximum_time_step = 1.0;
@@ -43,10 +50,17 @@ struct OpenFoamExportOptions {
     double airflow_refresh_interval = 300.0;
     double airflow_refresh_duration = 1.0;
     bool use_adaptive_airflow_refresh = true;
-    double airflow_refresh_check_interval = 1.0;
-    double maximum_airflow_refresh_duration = 20.0;
+    double airflow_refresh_maximum_courant_number = 10.0;
+    double airflow_refresh_check_interval = 0.01;
+    double maximum_airflow_refresh_duration = 0.2;
     double maximum_mass_imbalance_fraction = 0.01;
     double maximum_device_flow_change_fraction = 0.02;
+    bool stop_when_thermally_converged = false;
+    double minimum_thermal_convergence_time = 3600.0;
+    double thermal_convergence_reference_interval = 300.0;
+    double maximum_temperature_change = 0.1;
+    double maximum_component_average_temperature_change = 0.05;
+    int thermal_convergence_required_checkpoints = 2;
 };
 
 class OpenFoamExporter {
@@ -68,6 +82,15 @@ public:
             throw std::runtime_error(
                 "OpenFoamExporter: polyMesh already exists at '" +
                 poly_mesh.string() + "'. Set overwrite=true to replace files.");
+        if(options.overwrite) {
+            std::filesystem::remove(
+                options.case_directory/".openfoam_regions_prepared");
+            std::filesystem::remove(
+                options.case_directory/".thermal_convergence_state");
+            std::filesystem::remove(
+                options.case_directory/".thermal_convergence_streak");
+            clear_generated_solution_state(options.case_directory);
+        }
 
         std::filesystem::create_directories(poly_mesh);
         std::filesystem::create_directories(
@@ -134,6 +157,27 @@ public:
                         "OpenFoamExporter: fan curve b/c coefficients "
                         "must be finite and non-negative.");
             }
+            for(const auto& device :
+                mesh.get_openfoam_internal_flow_devices()) {
+                if(device.kind !=
+                   Mesh::OpenFoamInternalFlowDevice::Kind::Fan)
+                    continue;
+                validate_positive_finite(
+                    device.curve_a,
+                    ("internal fan '"+device.name+
+                     "' curve shutoff pressure").c_str());
+                validate_positive_finite(
+                    device.rated_density,
+                    ("internal fan '"+device.name+
+                     "' rated density").c_str());
+                if(!std::isfinite(device.curve_b) ||
+                   !std::isfinite(device.curve_c) ||
+                   device.curve_b < 0.0 || device.curve_c < 0.0)
+                    throw std::invalid_argument(
+                        "OpenFoamExporter: internal fan '"+device.name+
+                        "' curve b/c coefficients must be finite and "
+                        "non-negative.");
+            }
         }
         write_control_dict(
             mesh, options,
@@ -143,7 +187,8 @@ public:
             options.case_directory / "system" / "decomposeParDict");
         write_fv_schemes(options.case_directory / "system" / "fvSchemes");
         write_fv_solution(
-            options, options.case_directory / "system" / "fvSolution");
+            mesh, options,
+            options.case_directory / "system" / "fvSolution");
         write_region_preparation_script(
             mesh, options,
             options.case_directory / "prepare_regions.sh");
@@ -154,6 +199,36 @@ public:
     }
 
 private:
+    static bool is_openfoam_time_name(const std::string& name) {
+        if(name.empty() || name=="0") return false;
+        std::size_t consumed=0;
+        try {
+            (void)std::stod(name,&consumed);
+        } catch(...) {
+            return false;
+        }
+        return consumed==name.size();
+    }
+
+    static void clear_generated_solution_state(
+        const std::filesystem::path& case_directory) {
+        if(!std::filesystem::is_directory(case_directory)) return;
+        for(const auto& entry :
+            std::filesystem::directory_iterator(case_directory)) {
+            if(!entry.is_directory()) continue;
+            const std::string name=entry.path().filename().string();
+            const bool processor=
+                name.rfind("processor",0)==0 &&
+                name.size()>9 &&
+                std::all_of(
+                    name.begin()+9,name.end(),
+                    [](unsigned char c) { return std::isdigit(c)!=0; });
+            if(processor || name=="postProcessing" ||
+               is_openfoam_time_name(name))
+                std::filesystem::remove_all(entry.path());
+        }
+    }
+
     struct FaceRecord {
         std::array<std::size_t,4> points{};
         std::size_t owner = 0;
@@ -172,6 +247,21 @@ private:
         std::array<double,3> outward_normal{0.0,0.0,0.0};
         double gross_area = 0.0;
         std::size_t face_count = 0;
+    };
+
+    struct BoundaryFanInterfaceGeometry {
+        int axis = -1;
+        int side = -1;
+        double boundary_plane = 0.0;
+        double plane = 0.0;
+        std::array<double,3> minimum{
+            std::numeric_limits<double>::max(),
+            std::numeric_limits<double>::max(),
+            std::numeric_limits<double>::max()};
+        std::array<double,3> maximum{
+            std::numeric_limits<double>::lowest(),
+            std::numeric_limits<double>::lowest(),
+            std::numeric_limits<double>::lowest()};
     };
 
     static BoundaryDeviceGeometry boundary_device_geometry(
@@ -199,6 +289,73 @@ private:
         if(result.gross_area>0.0)
             for(double& value : result.outward_normal)
                 value/=result.gross_area;
+        return result;
+    }
+
+    static BoundaryFanInterfaceGeometry boundary_fan_interface_geometry(
+        const Mesh& mesh, int patch_id) {
+        BoundaryFanInterfaceGeometry result;
+        for(int i=0;i<mesh.get_nx();++i)
+            for(int j=0;j<mesh.get_ny();++j)
+                for(int k=0;k<mesh.get_nz();++k)
+                    for(int axis=0;axis<3;++axis)
+                        for(int side=0;side<2;++side) {
+                            if(mesh.get_openfoam_boundary_patch_id(
+                                   i,j,k,axis,side)!=patch_id)
+                                continue;
+                            if(result.axis>=0 &&
+                               (result.axis!=axis || result.side!=side))
+                                throw std::invalid_argument(
+                                    "OpenFoamExporter: an ambient fan patch "
+                                    "must lie on one exterior plane.");
+                            result.axis=axis;
+                            result.side=side;
+                            const Cell& cell=mesh.at(i,j,k);
+                            const std::array<double,3> center{
+                                mesh.cell_center_x(i),
+                                mesh.cell_center_y(j),
+                                mesh.cell_center_z(k)};
+                            const std::array<double,3> width{
+                                cell.get_dx(),cell.get_dy(),cell.get_dz()};
+                            std::array<int,3> neighbour_index{i,j,k};
+                            neighbour_index[axis]+=(side==0 ? 1 : -1);
+                            const std::array<int,3> cell_count{
+                                mesh.get_nx(),mesh.get_ny(),mesh.get_nz()};
+                            if(neighbour_index[axis]<0 ||
+                               neighbour_index[axis]>=cell_count[axis])
+                                throw std::invalid_argument(
+                                    "OpenFoamExporter: an ambient curve fan "
+                                    "requires at least two mesh cells normal "
+                                    "to its rack boundary.");
+                            const Cell& neighbour=mesh.at(
+                                neighbour_index[0],neighbour_index[1],
+                                neighbour_index[2]);
+                            const std::array<double,3> neighbour_width{
+                                neighbour.get_dx(),neighbour.get_dy(),
+                                neighbour.get_dz()};
+                            result.plane=
+                                center[axis]+
+                                (side==0 ? 1.0 : -1.0)*
+                                (0.5*width[axis]+
+                                 neighbour_width[axis]);
+                            result.boundary_plane=
+                                center[axis]+
+                                (side==0 ? -0.5 : 0.5)*width[axis];
+                            for(int tangent=0;tangent<3;++tangent) {
+                                if(tangent==axis) continue;
+                                result.minimum[tangent]=std::min(
+                                    result.minimum[tangent],
+                                    center[tangent]-0.5*width[tangent]);
+                                result.maximum[tangent]=std::max(
+                                    result.maximum[tangent],
+                                    center[tangent]+0.5*width[tangent]);
+                            }
+                        }
+        if(result.axis<0)
+            throw std::invalid_argument(
+                "OpenFoamExporter: ambient fan has no exterior faces.");
+        result.minimum[result.axis]=result.plane;
+        result.maximum[result.axis]=result.plane;
         return result;
     }
 
@@ -791,12 +948,9 @@ private:
     static bool is_external_source_device(
         const Mesh::OpenFoamBoundaryPatch& patch,
         const OpenFoamExportOptions& options) {
-        const bool resisted_vent =
-            options.use_vent_pressure_loss &&
-            patch.kind == Mesh::OpenFoamBoundaryPatch::Kind::Vent;
-        const bool curve_fan =
-            options.use_fan_curves && patch.fan_has_curve;
-        return resisted_vent || curve_fan;
+        return
+            (options.use_vent_pressure_loss &&
+             patch.kind == Mesh::OpenFoamBoundaryPatch::Kind::Vent);
     }
 
     static std::string external_device_name(
@@ -840,18 +994,99 @@ private:
                  << "; min 0.5; max 1.5; }\n"
                  << "{ name " << name << "; type cellZoneSet; action new;\n"
                  << "  source setToCellZone; set " << name << "; }\n";
-            if(patch.fan_has_curve && options.use_fan_curves) {
-                dict << "{ name " << name
-                     << "_faces; type faceSet; action new;\n"
-                     << "  source patchToFace; patch "
-                     << foam_word(patch.name) << "; }\n"
-                     << "{ name " << name
-                     << "_faces; type faceZoneSet; action new;\n"
-                     << "  source setToFaceZone; faceSet " << name
-                     << "_faces; }\n";
-            }
             dict << ");\n";
         }
+    }
+
+    static void write_boundary_fan_baffle_files(
+        const Mesh& mesh, const OpenFoamExportOptions& options,
+        const std::filesystem::path& case_directory) {
+        bool have_fans=false;
+        for(const auto& patch : mesh.get_openfoam_boundary_patches())
+            have_fans = have_fans ||
+                (options.use_fan_curves && patch.fan_has_curve);
+        if(!have_fans) return;
+
+        const auto topo_path=
+            case_directory/"system"/"topoSetDict_boundary_fans";
+        std::ofstream topo(topo_path);
+        require_stream(topo,topo_path);
+        write_header(
+            topo,"dictionary","topoSetDict_boundary_fans","system");
+        topo.precision(17);
+        topo << "actions\n(\n";
+
+        const double minimum_width=std::min({
+            mesh.get_dx(),mesh.get_dy(),mesh.get_dz()});
+        const double epsilon=minimum_width*1e-4;
+        bool first_duct_wall=true;
+        for(const auto& patch : mesh.get_openfoam_boundary_patches()) {
+            if(!(options.use_fan_curves && patch.fan_has_curve)) continue;
+            const auto geometry=
+                boundary_fan_interface_geometry(mesh,patch.id);
+            for(int tangent=0;tangent<3;++tangent) {
+                if(tangent==geometry.axis) continue;
+                for(int side=0;side<2;++side) {
+                    auto wall_min=geometry.minimum;
+                    auto wall_max=geometry.maximum;
+                    wall_min[geometry.axis]=std::min(
+                        geometry.boundary_plane,geometry.plane)-epsilon;
+                    wall_max[geometry.axis]=std::max(
+                        geometry.boundary_plane,geometry.plane)+epsilon;
+                    const double coordinate=side==0
+                        ? geometry.minimum[tangent]
+                        : geometry.maximum[tangent];
+                    wall_min[tangent]=coordinate-epsilon;
+                    wall_max[tangent]=coordinate+epsilon;
+                    topo << "{ name boundary_fan_duct_walls_set; "
+                         << "type faceSet; action "
+                         << (first_duct_wall ? "new" : "add") << ";\n"
+                         << "  source boxToFace; box ("
+                         << wall_min[0]<<' '<<wall_min[1]<<' '
+                         << wall_min[2]<<") ("
+                         << wall_max[0]<<' '<<wall_max[1]<<' '
+                         << wall_max[2]<<"); }\n";
+                    first_duct_wall=false;
+                }
+            }
+        }
+        topo << "{ name boundary_fan_duct_walls; type faceZoneSet; "
+             << "action new;\n"
+             << "  source setToFaceZone; faceSet "
+             << "boundary_fan_duct_walls_set; }\n";
+        topo << ");\n";
+
+        const auto baffles_path=
+            case_directory/"system"/"createBafflesDict_boundary_fans";
+        std::ofstream baffles(baffles_path);
+        require_stream(baffles,baffles_path);
+        write_header(
+            baffles,"dictionary","createBafflesDict_boundary_fans",
+            "system");
+        baffles.precision(17);
+        baffles << "internalFacesOnly true;\nbaffles\n{\n";
+        const double pressure=
+            options.temperature_dependent_air
+                ? mesh.get_env().get_ambient_pressure() : 101325.0;
+        baffles << "boundary_fan_duct_walls\n"
+                << "{\n type faceZone;\n"
+                << " zoneName boundary_fan_duct_walls;\n"
+                << " patchPairs\n {\n  type wall;\n"
+                << "  patchFields\n  {\n"
+                << "   U { type noSlip; }\n"
+                << "   p { type zeroGradient; }\n"
+                << "   p_rgh { type fixedFluxPressure; "
+                   "gradient uniform 0; value uniform "
+                << pressure << "; }\n"
+                << "   T { type zeroGradient; }\n"
+                << "   k { type kqRWallFunction; value uniform 1e-06; }\n"
+                << "   omega { type omegaWallFunction; "
+                   "value uniform 1; }\n"
+                << "   nut { type nutkWallFunction; value uniform 0; }\n"
+                << "   alphat { type compressible::alphatWallFunction; "
+                   "Prt 0.85; value uniform 0; }\n"
+                << "  }\n }\n}\n";
+        baffles << "}\n";
     }
 
     static void write_internal_device_files(
@@ -922,6 +1157,10 @@ private:
             options.maximum_courant_number,"maximum_courant_number");
         validate_positive_finite(
             options.field_write_interval,"field_write_interval");
+        if(options.saved_time_directories < 2)
+            throw std::invalid_argument(
+                "OpenFoamExporter: saved_time_directories must be at "
+                "least 2 so a prior restart state is retained.");
         validate_positive_finite(
             options.report_interval,"report_interval");
         if(options.use_k_omega_sst) {
@@ -951,6 +1190,36 @@ private:
             validate_positive_finite(
                 options.airflow_warmup_time,"airflow_warmup_time");
             validate_positive_finite(
+                options.initial_airflow_check_interval,
+                "initial_airflow_check_interval");
+            validate_positive_finite(
+                options.minimum_initial_airflow_duration,
+                "minimum_initial_airflow_duration");
+            if(options.minimum_initial_airflow_duration >
+               options.airflow_warmup_time)
+                throw std::invalid_argument(
+                    "OpenFoamExporter: minimum_initial_airflow_duration "
+                    "must not exceed airflow_warmup_time.");
+            if(options.initial_airflow_check_interval >
+               options.airflow_warmup_time)
+                throw std::invalid_argument(
+                    "OpenFoamExporter: initial_airflow_check_interval "
+                    "must not exceed airflow_warmup_time.");
+            if(options.use_fan_startup_ramp) {
+                validate_positive_finite(
+                    options.fan_startup_ramp_time,
+                    "fan_startup_ramp_time");
+                if(options.fan_startup_ramp_steps < 2)
+                    throw std::invalid_argument(
+                        "OpenFoamExporter: fan_startup_ramp_steps must "
+                        "be at least 2.");
+                if(options.fan_startup_ramp_time >
+                   options.airflow_warmup_time)
+                    throw std::invalid_argument(
+                        "OpenFoamExporter: fan_startup_ramp_time must not "
+                        "exceed airflow_warmup_time.");
+            }
+            validate_positive_finite(
                 options.frozen_flow_maximum_time_step,
                 "frozen_flow_maximum_time_step");
             validate_positive_finite(
@@ -966,6 +1235,9 @@ private:
                 options.airflow_refresh_check_interval,
                 "airflow_refresh_check_interval");
             validate_positive_finite(
+                options.airflow_refresh_maximum_courant_number,
+                "airflow_refresh_maximum_courant_number");
+            validate_positive_finite(
                 options.maximum_airflow_refresh_duration,
                 "maximum_airflow_refresh_duration");
             validate_positive_finite(
@@ -974,6 +1246,30 @@ private:
             validate_positive_finite(
                 options.maximum_device_flow_change_fraction,
                 "maximum_device_flow_change_fraction");
+            if(options.stop_when_thermally_converged) {
+                validate_positive_finite(
+                    options.minimum_thermal_convergence_time,
+                    "minimum_thermal_convergence_time");
+                validate_positive_finite(
+                    options.thermal_convergence_reference_interval,
+                    "thermal_convergence_reference_interval");
+                validate_positive_finite(
+                    options.maximum_temperature_change,
+                    "maximum_temperature_change");
+                validate_positive_finite(
+                    options.maximum_component_average_temperature_change,
+                    "maximum_component_average_temperature_change");
+                if(options.thermal_convergence_required_checkpoints < 1)
+                    throw std::invalid_argument(
+                        "OpenFoamExporter: "
+                        "thermal_convergence_required_checkpoints must "
+                        "be positive.");
+                if(!options.use_adaptive_airflow_refresh)
+                    throw std::invalid_argument(
+                        "OpenFoamExporter: thermal convergence stopping "
+                        "requires use_adaptive_airflow_refresh=true so the "
+                        "final airflow operating point is validated.");
+            }
             if(options.maximum_airflow_refresh_duration <
                options.airflow_refresh_duration)
                 throw std::invalid_argument(
@@ -1013,8 +1309,11 @@ private:
             "adjustTimeStep  yes;\n"
             "maxCo           " << options.maximum_courant_number << ";\n"
             "maxDeltaT       " << options.maximum_time_step << ";\n"
+            "timePrecision   12;\n"
             "writeControl    adjustableRunTime;\n"
             "writeInterval   " << options.field_write_interval << ";\n\n"
+            "purgeWrite      " << options.saved_time_directories << ";\n"
+            "writeFormat     binary;\n\n"
             "functions\n{\n";
         output <<
             "    fluid_temperature_range\n"
@@ -1098,27 +1397,6 @@ private:
                 "        writeInterval " << options.report_interval << ";\n"
                 "        regionType patch;\n"
                 "        names (" << ambient_patches << ");\n"
-                "        operation sum;\n"
-                "        writeFields false;\n"
-                "        fields (phi);\n"
-                "    }\n";
-        }
-        for(const auto& device :
-            mesh.get_openfoam_internal_flow_devices()) {
-            if(device.kind!=
-               Mesh::OpenFoamInternalFlowDevice::Kind::Fan)
-                continue;
-            const std::string name=internal_device_name(device);
-            output <<
-                "    " << name << "_mass_flow\n"
-                "    {\n"
-                "        type surfaceFieldValue;\n"
-                "        libs (fieldFunctionObjects);\n"
-                "        region fluid;\n"
-                "        writeControl adjustableRunTime;\n"
-                "        writeInterval " << options.report_interval << ";\n"
-                "        regionType faceZone;\n"
-                "        name " << name << "_faces;\n"
                 "        operation sum;\n"
                 "        writeFields false;\n"
                 "        fields (phi);\n"
@@ -1315,7 +1593,45 @@ private:
                                              std::to_string(reference_pressure) +
                                              ";\n"
                                       : " type zeroGradient;\n");
-                } else if(curve_fan || resisted_vent) {
+                } else if(curve_fan) {
+                    const double ambient_density=
+                        options.temperature_dependent_air
+                            ? reference_pressure*28.97/
+                                (8314.46261815324*
+                                 (mesh.get_env().get_T_ambient()+273.15))
+                            : mesh.get_env().get_rho();
+                    const double scale=
+                        ambient_density/patch->fan_rated_density;
+                    const double a=scale*patch->fan_curve_a;
+                    const double b=scale*patch->fan_curve_b;
+                    const double c=scale*patch->fan_curve_c;
+                    double q_zero=patch->fan_reference_flow_m3s;
+                    if(c>0.0)
+                        q_zero=(-b+std::sqrt(b*b+4*c*a))/(2*c);
+                    else if(b>0.0) q_zero=a/b;
+                    validate_positive_finite(
+                        q_zero,"ambient fan curve flow");
+                    output << " type fanPressure;\n"
+                           << " direction "
+                           << (patch->kind ==
+                                   Mesh::OpenFoamBoundaryPatch::Kind::Inlet
+                                   ? "in" : "out")
+                           << ";\n fanCurve\n {\n"
+                           << "  type table;\n"
+                           << "  outOfBounds clamp;\n"
+                           << "  values\n  (\n";
+                    constexpr int points=20;
+                    for(int i=0;i<=points;++i) {
+                        const double q=
+                            options.fan_curve_extension_multiplier*q_zero*
+                            static_cast<double>(i)/points;
+                        output << "   (" << q << ' '
+                               << std::max(0.0,a-b*q-c*q*q) << ")\n";
+                    }
+                    output << "  );\n }\n"
+                           << " p0 uniform " << reference_pressure << ";\n"
+                           << " value uniform " << reference_pressure << ";\n";
+                } else if(resisted_vent) {
                     output << " type prghPressure;\n"
                            << " p uniform " << reference_pressure << ";\n"
                            << " value uniform " << reference_pressure << ";\n";
@@ -1511,6 +1827,9 @@ private:
                << " Tnbr T;\n kappaMethod solidThermo;\n"
                << " useImplicit true;\n qrNbr none;\n qr none;\n"
                << " value uniform " << temperature << ";\n"
+               << "}\n"
+               << "\".*\"\n{\n"
+               << " type zeroGradient;\n"
                << "}\n}\n";
 
         const auto pressure_path = directory/"p";
@@ -1523,6 +1842,9 @@ private:
                  << "internalField uniform 101325;\n"
                  << "boundaryField\n{\n"
                  << component_region_name(component) << "_to_fluid\n{\n"
+                 << " type calculated;\n value uniform 101325;\n"
+                 << "}\n"
+                 << "\".*\"\n{\n"
                  << " type calculated;\n value uniform 101325;\n"
                  << "}\n}\n";
     }
@@ -1543,13 +1865,19 @@ private:
     }
 
     static void write_fv_solution(
+        const Mesh& mesh,
         const OpenFoamExportOptions& options,
         const std::filesystem::path& path) {
         std::ofstream output(path);
         require_stream(output,path);
         write_header(output,"dictionary","fvSolution","system");
+        const double reference_pressure =
+            options.temperature_dependent_air
+                ? mesh.get_env().get_ambient_pressure() : 101325.0;
         output << "PIMPLE\n{\n    nOuterCorrectors "
-               << (options.use_fan_curves ? 3 : 1) << ";\n}\n";
+               << (options.use_fan_curves ? 3 : 1) << ";\n"
+               << "    pRefCell 0;\n"
+               << "    pRefValue " << reference_pressure << ";\n}\n";
     }
 
     static void write_fluid_thermophysical_properties(
@@ -1574,6 +1902,10 @@ private:
             << (options.temperature_dependent_air ? "perfectGas" : "rhoConst")
             << ";\n specie specie;\n"
             " energy sensibleEnthalpy;\n}\n"
+            // Rack ventilation is low-Mach. Excluding transient pressure
+            // work prevents fan pressure corrections from producing
+            // non-physical temperature changes in short inlet ducts.
+            "dpdt no;\n"
             "mixture\n{\n"
             " specie { molWeight 28.97; }\n";
         if(options.temperature_dependent_air) {
@@ -1662,6 +1994,7 @@ private:
     }
 
     static void write_fluid_region_solution(
+        const Mesh& mesh,
         const OpenFoamExportOptions& options,
         const std::filesystem::path& path) {
         std::ofstream output(path);
@@ -1682,6 +2015,10 @@ private:
             "PIMPLE\n{\n momentumPredictor yes;\n nCorrectors "
             << (options.use_fan_curves ? 3 : 2) << ";\n"
             " nNonOrthogonalCorrectors 0;\n"
+            " pRefCell 0;\n pRefValue "
+            << (options.temperature_dependent_air
+                    ? mesh.get_env().get_ambient_pressure() : 101325.0)
+            << ";\n"
             " frozenFlow false;\n semiFrozenFlow false;\n"
             " thermalOnlyFlow false;\n}\n"
             "relaxationFactors\n{\n equations { \"h.*\" 1; \"U.*\" "
@@ -1802,7 +2139,7 @@ private:
                         options.fan_curve_extension_multiplier*q_zero*
                         static_cast<double>(i)/points;
                     output << "   (" << q << ' '
-                           << (a-b*q-c*q*q) << ")\n";
+                           << std::max(0.0,a-b*q-c*q*q) << ")\n";
                 }
                 output << "  );\n }\n}\n";
             } else {
@@ -1879,7 +2216,7 @@ private:
                         options.fan_curve_extension_multiplier*q_zero*
                         static_cast<double>(i)/points;
                     output << "   (" << q << ' '
-                           << (a-b*q-c*q*q) << ")\n";
+                           << std::max(0.0,a-b*q-c*q*q) << ")\n";
                 }
                 output << "  );\n }\n}\n";
             } else {
@@ -1932,6 +2269,10 @@ private:
             "constant/fluid");
         write_fluid_fv_options(
             mesh,options,case_directory/"constant"/"fluid"/"fvOptions");
+        std::filesystem::copy_file(
+            case_directory/"constant"/"fluid"/"fvOptions",
+            case_directory/"constant"/"fluid"/"fvOptions.fullFan",
+            std::filesystem::copy_options::overwrite_existing);
         {
             const auto path =
                 case_directory/"constant"/"fluid"/"turbulenceProperties";
@@ -1954,7 +2295,7 @@ private:
         write_fluid_region_schemes(
             case_directory/"system"/"fluid"/"fvSchemes");
         write_fluid_region_solution(
-            options,
+            mesh,options,
             case_directory/"system"/"fluid"/"fvSolution");
         write_region_decompose_include(
             case_directory/"system"/"fluid"/"decomposeParDict");
@@ -2062,8 +2403,13 @@ private:
             "set -euo pipefail\n\n"
             "case_dir=\"$(cd \"$(dirname \"$0\")\" && pwd)\"\n"
             "foam_launcher=\"${OPENFOAM_LAUNCHER:-openfoam2606}\"\n\n"
+            "if [[ -f \"$case_dir/.openfoam_regions_prepared\" ]]; then\n"
+            "    echo \"Region meshes already prepared; reusing existing "
+                "topology.\"\n"
+            "    exit 0\n"
+            "fi\n\n"
             "\"$foam_launcher\" splitMeshRegions "
-                "-case \"$case_dir\" -cellZones -overwrite\n"
+                "-case \"$case_dir\" -cellZonesOnly -overwrite\n"
             "\n";
         output <<
             "\"$foam_launcher\" topoSet "
@@ -2110,6 +2456,7 @@ private:
             "\"$foam_launcher\" checkMesh "
                 "-case \"$case_dir\" -allRegions "
                 "-allGeometry -allTopology\n\n"
+            "touch \"$case_dir/.openfoam_regions_prepared\"\n"
             "echo \"Region meshes prepared successfully.\"\n";
     }
 
@@ -2181,12 +2528,176 @@ private:
             "    echo \"Running airflow/thermal warm start to "
                 "t=$requested_end s.\"\n"
             "fi\n\n"
-            "bash \"$case_dir/prepare_regions.sh\"\n"
-            "\"$foam_launcher\" foamDictionary "
+            "# Reuse a complete, current decomposition. Reconstruct and "
+                "repartition only when processor state is missing, stale, or "
+                "uses a different process count.\n"
+            "reuse_decomposition=false\n"
+            "processor_dirs=(\"$case_dir\"/processor[0-9]*)\n"
+            "if [[ -f \"$case_dir/.openfoam_regions_prepared\" && "
+                "${#processor_dirs[@]} -eq \"$processes\" ]]; then\n"
+            "    reuse_decomposition=true\n"
+            "    for ((rank=0; rank<processes; ++rank)); do\n"
+            "        if [[ ! -d \"$case_dir/processor${rank}\" ]]; then\n"
+            "            reuse_decomposition=false\n"
+            "            break\n"
+            "        fi\n"
+            "    done\n"
+            "fi\n"
+            "if [[ \"$reuse_decomposition\" == true ]]; then\n"
+            "    root_latest=$(\"$foam_launcher\" foamListTimes "
+                "-case \"$case_dir\" -latestTime 2>/dev/null || echo 0)\n"
+            "    root_latest=\"${root_latest##*$'\\n'}\"\n"
+            "    processor_latest=$(\"$foam_launcher\" foamListTimes "
+                "-case \"$case_dir\" -processor -latestTime "
+                "2>/dev/null || echo 0)\n"
+            "    processor_latest=\"${processor_latest##*$'\\n'}\"\n"
+            "    if awk -v p=\"${processor_latest:-0}\" "
+                "-v r=\"${root_latest:-0}\" "
+                "'BEGIN { exit !(p+1e-9<r) }'; then\n"
+            "        reuse_decomposition=false\n"
+            "    fi\n"
+            "fi\n"
+            "if [[ \"$reuse_decomposition\" == true ]]; then\n"
+            "    echo \"Reusing $processes valid processor partitions at "
+                "t=${processor_latest:-0}.\"\n"
+            "else\n"
+            "    if [[ -d \"$case_dir/processor0\" ]]; then\n"
+            "        root_latest=$(\"$foam_launcher\" foamListTimes "
+                "-case \"$case_dir\" -latestTime 2>/dev/null || echo 0)\n"
+            "        root_latest=\"${root_latest##*$'\\n'}\"\n"
+            "        processor_latest=$(\"$foam_launcher\" foamListTimes "
+                "-case \"$case_dir\" -processor -latestTime "
+                "2>/dev/null || echo 0)\n"
+            "        processor_latest=\"${processor_latest##*$'\\n'}\"\n"
+            "        if awk -v p=\"${processor_latest:-0}\" "
+                "-v r=\"${root_latest:-0}\" "
+                "'BEGIN { exit !(p>r) }'; then\n"
+            "        echo \"Reconstructing interrupted parallel time "
+                "$processor_latest before redecomposition.\"\n"
+            "        \"$foam_launcher\" foamDictionary "
+                "\"$case_dir/system/controlDict\" -entry deltaT -set "
+            << options.initial_time_step << "\n"
+            "        \"$foam_launcher\" foamDictionary "
+                "\"$case_dir/system/controlDict\" -entry writeInterval -set "
+            << options.field_write_interval << "\n"
+            "        \"$foam_launcher\" reconstructPar -case \"$case_dir\" "
+                "-allRegions -latestTime\n"
+            "        fi\n"
+            "    fi\n"
+            "    bash \"$case_dir/prepare_regions.sh\"\n"
+            "    \"$foam_launcher\" foamDictionary "
                 "\"$case_dir/system/decomposeParDict\" "
                 "-entry numberOfSubdomains -set \"$processes\"\n"
-            "\"$foam_launcher\" decomposePar -case \"$case_dir\" "
-                "-allRegions -force\n\n";
+            "    \"$foam_launcher\" decomposePar -case \"$case_dir\" "
+                "-allRegions -latestTime -force\n\n"
+            "fi\n\n"
+            "full_fan_options=\"$case_dir/constant/fluid/"
+                "fvOptions.fullFan\"\n"
+            "restore_full_fan_options()\n"
+            "{\n"
+            "    local processor_dir\n"
+            "    if [[ -f \"$full_fan_options\" ]]; then\n"
+            "        cp \"$full_fan_options\" "
+                "\"$case_dir/constant/fluid/fvOptions\"\n"
+            "        for processor_dir in \"$case_dir\"/processor[0-9]*; do\n"
+            "            [[ -d \"$processor_dir\" ]] || continue\n"
+            "            mkdir -p \"$processor_dir/constant/fluid\"\n"
+            "            cp \"$full_fan_options\" "
+                "\"$processor_dir/constant/fluid/fvOptions\"\n"
+            "        done\n"
+            "    fi\n"
+            "}\n"
+            "trap restore_full_fan_options EXIT INT TERM\n"
+            "set_fan_scale()\n"
+            "{\n"
+            "    local scale=\"$1\" processor_dir full_pressure "
+                "scaled_pressure measured_scale\n"
+            "    awk -v scale=\"$scale\" '\n"
+            "        NF==2 && substr($1,1,1)==\"(\" && "
+                "index($2,\")\")>0 {\n"
+            "            q=$1; dp=$2; gsub(/[()]/,\"\",q); "
+                "gsub(/[()\\r]/,\"\",dp);\n"
+            "            printf \"   (%s %.17g)\\n\", q, dp*scale; next\n"
+            "        }\n"
+            "        { print }\n"
+            "    ' \"$full_fan_options\" > "
+                "\"$case_dir/constant/fluid/fvOptions\"\n"
+            "    full_pressure=$(awk '$1==\"(0\" "
+                "{ gsub(/[()]/,\"\",$2); print $2; exit }' "
+                "\"$full_fan_options\")\n"
+            "    scaled_pressure=$(awk '$1==\"(0\" "
+                "{ gsub(/[()]/,\"\",$2); print $2; exit }' "
+                "\"$case_dir/constant/fluid/fvOptions\")\n"
+            "    if [[ -z \"$full_pressure\" ]]; then\n"
+            "        echo \"No curve-driven fan sources require scaling.\"\n"
+            "        return 0\n"
+            "    fi\n"
+            "    measured_scale=$(awk -v scaled=\"$scaled_pressure\" "
+                "-v full=\"$full_pressure\" "
+                "'BEGIN { if(full==0) print 1; else print scaled/full }')\n"
+            "    if ! awk -v actual=\"$measured_scale\" -v expected=\"$scale\" "
+                "'BEGIN { d=actual-expected; if(d<0)d=-d; "
+                "exit !(d<=1e-6) }'; then\n"
+            "        echo \"Fan ramp scaling verification failed: "
+                "requested=$scale measured=$measured_scale.\" >&2\n"
+            "        return 4\n"
+            "    fi\n"
+            "    echo \"Applied fan pressure scale $scale "
+                "(first shutoff pressure $scaled_pressure Pa).\"\n"
+            "    for processor_dir in \"$case_dir\"/processor[0-9]*; do\n"
+            "        [[ -d \"$processor_dir\" ]] || continue\n"
+            "        mkdir -p \"$processor_dir/constant/fluid\"\n"
+            "        cp \"$case_dir/constant/fluid/fvOptions\" "
+                "\"$processor_dir/constant/fluid/fvOptions\"\n"
+            "    done\n"
+            "}\n"
+            "run_fan_ramp()\n"
+            "{\n"
+            "    local solver=\"$1\" start=\"$2\" limit=\"$3\" "
+                "step scale target interval\n"
+            "    ramp_current=\"$start\"\n"
+            "    if [[ ! -f \"$full_fan_options\" ]]; then\n"
+            "        echo \"Missing pristine fan options: "
+                "$full_fan_options\" >&2\n"
+            "        return 2\n"
+            "    fi\n"
+            "    echo \"Ramping fan pressure from 0 to 100% over "
+            << options.fan_startup_ramp_time << " s in "
+            << options.fan_startup_ramp_steps << " stages.\"\n"
+            "    for step in $(seq 1 "
+            << options.fan_startup_ramp_steps << "); do\n"
+            "        target=$(awk -v duration=\""
+            << options.fan_startup_ramp_time
+            << "\" -v i=\"$step\" -v n=\""
+            << options.fan_startup_ramp_steps
+            << "\" -v limit=\"$limit\" "
+                "'BEGIN { x=duration*i/n; print (x<limit?x:limit) }')\n"
+            "        if ! awk -v a=\"$target\" -v b=\"$ramp_current\" "
+                "'BEGIN { exit !(a>b) }'; then continue; fi\n"
+            "        scale=$(awk -v target=\"$target\" -v duration=\""
+            << options.fan_startup_ramp_time
+            << "\" 'BEGIN { x=target/duration; print (x<1?x:1) }')\n"
+            "        interval=$(awk -v a=\"$target\" -v b=\"$ramp_current\" "
+                "'BEGIN { print a-b }')\n"
+            "        set_fan_scale \"$scale\"\n"
+            "        \"$foam_launcher\" foamDictionary "
+                "\"$case_dir/system/controlDict\" "
+                "-entry startFrom -set latestTime\n"
+            "        \"$foam_launcher\" foamDictionary "
+                "\"$case_dir/system/controlDict\" "
+                "-entry endTime -set \"$target\"\n"
+            "        \"$foam_launcher\" foamDictionary "
+                "\"$case_dir/system/controlDict\" "
+                "-entry writeInterval -set \"$interval\"\n"
+            "        echo \"Fan ramp stage $step/"
+            << options.fan_startup_ramp_steps
+            << ": scale=$scale, t=$ramp_current -> $target\"\n"
+            "        \"$foam_launcher\" mpirun -np \"$processes\" "
+                "\"$solver\" -case \"$case_dir\" -parallel\n"
+            "        ramp_current=\"$target\"\n"
+            "    done\n"
+            "    set_fan_scale 1\n"
+            "}\n\n";
         if(options.use_multirate_thermal) {
             output <<
                 "if [[ \"$mode\" == \"--multirate\" ]]; then\n"
@@ -2195,19 +2706,41 @@ private:
                     "2>/dev/null || echo 0)\n"
                 "    current=\"${current##*$'\\n'}\"\n"
                 "    current=\"${current:-0}\"\n";
+            if(options.use_fan_startup_ramp) {
+                output <<
+                    "    if awk -v a=\"$current\" -v end=\""
+                    << options.fan_startup_ramp_time
+                    << "\" 'BEGIN { exit !(a<end) }'; then\n"
+                    "        run_fan_ramp semiFrozenChtMultiRegionFoam "
+                        "\"$current\" \"$requested_end\"\n"
+                    "        current=\"$ramp_current\"\n"
+                    "    fi\n";
+            }
             output << "    boundary_flow_names=(";
             for(const auto& patch : mesh.get_openfoam_boundary_patches())
                 output << '"' << foam_word(patch.name) << "\" ";
             output << ")\n    tracked_flow_names=(";
             for(const auto& patch : mesh.get_openfoam_boundary_patches())
                 output << '"' << foam_word(patch.name) << "\" ";
+            output << ")\n    internal_fan_names=(";
             for(const auto& device :
                 mesh.get_openfoam_internal_flow_devices()) {
                 if(device.kind ==
                    Mesh::OpenFoamInternalFlowDevice::Kind::Fan)
-                    output << '"' << internal_device_name(device)
-                           << "_faces\" ";
+                    output << '"' << internal_device_name(device) << "\" ";
             }
+            output << ")\n    stability_flow_names=(";
+            for(const auto& patch : mesh.get_openfoam_boundary_patches())
+                output << '"' << foam_word(patch.name) << "\" ";
+            for(const auto& device :
+                mesh.get_openfoam_internal_flow_devices())
+                if(device.kind ==
+                   Mesh::OpenFoamInternalFlowDevice::Kind::Fan)
+                    output << '"' << internal_device_name(device) << "\" ";
+            output << ")\n    component_region_names=(";
+            for(const auto& component :
+                mesh.get_openfoam_component_regions())
+                output << '"' << component_region_name(component) << "\" ";
             output << ")\n    fan_direction_rules=(";
             for(const auto& patch : mesh.get_openfoam_boundary_patches()) {
                 if(patch.kind == Mesh::OpenFoamBoundaryPatch::Kind::Inlet)
@@ -2222,7 +2755,7 @@ private:
                 "    airflow_metrics_converged()\n"
                 "    {\n"
                 "        local report name value rule expected net=0 "
-                    "sum_abs=0\n"
+                    "sum_abs=0 flow_time properties\n"
                 "        local imbalance stable=1 directions_ok=1 "
                     "maximum_change=0 change\n"
                 "        if ! report=$(\"$foam_launcher\" mpirun -np "
@@ -2245,6 +2778,32 @@ private:
                 "                return 1\n"
                 "            fi\n"
                 "            flows[\"$name\"]=\"$value\"\n"
+                "        done\n"
+                "        flow_time=$(\"$foam_launcher\" foamListTimes "
+                    "-case \"$case_dir\" -processor -latestTime "
+                    "2>/dev/null || echo 0)\n"
+                "        flow_time=\"${flow_time##*$'\\n'}\"\n"
+                "        for name in \"${internal_fan_names[@]}\"; do\n"
+                "            properties=\"$case_dir/processor0/$flow_time/"
+                    "fluid/uniform/${name}Properties\"\n"
+                "            value=$(awk '$1==\"flow_rate\" "
+                    "{ gsub(/;/,\"\",$2); print $2; exit }' "
+                    "\"$properties\" 2>/dev/null || true)\n"
+                "            if [[ -z \"$value\" ]]; then\n"
+                "                echo \"Missing fan operating-point output "
+                    "for $name at t=$flow_time.\" >&2\n"
+                "                return 1\n"
+                "            fi\n"
+                "            flows[\"$name\"]=\"$value\"\n"
+                "            if ! awk -v v=\"$value\" "
+                    "'BEGIN { exit !(v>0) }'; then\n"
+                "                directions_ok=0\n"
+                "                echo \"Internal fan not producing positive "
+                    "through-flow: $name flow_rate=$value m3/s\" >&2\n"
+                "            fi\n"
+                "        done\n"
+                "        for name in \"${stability_flow_names[@]}\"; do\n"
+                "            value=\"${flows[$name]}\"\n"
                 "            if [[ -n \"${previous_flows[$name]+set}\" ]]; "
                     "then\n"
                 "                change=$(awk -v a=\"$value\" "
@@ -2279,7 +2838,7 @@ private:
                     "phi=$value\" >&2\n"
                 "            fi\n"
                 "        done\n"
-                "        for name in \"${tracked_flow_names[@]}\"; do\n"
+                "        for name in \"${stability_flow_names[@]}\"; do\n"
                 "            previous_flows[\"$name\"]=\"${flows[$name]}\"\n"
                 "        done\n"
                 "        if ! awk -v v=\"$imbalance\" -v limit=\""
@@ -2292,60 +2851,224 @@ private:
                     "maxFlowChange=$maximum_change, directionsOK="
                     "$directions_ok\"\n"
                 "        [[ \"$stable\" == 1 && \"$directions_ok\" == 1 ]]\n"
-                "    }\n"
+                "    }\n";
+            if(options.stop_when_thermally_converged) {
+                output <<
+                "    thermal_convergence_state="
+                    "\"$case_dir/.thermal_convergence_state\"\n"
+                "    thermal_convergence_streak="
+                    "\"$case_dir/.thermal_convergence_streak\"\n"
+                "    thermal_metrics_converged()\n"
+                "    {\n"
+                "        local range_root range_file average_root average_file "
+                    "region line checkpoint_time peak previous_time "
+                    "previous_peak elapsed delta scaled_delta value previous "
+                    "index=0 maximum_average_delta=0 scaled_average_delta\n"
+                "        local -a averages=() state_values=()\n"
+                "        range_root=\"$case_dir/postProcessing/fluid/"
+                    "fluid_temperature_range\"\n"
+                "        range_file=$(find \"$range_root\" -type f "
+                    "-name fieldMinMax.dat -printf '%T@ %p\\n' "
+                    "2>/dev/null | sort -n | tail -1 | cut -d' ' -f2-)\n"
+                "        if [[ -z \"$range_file\" ]]; then\n"
+                "            echo \"Thermal convergence data is missing: "
+                    "fluid fieldMinMax output.\" >&2\n"
+                "            return 1\n"
+                "        fi\n"
+                "        line=$(awk '!/^#/ && NF { last=$0 } END { print last }' "
+                    "\"$range_file\")\n"
+                "        checkpoint_time=$(awk '{print $1}' <<<\"$line\")\n"
+                "        peak=$(awk '{print $8}' <<<\"$line\")\n"
+                "        if [[ -z \"$checkpoint_time\" || -z \"$peak\" ]]; then\n"
+                "            echo \"Unable to parse thermal convergence data "
+                    "from $range_file.\" >&2\n"
+                "            return 1\n"
+                "        fi\n"
+                "        for region in \"${component_region_names[@]}\"; do\n"
+                "            average_root=\"$case_dir/postProcessing/$region/"
+                    "${region}_temperature_average\"\n"
+                "            average_file=$(find \"$average_root\" -type f "
+                    "-name volFieldValue.dat -printf '%T@ %p\\n' "
+                    "2>/dev/null | sort -n | tail -1 | cut -d' ' -f2-)\n"
+                "            value=$(awk '!/^#/ && NF { value=$2 } "
+                    "END { print value }' \"$average_file\" 2>/dev/null)\n"
+                "            if [[ -z \"$value\" ]]; then\n"
+                "                echo \"Thermal convergence data is missing "
+                    "for component region $region.\" >&2\n"
+                "                return 1\n"
+                "            fi\n"
+                "            averages+=(\"$value\")\n"
+                "        done\n"
+                "        if [[ ! -f \"$thermal_convergence_state\" ]]; then\n"
+                "            printf '%s %s' \"$checkpoint_time\" \"$peak\" > "
+                    "\"$thermal_convergence_state\"\n"
+                "            printf ' %s' \"${averages[@]}\" >> "
+                    "\"$thermal_convergence_state\"\n"
+                "            printf '\\n' >> \"$thermal_convergence_state\"\n"
+                "            echo \"Thermal convergence baseline recorded at "
+                    "t=$checkpoint_time s.\"\n"
+                "            return 1\n"
+                "        fi\n"
+                "        read -ra state_values < "
+                    "\"$thermal_convergence_state\"\n"
+                "        previous_time=\"${state_values[0]:-}\"\n"
+                "        previous_peak=\"${state_values[1]:-}\"\n"
+                "        printf '%s %s' \"$checkpoint_time\" \"$peak\" > "
+                    "\"$thermal_convergence_state\"\n"
+                "        printf ' %s' \"${averages[@]}\" >> "
+                    "\"$thermal_convergence_state\"\n"
+                "        printf '\\n' >> \"$thermal_convergence_state\"\n"
+                "        elapsed=$(awk -v a=\"$checkpoint_time\" "
+                    "-v b=\"$previous_time\" 'BEGIN { print a-b }')\n"
+                "        if ! awk -v v=\"$elapsed\" "
+                    "'BEGIN { exit !(v>0) }'; then\n"
+                "            echo \"Thermal convergence checkpoint did not "
+                    "advance: previous=$previous_time "
+                    "current=$checkpoint_time.\" >&2\n"
+                "            return 1\n"
+                "        fi\n"
+                "        delta=$(awk -v a=\"$peak\" -v b=\"$previous_peak\" "
+                    "'BEGIN { d=a-b; if(d<0)d=-d; print d }')\n"
+                "        scaled_delta=$(awk -v d=\"$delta\" -v reference=\""
+                    << options.thermal_convergence_reference_interval
+                    << "\" -v elapsed=\"$elapsed\" "
+                    "'BEGIN { print d*reference/elapsed }')\n"
+                "        for value in \"${averages[@]}\"; do\n"
+                "            previous=\"${state_values[$((index+2))]:-}\"\n"
+                "            if [[ -z \"$previous\" ]]; then return 1; fi\n"
+                "            delta=$(awk -v a=\"$value\" -v b=\"$previous\" "
+                    "'BEGIN { d=a-b; if(d<0)d=-d; print d }')\n"
+                "            maximum_average_delta=$(awk "
+                    "-v a=\"$maximum_average_delta\" -v b=\"$delta\" "
+                    "'BEGIN { print (a>b?a:b) }')\n"
+                "            index=$((index+1))\n"
+                "        done\n"
+                "        scaled_average_delta=$(awk "
+                    "-v d=\"$maximum_average_delta\" -v reference=\""
+                    << options.thermal_convergence_reference_interval
+                    << "\" -v elapsed=\"$elapsed\" "
+                    "'BEGIN { print d*reference/elapsed }')\n"
+                "        echo \"Thermal convergence metrics: "
+                    "peakChange=$scaled_delta K/"
+                    << options.thermal_convergence_reference_interval
+                    << "s, maxComponentAverageChange=$scaled_average_delta K/"
+                    << options.thermal_convergence_reference_interval
+                    << "s, elapsed=$elapsed s\"\n"
+                "        if ! awk -v t=\"$checkpoint_time\" -v minimum=\""
+                    << options.minimum_thermal_convergence_time
+                    << "\" 'BEGIN { exit !(t>=minimum) }'; then return 1; fi\n"
+                "        if ! awk -v v=\"$scaled_delta\" -v limit=\""
+                    << options.maximum_temperature_change
+                    << "\" 'BEGIN { exit !(v<=limit) }'; then return 1; fi\n"
+                "        if ! awk -v v=\"$scaled_average_delta\" -v limit=\""
+                    << options.maximum_component_average_temperature_change
+                    << "\" 'BEGIN { exit !(v<=limit) }'; then return 1; fi\n"
+                "        return 0\n"
+                "    }\n";
+            }
+            output <<
                 "    stage()\n"
                 "    {\n"
                 "        local thermal_only=\"$1\" target=\"$2\" max_co=\"$3\" "
                     "max_dt=\"$4\" label=\"$5\"\n"
-                "        local interval\n"
+                "        local interval actual_time saved_time restart_dt "
+                    "saved_time_file rank\n"
                 "        interval=$(awk -v end=\"$target\" -v start=\"$current\" "
                     "'BEGIN { printf \"%.17g\", end-start }')\n"
-                "        \"$foam_launcher\" foamDictionary "
+                "        \"$foam_launcher\" foamDictionary -precision 16 "
                     "\"$case_dir/system/fluid/fvSolution\" "
                     "-entry PIMPLE/frozenFlow -set false\n"
-                "        \"$foam_launcher\" foamDictionary "
+                "        \"$foam_launcher\" foamDictionary -precision 16 "
                     "\"$case_dir/system/fluid/fvSolution\" "
                     "-entry PIMPLE/semiFrozenFlow -set false\n"
-                "        \"$foam_launcher\" foamDictionary "
+                "        \"$foam_launcher\" foamDictionary -precision 16 "
                     "\"$case_dir/system/fluid/fvSolution\" "
                     "-entry PIMPLE/thermalOnlyFlow -set \"$thermal_only\"\n"
-                "        \"$foam_launcher\" foamDictionary "
+                "        \"$foam_launcher\" foamDictionary -precision 16 "
                     "\"$case_dir/system/fluid/fvSolution\" "
                     "-entry PIMPLE/momentumPredictor -set true\n"
                 "        if [[ \"$thermal_only\" == \"true\" ]]; then\n"
                 "            adjust_time_step=false\n"
-                "            stage_dt=\"$max_dt\"\n"
+                "            stage_dt=$(awk -v maximum=\"$max_dt\" "
+                    "-v remaining=\"$interval\" "
+                    "'BEGIN { n=int(remaining/maximum); "
+                    "if(n*maximum<remaining-1e-12)n++; if(n<1)n=1; "
+                    "printf \"%.17g\", remaining/n }')\n"
                 "        else\n"
                 "            adjust_time_step=true\n"
-                "            stage_dt=\""
-                    << options.initial_time_step << "\"\n"
+                "            stage_dt=$(awk -v initial=\""
+                    << options.initial_time_step
+                    << "\" -v remaining=\"$interval\" "
+                    "'BEGIN { half=remaining/2; "
+                    "print (half<initial?half:initial) }')\n"
                 "        fi\n"
-                "        \"$foam_launcher\" foamDictionary "
+                "        if [[ \"$thermal_only\" == \"true\" ]]; then\n"
+                "            restart_dt=\"$stage_dt\"\n"
+                "        else\n"
+                "            restart_dt=$(awk -v dt=\"$stage_dt\" "
+                    "'BEGIN { print dt/10 }')\n"
+                "        fi\n"
+                "        \"$foam_launcher\" foamDictionary -precision 16 "
                     "\"$case_dir/system/controlDict\" "
                     "-entry adjustTimeStep -set \"$adjust_time_step\"\n"
-                "        \"$foam_launcher\" foamDictionary "
+                "        \"$foam_launcher\" foamDictionary -precision 16 "
                     "\"$case_dir/system/controlDict\" "
-                    "-entry deltaT -set \"$stage_dt\"\n"
-                "        \"$foam_launcher\" foamDictionary "
+                    "-entry deltaT -set \"$restart_dt\"\n"
+                "        \"$foam_launcher\" foamDictionary -precision 16 "
                     "\"$case_dir/system/controlDict\" "
-                    "-entry startFrom -set latestTime\n"
-                "        \"$foam_launcher\" foamDictionary "
+                    "-entry startFrom -set startTime\n"
+                "        \"$foam_launcher\" foamDictionary -precision 16 "
+                    "\"$case_dir/system/controlDict\" "
+                    "-entry startTime -set \"$current\"\n"
+                "        \"$foam_launcher\" foamDictionary -precision 16 "
                     "\"$case_dir/system/controlDict\" "
                     "-entry endTime -set \"$target\"\n"
-                "        \"$foam_launcher\" foamDictionary "
+                "        \"$foam_launcher\" foamDictionary -precision 16 "
                     "\"$case_dir/system/controlDict\" "
                     "-entry writeInterval -set \"$interval\"\n"
-                "        \"$foam_launcher\" foamDictionary "
+                "        \"$foam_launcher\" foamDictionary -precision 16 "
                     "\"$case_dir/system/controlDict\" "
                     "-entry maxCo -set \"$max_co\"\n"
-                "        \"$foam_launcher\" foamDictionary "
+                "        \"$foam_launcher\" foamDictionary -precision 16 "
                     "\"$case_dir/system/controlDict\" "
                     "-entry maxDeltaT -set \"$max_dt\"\n"
+                "        saved_time=$(\"$foam_launcher\" foamListTimes "
+                    "-case \"$case_dir\" -processor -latestTime "
+                    "2>/dev/null || true)\n"
+                "        saved_time=\"${saved_time##*$'\\n'}\"\n"
+                "        if [[ -n \"$saved_time\" ]]; then\n"
+                "            for ((rank=0; rank<processes; ++rank)); do\n"
+                "                saved_time_file=\"$case_dir/processor"
+                    "${rank}/${saved_time}/uniform/time\"\n"
+                "                if [[ -f \"$saved_time_file\" ]]; then\n"
+                "                    \"$foam_launcher\" foamDictionary "
+                    "-precision 16 "
+                    "\"$saved_time_file\" -entry deltaT "
+                    "-set \"$restart_dt\"\n"
+                "                    \"$foam_launcher\" foamDictionary "
+                    "-precision 16 "
+                    "\"$saved_time_file\" -entry deltaT0 "
+                    "-set \"$restart_dt\"\n"
+                "                fi\n"
+                "            done\n"
+                "        fi\n"
                 "        echo \"$label: t=$current -> $target\"\n"
                 "        \"$foam_launcher\" mpirun -np \"$processes\" "
                     "semiFrozenChtMultiRegionFoam "
                     "-case \"$case_dir\" -parallel\n"
-                "        current=\"$target\"\n"
+                "        actual_time=$(\"$foam_launcher\" foamListTimes "
+                    "-case \"$case_dir\" -processor -latestTime "
+                    "2>/dev/null || echo \"$current\")\n"
+                "        actual_time=\"${actual_time##*$'\\n'}\"\n"
+                "        if ! awk -v actual=\"$actual_time\" -v target=\"$target\" "
+                    "'BEGIN { scale=(target<0?-target:target); "
+                    "if(scale<1)scale=1; tolerance=1e-6*scale; "
+                    "exit !(actual>=target-tolerance) }'; then\n"
+                "            echo \"Solver stage failed to reach target time: "
+                    "target=$target actual=$actual_time.\" >&2\n"
+                "            return 5\n"
+                "        fi\n"
+                "        current=\"$actual_time\"\n"
                 "    }\n\n";
             if(options.use_adaptive_airflow_refresh) {
                 output <<
@@ -2353,6 +3076,8 @@ private:
                     "    {\n"
                     "        local refresh_start=\"$current\" "
                         "refresh_elapsed=0 refresh_target\n"
+                    "        printf '%s\n' \"$refresh_start\" > "
+                        "\"$refresh_pending_marker\"\n"
                     "        previous_flows=()\n"
                     "        while true; do\n"
                     "            refresh_target=$(awk -v a=\"$current\" -v d=\""
@@ -2363,7 +3088,7 @@ private:
                         "'BEGIN { x=a+d; limit=start+maximum; "
                         "if(x>limit)x=limit; if(x>end)x=end; print x }')\n"
                     "            stage false \"$refresh_target\" "
-                    << options.maximum_courant_number << ' '
+                    << options.airflow_refresh_maximum_courant_number << ' '
                     << options.maximum_time_step
                     << " \"Adaptive airflow refresh\"\n"
                     "            refresh_elapsed=$(awk -v a=\"$current\" "
@@ -2374,12 +3099,16 @@ private:
                     "                if airflow_metrics_converged; then\n"
                     "                    echo \"Airflow refresh converged "
                         "after $refresh_elapsed s.\"\n"
+                    "                    rm -f \"$refresh_pending_marker\"\n"
                     "                    return 0\n"
                     "                fi\n"
                     "            fi\n"
                     "            if ! awk -v a=\"$current\" "
                         "-v b=\"$requested_end\" "
-                        "'BEGIN { exit !(a<b) }'; then return 0; fi\n"
+                        "'BEGIN { exit !(a<b) }'; then\n"
+                    "                rm -f \"$refresh_pending_marker\"\n"
+                    "                return 0\n"
+                    "            fi\n"
                     "            if awk -v a=\"$refresh_elapsed\" -v b=\""
                     << options.maximum_airflow_refresh_duration
                     << "\" 'BEGIN { exit !(a>=b) }'; then\n"
@@ -2391,25 +3120,84 @@ private:
                     "            fi\n"
                     "        done\n"
                     "    }\n\n";
+                output <<
+                    "    adaptive_initial_airflow()\n"
+                    "    {\n"
+                    "        local initial_start=\"$current\" "
+                        "initial_elapsed=0 initial_target initial_limit\n"
+                    "        initial_limit=$(awk -v maximum=\""
+                    << options.airflow_warmup_time
+                    << "\" -v end=\"$requested_end\" "
+                        "'BEGIN { print (maximum<end?maximum:end) }')\n"
+                    "        previous_flows=()\n"
+                    "        while awk -v a=\"$current\" "
+                        "-v b=\"$initial_limit\" "
+                        "'BEGIN { exit !(a<b) }'; do\n"
+                    "            initial_target=$(awk -v a=\"$current\" -v d=\""
+                    << options.initial_airflow_check_interval
+                    << "\" -v limit=\"$initial_limit\" "
+                        "'BEGIN { x=a+d; print (x<limit?x:limit) }')\n"
+                    "            stage false \"$initial_target\" "
+                    << options.maximum_courant_number << ' '
+                    << options.maximum_time_step
+                    << " \"Adaptive initial airflow\"\n"
+                    "            initial_elapsed=$(awk -v a=\"$current\" "
+                        "-v b=\"$initial_start\" 'BEGIN { print a-b }')\n"
+                    "            if awk -v a=\"$initial_elapsed\" -v b=\""
+                    << options.minimum_initial_airflow_duration
+                    << "\" 'BEGIN { exit !(a>=b) }'; then\n"
+                    "                if airflow_metrics_converged; then\n"
+                    "                    echo \"Initial airflow converged "
+                        "after $initial_elapsed s beyond the fan ramp; "
+                        "switching to thermal-only mode.\"\n"
+                    "                    touch "
+                        "\"$initial_convergence_marker\"\n"
+                    "                    return 0\n"
+                    "                fi\n"
+                    "            fi\n"
+                    "        done\n"
+                    "        if ! awk -v a=\"$current\" "
+                        "-v b=\"$requested_end\" "
+                        "'BEGIN { exit !(a>=b) }'; then\n"
+                    "            echo \"Initial airflow failed to converge "
+                        "before the airflow_warmup_time safety limit of "
+                    << options.airflow_warmup_time << " s.\" >&2\n"
+                    "            return 3\n"
+                    "        fi\n"
+                    "    }\n\n";
             }
-            output <<
-                "    if awk -v a=\"$current\" -v b=\""
-                << options.airflow_warmup_time
-                << "\" 'BEGIN { exit !(a<b) }'; then\n"
-                "        warm_target=$(awk -v a=\""
-                << options.airflow_warmup_time
-                << "\" -v b=\"$requested_end\" "
-                    "'BEGIN { print (a<b ? a : b) }')\n"
-                "        stage false \"$warm_target\" "
-                << options.maximum_courant_number << ' '
-                << options.maximum_time_step << " \"Airflow warm-up\"\n"
-                "    fi\n";
             if(options.use_adaptive_airflow_refresh) {
                 output <<
-                    "    if awk -v a=\"$current\" -v b=\"$requested_end\" "
+                    "    initial_convergence_marker="
+                        "\"$case_dir/.initial_airflow_converged\"\n"
+                    "    refresh_pending_marker="
+                        "\"$case_dir/.airflow_refresh_pending\"\n"
+                    "    if [[ ! -f \"$initial_convergence_marker\" ]] && "
+                        "awk -v a=\"$current\" -v b=\"$requested_end\" "
                         "'BEGIN { exit !(a<b) }'; then\n"
-                    "        echo \"Checking initial airflow operating point.\"\n"
+                    "        echo \"Adaptively finding initial airflow "
+                        "operating point.\"\n"
+                    "        adaptive_initial_airflow\n"
+                    "    fi\n"
+                    "    if [[ -f \"$refresh_pending_marker\" ]] && "
+                        "awk -v a=\"$current\" -v b=\"$requested_end\" "
+                        "'BEGIN { exit !(a<b) }'; then\n"
+                    "        echo \"Retrying interrupted airflow refresh.\"\n"
                     "        adaptive_airflow_refresh\n"
+                    "    fi\n";
+            } else {
+                output <<
+                    "    if awk -v a=\"$current\" -v b=\""
+                    << options.airflow_warmup_time
+                    << "\" 'BEGIN { exit !(a<b) }'; then\n"
+                    "        warm_target=$(awk -v a=\""
+                    << options.airflow_warmup_time
+                    << "\" -v b=\"$requested_end\" "
+                        "'BEGIN { print (a<b ? a : b) }')\n"
+                    "        stage false \"$warm_target\" "
+                    << options.maximum_courant_number << ' '
+                    << options.maximum_time_step
+                    << " \"Fixed airflow warm-up\"\n"
                     "    fi\n";
             }
             output <<
@@ -2418,16 +3206,29 @@ private:
                 "        frozen_target=$(awk -v a=\"$current\" -v d=\""
                 << options.airflow_refresh_interval
                 << "\" -v b=\"$requested_end\" "
-                    "'BEGIN { x=a+d; print (x<b ? x : b) }')\n"
+                    "'BEGIN { x=(int(a/d)+1)*d; "
+                    "if(x<=a+1e-9)x+=d; "
+                    "print (x<b ? x : b) }')\n"
                 "        stage true \"$frozen_target\" "
                 << options.frozen_flow_maximum_courant_number << ' '
                 << options.frozen_flow_maximum_time_step
-                << " \"Implicit thermal-only stage (airflow held)\"\n"
+                << " \"Implicit thermal-only stage (airflow held)\"\n";
+            if(options.stop_when_thermally_converged) {
+                output <<
+                "        thermal_candidate=0\n"
+                "        airflow_validated=0\n"
+                "        if thermal_metrics_converged; then\n"
+                "            thermal_candidate=1\n"
+                "        fi\n";
+            }
+            output <<
                 "        if awk -v a=\"$current\" -v b=\"$requested_end\" "
                     "'BEGIN { exit !(a<b) }'; then\n";
             if(options.use_adaptive_airflow_refresh) {
                 output <<
                     "            adaptive_airflow_refresh\n";
+                if(options.stop_when_thermally_converged)
+                    output << "            airflow_validated=1\n";
             } else {
                 output <<
                     "            refresh_target=$(awk -v a=\"$current\" -v d=\""
@@ -2439,12 +3240,60 @@ private:
                     << options.maximum_time_step
                     << " \"Airflow refresh\"\n";
             }
+            output << "        fi\n";
+            if(options.stop_when_thermally_converged) {
+                output <<
+                "        if [[ \"$thermal_candidate\" == 1 && "
+                    "\"$airflow_validated\" == 1 ]]; then\n"
+                "            streak=$(cat \"$thermal_convergence_streak\" "
+                    "2>/dev/null || echo 0)\n"
+                "            streak=$((streak+1))\n"
+                "            printf '%s\\n' \"$streak\" > "
+                    "\"$thermal_convergence_streak\"\n"
+                "            echo \"Thermal convergence checkpoint "
+                    "$streak/"
+                    << options.thermal_convergence_required_checkpoints
+                    << " accepted with airflow metrics converged.\"\n"
+                "            if (( streak >= "
+                    << options.thermal_convergence_required_checkpoints
+                    << " )); then\n"
+                "                echo \"Thermal and airflow convergence "
+                    "criteria satisfied at t=$current s; stopping before "
+                    "requested end time $requested_end s.\"\n"
+                "                break\n"
+                "            fi\n"
+                "        else\n"
+                "            printf '0\\n' > \"$thermal_convergence_streak\"\n"
+                "        fi\n";
+            }
             output <<
-                "        fi\n"
                 "    done\n"
                 "else\n"
-                "    \"$foam_launcher\" mpirun -np \"$processes\" "
+                "    warm_current=$(\"$foam_launcher\" foamListTimes "
+                    "-case \"$case_dir\" -processor -latestTime "
+                    "2>/dev/null || echo 0)\n"
+                "    warm_current=\"${warm_current##*$'\\n'}\"\n"
+                "    warm_current=\"${warm_current:-0}\"\n";
+            if(options.use_fan_startup_ramp) {
+                output <<
+                    "    if [[ \"$mode\" == \"--warm-start\" ]] && "
+                        "awk -v a=\"$warm_current\" -v end=\""
+                    << options.fan_startup_ramp_time
+                    << "\" 'BEGIN { exit !(a<end) }'; then\n"
+                    "        run_fan_ramp chtMultiRegionFoam "
+                        "\"$warm_current\" \"$requested_end\"\n"
+                    "        warm_current=\"$ramp_current\"\n"
+                    "    fi\n";
+            }
+            output <<
+                "    if awk -v a=\"$warm_current\" -v b=\"$requested_end\" "
+                    "'BEGIN { exit !(a<b) }'; then\n"
+                "        \"$foam_launcher\" foamDictionary "
+                    "\"$case_dir/system/controlDict\" "
+                    "-entry endTime -set \"$requested_end\"\n"
+                "        \"$foam_launcher\" mpirun -np \"$processes\" "
                     "chtMultiRegionFoam -case \"$case_dir\" -parallel\n"
+                "    fi\n"
                 "fi\n";
         } else {
             output <<
@@ -2457,8 +3306,12 @@ private:
                     "chtMultiRegionFoam -case \"$case_dir\" -parallel\n";
         }
         output <<
+            "reconstruct_time=$(\"$foam_launcher\" foamListTimes "
+                "-case \"$case_dir\" -processor -latestTime "
+                "2>/dev/null || echo 0)\n"
+            "reconstruct_time=\"${reconstruct_time##*$'\\n'}\"\n"
             "\"$foam_launcher\" reconstructPar -case \"$case_dir\" "
-                "-allRegions -latestTime -withZero\n\n"
+                "-allRegions -time \"$reconstruct_time\"\n\n"
             "\"$foam_launcher\" foamDictionary "
                 "\"$case_dir/system/fluid/fvSolution\" "
                 "-entry PIMPLE/frozenFlow -set false\n"
@@ -2483,7 +3336,10 @@ private:
             "if [[ \"$mode\" == \"--warm-start\" ]]; then\n"
             "    \"$foam_launcher\" foamDictionary "
                 "\"$case_dir/system/controlDict\" "
-                "-entry startFrom -set latestTime\n"
+                "-entry startFrom -set startTime\n"
+            "    \"$foam_launcher\" foamDictionary "
+                "\"$case_dir/system/controlDict\" "
+                "-entry startTime -set \"$reconstruct_time\"\n"
             "    \"$foam_launcher\" foamDictionary "
                 "\"$case_dir/system/controlDict\" "
                 "-entry endTime -set " << options.end_time << "\n"
@@ -2496,7 +3352,10 @@ private:
             "elif [[ \"$mode\" == \"--multirate\" ]]; then\n"
             "    \"$foam_launcher\" foamDictionary "
                 "\"$case_dir/system/controlDict\" "
-                "-entry startFrom -set latestTime\n"
+                "-entry startFrom -set startTime\n"
+            "    \"$foam_launcher\" foamDictionary "
+                "\"$case_dir/system/controlDict\" "
+                "-entry startTime -set \"$reconstruct_time\"\n"
             "    \"$foam_launcher\" foamDictionary "
                 "\"$case_dir/system/controlDict\" "
                 "-entry endTime -set " << options.end_time << "\n"
