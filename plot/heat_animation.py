@@ -5,15 +5,17 @@ Usage:
   python heat_animation.py --sim simulation.csv --rack output.txt --save
   python heat_animation.py --format openfoam --case openfoam_cases/my_model
   python heat_animation.py --format openfoam --case openfoam_cases/my_model --time 3600 --save
+  python heat_animation.py --format openfoam --case openfoam_cases/my_model --animate --slice-axis none --save
 
 OpenFOAM mode uses PyVista's OpenFOAM reader, so no intermediate CSV is
-required. Install its optional dependency with ``python -m pip install
-pyvista``. The case may be reconstructed or decomposed; a harmless ``.foam``
+required. Install its optional dependencies with ``python -m pip install
+pyvista imageio imageio-ffmpeg``. The case may be reconstructed or decomposed; a harmless ``.foam``
 reader marker is created in the case directory when needed.
 """
 from __future__ import annotations
 
 import argparse
+import csv
 import itertools
 import re
 from dataclasses import dataclass, field
@@ -377,6 +379,19 @@ def iter_pyvista_datasets(dataset):
         yield dataset
 
 
+def iter_named_pyvista_datasets(dataset, path=()):
+    """Yield ``(block path, leaf)`` pairs from a nested PyVista dataset."""
+    if dataset is None:
+        return
+    if hasattr(dataset, "n_blocks"):
+        names = list(dataset.keys()) if hasattr(dataset, "keys") else []
+        for index, block in enumerate(dataset):
+            name = names[index] if index < len(names) else f"block_{index}"
+            yield from iter_named_pyvista_datasets(block, path + (str(name),))
+    elif getattr(dataset, "n_cells", 0) or getattr(dataset, "n_points", 0):
+        yield path, dataset
+
+
 def dataset_with_temperature(dataset, temperature_units: str):
     """Return (dataset, scalar_name), accepting either cell or point T data."""
     if "T" not in dataset.cell_data and "T" not in dataset.point_data:
@@ -406,6 +421,21 @@ def select_openfoam_time(reader, requested: str) -> float:
             print(f"Warning: time {target:g} is unavailable; using nearest time {selected:g}")
     reader.set_active_time_value(selected)
     return selected
+
+
+def select_openfoam_animation_times(available, start_time=None, end_time=None,
+                                    skip=1):
+    """Select an inclusive, ordered subset of written OpenFOAM times."""
+    if skip < 1:
+        raise ValueError("--skip must be at least 1")
+    times = sorted({float(value) for value in available})
+    if start_time is not None:
+        times = [value for value in times if value >= start_time]
+    if end_time is not None:
+        times = [value for value in times if value <= end_time]
+    if not times:
+        raise ValueError("No written OpenFOAM times are inside the requested range")
+    return times[::skip]
 
 
 def add_pyvista_box(plotter, pv, origin, size, color, width=2.0, label=None,
@@ -455,6 +485,275 @@ def add_pyvista_geometry(plotter, pv, rack: RackGeom) -> None:
         )
 
 
+def prepare_temperature_datasets(multiblock, temperature_units):
+    """Return temperature-bearing leaves and their finite scalar ranges."""
+    prepared = []
+    scalar_ranges = []
+    for leaf in iter_pyvista_datasets(multiblock):
+        leaf, scalar_name = dataset_with_temperature(leaf, temperature_units)
+        if leaf is None:
+            continue
+        values = (leaf.cell_data.get(scalar_name)
+                  if scalar_name in leaf.cell_data else leaf.point_data.get(scalar_name))
+        finite = np.asarray(values)[np.isfinite(values)]
+        if finite.size:
+            scalar_ranges.append((float(finite.min()), float(finite.max())))
+        prepared.append((leaf, scalar_name))
+    return prepared, scalar_ranges
+
+
+def temperature_region_statistics(multiblock, temperature_units):
+    """Calculate volume-weighted mean and maximum T for each mesh region."""
+    candidates = list(iter_named_pyvista_datasets(multiblock))
+    internal = [item for item in candidates if "internalMesh" in item[0]]
+    if internal:
+        candidates = internal
+    accumulators = {}
+    for path, leaf in candidates:
+        leaf, scalar_name = dataset_with_temperature(leaf, temperature_units)
+        if leaf is None:
+            continue
+        region = next(
+            (name for name in path
+             if name not in {"internalMesh", "boundary"}),
+            "rack",
+        )
+        if scalar_name in leaf.cell_data:
+            values = np.asarray(leaf.cell_data[scalar_name], dtype=float)
+            try:
+                weights = np.asarray(
+                    leaf.compute_cell_sizes(
+                        length=False, area=False, volume=True
+                    ).cell_data["Volume"],
+                    dtype=float,
+                )
+            except (KeyError, TypeError, AttributeError):
+                weights = np.ones(values.shape, dtype=float)
+        else:
+            values = np.asarray(leaf.point_data[scalar_name], dtype=float)
+            weights = np.ones(values.shape, dtype=float)
+        valid = np.isfinite(values) & np.isfinite(weights) & (weights > 0)
+        if not valid.any():
+            continue
+        stats = accumulators.setdefault(
+            region, {"weighted_sum": 0.0, "weight": 0.0, "maximum": -np.inf}
+        )
+        stats["weighted_sum"] += float(np.sum(values[valid] * weights[valid]))
+        stats["weight"] += float(np.sum(weights[valid]))
+        stats["maximum"] = max(stats["maximum"], float(np.max(values[valid])))
+    return {
+        region: {
+            "mean": values["weighted_sum"] / values["weight"],
+            "maximum": values["maximum"],
+        }
+        for region, values in accumulators.items()
+        if values["weight"] > 0
+    }
+
+
+def run_openfoam_convergence_report(args, reader) -> None:
+    """Write CSV data and a PNG temperature-history convergence report."""
+    try:
+        times = select_openfoam_animation_times(
+            reader.time_values, args.start_time, args.end_time, args.skip
+        )
+    except ValueError as exc:
+        raise SystemExit(str(exc)) from exc
+    records = []
+    regions = set()
+    for index, selected_time in enumerate(times, start=1):
+        reader.set_active_time_value(selected_time)
+        stats = temperature_region_statistics(
+            reader.read(), args.temperature_units
+        )
+        if not stats:
+            raise SystemExit(f"No T field was found at OpenFOAM time {selected_time:g}")
+        regions.update(stats)
+        records.append((selected_time, stats))
+        print(f"Read convergence sample {index}/{len(times)}: t={selected_time:g} s")
+
+    output = Path(args.output).expanduser().resolve()
+    if output.suffix.lower() not in {".png", ".jpg", ".jpeg"}:
+        output = output.with_suffix(".png")
+    output.parent.mkdir(parents=True, exist_ok=True)
+    csv_output = output.with_suffix(".csv")
+    ordered_regions = sorted(regions, key=lambda value: (value.lower() != "fluid", value))
+    with csv_output.open("w", newline="", encoding="utf-8") as stream:
+        columns = ["time_s"]
+        for region in ordered_regions:
+            columns.extend((f"{region}_mean", f"{region}_maximum"))
+        writer = csv.DictWriter(stream, fieldnames=columns)
+        writer.writeheader()
+        for selected_time, stats in records:
+            row = {"time_s": selected_time}
+            for region in ordered_regions:
+                if region in stats:
+                    row[f"{region}_mean"] = stats[region]["mean"]
+                    row[f"{region}_maximum"] = stats[region]["maximum"]
+            writer.writerow(row)
+
+    try:
+        import matplotlib.pyplot as plt
+    except ImportError as exc:
+        raise SystemExit(
+            "Convergence plotting requires Matplotlib. Install it with: "
+            "python -m pip install matplotlib"
+        ) from exc
+    figure, (rack_axis, component_axis) = plt.subplots(
+        2, 1, figsize=(12, 9), sharex=True, constrained_layout=True
+    )
+    time_values = [record[0] for record in records]
+    fluid_regions = [region for region in ordered_regions
+                     if region.lower() == "fluid"]
+    component_regions = [region for region in ordered_regions
+                         if region.lower() != "fluid"]
+    for region in fluid_regions:
+        means = [stats.get(region, {}).get("mean", np.nan) for _, stats in records]
+        maxima = [stats.get(region, {}).get("maximum", np.nan) for _, stats in records]
+        rack_axis.plot(time_values, means, label=f"{region} mean", linewidth=2)
+        rack_axis.plot(time_values, maxima, "--", label=f"{region} maximum")
+    global_maxima = [
+        max(value["maximum"] for value in stats.values()) for _, stats in records
+    ]
+    rack_axis.plot(time_values, global_maxima, color="black", linewidth=2,
+                   label="Rack global maximum")
+    for region in component_regions:
+        means = [stats.get(region, {}).get("mean", np.nan) for _, stats in records]
+        maxima = [stats.get(region, {}).get("maximum", np.nan) for _, stats in records]
+        line = component_axis.plot(time_values, means, label=f"{region} mean")[0]
+        component_axis.plot(time_values, maxima, "--", color=line.get_color(),
+                            alpha=0.75, label=f"{region} maximum")
+    rack_axis.set_title("Rack / fluid temperature convergence")
+    component_axis.set_title("Component temperature convergence")
+    component_axis.set_xlabel("Simulation time (s)")
+    for axis in (rack_axis, component_axis):
+        axis.set_ylabel(f"Temperature ({args.temperature_units})")
+        axis.grid(True, alpha=0.3)
+        axis.legend(loc="best", fontsize=8)
+    figure.savefig(output, dpi=180)
+    plt.close(figure)
+
+    final_time, final_stats = records[-1]
+    previous = records[-2] if len(records) > 1 else None
+    print(f"Saved convergence plot: {output}")
+    print(f"Saved convergence data: {csv_output}")
+    print(f"Final sample: t={final_time:g} s")
+    for region in ordered_regions:
+        current = final_stats.get(region)
+        if current is None:
+            continue
+        delta_text = ""
+        if previous and region in previous[1]:
+            delta = current["maximum"] - previous[1][region]["maximum"]
+            elapsed = final_time - previous[0]
+            rate = delta / elapsed if elapsed else np.nan
+            delta_text = f", max change={delta:+.3g} {args.temperature_units}, rate={rate:+.3g} {args.temperature_units}/s"
+        print(
+            f"  {region}: mean={current['mean']:.3g}, "
+            f"maximum={current['maximum']:.3g} {args.temperature_units}{delta_text}"
+        )
+
+
+def run_openfoam_animation(args, pv, reader, rack) -> None:
+    """Render written OpenFOAM result times to an MP4 or GIF."""
+    try:
+        times = select_openfoam_animation_times(
+            reader.time_values, args.start_time, args.end_time, args.skip
+        )
+    except ValueError as exc:
+        raise SystemExit(str(exc)) from exc
+
+    print(f"Scanning {len(times)} OpenFOAM frames for a common temperature scale...")
+    ranges = []
+    for selected_time in times:
+        reader.set_active_time_value(selected_time)
+        _, frame_ranges = prepare_temperature_datasets(
+            reader.read(), args.temperature_units
+        )
+        ranges.extend(frame_ranges)
+    if not ranges:
+        raise SystemExit("No T field was found in the requested OpenFOAM time range")
+    common_range = (min(value[0] for value in ranges),
+                    max(value[1] for value in ranges))
+
+    output = Path(args.output).expanduser().resolve()
+    if output.suffix.lower() not in {".mp4", ".gif"}:
+        output = output.with_suffix(".mp4")
+    output.parent.mkdir(parents=True, exist_ok=True)
+    plotter = pv.Plotter(off_screen=True, window_size=(1600, 1000))
+    try:
+        if output.suffix.lower() == ".gif":
+            plotter.open_gif(str(output), fps=args.fps)
+        else:
+            plotter.open_movie(str(output), framerate=args.fps)
+    except Exception as exc:
+        raise SystemExit(
+            f"Could not create animation '{output}': {exc}. "
+            "Install animation support with: "
+            "python -m pip install imageio imageio-ffmpeg"
+        ) from exc
+
+    axis = args.slice_axis.lower()
+    normal_by_axis = {"x": (1, 0, 0), "y": (0, 1, 0), "z": (0, 0, 1)}
+    axis_index = {"x": 0, "y": 1, "z": 2}.get(axis)
+    camera_position = None
+    written = 0
+    for frame_number, selected_time in enumerate(times, start=1):
+        reader.set_active_time_value(selected_time)
+        prepared, _ = prepare_temperature_datasets(
+            reader.read(), args.temperature_units
+        )
+        plotter.clear()
+        plotted = 0
+        for leaf, scalar_name in prepared:
+            shown = leaf
+            if axis_index is not None:
+                position = args.slice_position
+                if position is None:
+                    position = (leaf.bounds[2 * axis_index]
+                                + leaf.bounds[2 * axis_index + 1]) / 2.0
+                low, high = leaf.bounds[2 * axis_index:2 * axis_index + 2]
+                if position < low or position > high:
+                    continue
+                origin = list(leaf.center)
+                origin[axis_index] = position
+                shown = leaf.slice(normal=normal_by_axis[axis], origin=origin)
+                if shown.n_cells == 0:
+                    continue
+            plotter.add_mesh(
+                shown, scalars=scalar_name, cmap="inferno", clim=common_range,
+                opacity=args.opacity, show_scalar_bar=(plotted == 0),
+                scalar_bar_args={"title": f"Temperature ({args.temperature_units})"},
+            )
+            plotted += 1
+        if not plotted:
+            raise SystemExit(
+                f"The requested view contains no temperature cells at t={selected_time:g}"
+            )
+        if rack is not None:
+            add_pyvista_geometry(plotter, pv, rack)
+        plotter.add_text(
+            f"OpenFOAM temperature - t = {selected_time:g} s",
+            position="upper_left", font_size=13
+        )
+        plotter.add_axes()
+        if camera_position is None:
+            plotter.view_isometric()
+            plotter.reset_camera()
+            camera_position = plotter.camera_position
+        else:
+            plotter.camera_position = camera_position
+        plotter.write_frame()
+        written += 1
+        print(f"Rendered frame {frame_number}/{len(times)}: t={selected_time:g} s")
+    plotter.close()
+    print(
+        f"Saved {written}-frame OpenFOAM animation: {output}\n"
+        f"Temperature range: {common_range[0]:.3g} to {common_range[1]:.3g} "
+        f"{args.temperature_units}"
+    )
+
+
 def run_openfoam(args: argparse.Namespace) -> None:
     global np
     try:
@@ -492,20 +791,19 @@ def run_openfoam(args: argparse.Namespace) -> None:
     except (FileNotFoundError, ValueError) as exc:
         print(f"Warning: {exc}; showing the exact OpenFOAM mesh without box overlays")
 
+    if args.animate:
+        run_openfoam_animation(args, pv, reader, rack)
+        return
+    if args.convergence_report:
+        run_openfoam_convergence_report(args, reader)
+        return
+
     plotter = pv.Plotter(off_screen=args.save, window_size=(1600, 1000))
     plotted = 0
     scalar_ranges: list[tuple[float, float]] = []
-    prepared = []
-    for leaf in iter_pyvista_datasets(multiblock):
-        leaf, scalar_name = dataset_with_temperature(leaf, args.temperature_units)
-        if leaf is None:
-            continue
-        values = (leaf.cell_data.get(scalar_name)
-                  if scalar_name in leaf.cell_data else leaf.point_data.get(scalar_name))
-        finite = np.asarray(values)[np.isfinite(values)]
-        if finite.size:
-            scalar_ranges.append((float(finite.min()), float(finite.max())))
-        prepared.append((leaf, scalar_name))
+    prepared, scalar_ranges = prepare_temperature_datasets(
+        multiblock, args.temperature_units
+    )
 
     if not prepared:
         raise SystemExit(
@@ -650,6 +948,16 @@ def build_argument_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--case", help="OpenFOAM case directory")
     parser.add_argument("--time", default="latest", help="OpenFOAM time or 'latest'")
+    parser.add_argument(
+        "--animate", action="store_true",
+        help="Animate the selected range of written OpenFOAM times"
+    )
+    parser.add_argument(
+        "--convergence-report", action="store_true",
+        help="Save PNG/CSV temperature histories for written OpenFOAM times"
+    )
+    parser.add_argument("--start-time", type=float, help="First animation time")
+    parser.add_argument("--end-time", type=float, help="Last animation time")
     parser.add_argument(
         "--slice-axis", choices=("x", "y", "z", "none"), default="y",
         help="OpenFOAM slice normal; 'none' renders region surfaces"

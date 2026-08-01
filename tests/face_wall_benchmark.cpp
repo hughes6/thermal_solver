@@ -2,8 +2,8 @@
 #include <chrono>
 #include <iostream>
 
-#include "../mesh_refinement_planner.hpp"
-#include "../solver.hpp"
+#include "../src/mesh_refinement_planner.hpp"
+#include "../src/solver.hpp"
 
 struct Result {
     double seconds;

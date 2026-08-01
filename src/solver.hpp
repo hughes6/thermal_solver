@@ -3,7 +3,6 @@
 
 #include <stdexcept>
 #include <iomanip>
-#include <omp.h>
 
 #include "air_properties.hpp"
 #include "convection.hpp"
@@ -291,28 +290,9 @@ public:
         return current;
     }
 
-    void set_cores(int cores) {
-        int max_cores = omp_get_max_threads();
-        if(cores > max_cores) {
-            throw std::runtime_error("Cores exceeds max number of cores: " + max_cores);
-        } else {
-            num_cores = cores;
-            std::cout << "Number of cores set to: " << cores << " cores.\n";
-        }
-    }
-
+    
     void solve() {
-        if(num_cores > 1) {
-            int max_cores = omp_get_max_threads();
-            if(num_cores > max_cores) {
-                throw std::runtime_error("Cores exceeds max number of cores: " + max_cores);
-            } else {
-                omp_set_num_threads(num_cores);
-            }
-        }
-        std::cout << "Active cores: " << omp_get_num_threads() << "\n";
-        
-        int pct = 0, next_pct = 0;
+        double pct = 0.0;
         if (adaptive) {
             if(!advection_subcycling) check_advection_stability_adaptive();
             check_conduction_stability_adaptive();
@@ -339,41 +319,21 @@ public:
                 check_convection_stability();
             }
             pct = std::round(100.0 * step / steps);
-            if(pct > next_pct) {
-                std::cout<< "Working......" << pct - 1 << "%" << std::endl;
-                next_pct += 5;
+            if(step % 5 == 0) {
+                std::cout<< "Working......" << pct << "%" << std::endl;
             }
 
-            if (!advection_subcycling) {
-                if (num_cores > 1) {
-                    #pragma omp parallel for collapse(3) reduction(+:timestep_h_sum, timestep_h_count)
-                    for(int x = 0; x < current.get_nx(); x++) {
-                        for(int y = 0; y < current.get_ny(); y++) {
-                            for(int z = 0; z < current.get_nz(); z++) {
-                                double T_new = adaptive ? compute_t_next_adaptive(x,y,z) : compute_t_next(x,y,z);
-                                validate_temperature(T_new, x, y, z, "legacy update");
-                                Cell& next_cell = next.at(x,y,z);
-                                next_cell.set_T(T_new);
-                                if(next_cell.is_fluid()) {
-                                    next_cell.set_rho(AirProperties::density(T_new, current.get_env().get_ambient_pressure()));
-                                    next_cell.set_mu(AirProperties::viscosity(T_new));
-                                }
-                            }
-                        }
-                    }
-                } else {
-                    // Single‑thread fall‑back
-                    for(int x = 0; x < current.get_nx(); x++) {
-                        for(int y = 0; y < current.get_ny(); y++) {
-                            for(int z = 0; z < current.get_nz(); z++) {
-                                double T_new = adaptive ? compute_t_next_adaptive(x,y,z) : compute_t_next(x,y,z);
-                                validate_temperature(T_new, x, y, z, "legacy update");
-                                Cell& next_cell = next.at(x,y,z);
-                                next_cell.set_T(T_new);
-                                if(next_cell.is_fluid()) {
-                                    next_cell.set_rho(AirProperties::density(T_new, current.get_env().get_ambient_pressure()));
-                                    next_cell.set_mu(AirProperties::viscosity(T_new));
-                                }
+            if(!advection_subcycling) {
+                for(int x = 0; x < current.get_nx(); x++) {
+                    for(int y = 0; y < current.get_ny(); y++) {
+                        for(int z = 0; z < current.get_nz(); z++) {
+                            double T_new = adaptive ? compute_t_next_adaptive(x,y,z) : compute_t_next(x,y,z);
+                            validate_temperature(T_new,x,y,z,"legacy update");
+                            Cell& next_cell = next.at(x,y,z);
+                            next_cell.set_T(T_new);
+                            if(next_cell.is_fluid()) {
+                                next_cell.set_rho(AirProperties::density(T_new, current.get_env().get_ambient_pressure()));
+                                next_cell.set_mu(AirProperties::viscosity(T_new));
                             }
                         }
                     }
@@ -383,7 +343,6 @@ public:
             } else {
                 advance_with_advection_subcycling(step);
             }
-
             const double average_h =
             timestep_h_count > 0
                 ? timestep_h_sum /
@@ -394,6 +353,7 @@ public:
                 std::cout << "Step " << step << ": convection faces = " << timestep_h_count
                 << ", average h = " << average_h << " W/(m^2 K)\n";
             }
+
             if(step % output_interval == 0) {
                 log_state(step + 1);
             }
@@ -433,7 +393,6 @@ private:
     int timestep_h_count = 0;
     int output_interval = 0;
     int update_flow_interval = 0;
-    int num_cores = 1;
     bool advection_subcycling = false;
     double advection_cfl_target = 0.8;
     int max_advection_substeps = 10000;
@@ -492,39 +451,21 @@ private:
     void advance_with_advection_subcycling(int step) {
         // Lie split: advance all non-advection physics once at the global
         // timestep, then advance only fluid advection using stable substeps.
-        if(num_cores > 1) {
-            #pragma omp parallel for collapse(3) reduction(+:timestep_h_sum, timestep_h_count)
-            for(int x=0; x<current.get_nx(); ++x) {
-                for(int y=0; y<current.get_ny(); ++y) {
-                    for(int z=0; z<current.get_nz(); ++z) {
-                        const double temperature = compute_t_next_without_advection(x,y,z);
-                        validate_temperature(temperature,x,y,z,"non-advection update");
-                        Cell& target=next.at(x,y,z);
-                        target.set_T(temperature);
-                        if(target.is_fluid()) {
-                            target.set_rho(AirProperties::density(temperature,current.get_env().get_ambient_pressure()));
-                            target.set_mu(AirProperties::viscosity(temperature));
-                        }
+        for(int x=0; x<current.get_nx(); ++x)
+            for(int y=0; y<current.get_ny(); ++y)
+                for(int z=0; z<current.get_nz(); ++z) {
+                    const double temperature =
+                        compute_t_next_without_advection(x,y,z);
+                    validate_temperature(
+                        temperature,x,y,z,"non-advection update");
+                    Cell& target=next.at(x,y,z);
+                    target.set_T(temperature);
+                    if(target.is_fluid()) {
+                        target.set_rho(AirProperties::density(
+                            temperature,current.get_env().get_ambient_pressure()));
+                        target.set_mu(AirProperties::viscosity(temperature));
                     }
                 }
-            }
-        } else {
-            for(int x=0; x<current.get_nx(); ++x) {
-                for(int y=0; y<current.get_ny(); ++y) {
-                    for(int z=0; z<current.get_nz(); ++z) {
-                        const double temperature = compute_t_next_without_advection(x,y,z);
-                        validate_temperature(temperature,x,y,z,"non-advection update");
-                        Cell& target=next.at(x,y,z);
-                        target.set_T(temperature);
-                        if(target.is_fluid()) {
-                            target.set_rho(AirProperties::density(temperature,current.get_env().get_ambient_pressure()));
-                            target.set_mu(AirProperties::viscosity(temperature));
-                        }
-                    }
-                }
-            }  
-        }
-
         update_face_wall_temperatures();
         std::swap(current,next);
 
@@ -548,52 +489,29 @@ private:
 
         const double sub_dt=dt/static_cast<double>(substeps);
         for(int sub=0; sub<substeps; ++sub) {
-            if(num_cores > 1) {
-                #pragma omp parallel for collapse(3)
-                for(int x=0; x<current.get_nx(); ++x) {
-                    for(int y=0; y<current.get_ny(); ++y) {
-                        for(int z=0; z<current.get_nz(); ++z) {
-                            const Cell& source=current.at(x,y,z);
-                            double temperature=source.get_T();
-                            if(source.is_intake()) {
-                                temperature=current.get_env().get_T_ambient();
-                            } else if(source.is_fluid()) {
-                                const double derivative=adaptive ? compute_advection_adaptive(x,y,z) : compute_advection(x,y,z);
-                                temperature += sub_dt*derivative;
-                            }
-                            validate_temperature(temperature,x,y,z,"advection substep");
-                            Cell& target=next.at(x,y,z);
-                            target.set_T(temperature);
-                            if(target.is_fluid()) {
-                                target.set_rho(AirProperties::density(temperature,current.get_env().get_ambient_pressure()));
-                                target.set_mu(AirProperties::viscosity(temperature));
-                            }
+            for(int x=0; x<current.get_nx(); ++x)
+                for(int y=0; y<current.get_ny(); ++y)
+                    for(int z=0; z<current.get_nz(); ++z) {
+                        const Cell& source=current.at(x,y,z);
+                        double temperature=source.get_T();
+                        if(source.is_intake()) {
+                            temperature=current.get_env().get_T_ambient();
+                        } else if(source.is_fluid()) {
+                            const double derivative=adaptive
+                                ? compute_advection_adaptive(x,y,z)
+                                : compute_advection(x,y,z);
+                            temperature += sub_dt*derivative;
+                        }
+                        validate_temperature(
+                            temperature,x,y,z,"advection substep");
+                        Cell& target=next.at(x,y,z);
+                        target.set_T(temperature);
+                        if(target.is_fluid()) {
+                            target.set_rho(AirProperties::density(
+                                temperature,current.get_env().get_ambient_pressure()));
+                            target.set_mu(AirProperties::viscosity(temperature));
                         }
                     }
-                }
-            } else{
-               for(int x=0; x<current.get_nx(); ++x) {
-                    for(int y=0; y<current.get_ny(); ++y) {
-                        for(int z=0; z<current.get_nz(); ++z) {
-                            const Cell& source=current.at(x,y,z);
-                            double temperature=source.get_T();
-                            if(source.is_intake()) {
-                                temperature=current.get_env().get_T_ambient();
-                            } else if(source.is_fluid()) {
-                                const double derivative=adaptive ? compute_advection_adaptive(x,y,z) : compute_advection(x,y,z);
-                                temperature += sub_dt*derivative;
-                            }
-                            validate_temperature(temperature,x,y,z,"advection substep");
-                            Cell& target=next.at(x,y,z);
-                            target.set_T(temperature);
-                            if(target.is_fluid()) {
-                                target.set_rho(AirProperties::density(temperature,current.get_env().get_ambient_pressure()));
-                                target.set_mu(AirProperties::viscosity(temperature));
-                            }
-                        }
-                    }
-                }
-            }
             auto& next_walls=next.get_wall_faces();
             const auto& current_walls=current.get_wall_faces();
             for(size_t wi=0; wi<current_walls.size(); ++wi)
@@ -650,6 +568,17 @@ private:
         }
 
         double Qcond = 0.0, Qconv = 0.0, Qgen = 0.0;
+        /*
+        if (cell is solid) {
+            compute conduction
+            compute heat generation
+        } else if (cell is fluid - fluid interface) {
+            compute advection
+            fluid energe exchange
+        } else if (cell is fluid - solid interface ) {
+            compute convection 
+        }
+        */
         Qcond = compute_conduction(x, y, z);
         Qgen  = c.get_qdot() * current.cell_volume();
         Qconv = compute_convection(x, y, z);

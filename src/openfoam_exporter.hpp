@@ -89,6 +89,10 @@ public:
                 options.case_directory/".thermal_convergence_state");
             std::filesystem::remove(
                 options.case_directory/".thermal_convergence_streak");
+            std::filesystem::remove(
+                options.case_directory/".initial_airflow_converged");
+            std::filesystem::remove(
+                options.case_directory/".airflow_refresh_pending");
             clear_generated_solution_state(options.case_directory);
         }
 
@@ -2823,9 +2827,15 @@ private:
                 "            sum_abs=$(awk -v a=\"$sum_abs\" -v b=\"$value\" "
                     "'BEGIN { if(b<0)b=-b; print a+b }')\n"
                 "        done\n"
-                "        imbalance=$(awk -v n=\"$net\" -v s=\"$sum_abs\" "
+                "        if [[ ${#boundary_flow_names[@]} -eq 0 ]]; then\n"
+                "            # A sealed domain has no ambient mass-flow balance to "
+                    "evaluate.\n"
+                "            imbalance=0\n"
+                "        else\n"
+                "            imbalance=$(awk -v n=\"$net\" -v s=\"$sum_abs\" "
                     "'BEGIN { if(n<0)n=-n; d=0.5*s; "
                     "print (d>1e-12?n/d:1e30) }')\n"
+                "        fi\n"
                 "        for rule in \"${fan_direction_rules[@]}\"; do\n"
                 "            name=\"${rule%%:*}\"\n"
                 "            expected=\"${rule##*:}\"\n"

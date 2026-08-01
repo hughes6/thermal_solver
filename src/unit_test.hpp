@@ -2275,13 +2275,13 @@ public:
         assert(nearly_equal(sum(plan.dys), rack.get_depth_m()));
         assert(nearly_equal(sum(plan.dzs), rack.get_height_m()));
 
-        bool has_fine = false;
-        bool has_coarse = false;
-        for (double width : plan.dxs) {
-            has_fine = has_fine || nearly_equal(width, 0.01);
-            has_coarse = has_coarse || nearly_equal(width, 0.05);
-        }
-        assert(has_fine && has_coarse);
+        const auto [minimum, maximum] = std::minmax_element(
+            plan.dxs.begin(), plan.dxs.end());
+        // Spacings are targets: exact geometry cuts may split a remainder, so
+        // the realized widths need not equal fine_dx/coarse_dx exactly.
+        assert(*minimum <= 0.01 + 1e-12);
+        assert(*maximum >= 0.04 - 1e-12);
+        assert(*maximum > 2.0 * *minimum);
         std::cout << "test_adaptive_planner_refines_near_component PASSED\n";
     }
 

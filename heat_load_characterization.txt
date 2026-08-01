@@ -1,0 +1,295 @@
+THERMAL SIM - HEAT-LOAD CHARACTERIZATION AND MODEL-CALIBRATION GUIDE
+====================================================================
+
+PURPOSE
+-------
+Use this worksheet to turn measurements from operating rack equipment into
+defensible heat loads for Thermal Sim. Preserve one completed copy per device,
+workload, and observation period. The preferred estimate is measured wall
+power. Thermal-camera data is valuable for calibrating and validating the
+model, but surface temperature and physical size alone do not uniquely
+determine watts.
+
+
+1. MINIMUM DATA TO COLLECT WHILE EQUIPMENT REMAINS RUNNING
+----------------------------------------------------------
+
+Identification and operating state
+
+  Device/component name:
+  Manufacturer and model:
+  Date and time:
+  Workload or utilization:
+  Fan RPM, controller percentage, or operating mode:
+  Relevant alarms or throttling:
+
+Geometry and placement
+
+  Width (m):
+  Depth (m):
+  Height (m):
+  Rack position and orientation:
+  Approximate heat-producing subregion size (m):
+  Approximate heat-producing subregion position (m):
+  Intake and exhaust opening dimensions (m):
+
+Electrical data - preferred heat-load basis
+
+  Measured wall/input power (W):
+  Instrument and stated accuracy:
+  DC load, if independently known (W):
+  PSU efficiency at this load (0-1 or percent):
+  Power that genuinely leaves the modeled domain (W):
+  Measurement averaging period:
+
+Temperatures
+
+  Rack inlet/ambient air temperature (C):
+  Rack exhaust temperature (C):
+  Device inlet temperature (C):
+  Device exhaust temperature (C):
+  Internal sensor readings and sensor names (C):
+
+Thermal-camera observations
+
+  Camera model:
+  Emissivity setting:
+  Reflected apparent temperature setting (C):
+  Distance and viewing angle:
+  Surface material/coating:
+  Hotspot temperature (C):
+  Area-average surface temperature (C):
+  Cold/reference surface temperature (C):
+  Hotspot location relative to component origin (m):
+  Image filename:
+
+For shiny bare metal, place a small piece of known high-emissivity electrical
+tape on a safe accessible surface and allow it to reach the local surface
+temperature. Measure the tape rather than trusting the apparent temperature of
+reflective metal. Do not block vents, touch hazardous conductors, or interfere
+with equipment cooling.
+
+Optional airflow information
+
+  Intake velocity or volumetric flow:
+  Exhaust velocity or volumetric flow:
+  Measurement locations and instrument:
+  Observed recirculation or leakage:
+
+
+2. CHOOSING THE HEAT-LOAD METHOD
+--------------------------------
+
+Use methods in this order of confidence:
+
+  1. Measured whole-device wall/input power.
+  2. Known DC load divided by PSU efficiency.
+  3. Steady surface temperature with a calibrated total thermal resistance.
+  4. Transient temperature rise with calibrated effective mass, specific heat,
+     and an optional heat-loss correction.
+
+For ordinary servers, nearly all wall power eventually becomes heat in the
+device, rack, or room. Do not multiply measured wall power by PSU efficiency.
+PSU losses and delivered DC power both normally become heat. Subtract only
+energy that actually exits the modeled domain as nonthermal output.
+
+Temperature and size alone are insufficient because the same surface
+temperature can result from different combinations of watts, airflow, contact
+resistance, emissivity, surface area, and material construction. Use thermal
+images to locate sources and validate predicted temperatures. Use temperature
+to infer watts only after thermal resistance or transient thermal mass has been
+measured or calibrated.
+
+
+3. USING tools/heat_load_estimator.py
+------------------------------------
+
+Run interactively from the repository root:
+
+  python .\tools\heat_load_estimator.py
+
+Measured wall power example:
+
+  python .\tools\heat_load_estimator.py `
+    --name "CPU and system board" `
+    --input-power-w 500 `
+    --exported-power-w 10 `
+    --method electrical_input
+
+Known DC load and PSU efficiency example:
+
+  python .\tools\heat_load_estimator.py `
+    --name "Server electronics" `
+    --dc-load-w 450 `
+    --efficiency 90 `
+    --method dc_load_and_efficiency
+
+Calibrated steady-temperature example:
+
+  python .\tools\heat_load_estimator.py `
+    --name "Calibrated electronics" `
+    --surface-c 60 `
+    --ambient-c 20 `
+    --thermal-resistance-k-per-w 0.20 `
+    --method steady_temperature
+
+Transient warm-up example:
+
+  python .\tools\heat_load_estimator.py `
+    --name "Chassis thermal mass" `
+    --mass-kg 12 `
+    --specific-heat-j-kg-k 700 `
+    --start-c 25 `
+    --end-c 35 `
+    --duration-s 600 `
+    --method transient_temperature
+
+The tool prints each available estimate and a copy-ready TOML block. Copy the
+reviewed watts into a reusable component file under library/components or into
+the model's internal solid region. Do not assign the same watts to both an
+internal region and its enclosing component; those sources are additive.
+
+Save a traceable estimator report:
+
+  python .\tools\heat_load_estimator.py `
+    --name "CPU and system board" `
+    --input-power-w 500 `
+    --exported-power-w 10 `
+    --method electrical_input | Tee-Object .\cpu_heat_estimate.txt
+
+
+4. CALIBRATION PROCEDURE
+------------------------
+
+  1. Create a screening model using measured geometry, wall power, ambient
+     temperature, fan curves, and vent information.
+  2. Confirm that exported integrated heat equals the requested component watts.
+  3. Compare simulated inlet, exhaust, internal-sensor, and surface temperatures
+     with measurements from the same workload and time period.
+  4. Change only uncertain physical inputs: watts, fan-curve scaling, vent
+     resistance, contact/convection assumptions, or source distribution.
+  5. Change one category at a time. Multiple incorrect values can compensate
+     for each other and create a misleading match.
+  6. Calibrate on one operating condition and validate on another condition.
+  7. Record assumed ranges as well as the selected value so uncertainty remains
+     visible.
+
+
+5. REUSABLE DATA-TO-HEAT-LOAD PROMPT
+------------------------------------
+
+Copy the prompt below, fill in every known value, and leave unknown values as
+"unknown". Attach thermal images or measurement tables when available.
+
+BEGIN PROMPT
+
+I am characterizing a heat-producing rack component for Thermal Sim. Use the
+data below to recommend a defensible component or internal-region heat load in
+watts, explain which estimation method is valid, identify missing calibration
+information, and provide a command for tools/heat_load_estimator.py plus a
+copy-ready TOML internal-region block. Do not infer watts from surface
+temperature and size alone. Prefer measured wall power when available. Do not
+reduce measured wall power by PSU efficiency unless power genuinely leaves the
+modeled domain.
+
+Device name/model:
+Workload/utilization:
+Width, depth, height (m):
+Heat-source region size and position (m):
+Measured wall/input power and accuracy (W):
+Known DC load (W):
+PSU efficiency:
+Exported nonthermal power (W):
+Ambient/inlet temperature (C):
+Exhaust temperature (C):
+Internal sensor temperatures (C):
+Thermal-camera hotspot temperature (C):
+Thermal-camera area-average temperature (C):
+Surface material and emissivity setting:
+Thermal-camera image filename and hotspot location:
+Calibrated thermal resistance (K/W):
+Effective mass (kg):
+Effective specific heat (J/kg-K):
+Transient start/end temperatures and elapsed time:
+Fan RPM/controller state:
+Measured airflow, if available:
+Other observations:
+
+Return:
+  1. Recommended heat-load method and why.
+  2. Central watts estimate and defensible low/high range.
+  3. Any invalid or insufficient inputs.
+  4. Exact heat_load_estimator.py command.
+  5. Copy-ready TOML internal-region block.
+  6. Measurements that would most reduce uncertainty.
+
+END PROMPT
+
+
+6. THERMAL MODEL NEXT-STEP ROADMAP
+----------------------------------
+
+The next step is physical calibration and uncertainty validation - not another
+major solver feature.
+
+The OpenFOAM workflow can now mesh, solve, animate, and evaluate convergence.
+The largest remaining uncertainty is the real equipment inputs: heat
+generation, fan curves, vent resistance, and boundary conditions.
+
+1. Build one representative production rack from TOML.
+
+Use the actual rack dimensions, component positions, fan curves, vents, power
+estimates, materials, and ambient temperature. Run screening mesh, medium mesh,
+and fine mesh.
+
+2. Add automatic mesh-independence comparison.
+
+Run the same case at coarse, medium, and fine resolution and generate a
+comparison report containing:
+
+  - Component mean and maximum temperatures.
+  - Rack hotspot temperature and position.
+  - Intake/exhaust airflow.
+  - Pressure drop and fan operating points.
+  - Percentage change between mesh levels.
+  - Runtime and cell count.
+
+This is the next code feature to implement. Without it, a stable solution may
+still be strongly mesh-dependent.
+
+3. Collect minimal lab measurements without interrupting equipment.
+
+You do not need controlled shutdown tests. During normal operation, record:
+
+  - Ambient and rack inlet temperatures.
+  - Exhaust temperatures.
+  - Component surface temperatures using the thermal camera.
+  - Actual wall-plug power where available.
+  - Fan RPM or controller percentage.
+  - A few airflow measurements at major vents, if possible.
+
+Use several steady operating snapshots rather than attempting a complete
+experiment.
+
+4. Calibrate uncertain inputs.
+
+Adjust only physically uncertain quantities - component watts,
+contact/convection assumptions, fan-curve scaling, and vent resistance - within
+defensible ranges. Do not tune material properties arbitrarily.
+
+5. Validate on a different operating condition.
+
+Calibrate against one observation period, then test against another load or
+ambient condition. That determines whether the model predicts behavior instead
+of merely matching one dataset.
+
+6. Run the 18,000-second production transient.
+
+Use the convergence report to stop when temperature changes stay below a chosen
+threshold across several airflow-refresh intervals. A practical initial
+criterion is less than approximately 0.01 C/min for important component maxima
+over multiple report intervals.
+
+The immediate development task is the automatic coarse/medium/fine
+mesh-independence report. After that, the work shifts primarily from solver
+engineering to real-rack calibration.

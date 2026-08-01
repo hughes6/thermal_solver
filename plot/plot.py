@@ -7,6 +7,24 @@ import re
 from mpl_toolkits.mplot3d import art3d
 import argparse
 
+
+def centered_surface_rectangle(center, size, direction):
+    """Return the 2-D rectangle bounds for a center-positioned opening."""
+    if len(center) != 3 or len(size) != 3 or len(direction) != 3:
+        raise ValueError("center, size, and direction must each have three values")
+
+    x, y, z = center
+    sx, sy, sz = size
+    vx, vy, vz = direction
+
+    # Match the project's normal-axis tie break: z, then y, then x.
+    if abs(vz) >= abs(vx) and abs(vz) >= abs(vy):
+        return "z", z, (x - sx / 2.0, y - sy / 2.0), (sx, sy)
+    if abs(vy) >= abs(vx) and abs(vy) >= abs(vz):
+        return "y", y, (x - sx / 2.0, z - sz / 2.0), (sx, sz)
+    return "x", x, (y - sy / 2.0, z - sz / 2.0), (sy, sz)
+
+
 anim = False
 
 parser = argparse.ArgumentParser()
@@ -545,47 +563,40 @@ for i in range(len(vent_centers)):
     # draw vent opening
     # -------------------------
 
-    # mostly z-normal: vent lies in XY plane
-    if abs(vz) >= abs(vx) and abs(vz) >= abs(vy):
+    if s == "Rectangular":
+        plane, mount, lower, extents = centered_surface_rectangle(
+            (x, y, z), vent_sizes[i], (vx, vy, vz)
+        )
+        rect = plt.Rectangle(
+            lower,
+            extents[0],
+            extents[1],
+            color=color,
+            alpha=0.35,
+        )
+        ax.add_patch(rect)
+        art3d.pathpatch_2d_to_3d(rect, z=mount, zdir=plane)
+
+    # Mostly z-normal: a circular vent lies in the XY plane.
+    elif abs(vz) >= abs(vx) and abs(vz) >= abs(vy):
         if s == "Circular":
             circle = plt.Circle((x, y), r, color=color, alpha=0.35)
             ax.add_patch(circle)
             art3d.pathpatch_2d_to_3d(circle, z=z, zdir="z")
-        elif s == "Rectangular":
-            w, h, _ = vent_sizes[i]
-            x0 = x - w / 2.0
-            y0 = y - h / 2.0
-            rect = plt.Rectangle((x0, y0), w, h, color=color, alpha=0.35)
-            ax.add_patch(rect)
-            art3d.pathpatch_2d_to_3d(rect, z=z, zdir="z")
 
-    # mostly y-normal: vent lies in XZ plane
+    # Mostly y-normal: a circular vent lies in the XZ plane.
     elif abs(vy) >= abs(vx) and abs(vy) >= abs(vz):
         if s == "Circular":
             circle = plt.Circle((x, z), r, color=color, alpha=0.35)
             ax.add_patch(circle)
             art3d.pathpatch_2d_to_3d(circle, z=y, zdir="y")
-        elif s == "Rectangular":
-            w, _, h = vent_sizes[i]
-            x0 = x - w / 2.0
-            z0 = z - h / 2.0
-            rect = plt.Rectangle((x0, z0), w, h, color=color, alpha=0.35)
-            ax.add_patch(rect)
-            art3d.pathpatch_2d_to_3d(rect, z=y, zdir="y")
 
-    # mostly x-normal: vent lies in YZ plane
+    # Mostly x-normal: a circular vent lies in the YZ plane.
     else:
         if s == "Circular":
             circle = plt.Circle((y, z), r, color=color, alpha=0.35)
             ax.add_patch(circle)
             art3d.pathpatch_2d_to_3d(circle, z=x, zdir="x")
-        elif s == "Rectangular":
-            _, w, h = vent_sizes[i]
-            y0 = y - w / 2.0
-            z0 = z - h / 2.0
-            rect = plt.Rectangle((y0, z0), w, h, color=color, alpha=0.35)
-            ax.add_patch(rect)
-            art3d.pathpatch_2d_to_3d(rect, z=x, zdir="x")
 
     legend_handles.append(
         mpatches.Patch(

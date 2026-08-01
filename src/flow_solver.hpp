@@ -70,7 +70,7 @@ public:
                double tolerance_ = 1e-6,
                int max_iters_ = 20000,
                double sor_omega_ = 1.3,
-               int max_outer_iters_ = 10,
+               int max_outer_iters_ = 30,
                double flow_tolerance_ = 1e-4,
                std::string pressure_method_ = "sor") :
                mesh(mesh_),
@@ -109,7 +109,7 @@ public:
         for (int outer = 0; outer < max_outer_iters; ++outer) {
             if (adaptive) build_linearized_network_adaptive();
             else          build_linearized_network();
-            solve_pressures(outer, max_outer_iters);
+            solve_pressures();
 
             double max_relative_change = update_face_flows();
             if (adaptive) update_cell_velocities_adaptive();
@@ -149,7 +149,7 @@ public:
         for (int outer = 0; outer < max_outer_iters; ++outer) {
             if (adaptive) build_linearized_network_adaptive();
             else          build_linearized_network();
-            solve_pressures(outer, max_outer_iters);
+            solve_pressures();
 
             double max_relative_change = update_face_flows();
             if (adaptive) update_cell_velocities_adaptive();
@@ -621,12 +621,12 @@ private:
             {nx, ny, nz, axis, face_index, area, length, Dh, C, global_face_sign});
     }
 
-    void solve_pressures(int outer, int maxouter) {
-        if(pressure_method == "pcg") solve_pressures_pcg(outer, maxouter);
-        else                         solve_pressures_sor(outer, maxouter);
+    void solve_pressures() {
+        if(pressure_method == "pcg") solve_pressures_pcg();
+        else                         solve_pressures_sor();
     }
 
-    void solve_pressures_sor(int outer, int maxouter) {
+    void solve_pressures_sor() {
         for (int iter = 0; iter < max_pressure_iters; ++iter) {
             for (int x = 0; x < mesh.get_nx(); ++x) {
                 for (int y = 0; y < mesh.get_ny(); ++y) {
@@ -666,12 +666,12 @@ private:
             if (residual < pressure_tolerance) return;
         }
 
-        std::cerr << "FlowSolver: loop: " << outer + 1 << "/" << maxouter << " WARNING -- pressure solve reached "
+        std::cerr << "FlowSolver: WARNING -- pressure solve reached "
                   << max_pressure_iters << " iterations; residual = "
                   << max_mass_residual() << " m^3/s.\n";
     }
 
-    void solve_pressures_pcg(int outer, int maxouter) {
+    void solve_pressures_pcg() {
         const size_t n = mesh.get_cell_count();
         std::vector<double> x(n, 0.0), rhs(n, 0.0), residual(n, 0.0);
         std::vector<double> z(n, 0.0), direction(n, 0.0);
@@ -782,7 +782,7 @@ private:
             residual_max = max_abs_active(residual);
             if(residual_max < pressure_tolerance) {
                 write_pressures();
-                std::cout << "FlowSolver: loop: " << outer + 1 << "/" << maxouter << " PCG pressure converged after "
+                std::cout << "FlowSolver: PCG pressure converged after "
                           << iter + 1 << " iterations; residual = "
                           << residual_max << " m^3/s.\n";
                 return;

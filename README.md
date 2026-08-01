@@ -96,8 +96,28 @@ argument selects a different fan-curve library:
 The loader decides what happens from `[openfoam_solver].enabled`:
 
 - `false` or an omitted section runs the native explicit solver.
-- `true` exports a complete OpenFOAM case and prints the WSL commands needed
-  to prepare and run it.
+- `true` exports a complete OpenFOAM case and prints both the WSL solver command
+  and a platform-correct Python command that renders the latest reconstructed
+  temperature field to `temperature_latest.png` inside the case directory.
+
+### 2.1 Source layout
+
+The repository root contains the three supported C++ entry points:
+
+| File | Purpose |
+|---|---|
+| `main.cpp` | Direct construction and component experiments. |
+| `model_runner.cpp` | Production TOML loader for the native or OpenFOAM backend. |
+| `foam_main.cpp` | Direct C++ OpenFOAM export example and smoke case. |
+
+Shared implementation headers are under `src`, and loader-specific headers are
+under `src/input`. Tests remain under `tests`; plotting and estimation tools
+remain under `plot` and `tools`. The custom OpenFOAM application remains in
+`openfoam_semifrozen_solver` because OpenFOAM's `wmake` requires its local
+`Make/files` and `Make/options` layout.
+
+`temp_foam_regions` is disposable test/export workspace. Production cases
+should use the case directory selected in the model TOML.
 
 For a debug build:
 
@@ -108,6 +128,20 @@ g++ -std=c++17 -O0 -g -fopenmp .\model_runner.cpp -o model_debug.exe
 
 Use the optimized build for production runs. Flow and thermal loops touch every
 active cell many times, so optimization has a large effect.
+
+To compile and run the focused regression tests after changing the mesh,
+solver, exporter, loader, or plotting utilities:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\tests\run_added_feature_tests.ps1
+```
+
+The broader legacy unit suite is built from `src/test_runner.cpp`:
+
+```powershell
+g++ -std=c++17 -O2 -fopenmp .\src\test_runner.cpp -o test_runner.exe
+.\test_runner.exe
+```
 
 ## 3. Current advanced configuration
 
@@ -850,8 +884,8 @@ loader.run();
 Build and run it with:
 
 ```powershell
-g++ -std=c++17 -O3 -DNDEBUG .\main.cpp -o main
-.\main
+g++ -std=c++17 -O3 -DNDEBUG -fopenmp .\main.cpp -o main.exe
+.\main.exe
 ```
 
 To run a TOML model from `main.cpp`, replace the active loader block with:
@@ -1169,6 +1203,48 @@ Before each stage, the estimator reports:
 The time constant is a single lumped estimate. Real rack geometry contains
 multiple time constants, so the logger should still be used to verify that
 important temperatures have flattened.
+
+The estimator is intended to answer two setup questions before spending time
+on a long run:
+
+1. Is the requested duration long enough for the modeled thermal mass to react?
+2. Is the native explicit timestep stable on the mesh that was actually
+   stamped, including geometry-aligned cells smaller than the requested mesh
+   spacing?
+
+Its lumped thermal calculation is approximately:
+
+```text
+Cthermal = sum(rho * cp * solid volume)          [J/K]
+UA       = representative h * solid-air area    [W/K]
+tau      = Cthermal / UA                         [s]
+suggested duration = 5 * tau
+```
+
+`5*tau` is a starting duration at which a single first-order thermal mass would
+be more than 99% of the way toward equilibrium after a step in heat load. It is
+not a prediction of the final temperature, and it does not prove convergence.
+A rack has separate chip, chassis, internal-air, rack-air, and enclosure time
+constants. Use the component averages, hotspot history, and convergence reports
+from the actual run to decide whether the temperature field has flattened.
+
+For the native solver, `recommended_dt` is 80% of the smaller computed
+conduction and advection stability limits. When advection subcycling is active,
+the global thermal step may be selected from the conduction/convection limit
+while advection uses smaller internal substeps. For the OpenFOAM backend, the
+explicit stability recommendation is diagnostic only: the implicit solver and
+Courant controls choose their own steps. The `tau` and mesh/memory estimates are
+still useful for selecting screening duration, write intervals, airflow refresh
+intervals, and the eventual 18,000-second production horizon.
+
+The estimate is only as credible as the three inputs that feed the model:
+
+- material density and heat capacity determine thermal mass;
+- fan curves determine airflow and therefore the convective coefficient;
+- component/internal-region watts determine the applied heat load.
+
+Sections 19.1 and 19.2 provide repeatable utilities for converting fan
+datasheets and server power/temperature information into those model inputs.
 
 ## 9. Choosing practical settings
 
@@ -1578,11 +1654,24 @@ different library:
 ```
 
 When OpenFOAM is enabled, this command exports only; it does not launch WSL or
-the CFD solver. The final console output prints copy-ready WSL commands.
+the CFD solver. The final console output prints a copy-ready WSL solver command
+followed by a copy-ready visualization command. Run the visualization command
+after `run_parallel.sh` has reconstructed the latest saved time. It uses
+`plot/heat_animation.py`, overlays `geometry.txt`, selects a `y`-normal slice,
+reports temperatures in Celsius, and saves `temperature_latest.png` in the
+exported case. Other slices, times, interactive display, and output formats are
+documented in Section 17.2.
 
 `foam_main.cpp` is a direct C++ demonstration/export smoke case. It is useful
 for development, but the TOML-driven production entry point is
 `model_runner.cpp`.
+
+Build that direct demonstration with:
+
+```powershell
+g++ -std=c++17 -O3 -DNDEBUG -fopenmp .\foam_main.cpp -o foam_model.exe
+.\foam_model.exe "C:\OpenFOAM\thermal_sim_v2\basic_rack"
+```
 
 ### 16.2 Confirm OpenFOAM in WSL2
 
@@ -1865,7 +1954,7 @@ Useful views:
 Install plotting dependencies in the Python environment used from PowerShell:
 
 ```powershell
-python -m pip install pyvista matplotlib numpy
+python -m pip install pyvista matplotlib numpy imageio imageio-ffmpeg
 ```
 
 Plot the latest result with rack/component geometry overlaid:
@@ -1890,6 +1979,53 @@ python .\plot\heat_animation.py `
   --save
 ```
 
+Animate the complete 3D rack through all written OpenFOAM result times:
+
+```powershell
+python .\plot\heat_animation.py `
+  --format openfoam `
+  --case "C:\OpenFOAM\thermal_sim_v2\production_rack_screening" `
+  --animate `
+  --slice-axis none `
+  --opacity 0.35 `
+  --temperature-units C `
+  --fps 15 `
+  --skip 1 `
+  --output .\plot\screening_full_rack.mp4 `
+  --save
+```
+
+Use `--start-time 300 --end-time 18000` to restrict the inclusive time range.
+Use `--skip 5` for a quick preview containing every fifth written result. A
+`.gif` output name creates a GIF instead of MP4. The script scans the selected
+times before rendering so every frame uses one fixed temperature color scale;
+this prevents apparent temperature changes caused only by color-bar rescaling.
+The animation uses OpenFOAM's written time directories, not every internal
+solver time step, so its temporal resolution is controlled by the case's field
+write interval.
+
+Generate a convergence report from the same written results:
+
+```powershell
+python .\plot\heat_animation.py `
+  --format openfoam `
+  --case "C:\OpenFOAM\thermal_sim_v2\production_rack_screening" `
+  --convergence-report `
+  --temperature-units C `
+  --skip 1 `
+  --output .\plot\screening_temperature_convergence.png `
+  --save
+```
+
+This writes both a PNG chart and a CSV with the same base name. The chart shows
+fluid mean/maximum temperature, the rack-wide maximum, and each solid component
+region's mean and maximum temperature over time. Means are volume weighted when
+OpenFOAM cell volumes are available. The terminal summary reports each region's
+final mean and maximum plus the maximum-temperature change and rate since the
+previous written result. A small final rate is useful evidence of stabilization,
+but it should be evaluated over several output intervals rather than treated as
+an automatic proof of convergence.
+
 Select a specific time and physical slice coordinate:
 
 ```powershell
@@ -1910,12 +2046,17 @@ OpenFOAM plotting options:
 |---|---|
 | `--case` | Case directory; required for OpenFOAM input. |
 | `--time latest` | Latest available time, or provide a numeric time. |
+| `--animate` | Render a transient MP4/GIF from written OpenFOAM result times. |
+| `--convergence-report` | Save temperature-history PNG and CSV reports. |
+| `--start-time`, `--end-time` | Optional inclusive animation time range. |
 | `--rack` | Optional geometry report; defaults to `<case>/geometry.txt`. |
 | `--slice-axis x/y/z` | Slice normal. |
 | `--slice-axis none` | Render region surfaces instead of a slice. |
 | `--slice-position` | Physical coordinate of the slice; defaults to each region midpoint. |
 | `--temperature-units C/K` | Display units. |
 | `--opacity` | Geometry/field opacity. |
+| `--fps` | Animation playback frames per second. |
+| `--skip` | Animate every Nth written OpenFOAM result. |
 | `--stride` | Plot every Nth cell when a lighter visualization is needed. |
 | `--output` | Saved image path. |
 | `--save` | Save instead of opening the interactive window. |
@@ -2031,3 +2172,280 @@ and validating on the same data.
    mass flow, and fan operating points.
 9. Plot the final fields and archive the model TOML, profile, case log, and
    convergence state together.
+
+## 19. Fan-curve and component-watt utilities
+
+Two standard-library-only Python tools are provided under `tools`. Run either
+without data arguments for a short interactive prompt, or provide command-line
+arguments for a repeatable calculation.
+
+These tools form the model-calibration front end to the thermal estimator and
+solver:
+
+```text
+manufacturer fan plot/data points
+    -> tools/fan_curve_fitter.py
+    -> a, b, c in library/fan_curves/fan_curves.toml
+    -> pressure/flow operating point and convective cooling
+
+server wall power, efficiency, or calibrated temperature response
+    -> tools/heat_load_estimator.py
+    -> watts in a component or internal solid region TOML
+    -> qdot heat source in the stamped mesh
+
+material rho/cp + stamped volume + solid/air area
+    -> built-in ThermalTimeEstimator
+    -> estimated tau, starting duration, memory, and timestep guidance
+```
+
+The utilities produce copy-ready TOML rather than silently modifying the model
+library. This keeps the source measurement, fitting diagnostics, and engineering
+judgment visible during review. A useful project record is to save the raw fan
+points or server measurements beside the generated text, then copy only the
+reviewed TOML block into the appropriate library file.
+
+### 19.1 Fit fan-curve `a`, `b`, and `c`
+
+Thermal Sim uses:
+
+```text
+deltaP(Q) = a - b Q - c Q^2
+```
+
+where `Q` is m³/s and pressure is Pa. The fitter converts datasheet units,
+performs a least-squares quadratic fit, reports RMSE/R², and prints a TOML
+block for `library/fan_curves/fan_curves.toml`.
+
+The coefficients mean:
+
+- `a`: shutoff pressure at zero flow, in Pa;
+- `b`: linear pressure-drop coefficient, in Pa/(m³/s);
+- `c`: quadratic pressure-drop coefficient, in Pa/(m³/s)².
+
+The solver does not assume that the datasheet free-air CFM is the installed
+flow. It evaluates this pressure curve against rack, vent, and internal-system
+resistance to find the operating point. Consequently, an accurate curve affects
+both predicted mass flow and the convection used by the thermal calculation.
+
+Enter points directly from a CFM/Pa datasheet:
+
+```powershell
+python .\tools\fan_curve_fitter.py `
+  --name "my_server_fan" `
+  --rho-rated 1.2 `
+  --flow-unit cfm `
+  --pressure-unit pa `
+  --point 0,300 `
+  --point 100,260 `
+  --point 200,170 `
+  --point 300,0
+```
+
+Supported flow units are `m3/s`, `cfm`, `l/s`, and `m3/h`. Supported pressure
+units are `pa`, `kpa`, `inh2o`, and `mmh2o`.
+
+For a manufacturer graph measured in CFM and inches of water:
+
+```powershell
+python .\tools\fan_curve_fitter.py `
+  --name "datasheet_fan" `
+  --flow-unit cfm `
+  --pressure-unit inh2o `
+  --point 0,1.20 `
+  --point 100,1.05 `
+  --point 200,0.72 `
+  --point 300,0.00
+```
+
+Or provide a CSV:
+
+```csv
+flow,pressure
+0,1.20
+100,1.05
+200,0.72
+300,0.00
+```
+
+```powershell
+python .\tools\fan_curve_fitter.py `
+  --name "datasheet_fan" `
+  --flow-unit cfm `
+  --pressure-unit inh2o `
+  --csv .\fan_points.csv
+```
+
+Use at least three distinct flow values. More points are preferable because
+the fitted curve is less sensitive to errors introduced while reading pixels
+from a datasheet graph. If the tool warns that `b` or `c` is negative, inspect
+the points and verify that the fitted curve decreases over the actual fan
+operating range.
+
+After copying the printed block into the fan-curve library, reference it from
+a rack or internal fan:
+
+```toml
+curve = "datasheet_fan"
+```
+
+For traceability, save the complete fitting report while still displaying it:
+
+```powershell
+python .\tools\fan_curve_fitter.py `
+  --name "datasheet_fan" `
+  --flow-unit cfm `
+  --pressure-unit inh2o `
+  --csv .\fan_points.csv |
+  Tee-Object .\datasheet_fan_fit.txt
+```
+
+Keep `fan_points.csv` and `datasheet_fan_fit.txt` as calibration records. Copy
+the final `[[fan_curve]]` block printed at the bottom into
+`library/fan_curves/fan_curves.toml`. Check that the reported RMSE is small
+relative to the fan's pressure range, R-squared is close to one, `a` is close
+to the plotted shutoff pressure, and the fitted pressure decreases throughout
+the expected operating range.
+
+### 19.2 Estimate watts for an internal solid region
+
+This utility estimates the heat that belongs inside the CFD/thermal domain. It
+does not estimate IT workload from temperature alone. Prefer inputs in this
+order when available:
+
+1. measured whole-device wall power under the workload being modeled;
+2. DC load plus measured or specified PSU efficiency;
+3. steady temperature plus a calibrated total thermal resistance;
+4. transient temperature rise plus calibrated effective thermal mass and heat
+   loss.
+
+For a printable/fillable measurement worksheet, thermal-camera guidance,
+calibration sequence, and a reusable data-to-heat-load prompt, use
+`heat_load_characterization.txt` in the repository root. Fill one copy per
+device and operating condition, then use the commands below to convert the
+reviewed measurements into TOML watts.
+
+Wall power is usually the strongest rack-level heat estimate because almost all
+electrical energy consumed by a server becomes heat within the room. Subtract
+only energy that genuinely leaves the modeled domain in another form, such as
+power delivered to an external device outside the rack boundary.
+
+For measured wall/input power:
+
+```powershell
+python .\tools\heat_load_estimator.py `
+  --name "CPU and system board" `
+  --input-power-w 500 `
+  --exported-power-w 10
+```
+
+This estimates 490 W of heat because 10 W was explicitly identified as energy
+leaving the modeled device. For ordinary servers, nearly all wall power
+eventually becomes heat. Do **not** multiply measured wall power by PSU
+efficiency; PSU losses and delivered DC power both become heat.
+
+If only the DC load and PSU efficiency are known:
+
+```powershell
+python .\tools\heat_load_estimator.py `
+  --name "Server electronics" `
+  --dc-load-w 450 `
+  --efficiency 90
+```
+
+The tool first calculates wall power:
+
+```text
+wall power = DC load / efficiency
+heat = wall power - exported nonthermal power
+```
+
+Efficiency accepts either `0.90` or `90`.
+
+Temperature alone cannot uniquely determine watts. A steady temperature
+estimate requires a measured or calibrated total thermal resistance:
+
+```powershell
+python .\tools\heat_load_estimator.py `
+  --name "Calibrated electronics" `
+  --surface-c 60 `
+  --ambient-c 20 `
+  --thermal-resistance-k-per-w 0.20
+```
+
+This uses:
+
+```text
+heat = (surface temperature - ambient temperature) / thermal resistance
+```
+
+A transient warm-up estimate requires effective mass, specific heat, initial
+temperature, final temperature, and elapsed time:
+
+```powershell
+python .\tools\heat_load_estimator.py `
+  --name "Chassis thermal mass" `
+  --mass-kg 12 `
+  --specific-heat-j-kg-k 700 `
+  --start-c 25 `
+  --end-c 35 `
+  --duration-s 600
+```
+
+That calculation estimates the power stored in thermal mass:
+
+```text
+stored power = mass * specific heat * temperature rise / elapsed time
+```
+
+Add `--ambient-c` and `--thermal-resistance-k-per-w` to include an approximate
+heat-loss correction during the warm-up. The effective mass and resistance
+must be calibrated for credible results; a thermal-camera surface temperature
+by itself is not sufficient.
+
+When multiple complete methods are supplied, the tool prints them separately.
+Select the value written into the TOML snippet with, for example:
+
+```powershell
+--method electrical_input
+--method steady_temperature
+--method transient_temperature
+--method median
+```
+
+The result is a copy-ready starting block:
+
+```toml
+[[internal_regions]]
+name = "CPU and system board"
+state = "solid"
+watts = 490.0
+# Add position, size, and material tables below this block.
+```
+
+Save the complete calculation report for later calibration:
+
+```powershell
+python .\tools\heat_load_estimator.py `
+  --name "CPU and system board" `
+  --input-power-w 500 `
+  --exported-power-w 10 `
+  --method electrical_input |
+  Tee-Object .\cpu_system_board_heat_estimate.txt
+```
+
+Copy the printed `watts` value into either the reusable component file under
+`library/components` or the model's `[[components.internal_regions]]` entry.
+Use an internal solid region when the heat is localized to electronics inside a
+larger chassis. Use component-level watts only when distributing heat across the
+whole component is the intended approximation.
+
+After stamping/exporting, verify that the integrated heat-source report equals
+the requested watts. Then use a screening run to compare simulated surface or
+probe temperatures with any available thermal-camera or sensor measurements.
+Adjust uncertain watts, airflow curves, or thermal resistance one category at a
+time; otherwise several incorrect inputs can compensate for one another and
+produce a misleading temperature match.
+
+Do not also place the same watts on the outer component shell. Heat assigned
+to an internal solid region and heat assigned to the enclosing component are
+separate sources and would be added together.

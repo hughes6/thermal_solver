@@ -2,8 +2,8 @@
 #include <cmath>
 #include <iostream>
 
-#include "../mesh.hpp"
-#include "../solver.hpp"
+#include "../src/mesh.hpp"
+#include "../src/solver.hpp"
 
 static double energy(const Mesh& mesh) {
     double total = 0.0;

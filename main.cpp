@@ -5,30 +5,30 @@
 #include <iomanip>
 #include <cmath>
 
-#include "cell.hpp"
-#include "collision.hpp"
-#include "component.hpp"
-#include "environment.hpp"
-#include "fan.hpp"
-#include "flow_solver.hpp"
-#include "grapher.hpp"
-#include "mesh.hpp"
-#include "mesh_refinement_planner.hpp"
-#include "rack.hpp"
-#include "solver.hpp"
-#include "thermal_estimator.hpp"
-#include "unit_test.hpp"
-#include "vent.hpp"
-#include "workload.hpp"
-#include "input/model_loader.hpp"
+#include "src/cell.hpp"
+#include "src/collision.hpp"
+#include "src/component.hpp"
+#include "src/environment.hpp"
+#include "src/fan.hpp"
+#include "src/flow_solver.hpp"
+#include "src/grapher.hpp"
+#include "src/mesh.hpp"
+#include "src/mesh_refinement_planner.hpp"
+#include "src/rack.hpp"
+#include "src/solver.hpp"
+#include "src/thermal_estimator.hpp"
+#include "src/unit_test.hpp"
+#include "src/vent.hpp"
+#include "src/workload.hpp"
+#include "src/input/model_loader.hpp"
 
 
 int main(int argc, char* argv[]) {
 
 
   ComponentLoader loader;
-  loader.load_component("library/components/eaton_KVM.toml");
-  loader.run(); 
+  loader.load_component("library/components/eaton_2U_UPS.toml");
+  loader.run();
 
   // ModelLoader loader;
   // loader.load_fan_curves("library/components/fan_curves.toml");  
@@ -214,165 +214,165 @@ int main(int argc, char* argv[]) {
 
 
 
-// //---------------------------------------------
-// // adaptive mesh main
-// //---------------------------------------------
+//---------------------------------------------
+// adaptive mesh main
+//---------------------------------------------
 
-//   Environment env(30.0, 5800.0, 20.0, 1005.0, 0.02587, 0.000018, 0.71, 1.225);
-//   Workload load(1'000'000, 10'000'000, 1'000'000, 4);
+  Environment env(30.0, 5800.0, 20.0, 1005.0, 0.02587, 0.000018, 0.71, 1.225);
+  Workload load(1'000'000, 10'000'000, 1'000'000, 4);
   
-//   double dx = 0.04445;   // 1U
-//   double dy = 0.04445;   // 1U
-//   double dz = 0.04445/2.0;   // 1U
-//   double sim_length = 10.0; 
-//   double dt = 0.1;
-//   double mu = 1.8e-5;  // air at atmospheric pressure and temp
-//   double pr = 0.71;    // air at atmospheric pressure and temp
+  double dx = 0.04445;   // 1U
+  double dy = 0.04445;   // 1U
+  double dz = 0.04445/2.0;   // 1U
+  double sim_length = 10.0; 
+  double dt = 0.1;
+  double mu = 1.8e-5;  // air at atmospheric pressure and temp
+  double pr = 0.71;    // air at atmospheric pressure and temp
 
-//   Rack rack = Rack::from_rack_units(
-//       5.0,     // width  (5U)
-//       5.0,     // depth  (5U)
-//       10.0,    // height (10U)
-//       "rack"
-//   );  
+  Rack rack = Rack::from_rack_units(
+      5.0,     // width  (5U)
+      5.0,     // depth  (5U)
+      10.0,    // height (10U)
+      "rack"
+  );  
 
-//   rack.set_t(20);        // 68 F
-//   rack.set_cp(1005);     // cp of air
-//   rack.set_k(0.02587);   // k of air at 20 C
-//   rack.set_rho(1.225);   // density of air kg/m^3
+  rack.set_t(20);        // 68 F
+  rack.set_cp(1005);     // cp of air
+  rack.set_k(0.02587);   // k of air at 20 C
+  rack.set_rho(1.225);   // density of air kg/m^3
 
-//   Fan top_fan{
-//     "Top exhust", // name
-//     3.0,        // cfm
-//     0.1,          // diameter (m),
-//     {0.0, 0.0, 0.0}, // rectangular size
-//     {rack.get_width_m()/2, rack.get_depth_m()/2, rack.get_height_m()}, // m m m
-//     {0.0, 0.0, 1.0}, // velocity vector 0x 0y 1z air going up
-//     FlowType::Exhaust,
-//     ShapeType::Circular
-//   };
+  Fan top_fan{
+    "Top exhust", // name
+    3.0,        // cfm
+    0.1,          // diameter (m),
+    {0.0, 0.0, 0.0}, // rectangular size
+    {rack.get_width_m()/2, rack.get_depth_m()/2, rack.get_height_m()}, // m m m
+    {0.0, 0.0, 1.0}, // velocity vector 0x 0y 1z air going up
+    FlowType::Exhaust,
+    ShapeType::Circular
+  };
 
-//   Fan mid_fan{
-//     "mid intake", // name
-//     3.0,        // cfm
-//     0.0,          // diameter (m),
-//     {0.0, 0.1, 0.1}, // rectangular size
-//     {rack.get_width_m(), rack.get_depth_m()/2, rack.get_height_m() * 0.5}, // m m m center
-//     {-1.0, 0.0, 0.0}, // velocity vector 0x 0y 0z air going in
-//     FlowType::Intake,
-//     ShapeType::Rectangular
-//   };
+  Fan mid_fan{
+    "mid intake", // name
+    3.0,        // cfm
+    0.0,          // diameter (m),
+    {0.0, 0.1, 0.1}, // rectangular size
+    {rack.get_width_m(), rack.get_depth_m()/2, rack.get_height_m() * 0.5}, // m m m center
+    {-1.0, 0.0, 0.0}, // velocity vector 0x 0y 0z air going in
+    FlowType::Intake,
+    ShapeType::Rectangular
+  };
 
-//   Vent vent("Rack main vent", 
-//       {0.1, 0.0, 0.1},
-//       0.5,
-//       0.0,
-//       0.5,
-//       {rack.get_width_m()/2, 0.0, rack.get_height_m()*0.5},
-//       {0.0, 1.0, 0.0},
-//       VentShapeType::Rectangular
-//   );
-
-
-//   Component server1 = Component::from_rack_units(5.0, 5.0, 1.0, "S-1"); // u u u
-//   server1.set_coords_rack_units(0,0,1); // in in u
-//   server1.set_k_solid(200.0);    // W/(m·K)
-//   server1.set_cp(900.0);         // J/(kg·K)
-//   server1.set_rho_solid(2700.0); // kg/m^3
-//   server1.set_t(20.0);           // °C
-//   server1.set_watts(3000);      // W
-
-//   //component x y z  {0.22225, 0.22225, 0.04445} 
-//   InternalRegion air_channel("air channel", {server1.get_width_m() / 2.0, server1.get_depth_m(), server1.get_height_m()}, {0.0, 0.0, 0.0}); 
-//   server1.add_region(air_channel);
-
-//   InternalRegion metal_bar("metal bar", {server1.get_width_m() / 4.0, server1.get_depth_m() / 2.0, server1.get_height_m() / 2.0}, 
-//   {server1.get_width_m() / 4.0, server1.get_height_m() / 2.0, 0.0}, 897.0, 2170.0, 237.0, 200.0); 
-//   server1.add_region(metal_bar);
-
-//   //  Component server2 = Component::from_rack_units(8.75, 8.75, 10., "S-2"); // u in in
-//   //  server2.set_coords_rack_units(0,0,2); // in in u
-//   //  server2.set_k_solid(100.0);    // W/(m·K)
-//   //  server2.set_cp(400.0);         // J/(kg·K)
-//   //  server2.set_rho_solid(2100.0); // kg/m^3
-//   //  server2.set_t(90.0);           // °C
-//   //  server2.set_watts(10000);      // W
-
-//   server1.order_internal_regions();
-//   std::vector<Component> components = { server1 /*, server2 */ };
-//   std::vector<Fan> fans = { top_fan, mid_fan };
-//   std::vector<Vent> vents = { vent };
-
-//   CollisionChecker::check_all(components, fans, vents);
-
-//   Grapher grapher(rack, dx, dy, dz);
-//   grapher.add_component(server1);
-//   grapher.add_fan(top_fan);
-//   grapher.add_fan(mid_fan);
-//   grapher.add_vent(vent);
-//   grapher.stamp_components();
-//   grapher.stamp_fans();
-//   grapher.stamp_vents();
-//   grapher.export_to_file("output.txt");
-
-//   int update_flow_interval = 100;
-//   double resistivity = 4.5;
-//   double tolerance = 1e-9;
-//   int max_iterations = 2000;
-//   double sor_omega = 1.1;
-//   int max_outer_iterations = 20;
-//   double flow_tolerance = 1e-3;
-//   int otuput_interval = 25;
-
-//   double fine_dx = 0.02;
-//   double coarse_dx = 0.1;
-//   double margin = 0.08;
-//   const MeshRefinementPlan plan = MeshRefinementPlanner::plan(rack, components, fans, vents, fine_dx, coarse_dx, margin);
-//   Mesh mesh = Mesh().build_adaptive_mesh(rack, plan.dxs, plan.dys, plan.dzs, env, load);
-//   mesh.stamp_component_adaptive(server1);
-//   mesh.stamp_fan_adaptive(top_fan);
-//   mesh.stamp_fan_adaptive(mid_fan);
-//   mesh.stamp_vent_adaptive(vent);
-
-//   ThermalTimeEstimate estimate = ThermalTimeEstimator::estimate(mesh);
-//   std::cout << "\n\n\n";
-//   estimate.print();
-//   std::cout << "\n\n\n";
-
-//   Solver solver(mesh, dt, sim_length, false, otuput_interval, update_flow_interval, resistivity, tolerance, max_iterations, sor_omega, max_outer_iterations, flow_tolerance);
+  Vent vent("Rack main vent", 
+      {0.1, 0.0, 0.1},
+      0.5,
+      0.0,
+      0.5,
+      {rack.get_width_m()/2, 0.0, rack.get_height_m()*0.5},
+      {0.0, 1.0, 0.0},
+      VentShapeType::Rectangular
+  );
 
 
-//   LoggingConfig config;
+  Component server1 = Component::from_rack_units(5.0, 5.0, 1.0, "S-1"); // u u u
+  server1.set_coords_rack_units(0,0,1); // in in u
+  server1.set_k_solid(200.0);    // W/(m·K)
+  server1.set_cp(900.0);         // J/(kg·K)
+  server1.set_rho_solid(2700.0); // kg/m^3
+  server1.set_t(20.0);           // °C
+  server1.set_watts(3000);      // W
 
-//   config.output_directory = "simulation_output";
-//   config.field_interval = 100;
-//   config.summary_interval = 10;
-//   config.probe_interval = 1;
+  //component x y z  {0.22225, 0.22225, 0.04445} 
+  InternalRegion air_channel("air channel", {server1.get_width_m() / 2.0, server1.get_depth_m(), server1.get_height_m()}, {0.0, 0.0, 0.0}); 
+  server1.add_region(air_channel);
 
-//   config.field_variables = {LogVariable::Temperature, LogVariable::Pressure, LogVariable::VelocityX, LogVariable::VelocityY, LogVariable::VelocityZ};
+  InternalRegion metal_bar("metal bar", {server1.get_width_m() / 4.0, server1.get_depth_m() / 2.0, server1.get_height_m() / 2.0}, 
+  {server1.get_width_m() / 4.0, server1.get_height_m() / 2.0, 0.0}, 897.0, 2170.0, 237.0, 200.0); 
+  server1.add_region(metal_bar);
 
-//   config.summary_requests = {
-//         {"temperature_all", LogVariable::Temperature, CellSelection::All,
-//             true,   // minimum
-//             true,   // maximum
-//             true,   // average
-//             false,  // RMS
-//             true    // standard deviation
-//         },
-//         {"fluid_velocity", LogVariable::VelocityMagnitude, CellSelection::FluidOnly, true, true, true, true, true},
-//         {"fluid_pressure", LogVariable::Pressure, CellSelection::FluidOnly, true, true, true, false, true}
-//   };
+  //  Component server2 = Component::from_rack_units(8.75, 8.75, 10., "S-2"); // u in in
+  //  server2.set_coords_rack_units(0,0,2); // in in u
+  //  server2.set_k_solid(100.0);    // W/(m·K)
+  //  server2.set_cp(400.0);         // J/(kg·K)
+  //  server2.set_rho_solid(2100.0); // kg/m^3
+  //  server2.set_t(90.0);           // °C
+  //  server2.set_watts(10000);      // W
 
-//   config.probes = {
-//       {"rack_inlet", 0.22, 0.00, 0.3, {LogVariable::Temperature, LogVariable::Pressure, LogVariable::VelocityMagnitude}},
-//       {"rack_exhaust", 0.220, 0.22, 0.3, {LogVariable::Temperature, LogVariable::Pressure, LogVariable::VelocityMagnitude}}
-//   };
+  server1.order_internal_regions();
+  std::vector<Component> components = { server1 /*, server2 */ };
+  std::vector<Fan> fans = { top_fan, mid_fan };
+  std::vector<Vent> vents = { vent };
 
-//   SimulationLogger logger(config);
-//   logger.initialize(mesh);
+  CollisionChecker::check_all(components, fans, vents);
 
-//   solver.set_logger(logger);
-//   solver.solve();
-//   mesh.check_stamps();
-//   return 0;
+  Grapher grapher(rack, dx, dy, dz);
+  grapher.add_component(server1);
+  grapher.add_fan(top_fan);
+  grapher.add_fan(mid_fan);
+  grapher.add_vent(vent);
+  grapher.stamp_components();
+  grapher.stamp_fans();
+  grapher.stamp_vents();
+  grapher.export_to_file("output.txt");
+
+  int update_flow_interval = 100;
+  double resistivity = 4.5;
+  double tolerance = 1e-9;
+  int max_iterations = 2000;
+  double sor_omega = 1.1;
+  int max_outer_iterations = 20;
+  double flow_tolerance = 1e-3;
+  int otuput_interval = 25;
+
+  double fine_dx = 0.02;
+  double coarse_dx = 0.1;
+  double margin = 0.08;
+  const MeshRefinementPlan plan = MeshRefinementPlanner::plan(rack, components, fans, vents, fine_dx, coarse_dx, margin);
+  Mesh mesh = Mesh().build_adaptive_mesh(rack, plan.dxs, plan.dys, plan.dzs, env, load);
+  mesh.stamp_component_adaptive(server1);
+  mesh.stamp_fan_adaptive(top_fan);
+  mesh.stamp_fan_adaptive(mid_fan);
+  mesh.stamp_vent_adaptive(vent);
+
+  ThermalTimeEstimate estimate = ThermalTimeEstimator::estimate(mesh);
+  std::cout << "\n\n\n";
+  estimate.print();
+  std::cout << "\n\n\n";
+
+  Solver solver(mesh, dt, sim_length, false, otuput_interval, update_flow_interval, resistivity, tolerance, max_iterations, sor_omega, max_outer_iterations, flow_tolerance);
+
+
+  LoggingConfig config;
+
+  config.output_directory = "simulation_output";
+  config.field_interval = 100;
+  config.summary_interval = 10;
+  config.probe_interval = 1;
+
+  config.field_variables = {LogVariable::Temperature, LogVariable::Pressure, LogVariable::VelocityX, LogVariable::VelocityY, LogVariable::VelocityZ};
+
+  config.summary_requests = {
+        {"temperature_all", LogVariable::Temperature, CellSelection::All,
+            true,   // minimum
+            true,   // maximum
+            true,   // average
+            false,  // RMS
+            true    // standard deviation
+        },
+        {"fluid_velocity", LogVariable::VelocityMagnitude, CellSelection::FluidOnly, true, true, true, true, true},
+        {"fluid_pressure", LogVariable::Pressure, CellSelection::FluidOnly, true, true, true, false, true}
+  };
+
+  config.probes = {
+      {"rack_inlet", 0.22, 0.00, 0.3, {LogVariable::Temperature, LogVariable::Pressure, LogVariable::VelocityMagnitude}},
+      {"rack_exhaust", 0.220, 0.22, 0.3, {LogVariable::Temperature, LogVariable::Pressure, LogVariable::VelocityMagnitude}}
+  };
+
+  SimulationLogger logger(config);
+  logger.initialize(mesh);
+
+  solver.set_logger(logger);
+  solver.solve();
+  mesh.check_stamps();
+  return 0;
 }

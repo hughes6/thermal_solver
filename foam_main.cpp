@@ -4,16 +4,16 @@
 #include <string>
 #include <vector>
 
-#include "collision.hpp"
-#include "component.hpp"
-#include "environment.hpp"
-#include "fan.hpp"
-#include "grapher.hpp"
-#include "mesh.hpp"
-#include "openfoam_exporter.hpp"
-#include "rack.hpp"
-#include "vent.hpp"
-#include "workload.hpp"
+#include "src/collision.hpp"
+#include "src/component.hpp"
+#include "src/environment.hpp"
+#include "src/fan.hpp"
+#include "src/grapher.hpp"
+#include "src/mesh.hpp"
+#include "src/openfoam_exporter.hpp"
+#include "src/rack.hpp"
+#include "src/vent.hpp"
+#include "src/workload.hpp"
 
 int main(int argc, char* argv[]) {
     try {

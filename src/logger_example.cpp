@@ -1,9 +1,7 @@
 #include "logger.hpp"
 #include "solver.hpp"
 
-int main() {
-    Mesh mesh = /* build mesh */;
-
+void run_logger_example(Mesh& mesh, double dt, double simulation_length) {
     LoggingConfig config;
 
     config.output_directory =
@@ -88,12 +86,13 @@ int main() {
 
     Solver solver(
         mesh,
-        /* dt */,
-        /* simulation length */
+        dt,
+        simulation_length,
+        false,
+        100
     );
 
     solver.set_logger(logger);
-    solver.run();
+    solver.solve();
 
-    return 0;
 }

@@ -1536,6 +1536,48 @@ struct ModelLoader {
             std::replace(
                 launch_directory.begin(),launch_directory.end(),'\\','/');
 #endif
+            const std::filesystem::path visualization_script=
+                std::filesystem::absolute("plot/heat_animation.py");
+            const std::filesystem::path visualization_output=
+                absolute_case_directory/"temperature_latest_full_rack.png";
+            const std::filesystem::path animation_output=
+                absolute_case_directory/"temperature_full_rack.mp4";
+            const std::filesystem::path convergence_output=
+                absolute_case_directory/"temperature_convergence.png";
+            const auto shell_display_path=[](
+                const std::filesystem::path& path) {
+                std::string value=path.string();
+#ifdef _WIN32
+                std::replace(value.begin(),value.end(),'\\','/');
+#endif
+                return value;
+            };
+            const std::string visualization_script_display=
+                shell_display_path(visualization_script);
+            const std::string case_directory_display=
+                shell_display_path(absolute_case_directory);
+            const std::string visualization_output_display=
+                shell_display_path(visualization_output);
+            const std::string animation_output_display=
+                shell_display_path(animation_output);
+            const std::string convergence_output_display=
+                shell_display_path(convergence_output);
+            const auto command_quote=[](const std::string& value) {
+                std::string quoted="'";
+                for(const char character : value) {
+                    if(character=='\'') {
+#ifdef _WIN32
+                        quoted += "''";
+#else
+                        quoted += "'\\''";
+#endif
+                    } else {
+                        quoted += character;
+                    }
+                }
+                quoted += '\'';
+                return quoted;
+            };
             std::cout
                 << "OpenFOAM backend selected; case exported to "
                 << absolute_case_directory
@@ -1544,7 +1586,73 @@ struct ModelLoader {
                 << launch_directory << "' && ./run_parallel.sh "
                 << cfg.parallel_processes
                 << (cfg.use_multirate_thermal ? " --multirate " : " ")
-                << model.simulation.duration << '\n';
+                << model.simulation.duration << '\n'
+                << "Plot the latest temperature cut plane interactively "
+                   "(PowerShell or Git Bash):\n  "
+#ifdef _WIN32
+                << "python "
+#else
+                << "python3 "
+#endif
+                << command_quote(visualization_script_display)
+                << " --format openfoam --case "
+                << command_quote(case_directory_display)
+                << " --time latest --slice-axis y --temperature-units C\n"
+                << "Plot the complete 3D rack temperature field interactively "
+                   "(PowerShell or Git Bash):\n  "
+#ifdef _WIN32
+                << "python "
+#else
+                << "python3 "
+#endif
+                << command_quote(visualization_script_display)
+                << " --format openfoam --case "
+                << command_quote(case_directory_display)
+                << " --time latest --slice-axis none --opacity 0.35 "
+                   "--temperature-units C\n"
+                << "Save the complete 3D rack temperature plot to PNG "
+                   "(PowerShell or Git Bash):\n  "
+#ifdef _WIN32
+                << "python "
+#else
+                << "python3 "
+#endif
+                << command_quote(visualization_script_display)
+                << " --format openfoam --case "
+                << command_quote(case_directory_display)
+                << " --time latest --slice-axis none --opacity 0.35 "
+                   "--temperature-units C "
+                   "--output "
+                << command_quote(visualization_output_display)
+                << " --save\n"
+                << "Animate all written full-rack temperature results to MP4 "
+                   "(PowerShell or Git Bash):\n  "
+#ifdef _WIN32
+                << "python "
+#else
+                << "python3 "
+#endif
+                << command_quote(visualization_script_display)
+                << " --format openfoam --case "
+                << command_quote(case_directory_display)
+                << " --animate --slice-axis none --opacity 0.35 "
+                   "--temperature-units C --fps 15 --skip 1 --output "
+                << command_quote(animation_output_display)
+                << " --save\n"
+                << "Generate the temperature convergence PNG and CSV "
+                   "(PowerShell or Git Bash):\n  "
+#ifdef _WIN32
+                << "python "
+#else
+                << "python3 "
+#endif
+                << command_quote(visualization_script_display)
+                << " --format openfoam --case "
+                << command_quote(case_directory_display)
+                << " --convergence-report --temperature-units C --skip 1 "
+                   "--output "
+                << command_quote(convergence_output_display)
+                << " --save\n";
             return;
         }
 

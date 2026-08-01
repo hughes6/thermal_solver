@@ -5,21 +5,21 @@
 #include <iomanip>
 #include <cmath>
 
-#include "cell.hpp"
-#include "collision.hpp"
-#include "component.hpp"
-#include "environment.hpp"
-#include "fan.hpp"
-#include "flow_solver.hpp"
-#include "grapher.hpp"
-#include "mesh.hpp"
-#include "mesh_refinement_planner.hpp"
-#include "rack.hpp"
-#include "solver.hpp"
-#include "unit_test.hpp"
-#include "vent.hpp"
-#include "workload.hpp"
-#include "input/model_loader.hpp"
+#include "src/cell.hpp"
+#include "src/collision.hpp"
+#include "src/component.hpp"
+#include "src/environment.hpp"
+#include "src/fan.hpp"
+#include "src/flow_solver.hpp"
+#include "src/grapher.hpp"
+#include "src/mesh.hpp"
+#include "src/mesh_refinement_planner.hpp"
+#include "src/rack.hpp"
+#include "src/solver.hpp"
+#include "src/unit_test.hpp"
+#include "src/vent.hpp"
+#include "src/workload.hpp"
+#include "src/input/model_loader.hpp"
 
 
 int main(int argc, char* argv[]) {

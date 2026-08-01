@@ -7,8 +7,8 @@
 #include <iostream>
 #include <sstream>
 
-#include "../grapher.hpp"
-#include "../input/model_loader.hpp"
+#include "../src/grapher.hpp"
+#include "../src/input/model_loader.hpp"
 
 int main() {
     auto read_file=[](const std::filesystem::path& path) {
@@ -128,7 +128,7 @@ int main() {
         profile_model.replace(
             profile_at,default_profile.size(),selected_profile);
         const std::filesystem::path profile_path=
-            ".codex-foam-regions/"+profile_name+"_profile_model.toml";
+            "temp_foam_regions/"+profile_name+"_profile_model.toml";
         std::filesystem::create_directories(profile_path.parent_path());
         std::ofstream output(profile_path);
         output << profile_model;
@@ -163,7 +163,7 @@ int main() {
     ModelLoader unsafe_path_loader;
     unsafe_path_loader.load_model("library/tests/openfoam_model.toml");
     unsafe_path_loader.model.openfoam_solver.case_directory=
-        ".codex-foam-regions/unsafe case";
+        "temp_foam_regions/unsafe case";
     bool rejected_unsafe_path=false;
     try {
         unsafe_path_loader.run();
@@ -187,6 +187,12 @@ int main() {
         std::ofstream stale_thermal_streak(
             case_directory/".thermal_convergence_streak");
         stale_thermal_streak << "9\n";
+        std::ofstream stale_initial_airflow(
+            case_directory/".initial_airflow_converged");
+        stale_initial_airflow << "stale\n";
+        std::ofstream stale_refresh(
+            case_directory/".airflow_refresh_pending");
+        stale_refresh << "stale\n";
     }
     std::filesystem::create_directories(case_directory/"0.25");
     std::filesystem::create_directories(case_directory/"processor0");
@@ -199,6 +205,46 @@ int main() {
         "Run from a WSL terminal with:") != std::string::npos);
     assert(export_output.str().find(
         "./run_parallel.sh 2 --multirate 10") != std::string::npos);
+    assert(export_output.str().find(
+        "Plot the latest temperature cut plane interactively") !=
+        std::string::npos);
+    assert(export_output.str().find(
+        "Plot the complete 3D rack temperature field interactively") !=
+        std::string::npos);
+    assert(export_output.str().find(
+        "Save the complete 3D rack temperature plot to PNG") !=
+        std::string::npos);
+    assert(export_output.str().find(
+        "Animate all written full-rack temperature results to MP4") !=
+        std::string::npos);
+    assert(export_output.str().find(
+        "plot/heat_animation.py") != std::string::npos ||
+           export_output.str().find(
+        "plot\\heat_animation.py") != std::string::npos);
+    assert(export_output.str().find(
+        "--format openfoam --case") != std::string::npos);
+    assert(export_output.str().find(
+        "--time latest --slice-axis y --temperature-units C") !=
+        std::string::npos);
+    assert(export_output.str().find(
+        "--time latest --slice-axis none --opacity 0.35 "
+        "--temperature-units C") != std::string::npos);
+    assert(export_output.str().find(
+        "temperature_latest_full_rack.png") != std::string::npos);
+    assert(export_output.str().find(
+        "--animate --slice-axis none --opacity 0.35") !=
+        std::string::npos);
+    assert(export_output.str().find(
+        "temperature_full_rack.mp4") != std::string::npos);
+    assert(export_output.str().find(
+        "Generate the temperature convergence PNG and CSV") !=
+        std::string::npos);
+    assert(export_output.str().find(
+        "--convergence-report --temperature-units C --skip 1") !=
+        std::string::npos);
+    assert(export_output.str().find(
+        "temperature_convergence.png") != std::string::npos);
+    assert(export_output.str().find("--save") != std::string::npos);
 #ifdef _WIN32
     const std::size_t wsl_command=export_output.str().find("  cd '/mnt/");
     assert(wsl_command != std::string::npos);
@@ -207,6 +253,14 @@ int main() {
     assert(export_output.str().substr(
         wsl_command,wsl_command_end-wsl_command).find('\\') ==
         std::string::npos);
+    const std::size_t plot_command=export_output.str().find(
+        "  python '",wsl_command_end);
+    assert(plot_command != std::string::npos);
+    const std::size_t plot_command_end=
+        export_output.str().find('\n',plot_command);
+    assert(export_output.str().substr(
+        plot_command,plot_command_end-plot_command).find('\\') ==
+        std::string::npos);
 #endif
     assert(!std::filesystem::exists(
         case_directory/".openfoam_regions_prepared"));
@@ -214,6 +268,10 @@ int main() {
         case_directory/".thermal_convergence_state"));
     assert(!std::filesystem::exists(
         case_directory/".thermal_convergence_streak"));
+    assert(!std::filesystem::exists(
+        case_directory/".initial_airflow_converged"));
+    assert(!std::filesystem::exists(
+        case_directory/".airflow_refresh_pending"));
     assert(!std::filesystem::exists(case_directory/"0.25"));
     assert(!std::filesystem::exists(case_directory/"processor0"));
     assert(!std::filesystem::exists(case_directory/"postProcessing"));
@@ -257,6 +315,9 @@ int main() {
     assert(run_parallel.find("adaptive_initial_airflow") !=
            std::string::npos);
     assert(run_parallel.find("internal_fan_names") != std::string::npos);
+    assert(run_parallel.find("${#boundary_flow_names[@]} -eq 0") !=
+           std::string::npos);
+    assert(run_parallel.find("imbalance=0") != std::string::npos);
     assert(run_parallel.find("Properties") != std::string::npos);
     const std::size_t internal_fan_check=
         run_parallel.find("Internal fan not producing positive through-flow");

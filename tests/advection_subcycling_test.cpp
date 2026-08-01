@@ -2,7 +2,7 @@
 #include <cmath>
 #include <iostream>
 
-#include "../solver.hpp"
+#include "../src/solver.hpp"
 
 static Mesh make_mesh() {
     Environment env(30.0,0.0,20.0,1005.0,0.02587,

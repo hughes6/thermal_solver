@@ -3,13 +3,13 @@
 #include <cmath>
 #include <iostream>
 
-#include "../environment.hpp"
-#include "../fan.hpp"
-#include "../flow_solver.hpp"
-#include "../mesh.hpp"
-#include "../rack.hpp"
-#include "../vent.hpp"
-#include "../workload.hpp"
+#include "../src/environment.hpp"
+#include "../src/fan.hpp"
+#include "../src/flow_solver.hpp"
+#include "../src/mesh.hpp"
+#include "../src/rack.hpp"
+#include "../src/vent.hpp"
+#include "../src/workload.hpp"
 
 static Mesh make_case() {
     Environment env(

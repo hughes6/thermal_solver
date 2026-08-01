@@ -3,18 +3,13 @@ $ErrorActionPreference = "Stop"
 $tests = @(
     "pcg_flow_test",
     "advection_subcycling_test",
-<<<<<<< Updated upstream
-=======
-    "multithreading_test",
-    "openfoam_export_test",
->>>>>>> Stashed changes
     "face_wall_test",
     "model_config_test"
 )
 
 foreach ($test in $tests) {
     Write-Host "Building $test"
-    & g++ -std=c++17 -O2 -I . "tests/$test.cpp" -o "tests/$test.exe"
+    & g++ -std=c++17 -O2 -I src "tests/$test.cpp" -o "tests/$test.exe"
     if ($LASTEXITCODE -ne 0) {
         throw "Compilation failed: $test"
     }
@@ -31,7 +26,13 @@ Write-Host "Checking Python plotting scripts"
     "plot/heat_animation.py" `
     "plot/coarse_heat_animation.py" `
     "plot/coarse_heat_io.py" `
-    "tests/coarse_heat_io_test.py"
+    "plot/plot.py" `
+    "tools/fan_curve_fitter.py" `
+    "tools/heat_load_estimator.py" `
+    "tests/coarse_heat_io_test.py" `
+    "tests/engineering_tools_test.py" `
+    "tests/plot_geometry_test.py" `
+    "tests/openfoam_animation_test.py"
 if ($LASTEXITCODE -ne 0) {
     throw "Python plotting syntax check failed"
 }
@@ -39,6 +40,21 @@ if ($LASTEXITCODE -ne 0) {
 & python "tests/coarse_heat_io_test.py"
 if ($LASTEXITCODE -ne 0) {
     throw "Coarse heat input tests failed"
+}
+
+& python "tests/engineering_tools_test.py"
+if ($LASTEXITCODE -ne 0) {
+    throw "Engineering utility tests failed"
+}
+
+& python "tests/plot_geometry_test.py"
+if ($LASTEXITCODE -ne 0) {
+    throw "Plot geometry tests failed"
+}
+
+& python "tests/openfoam_animation_test.py"
+if ($LASTEXITCODE -ne 0) {
+    throw "OpenFOAM animation tests failed"
 }
 
 Write-Host "All added-feature tests passed."
