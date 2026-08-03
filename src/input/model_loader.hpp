@@ -182,9 +182,9 @@ namespace {
 
         const toml::array* internal_regions = table["internal_regions"].as_array();
 
-        if(internal_regions == nullptr) {
-            throw std::runtime_error("internal_regions[...] must be a table");
-        }
+        // A homogeneous component is valid without internal regions. Its
+        // outer material and watts describe the complete solid volume.
+        if(internal_regions == nullptr) return component;
 
         std::size_t index = 0;
 

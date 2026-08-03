@@ -64,6 +64,12 @@ int main() {
     assert(!legacy_loader.model.openfoam_solver.enabled);
     assert(!legacy_loader.model.openfoam_solver.template_file.has_value());
 
+    ModelLoader homogeneous_loader;
+    homogeneous_loader.load_model(
+        "library/tests/minimal_geometry_repro.toml");
+    assert(homogeneous_loader.model.components.size() == 1);
+    assert(homogeneous_loader.model.components[0].internal_regions.empty());
+
     ModelLoader foam_loader;
     foam_loader.load_model("library/tests/openfoam_model.toml");
 #ifdef _WIN32
