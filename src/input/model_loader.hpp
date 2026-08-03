@@ -1033,7 +1033,7 @@ struct ModelLoader {
         return inserted->second;
     }
 
-    void run() 
+    void run(bool geometry_only = false)
     {
         Workload load = Workload(model.simulation.max_timesteps, model.simulation.max_updates, model.simulation.max_cell_count, model.simulation.max_megabyte_usage);
         Environment env(model.environment.humidity, model.environment.elevation, model.environment.T_ambient, 
@@ -1245,14 +1245,14 @@ struct ModelLoader {
         std::optional<Mesh> coarse_warm_start;
         std::optional<ThermalTimeEstimate> coarse_thermal_estimate;
         std::size_t coarse_timestep_count = 0;
-        if (model.multistage.enabled && !model.openfoam_solver.enabled) {
+        if (model.multistage.enabled && !model.openfoam_solver.enabled &&
+            !geometry_only) {
             std::cout << "----- Coarse warm-start stage -----\n";
             const MeshInput& coarse_cfg = model.multistage.coarse_mesh;
             const MeshRefinementPlan coarse_plan = MeshRefinementPlanner::plan(
                 rack, components, fans, vents,
                 coarse_cfg.fine_dx, coarse_cfg.coarse_dx,
-                coarse_cfg.refinement_margin,
-                false); // omit thin internal cuts on the warm-start grid
+                coarse_cfg.refinement_margin);
 
             Mesh coarse_mesh = Mesh().build_adaptive_mesh(
                 rack, coarse_plan.dxs, coarse_plan.dys, coarse_plan.dzs,
@@ -1785,6 +1785,11 @@ struct ModelLoader {
         grapher.stamp_fans();
         grapher.stamp_vents();
         grapher.export_to_file("output.txt");
+        if(geometry_only) {
+            std::cout << "Geometry-only mode: wrote output.txt; transient "
+                         "solver was not run.\n";
+            return;
+        }
         if(model.flow_solver.enable_flow_solver) {
             FlowSolver flow_solver(mesh, *model.flow_solver.resistivity, *model.flow_solver.tolerance, *model.flow_solver.max_iterations, 
                                 *model.flow_solver.sor_omega, *model.flow_solver.max_outer_iters, *model.flow_solver.flow_tolerance,

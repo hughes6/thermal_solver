@@ -100,6 +100,25 @@ The loader decides what happens from `[openfoam_solver].enabled`:
   and a platform-correct Python command that renders the latest reconstructed
   temperature field to `temperature_latest.png` inside the case directory.
 
+To override an OpenFOAM-enabled model for one run and use the native solver
+without editing its TOML, pass `--native`:
+
+```powershell
+.\model_runner.exe --native
+```
+
+This writes the normal native `output.txt` and simulation CSV files and does
+not access the configured OpenFOAM case directory.
+
+If only the geometry report is needed, skip both transient solvers:
+
+```powershell
+.\model_runner.exe --geometry-only
+```
+
+This writes `output.txt` without accessing OpenFOAM or running the coarse and
+fine thermal simulations.
+
 ### 2.1 Source layout
 
 The repository root contains the three supported C++ entry points:
