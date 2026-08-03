@@ -1,0 +1,155 @@
+THERMAL DESKTOP VALIDATION MODEL
+================================
+
+Purpose
+-------
+Use this model to validate the solver's transient energy conservation and
+solid-temperature response for the minimal rack case.
+
+This is a sealed transient model, not a steady-state model. With a 1000 W heat
+source and no fan, vent, or external heat sink, the temperature must continue
+to rise. A steady solution is physically impossible.
+
+
+Geometry
+--------
+Rack:
+  Width:  0.5 m
+  Depth:  0.5 m
+  Height: 1.0 m
+  Origin: (0.0, 0.0, 0.0) m
+
+Aluminum block:
+  Width:  0.5 m
+  Depth:  0.5 m
+  Height: 0.2 m
+  Origin: (0.0, 0.0, 0.4) m
+  Heat load: 1000 W total
+
+Because the block spans the complete rack width and depth, it divides the rack
+air into two separate volumes:
+
+  Lower air volume: 0.5 x 0.5 x 0.4 m
+  Upper air volume: 0.5 x 0.5 x 0.4 m
+
+
+Thermal Desktop setup
+---------------------
+1. Create the aluminum block as a finite-difference or finite-element solid.
+
+2. Assign the same aluminum properties used by the thermal-solver TOML:
+
+     Density:         2700 kg/m^3
+     Specific heat:    900 J/kg-K
+     Conductivity:      205 W/m-K, or the exact TOML value
+
+3. Apply 1000 W to the complete aluminum solid. This is a total heat load, not
+   a volumetric value of 1000 W/m^3.
+
+4. Set the initial temperature of the block and air to 20 degC, or exactly the
+   same initial temperature used in the thermal-solver model.
+
+5. Leave the rack exterior adiabatic for the basic energy-conservation test.
+   Do not apply an ambient sink unless the identical boundary condition is
+   added to the thermal-solver model.
+
+6. For a conduction-only comparison, represent the upper and lower air spaces
+   using air material volumes and connect their faces to the aluminum block.
+
+7. For a natural-convection comparison, use FloCAD or a documented convection
+   correlation. A lumped convection network will not reproduce a complete 3-D
+   buoyant CFD field, so compare bulk temperatures and heat balances before
+   comparing local temperatures.
+
+8. Use approximately the same spatial resolution as the thermal-solver case.
+   Perform a mesh-refinement comparison in both programs before comparing
+   localized maximum temperatures.
+
+9. Run a transient solution for 600 seconds with results saved every 10 seconds.
+
+
+Analytical energy benchmark
+---------------------------
+Aluminum volume:
+
+  V = 0.5 x 0.5 x 0.2 = 0.05 m^3
+
+Aluminum mass:
+
+  m = 0.05 x 2700 = 135 kg
+
+Aluminum thermal capacitance:
+
+  C = 135 x 900 = 121,500 J/K
+
+For an adiabatic block with a uniform 1000 W load:
+
+  dT/dt = 1000 / 121,500
+        = 0.008230 K/s
+        = 0.4938 K/min
+        = 29.63 K/hour
+
+After 600 seconds:
+
+  delta T = 4.938 degC
+  average block temperature = approximately 24.938 degC
+
+The air adds a small amount of thermal capacitance. For 0.20 m^3 of air at
+rho = 1.225 kg/m^3 and cp = 1005 J/kg-K:
+
+  C_air = 0.20 x 1.225 x 1005 = 246.2 J/K
+
+The combined idealized heating rate is then:
+
+  dT/dt = 1000 / (121,500 + 246.2) = 0.008214 K/s
+
+This gives an approximately uniform-energy temperature rise of 4.928 degC
+after 600 seconds. Local solid and air temperatures will differ while heat is
+being redistributed, but total stored energy must still balance.
+
+
+Quantities to compare
+---------------------
+Compare these results between Thermal Desktop and the thermal solver:
+
+  1. Integrated heat input: exactly 1000 W.
+  2. Volume-weighted average aluminum temperature versus time.
+  3. Total stored-energy increase versus time.
+  4. Minimum and maximum aluminum temperatures.
+  5. Aluminum center temperature.
+  6. Temperatures at the upper and lower aluminum faces.
+  7. Total energy residual.
+
+For an adiabatic model, the primary conservation check is:
+
+  E(t) - E(0) = 1000 x t joules
+
+Start by validating total power, stored energy, and volume-averaged
+temperature. Only compare cell-level temperature fields after those integral
+quantities agree.
+
+
+Optional steady-state validation
+--------------------------------
+To create a steady-state benchmark, add an explicit and identical heat sink to
+both models. Suitable choices include:
+
+  - Hold all rack exterior faces at 20 degC; or
+  - Apply the same external convection coefficient and ambient temperature to
+    the same rack faces.
+
+Document the selected face areas, convection coefficient, ambient temperature,
+contact conductance, and radiation assumptions. Without an external heat sink,
+the 1000 W model must not converge to a fixed temperature.
+
+
+Thermal Desktop references
+--------------------------
+Thermal Desktop overview:
+  https://www.crtech.com/products/thermal-desktop
+
+SINDA/FLUINT capabilities:
+  https://www.crtech.com/products/sindafluint
+
+CRTech guides and manuals:
+  https://www.crtech.com/guides-and-manuals
