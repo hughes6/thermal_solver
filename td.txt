@@ -153,3 +153,475 @@ SINDA/FLUINT capabilities:
 
 CRTech guides and manuals:
   https://www.crtech.com/guides-and-manuals
+
+
+DETAILED BUILD PROCEDURE
+========================
+
+The exact ribbon/menu wording varies between Thermal Desktop releases. In most
+releases the commands are under Thermal > FD/FEM Network, the Model Browser,
+or the Case Set/Case Manager. Use the installed Thermal Desktop and
+SINDA/FLUINT manuals for the labels in your release. The modeling decisions,
+dimensions, units, loads, and comparison requirements below do not depend on
+the interface version.
+
+
+Step 1 - Freeze the validation question
+---------------------------------------
+Before drawing anything, record the purpose of the case. The first comparison
+should answer only these questions:
+
+  - Does each program apply exactly 1000 W?
+  - Does each program conserve 1000*t joules in an adiabatic transient?
+  - Does the volume-averaged aluminum temperature rise at the expected rate?
+  - Do both programs use the same initial temperature and material properties?
+
+Do not add radiation, external convection, temperature-dependent properties,
+contact resistance, fans, vents, or natural-convection correlations to the
+first case. Each extra mechanism makes it harder to identify the source of a
+difference.
+
+Create a short case-identification table and keep it with the results:
+
+  Case name:                 ADIABATIC_AL_1000W
+  Unit system:               SI (m, kg, s, W, J, K)
+  Initial temperature:       20 degC = 293.15 K
+  Rack dimensions:           0.5 x 0.5 x 1.0 m
+  Aluminum origin:           (0.0, 0.0, 0.4) m
+  Aluminum dimensions:       0.5 x 0.5 x 0.2 m
+  Aluminum total heat:       1000 W
+  Exterior boundary:         adiabatic
+  Solution type:             transient
+  End time:                  600 s
+  Result interval:           10 s
+
+Thermal Desktop and the thermal solver may display Celsius, but absolute
+temperature inputs are often stored in kelvin internally. Confirm that an
+entered 20 degC is displayed as 20 degC, not -253.15 degC or 293.15 degC.
+
+
+Step 2 - Create a clean Thermal Desktop model
+---------------------------------------------
+1. Start a new Thermal Desktop drawing/model rather than modifying an existing
+   spacecraft or electronics model. This avoids inherited symbols, radiation
+   groups, contactors, heaters, and Case Set overrides.
+
+2. Set the drawing/model unit convention to SI. Confirm that a line entered as
+   0.5 measures 0.5 m in Thermal Desktop. Some AutoCAD templates use mm or
+   inches even when material properties are SI.
+
+3. Create a dedicated thermal submodel, for example VALIDATION. Put every
+   node, conductor, heat load, and boundary condition for this test in that
+   submodel.
+
+4. Create Symbols for inputs if desired:
+
+     RACK_W     = 0.5 m
+     RACK_D     = 0.5 m
+     RACK_H     = 1.0 m
+     BLOCK_H    = 0.2 m
+     BLOCK_Z    = 0.4 m
+     BLOCK_Q    = 1000 W
+     T_INITIAL  = 293.15 K
+     T_END      = 600 s
+
+   Symbols are optional for one case but reduce transcription mistakes when
+   the mesh or boundary condition is changed later.
+
+5. Save the untouched starting file, then save the working copy with a name
+   such as ADIABATIC_AL_1000W.dwg. Do not reuse the same result database for
+   materially different boundary-condition cases.
+
+
+Step 3 - Decide what the rack means
+-----------------------------------
+The thermal-solver rack in this test is a computational domain, not a stated
+sheet-metal enclosure. Therefore, do not automatically create aluminum rack
+walls in Thermal Desktop. Adding wall mass or wall conduction would create a
+different physical model.
+
+For the first validation case, represent the rack boundary as six geometric
+reference faces or a nonparticipating wireframe box:
+
+  x = 0.0 m and x = 0.5 m
+  y = 0.0 m and y = 0.5 m
+  z = 0.0 m and z = 1.0 m
+
+These faces locate the air/domain boundaries. They should not have thermal
+capacitance, conductivity, a fixed temperature, convection, or radiation in
+the adiabatic case.
+
+Check the rack box:
+
+  - Minimum corner is (0, 0, 0) m.
+  - Maximum corner is (0.5, 0.5, 1.0) m.
+  - Width is along global x.
+  - Depth is along global y.
+  - Height is along global z.
+
+If Thermal Desktop displays another axis as vertical, do not rotate the
+numeric model merely to make the view look conventional. The coordinates must
+match the thermal-solver x/y/z convention.
+
+
+Step 4 - Create the aluminum block
+----------------------------------
+Use a Thermal Desktop finite-difference solid or a TD Direct finite-element
+solid. A parameterized FD brick is easiest for this rectangular benchmark.
+
+1. Create a rectangular solid with minimum corner:
+
+     x = 0.0 m
+     y = 0.0 m
+     z = 0.4 m
+
+2. Set its dimensions:
+
+     x length = 0.5 m
+     y length = 0.5 m
+     z length = 0.2 m
+
+3. Verify the maximum corner is (0.5, 0.5, 0.6) m.
+
+4. Assign it to submodel VALIDATION and give it an unmistakable name such as
+   AL_BLOCK.
+
+5. Start with a structured mesh. A useful first mesh is:
+
+     Nx = 10
+     Ny = 10
+     Nz = 4
+
+   This produces nominal 0.05 m cells in every direction and 400 solid nodes
+   or elements, depending on the selected FD/FEM formulation. If the thermal
+   solver uses another mesh, match its block-plane cuts as closely as possible.
+
+6. Confirm that the generated mesh covers the complete solid and that no node
+   lies outside z = 0.4 to 0.6 m.
+
+7. Confirm the modeled solid volume from Thermal Desktop's object or mesh
+   information:
+
+     expected volume = 0.050000 m^3
+
+   A different volume means the units, dimensions, or element thickness are
+   wrong. Do not proceed until the volume matches.
+
+
+Step 5 - Define and verify aluminum properties
+----------------------------------------------
+Create a dedicated material instead of relying on a similarly named library
+entry. Name it AL_VALIDATION_CONSTANT and enter constant properties:
+
+  Density, rho:             2700 kg/m^3
+  Specific heat, cp:         900 J/kg-K
+  Thermal conductivity, k:   205 W/m-K
+
+If the TOML uses a conductivity other than 205 W/m-K, use the TOML value in
+both programs. Do not use temperature-dependent aluminum data in one program
+and constants in the other.
+
+After assigning the material, verify these derived values:
+
+  Solid volume:             0.05 m^3
+  Solid mass:               135 kg
+  Solid thermal capacity:   121,500 J/K
+
+Thermal Desktop may report capacitance per node rather than one total. Sum all
+AL_BLOCK nodal capacitances and verify the result is 121,500 J/K, allowing
+only normal roundoff. If it is off by factors of 1000, check whether the model
+uses mm while density and conductivity are entered in m-based units.
+
+
+Step 6 - Apply the 1000 W heat load
+-----------------------------------
+1. Choose the command for a heat load applied to solids/elements, commonly
+   Thermal > FD/FEM Network > Heat Load on Solids.
+
+2. Select only AL_BLOCK. Do not select rack reference faces or air volumes.
+
+3. Set the load type to a total/distributed heat load whose integrated value
+   is 1000 W.
+
+4. If the interface instead requests volumetric generation, enter:
+
+     q''' = 1000 W / 0.05 m^3 = 20,000 W/m^3
+
+   Never enter 1000 W/m^3; that would apply only 50 W to this block.
+
+5. Make the load active from t = 0 through t = 600 s. Do not apply a ramp for
+   the first case unless the thermal-solver heat source uses the same ramp.
+
+6. Give the load a name such as Q_AL_BLOCK_1000W.
+
+7. Use Thermal Desktop's model check, object summary, generated SINDA input,
+   or heat-load report to confirm the sum of all active loads is exactly
+   +1000 W. Ensure the load is not applied once per selected element as 1000 W
+   per element.
+
+
+Step 7 - Choose the air representation
+--------------------------------------
+Three levels of validation are possible. Run them in order rather than mixing
+them into one first case.
+
+Level A: aluminum-only energy check
+  Do not create air thermal nodes. The block is completely adiabatic and has
+  uniform internal generation. This is the cleanest check of heat, mass,
+  capacitance, transient time, and units.
+
+Level B: stationary air conduction check
+  Create two air FD/FEM volumes:
+
+    AIR_LOWER: origin (0,0,0),   size 0.5 x 0.5 x 0.4 m
+    AIR_UPPER: origin (0,0,0.6), size 0.5 x 0.5 x 0.4 m
+
+  Use exactly the thermal-solver air density, cp, and conductivity. Connect
+  the z = 0.4 lower-air face to the block bottom and the z = 0.6 upper-air
+  face to the block top. Use matched nodes or an ideal geometric contactor so
+  no arbitrary contact resistance is introduced. This level tests conduction
+  and capacity, not buoyancy.
+
+Level C: natural convection/fluid check
+  Use FloCAD or a documented fluid/convection network. Define gravity along
+  global -z, use the same air properties, and document the convection model.
+  A FloCAD network is a reduced-order model and should not be expected to
+  reproduce the exact 3-D CFD temperature field. Compare bulk temperatures,
+  energy balance, and total block-to-air heat before local cell values.
+
+The block fills the entire x-y cross-section. Therefore AIR_LOWER and
+AIR_UPPER are not connected around its sides. Do not add a flow path between
+them unless the thermal-solver geometry includes a clearance or opening.
+
+
+Step 8 - Apply boundary conditions
+----------------------------------
+For ADIABATIC_AL_1000W:
+
+  - No fixed-temperature nodes.
+  - No convection to an ambient node.
+  - No radiation conductors or RadCAD calculation.
+  - No contact to an unmodeled rack wall.
+  - No heater controller or thermostat.
+
+An omitted thermal connection is the adiabatic condition. Do not create a
+20 degC boundary merely because the initial temperature is 20 degC. Initial
+temperature and fixed boundary temperature are different concepts.
+
+Run Thermal Desktop's model checks and inspect for unintended conductors to
+boundary or arithmetic nodes. The only energy entering Level A should be the
+1000 W heat load.
+
+
+Step 9 - Configure the transient SINDA/FLUINT case
+--------------------------------------------------
+1. Create a transient Case Set/case named ADIABATIC_AL_1000W_TRANSIENT.
+
+2. Select the transient solution option rather than steady state.
+
+3. Set initial temperature for every AL_BLOCK node to:
+
+     20 degC, or 293.15 K
+
+4. Set start time to 0 s and end time to 600 s.
+
+5. Request saved/printed results at least every 10 s. The numerical integration
+   timestep and result-output interval are not the same setting.
+
+6. For the first Level A run, choose a conservative maximum integration step,
+   for example 1 s. Repeat with 0.5 s or tighter tolerances to demonstrate
+   that the temperature result is insensitive to solver controls.
+
+7. Use the normal SINDA/FLUINT transient solver and default robust convergence
+   controls unless the installed manual recommends otherwise for the chosen
+   FD/FEM object.
+
+8. Disable inherited Case Set overrides that activate other heat loads,
+   conductors, radiation tasks, or boundary nodes.
+
+9. Generate the SINDA/FLUINT input and inspect the execution summary before
+   accepting the run. Confirm:
+
+     total AL_BLOCK capacitance = 121,500 J/K
+     active heat input          = 1000 W
+     initial temperature        = 293.15 K
+     final requested time       = 600 s
+
+
+Step 10 - Run and inspect solver health
+---------------------------------------
+Run the Thermal Desktop/SINDA case and retain the solver output file. A valid
+Level A run should have no singular-network error, no uncontrolled node, no
+negative capacitance, and no timestep collapse.
+
+At selected times, the ideal aluminum-only average temperature is:
+
+  t =   0 s: 20.0000 degC
+  t =  10 s: 20.0823 degC
+  t =  60 s: 20.4938 degC
+  t = 300 s: 22.4691 degC
+  t = 600 s: 24.9383 degC
+
+Because the load and initial temperature are spatially uniform and every face
+is adiabatic, all AL_BLOCK nodes should remain nearly identical in Level A.
+Large node-to-node differences indicate a nonuniform load, unintended boundary
+condition, incorrect initial temperature, or mesh/property assignment error.
+
+
+Step 11 - Create result outputs
+-------------------------------
+Create and export the following Thermal Desktop results:
+
+1. Volume- or capacitance-weighted average temperature of AL_BLOCK versus time.
+   Do not use a simple node average if nodal volumes differ.
+
+2. Minimum and maximum AL_BLOCK temperature versus time.
+
+3. Center temperature near (0.25, 0.25, 0.5) m.
+
+4. Total applied heat versus time.
+
+5. Total stored energy or the sum of nodal capacitance times temperature
+   change:
+
+     delta E = sum_i C_i [T_i(t) - T_i(0)]
+
+6. A CSV/table containing time, average temperature, minimum temperature,
+   maximum temperature, heat input, and stored energy.
+
+Use kelvin differences or Celsius differences consistently; a temperature
+difference of 1 K equals a difference of 1 degC.
+
+
+Step 12 - Export matching thermal-solver results
+------------------------------------------------
+From the thermal solver, collect at the same result times:
+
+  - Integrated qdot over the block volume.
+  - Volume-weighted block temperature.
+  - Block minimum and maximum temperature.
+  - Block-center temperature.
+  - Total energy change of all modeled materials.
+
+For cell-centered data, compute the block average as:
+
+  T_avg = sum(T_i * V_i) / sum(V_i)
+
+For temperature-dependent density or cp, compare energy directly rather than
+assuming one constant bulk capacitance.
+
+
+Step 13 - Numerical acceptance criteria
+---------------------------------------
+Use explicit acceptance limits so visual similarity is not mistaken for
+validation. Suggested Level A criteria are:
+
+  Geometry volume error:       <= 0.01 percent
+  Applied heat error:          <= 0.01 percent
+  Total capacitance error:     <= 0.01 percent
+  Stored energy error at 600s: <= 0.10 percent
+  Average temperature error:   <= 0.02 degC
+  TD min-to-max spread:        <= 0.01 degC
+  Solver min-to-max spread:    consistent with its discretization
+
+Energy residual for either program can be reported as:
+
+  residual = [delta E - integral(Q_in - Q_out)dt]
+             / integral(abs(Q_in) + abs(Q_out))dt
+
+For the adiabatic constant-load case, Q_out = 0 and the denominator is
+1000*t.
+
+
+Step 14 - Mesh and timestep convergence
+---------------------------------------
+After the baseline agrees, repeat at three resolutions. For example:
+
+  Coarse block mesh:  5 x 5 x 2
+  Baseline mesh:     10 x 10 x 4
+  Fine block mesh:   20 x 20 x 8
+
+For Level A, average temperature should be essentially mesh independent. For
+Levels B and C, compare average and peak temperatures and the block-to-air heat
+rate. Treat a localized peak as resolved only when refinement changes it by an
+acceptably small amount.
+
+Repeat the transient with smaller maximum timesteps or tighter SINDA controls.
+The 600-second average temperature should remain within the selected tolerance.
+
+
+Step 15 - Add a steady-state benchmark only after transient validation
+-----------------------------------------------------------------------
+The original sealed case cannot reach steady state. To create a second,
+steady-state benchmark, define an identical sink in both programs.
+
+Simple fixed-wall option:
+  Hold selected rack boundary faces at exactly 20 degC. Record which faces are
+  fixed and ensure the same geometric faces are fixed in both models.
+
+External-convection option:
+  Apply the same ambient temperature and heat-transfer coefficient to the same
+  rack areas in both programs. Record:
+
+    ambient temperature
+    convection coefficient
+    wetted area
+    wall material and thickness, if any
+    contact resistance
+    radiation emissivity and surroundings, if radiation is enabled
+
+Do not compare a Thermal Desktop fixed-temperature wall against a thermal
+solver adiabatic wall or convection boundary. Those are different problems.
+
+
+Troubleshooting checklist
+-------------------------
+If the final average is too low:
+  - Verify 1000 W is total heat, not 1000 W/m^3.
+  - Check for an unintended 20 degC boundary or ambient conductor.
+  - Check whether radiation was left active.
+  - Verify the model did not add rack-wall thermal mass.
+
+If the final average is too high:
+  - Check for a duplicated 1000 W load.
+  - Verify aluminum density and cp units.
+  - Confirm the block volume is 0.05 m^3.
+  - Confirm temperature is not being interpreted in an incorrect unit system.
+
+If temperatures are nonuniform in Level A:
+  - Confirm every node has the same initial temperature.
+  - Confirm the heat load is distributed through the solid volume.
+  - Search for fixed nodes, contactors, radiation, and convection objects.
+
+If Thermal Desktop reaches steady state in the sealed 1000 W case:
+  - A heat sink or fixed node exists somewhere in the model.
+  - Inspect Case Set overrides and generated SINDA conductors/boundary nodes.
+
+If Thermal Desktop and the solver conserve energy but local fields differ:
+  - Match meshes and material conductivity.
+  - Match air modeling assumptions.
+  - Compare contact conductance and interface placement.
+  - Refine both meshes before interpreting peak temperatures.
+
+
+Validation record template
+--------------------------
+Record one row per run:
+
+  Program/version:
+  Model revision/commit:
+  Case name:
+  Mesh dimensions/count:
+  Maximum timestep/tolerances:
+  Aluminum volume:
+  Aluminum mass:
+  Total capacitance:
+  Integrated heat input:
+  Tavg at 60 s:
+  Tavg at 300 s:
+  Tavg at 600 s:
+  Tmin/Tmax at 600 s:
+  Stored energy at 600 s:
+  Energy residual:
+  Runtime:
+  Pass/fail and reason:
