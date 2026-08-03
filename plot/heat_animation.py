@@ -26,6 +26,8 @@ class InternalRegionGeom:
     kind: str
     size: tuple[float, float, float]
     origin: tuple[float, float, float]
+    direction: tuple[float, float, float] = (0.0, 0.0, 0.0)
+    diameter: float = 0.0
 
 
 @dataclass
@@ -115,6 +117,8 @@ def parse_component(lines: list[str], start: int, name: str) -> tuple[ComponentG
                     kind=region_values["type"],
                     size=three_floats(region_values["size"]),
                     origin=three_floats(region_values["global_position"]),
+                    direction=three_floats(region_values.get("direction", "0 0 0")),
+                    diameter=first_float(region_values.get("diameter", "0")),
                 ))
             continue
 
@@ -289,6 +293,9 @@ def run_native(args: argparse.Namespace) -> None:
             "  python -m pip install numpy pandas matplotlib"
         ) from exc
 
+    if not 0.0 <= args.alpha <= 1.0:
+        raise SystemExit("--alpha must be between 0 and 1")
+
     dx, dy, dz = read_spacing(args.sim)
     df = pd.read_csv(args.sim, skiprows=[1])
     try:
@@ -323,6 +330,25 @@ def run_native(args: argparse.Namespace) -> None:
             handles.append(mpatches.Patch(facecolor="none", edgecolor=color, label=f"Component: {comp.name}"))
             for region in comp.regions:
                 kind = region.kind.lower()
+                if kind in {"fan", "vent"}:
+                    # Fan/vent global_position is its center, unlike the
+                    # minimum-corner position used by volumetric regions.
+                    draw_opening(ax, OpeningGeom(
+                        name=f"{comp.name}: {region.kind}",
+                        kind=region.kind,
+                        center=region.origin,
+                        direction=region.direction,
+                        size=region.size,
+                        shape="Circular" if region.diameter > 0 else "Rectangular",
+                        diameter=region.diameter,
+                    ), "limegreen" if kind == "vent" else "dodgerblue")
+                    if kind not in seen_region_types:
+                        handles.append(mpatches.Patch(
+                            facecolor="none",
+                            edgecolor="limegreen" if kind == "vent" else "dodgerblue",
+                            label=f"Internal region: {region.kind}"))
+                        seen_region_types.add(kind)
+                    continue
                 region_color = "deepskyblue" if kind == "air" else "orangered" if kind == "heatsource" else "limegreen"
                 draw_box_edges(ax, region.origin, region.size, color=region_color, linewidth=2.2, linestyle="--")
                 if kind not in seen_region_types:
@@ -348,7 +374,7 @@ def run_native(args: argparse.Namespace) -> None:
 
         sizes = np.where(is_component, 70.0, 32.0)
         ax.scatter(x, y, z, c=temperatures, cmap="inferno", vmin=tmin, vmax=tmax,
-                   marker="s", s=sizes, alpha=0.72, edgecolors="none")
+                   marker="s", s=sizes, alpha=args.alpha, edgecolors="none")
 
         handles = draw_geometry()
         time_value = float(frame["time"].iloc[0])
@@ -462,10 +488,37 @@ def add_pyvista_geometry(plotter, pv, rack: RackGeom) -> None:
             color, label=f"Component: {comp.name}"
         )
         for region in comp.regions:
+            kind = region.kind.lower()
+            if kind in {"fan", "vent"}:
+                direction = np.asarray(region.direction, dtype=float)
+                norm = np.linalg.norm(direction)
+                if norm == 0:
+                    continue
+                direction /= norm
+                axis = dominant_axis(direction)
+                plane_sizes = (
+                    (region.size[1], region.size[2]) if axis == 0 else
+                    (region.size[0], region.size[2]) if axis == 1 else
+                    (region.size[0], region.size[1])
+                )
+                color = "limegreen" if kind == "vent" else "dodgerblue"
+                if region.diameter > 0:
+                    opening_mesh = pv.Disc(
+                        center=region.origin, inner=0.0,
+                        outer=region.diameter / 2.0, normal=direction,
+                        r_res=1, c_res=64)
+                else:
+                    opening_mesh = pv.Plane(
+                        center=region.origin, direction=direction,
+                        i_size=plane_sizes[0], j_size=plane_sizes[1])
+                plotter.add_mesh(
+                    opening_mesh, color=color, style="wireframe",
+                    line_width=3, label=f"Internal region: {region.kind}")
+                continue
             region_color = {
                 "air": "deepskyblue",
                 "heatsource": "orangered",
-            }.get(region.kind.lower(), "limegreen")
+            }.get(kind, "limegreen")
             add_pyvista_box(
                 plotter, pv, region.origin, region.size, region_color,
                 width=3, label=f"Internal region: {region.kind}"
@@ -970,6 +1023,10 @@ def build_argument_parser() -> argparse.ArgumentParser:
         "--temperature-units", choices=("C", "K"), default="C"
     )
     parser.add_argument("--opacity", type=float, default=0.9)
+    parser.add_argument(
+        "--alpha", type=float, default=0.38,
+        help="Native heat-cell opacity from 0 (transparent) to 1 (opaque)"
+    )
     parser.add_argument("--fps", type=int, default=15)
     parser.add_argument("--skip", type=int, default=1)
     parser.add_argument("--output", default="rack_temperature_animation.mp4")
