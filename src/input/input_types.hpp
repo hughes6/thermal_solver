@@ -176,19 +176,9 @@ struct OpenFoamSolverInput {
 // Rack
 // -------------------------------------------------------------
 
-struct AmbientInput {
-    double temperature = 20.0;
-    double pressure = 101325.0;
-    double rho = 0.0;
-    double cp = 0.0;
-    double k = 0.0;
-    double h = 0.0;
-};
-
 struct RackInput {
     std::string name = "rack";
     SizeInput size;
-    AmbientInput ambient;
 };
 
 // -------------------------------------------------------------

@@ -1011,13 +1011,6 @@ struct ModelLoader {
             const toml::table& rack = require_table(root["rack"], "rack");
             model.rack.name = rack["name"].value<std::string>().value_or("Unnamed rack");
             model.rack.size = parse_size(require_table(rack["size"], "rack.size"), "rack.size");
-            const toml::table& ambient = require_table(rack["ambient"], "rack.ambient");
-            model.rack.ambient.pressure = ambient["pressure"].value<double>().value_or(101325.0);
-            model.rack.ambient.h = ambient["h"].value<double>().value_or(0.0);
-            model.rack.ambient.temperature = require_value<double>(ambient["temperature"], "rack.ambient.temperature");
-            model.rack.ambient.k = require_value<double>(ambient["k"], "rack.ambient.k");
-            model.rack.ambient.rho = require_value<double>(ambient["rho"], "rack.ambient.rho");
-            model.rack.ambient.cp = require_value<double>(ambient["cp"], "rack.ambient.cp");
 
             // ------------------------------------------Global Objects---------------------------------------
             parse_global_components(root, model);
@@ -1061,11 +1054,6 @@ struct ModelLoader {
         } else {
             throw std::runtime_error("Invalid rack.size units: '" + rack_units + "'. Supported values are 'u', 'm', 'in', and 'mm'.");
         }
-        rack.set_cp(model.rack.ambient.cp);
-        rack.set_k(model.rack.ambient.k);
-        rack.set_h(model.rack.ambient.h);
-        rack.set_rho(model.rack.ambient.rho);
-        rack.set_t(model.rack.ambient.temperature);
 
         // Built up-front, geometry-checked as a whole, then stamped. Keeping the
         // "build" and "stamp" phases separate is what lets CollisionChecker see
