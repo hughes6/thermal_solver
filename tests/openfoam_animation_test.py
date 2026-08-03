@@ -8,6 +8,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "plot"))
 
 import heat_animation
 from heat_animation import (
+    enable_internal_meshes_only,
     build_argument_parser,
     run_openfoam_animation,
     run_openfoam_convergence_report,
@@ -16,6 +17,26 @@ from heat_animation import (
 
 
 class OpenFoamAnimationTest(unittest.TestCase):
+    def test_reader_enables_only_internal_volume_meshes(self):
+        class Reader:
+            patch_array_names = [
+                "internalMesh", "patch/rack_walls", "patch/empty_interface"]
+
+            def __init__(self):
+                self.enabled = []
+                self.disabled_all = False
+
+            def disable_all_patch_arrays(self):
+                self.disabled_all = True
+
+            def enable_patch_array(self, name):
+                self.enabled.append(name)
+
+        reader = Reader()
+        enable_internal_meshes_only(reader)
+        self.assertTrue(reader.disabled_all)
+        self.assertEqual(reader.enabled, ["internalMesh"])
+
     def test_inclusive_time_range_and_skip(self):
         self.assertEqual(
             select_openfoam_animation_times(

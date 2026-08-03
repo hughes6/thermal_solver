@@ -449,6 +449,27 @@ def select_openfoam_time(reader, requested: str) -> float:
     return selected
 
 
+def enable_internal_meshes_only(reader) -> None:
+    """Read volume meshes without empty boundary-patch blocks.
+
+    Exported multi-region cases can legitimately contain patches with zero
+    faces on some regions. Asking VTK to load every patch produces noisy
+    ``mesh contains no cells`` warnings and adds no temperature volume data.
+    """
+    names = list(getattr(reader, "patch_array_names", ()))
+    internal = [
+        name for name in names
+        if name == "internalMesh"
+        or name.endswith("/internalMesh")
+        or name.endswith(".internalMesh")
+    ]
+    if not internal:
+        return
+    reader.disable_all_patch_arrays()
+    for name in internal:
+        reader.enable_patch_array(name)
+
+
 def select_openfoam_animation_times(available, start_time=None, end_time=None,
                                     skip=1):
     """Select an inclusive, ordered subset of written OpenFOAM times."""
@@ -843,7 +864,7 @@ def run_openfoam(args: argparse.Namespace) -> None:
         reader.case_type = "decomposed"
     reader.cell_to_point_creation = True
     try:
-        reader.enable_all_patch_arrays()
+        enable_internal_meshes_only(reader)
     except AttributeError:
         pass
     selected_time = select_openfoam_time(reader, args.time)

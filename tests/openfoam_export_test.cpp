@@ -32,6 +32,16 @@ int main(int argc, char** argv) {
     component.order_internal_regions();
     mesh.stamp_component_for_openfoam(component);
 
+    Component homogeneous =
+        Component::from_meters(0.1,0.1,0.1,"homogeneous heater");
+    homogeneous.set_coords_m(0.2,0.0,0.0);
+    homogeneous.set_t(20.0);
+    homogeneous.set_rho_solid(2700.0);
+    homogeneous.set_cp(900.0);
+    homogeneous.set_k_solid(150.0);
+    homogeneous.set_watts(7.0);
+    mesh.stamp_component_for_openfoam(homogeneous);
+
     Fan inlet(
         "test_inlet",10.0,0.0,{0.1,0.0,0.1},
         {0.05,0.0,0.05},{0.0,1.0,0.0},
@@ -44,7 +54,11 @@ int main(int argc, char** argv) {
     mesh.stamp_vent_for_openfoam(outlet);
 
     assert(mesh.has_openfoam_export_metadata());
-    assert(mesh.get_openfoam_component_regions().size()==1);
+    assert(mesh.get_openfoam_component_regions().size()==2);
+    assert(mesh.get_openfoam_heat_source_regions().size()==2);
+    assert(mesh.get_openfoam_heat_source_regions()[1].watts==7.0);
+    assert(mesh.get_openfoam_cell_metadata()[mesh.idx(2,0,0)]
+               .heat_source_id==1);
     assert(mesh.get_openfoam_cell_metadata()[mesh.idx(1,0,0)]
                .region_type ==
            Mesh::OpenFoamCellMetadata::RegionType::Solid);
@@ -95,6 +109,9 @@ int main(int argc, char** argv) {
     assert(control_text.str().find("type yPlus;") != std::string::npos);
     assert(std::filesystem::is_regular_file(
         case_path/"constant"/"polyMesh"/"sets"/"test_heat_source_0"));
+    assert(std::filesystem::is_regular_file(
+        case_path/"constant"/"polyMesh"/"sets"/
+            "homogeneous_heater_load_1"));
     assert(std::filesystem::is_regular_file(
         case_path/"constant"/"openfoamExportProperties"));
     assert(std::filesystem::is_regular_file(

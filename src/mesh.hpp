@@ -543,6 +543,27 @@ public:
             }
         }
 
+        // A homogeneous component may carry its heat load directly on the
+        // component instead of defining an internal heat-source region. The
+        // native stamper already applies this load; mirror it in OpenFOAM by
+        // creating a source mask over the component's solid cells.
+        if(std::abs(component.get_watts()) > 1e-12) {
+            const int source_id =
+                static_cast<int>(openfoam_heat_source_regions.size());
+            openfoam_heat_source_regions.push_back(
+                {source_id, component_id, component.get_name()+" load",
+                 component.get_watts()});
+            for(int i = i0; i < i1; ++i) {
+                for(int j = j0; j < j1; ++j) {
+                    for(int k = k0; k < k1; ++k) {
+                        if(at(i,j,k).is_solid())
+                            openfoam_cell_metadata[idx(i,j,k)]
+                                .heat_source_id = source_id;
+                    }
+                }
+            }
+        }
+
         for(const InternalRegion& region : component.get_regions()) {
             if(region.get_region_type() != RegionType::HeatSource) continue;
             const int source_id =

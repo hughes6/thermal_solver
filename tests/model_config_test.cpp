@@ -55,6 +55,9 @@ int main() {
     assert(model.openfoam_solver.enabled);
     assert(model.openfoam_solver.template_file ==
            "library/openfoam_cfg/indepth_foam_cfg.toml");
+    assert(model.openfoam_solver.case_directory ==
+           std::filesystem::path(
+               "C:/OpenFOAM/thermal_sim_v2/model"));
     assert(model.mesh.adaptive);
     assert(model.mesh.fine_dx == 0.02);
     assert(model.mesh.coarse_dx == 0.10);
@@ -72,6 +75,12 @@ int main() {
 
     ModelLoader foam_loader;
     foam_loader.load_model("library/tests/openfoam_model.toml");
+    assert(foam_loader.model.openfoam_solver.case_directory ==
+           std::filesystem::path("openfoam_cases/openfoam_model"));
+    // Keep generated regression-test output in its established fixture path;
+    // the assertion above verifies the user-facing default independently.
+    foam_loader.model.openfoam_solver.case_directory=
+        "temp_foam_regions/toml_export";
 #ifdef _WIN32
     {
         const std::string resolved_test_case=std::filesystem::absolute(

@@ -885,9 +885,21 @@ struct ModelLoader {
                     }
                 }
                 cfg.enabled=value("enabled").value<bool>().value_or(false);
-                cfg.case_directory=value("case_directory")
-                    .value<std::string>().value_or(
-                        ("openfoam_cases/"+model_path.stem().string()));
+                // Output locations belong to models, not reusable fidelity
+                // profiles. Inheriting a template's case_directory made every
+                // model using that profile overwrite and/or reuse one case.
+                // Honor an explicit per-model directory; otherwise derive a
+                // distinct directory from the TOML filename.
+                if(const auto explicit_directory=
+                       (*foam)["case_directory"].value<std::string>()) {
+                    cfg.case_directory=*explicit_directory;
+                } else {
+                    const std::filesystem::path case_root=
+                        (*foam)["case_root_directory"]
+                            .value<std::string>().value_or("openfoam_cases");
+                    cfg.case_directory=
+                        case_root/model_path.stem().string();
+                }
                 cfg.overwrite=value("overwrite").value<bool>().value_or(false);
                 cfg.parallel_processes=value("parallel_processes")
                     .value<int>().value_or(4);
@@ -1613,9 +1625,10 @@ struct ModelLoader {
                 << "\nNative transient solver was not run.\n"
                 << "Run from a WSL terminal with:\n  cd '"
                 << launch_directory << "' && ./run_parallel.sh "
-                << cfg.parallel_processes
-                << (cfg.use_multirate_thermal ? " --multirate " : " ")
-                << model.simulation.duration << '\n'
+                << cfg.parallel_processes;
+            if(cfg.use_multirate_thermal)
+                std::cout << " --multirate " << model.simulation.duration;
+            std::cout << '\n'
                 << "Plot the latest temperature cut plane interactively "
                    "(PowerShell or Git Bash):\n  "
 #ifdef _WIN32
