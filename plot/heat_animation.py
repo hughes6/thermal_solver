@@ -496,11 +496,6 @@ def add_pyvista_geometry(plotter, pv, rack: RackGeom) -> None:
                     continue
                 direction /= norm
                 axis = dominant_axis(direction)
-                plane_sizes = (
-                    (region.size[1], region.size[2]) if axis == 0 else
-                    (region.size[0], region.size[2]) if axis == 1 else
-                    (region.size[0], region.size[1])
-                )
                 color = "limegreen" if kind == "vent" else "dodgerblue"
                 if region.diameter > 0:
                     opening_mesh = pv.Disc(
@@ -508,9 +503,26 @@ def add_pyvista_geometry(plotter, pv, rack: RackGeom) -> None:
                         outer=region.diameter / 2.0, normal=direction,
                         r_res=1, c_res=64)
                 else:
-                    opening_mesh = pv.Plane(
-                        center=region.origin, direction=direction,
-                        i_size=plane_sizes[0], j_size=plane_sizes[1])
+                    # Build global-axis corners explicitly. pv.Plane chooses
+                    # an arbitrary in-plane basis, which can rotate a
+                    # rectangular width/height footprint by 90 degrees.
+                    x, y, z = region.origin
+                    sx, sy, sz = region.size
+                    if axis == 0:
+                        points = [
+                            (x, y-sy/2, z-sz/2), (x, y+sy/2, z-sz/2),
+                            (x, y+sy/2, z+sz/2), (x, y-sy/2, z+sz/2)]
+                    elif axis == 1:
+                        points = [
+                            (x-sx/2, y, z-sz/2), (x+sx/2, y, z-sz/2),
+                            (x+sx/2, y, z+sz/2), (x-sx/2, y, z+sz/2)]
+                    else:
+                        points = [
+                            (x-sx/2, y-sy/2, z), (x+sx/2, y-sy/2, z),
+                            (x+sx/2, y+sy/2, z), (x-sx/2, y+sy/2, z)]
+                    opening_mesh = pv.PolyData(
+                        np.asarray(points, dtype=float),
+                        faces=np.asarray([4, 0, 1, 2, 3]))
                 plotter.add_mesh(
                     opening_mesh, color=color, style="wireframe",
                     line_width=3, label=f"Internal region: {region.kind}")

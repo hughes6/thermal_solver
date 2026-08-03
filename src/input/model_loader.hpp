@@ -1241,12 +1241,29 @@ struct ModelLoader {
         // anything else. Both are resolution-independent - no dx/dy/dz involved.
         RackBoundsChecker::check_all(rack, components, fans, vents);
         CollisionChecker::check_all(components, fans, vents);
+
+        if(geometry_only) {
+            const double graph_spacing = model.mesh.adaptive
+                ? model.mesh.fine_dx : model.mesh.dx;
+            Grapher grapher(
+                rack, graph_spacing, graph_spacing, graph_spacing);
+            for(const Component& component : components)
+                grapher.add_component(component);
+            for(const Fan& fan : fans) grapher.add_fan(fan);
+            for(const Vent& vent : vents) grapher.add_vent(vent);
+            grapher.stamp_components();
+            grapher.stamp_fans();
+            grapher.stamp_vents();
+            grapher.export_to_file("output.txt");
+            std::cout << "Geometry-only mode: wrote output.txt; mesh and "
+                         "transient solvers were not run.\n";
+            return;
+        }
         
         std::optional<Mesh> coarse_warm_start;
         std::optional<ThermalTimeEstimate> coarse_thermal_estimate;
         std::size_t coarse_timestep_count = 0;
-        if (model.multistage.enabled && !model.openfoam_solver.enabled &&
-            !geometry_only) {
+        if (model.multistage.enabled && !model.openfoam_solver.enabled) {
             std::cout << "----- Coarse warm-start stage -----\n";
             const MeshInput& coarse_cfg = model.multistage.coarse_mesh;
             const MeshRefinementPlan coarse_plan = MeshRefinementPlanner::plan(
@@ -1785,11 +1802,6 @@ struct ModelLoader {
         grapher.stamp_fans();
         grapher.stamp_vents();
         grapher.export_to_file("output.txt");
-        if(geometry_only) {
-            std::cout << "Geometry-only mode: wrote output.txt; transient "
-                         "solver was not run.\n";
-            return;
-        }
         if(model.flow_solver.enable_flow_solver) {
             FlowSolver flow_solver(mesh, *model.flow_solver.resistivity, *model.flow_solver.tolerance, *model.flow_solver.max_iterations, 
                                 *model.flow_solver.sor_omega, *model.flow_solver.max_outer_iters, *model.flow_solver.flow_tolerance,
