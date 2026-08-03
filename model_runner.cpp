@@ -64,10 +64,12 @@ int main(int argc, char* argv[]) {
     std::cerr << "Too many arguments. Run with --help for usage.\n";
     return 2;
   }
+  
+  std::string load_model_path = "library/models/validation_rack.toml";
 
   ModelLoader loader;
   const std::filesystem::path model_path = positional_arguments.empty()
-      ? "library/models/model.toml" : positional_arguments[0];
+      ? load_model_path : positional_arguments[0];
   const std::filesystem::path fan_curve_path = positional_arguments.size() < 2
       ? "library/fan_curves/fan_curves.toml" : positional_arguments[1];
   loader.load_fan_curves(fan_curve_path);
