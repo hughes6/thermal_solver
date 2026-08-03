@@ -1035,9 +1035,6 @@ struct ModelLoader {
 
     void run(bool geometry_only = false)
     {
-        Workload load = Workload(model.simulation.max_timesteps, model.simulation.max_updates, model.simulation.max_cell_count, model.simulation.max_megabyte_usage);
-        Environment env(model.environment.humidity, model.environment.elevation, model.environment.T_ambient, 
-                        model.environment.cp, model.environment.k, model.environment.mu, model.environment.pr, model.environment.rho);
         Rack rack;
         const std::string rack_units = model.rack.size.units.value_or("u");
 
@@ -1259,6 +1256,21 @@ struct ModelLoader {
                          "transient solvers were not run.\n";
             return;
         }
+
+        Workload load(
+            model.simulation.max_timesteps,
+            model.simulation.max_updates,
+            model.simulation.max_cell_count,
+            model.simulation.max_megabyte_usage);
+        Environment env(
+            model.environment.humidity,
+            model.environment.elevation,
+            model.environment.T_ambient,
+            model.environment.cp,
+            model.environment.k,
+            model.environment.mu,
+            model.environment.pr,
+            model.environment.rho);
         
         std::optional<Mesh> coarse_warm_start;
         std::optional<ThermalTimeEstimate> coarse_thermal_estimate;
