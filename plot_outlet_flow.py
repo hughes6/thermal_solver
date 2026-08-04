@@ -5,7 +5,7 @@ import matplotlib.pyplot as plt
 CASE = Path(r"C:\OpenFOAM\thermal_sim_v2\validation_fan_rack")
 
 # TOML name "Validation outlet" becomes Validation_outlet.
-REPORT = "Validation_outlet_mass_flow"
+REPORT = '\fluid\ambient_net_mass_flow'
 
 # Use the same density as the simulation for conversion to volumetric flow.
 RHO = 1.225  # kg/m^3

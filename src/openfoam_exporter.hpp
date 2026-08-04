@@ -3026,7 +3026,7 @@ private:
                     "-entry deltaT -set \"$restart_dt\"\n"
                 "        \"$foam_launcher\" foamDictionary -precision 16 "
                     "\"$case_dir/system/controlDict\" "
-                    "-entry startFrom -set startTime\n"
+                    "-entry startFrom -set latestTime\n"
                 "        \"$foam_launcher\" foamDictionary -precision 16 "
                     "\"$case_dir/system/controlDict\" "
                     "-entry startTime -set \"$current\"\n"
