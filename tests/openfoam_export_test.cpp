@@ -107,6 +107,11 @@ int main(int argc, char** argv) {
     assert(control_text.str().find("writeControl    adjustableRunTime;") !=
            std::string::npos);
     assert(control_text.str().find("type yPlus;") != std::string::npos);
+    assert(control_text.str().find(
+        "test_outlet_mass_weighted_temperature") != std::string::npos);
+    assert(control_text.str().find(
+        "operation absWeightedAverage;") != std::string::npos);
+    assert(control_text.str().find("weightField phi;") != std::string::npos);
     assert(std::filesystem::is_regular_file(
         case_path/"constant"/"polyMesh"/"sets"/"test_heat_source_0"));
     assert(std::filesystem::is_regular_file(

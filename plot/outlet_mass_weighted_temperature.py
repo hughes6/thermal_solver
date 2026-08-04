@@ -22,6 +22,28 @@ def patch_basename(name: str) -> str:
     return name.replace("\\", "/").rstrip("/").split("/")[-1]
 
 
+def read_surface_report(report_root: Path) -> dict[float, float]:
+    """Read scalar surfaceFieldValue output across restart directories."""
+    samples: dict[float, float] = {}
+    for path in report_root.glob("*/surfaceFieldValue.dat"):
+        with path.open("r", encoding="utf-8", errors="replace") as stream:
+            for line in stream:
+                columns = line.replace("(", " ").replace(")", " ").split()
+                if not columns or columns[0].startswith("#"):
+                    continue
+                try:
+                    samples[float(columns[0])] = float(columns[1])
+                except (ValueError, IndexError):
+                    continue
+    return samples
+
+
+def report_value_at_time(samples: dict[float, float], time: float):
+    tolerance = 1.0e-8 * max(1.0, abs(time))
+    matches = [key for key in samples if abs(key - time) <= tolerance]
+    return samples[max(matches)] if matches else None
+
+
 def select_time(reader, requested: str) -> float:
     times = [float(value) for value in reader.time_values]
     if not times:
@@ -103,6 +125,31 @@ def main() -> None:
     except ValueError as exc:
         raise SystemExit(str(exc)) from exc
     reader.set_active_time_value(selected_time)
+
+    report_name = f"{args.outlet}_mass_weighted_temperature"
+    report_root = case / "postProcessing" / "fluid" / report_name
+    exact_samples = read_surface_report(report_root)
+    exact_temperature = report_value_at_time(exact_samples, selected_time)
+    if exact_temperature is not None:
+        mass_samples = read_surface_report(
+            case
+            / "postProcessing"
+            / "fluid"
+            / f"{args.outlet}_mass_flow"
+        )
+        exact_mass_flow = report_value_at_time(mass_samples, selected_time)
+        print(f"Result time:                  {selected_time:g} s")
+        print(f"Outlet patch:                 {args.outlet}")
+        if exact_mass_flow is not None:
+            print(f"Absolute outlet mass flow:    {abs(exact_mass_flow):.8g} kg/s")
+        print(f"Mass-weighted temperature:    {exact_temperature:.6f} K")
+        print(
+            "Mass-weighted temperature:    "
+            f"{exact_temperature - 273.15:.6f} C"
+        )
+        print("Weighting source:              OpenFOAM absWeightedAverage(T, phi)")
+        return
+
     data = reader.read()
 
     weighted_temperature_sum = 0.0
@@ -187,6 +234,12 @@ def main() -> None:
     print(f"Absolute outlet mass flow:    {mass_flow_sum:.8g} kg/s")
     print(f"Mass-weighted temperature:    {temperature_k:.6f} K")
     print(f"Mass-weighted temperature:    {temperature_k - 273.15:.6f} C")
+    print("Weighting source:              VTK boundary-field reconstruction")
+    print(
+        "Warning: exact OpenFOAM temperature report is unavailable for this "
+        "time. Re-export the case with the current v2.2 exporter before "
+        "using this value for validation."
+    )
 
 
 if __name__ == "__main__":

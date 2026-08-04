@@ -1381,6 +1381,21 @@ private:
                 "        operation sum;\n"
                 "        writeFields false;\n"
                 "        fields (phi);\n"
+                "    }\n"
+                "    " << foam_word(patch.name)
+                << "_mass_weighted_temperature\n"
+                "    {\n"
+                "        type surfaceFieldValue;\n"
+                "        libs (fieldFunctionObjects);\n"
+                "        region fluid;\n"
+                "        writeControl adjustableRunTime;\n"
+                "        writeInterval " << options.report_interval << ";\n"
+                "        regionType patch;\n"
+                "        name " << foam_word(patch.name) << ";\n"
+                "        operation absWeightedAverage;\n"
+                "        weightField phi;\n"
+                "        writeFields false;\n"
+                "        fields (T);\n"
                 "    }\n";
         }
         if(!mesh.get_openfoam_boundary_patches().empty()) {
