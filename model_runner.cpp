@@ -65,7 +65,7 @@ int main(int argc, char* argv[]) {
     return 2;
   }
   
-  std::string load_model_path = "library/models/validation_rack.toml";
+  std::string load_model_path = "library/models/validation_fan_rack.toml";
 
   ModelLoader loader;
   const std::filesystem::path model_path = positional_arguments.empty()
