@@ -1329,6 +1329,18 @@ private:
             "        writeInterval " << options.report_interval << ";\n"
             "        fields (T);\n"
             "        location true;\n"
+            "    }\n"
+            "    fluid_temperature_average\n"
+            "    {\n"
+            "        type volFieldValue;\n"
+            "        libs (fieldFunctionObjects);\n"
+            "        region fluid;\n"
+            "        writeControl adjustableRunTime;\n"
+            "        writeInterval " << options.report_interval << ";\n"
+            "        regionType all;\n"
+            "        operation volAverage;\n"
+            "        writeFields false;\n"
+            "        fields (T);\n"
             "    }\n";
         if(options.use_k_omega_sst)
             output <<
@@ -2885,28 +2897,22 @@ private:
                     "\"$case_dir/.thermal_convergence_streak\"\n"
                 "    thermal_metrics_converged()\n"
                 "    {\n"
-                "        local range_root range_file average_root average_file "
+                "        local range_root average_root average_file "
                     "region line checkpoint_time peak previous_time "
                     "previous_peak elapsed delta scaled_delta value previous "
                     "index=0 maximum_average_delta=0 scaled_average_delta\n"
                 "        local -a averages=() state_values=()\n"
                 "        range_root=\"$case_dir/postProcessing/fluid/"
                     "fluid_temperature_range\"\n"
-                "        range_file=$(find \"$range_root\" -type f "
-                    "-name fieldMinMax.dat -printf '%T@ %p\\n' "
-                    "2>/dev/null | sort -n | tail -1 | cut -d' ' -f2-)\n"
-                "        if [[ -z \"$range_file\" ]]; then\n"
-                "            echo \"Thermal convergence data is missing: "
-                    "fluid fieldMinMax output.\" >&2\n"
-                "            return 1\n"
-                "        fi\n"
-                "        line=$(awk '!/^#/ && NF { last=$0 } END { print last }' "
-                    "\"$range_file\")\n"
+                "        line=$(find \"$range_root\" -type f "
+                    "-name 'fieldMinMax*.dat' -exec awk "
+                    "'!/^#/ && NF>=8 { print $1, $8 }' {} + "
+                    "2>/dev/null | sort -g -k1,1 | tail -1)\n"
                 "        checkpoint_time=$(awk '{print $1}' <<<\"$line\")\n"
-                "        peak=$(awk '{print $8}' <<<\"$line\")\n"
+                "        peak=$(awk '{print $2}' <<<\"$line\")\n"
                 "        if [[ -z \"$checkpoint_time\" || -z \"$peak\" ]]; then\n"
-                "            echo \"Unable to parse thermal convergence data "
-                    "from $range_file.\" >&2\n"
+                "            echo \"Thermal convergence data is missing or "
+                    "contains no completed fluid fieldMinMax sample.\" >&2\n"
                 "            return 1\n"
                 "        fi\n"
                 "        for region in \"${component_region_names[@]}\"; do\n"
@@ -3227,7 +3233,8 @@ private:
             }
             output <<
                 "    while awk -v a=\"$current\" -v b=\"$requested_end\" "
-                    "'BEGIN { exit !(a<b) }'; do\n"
+                    "'BEGIN { s=(b<0?-b:b); if(s<1)s=1; "
+                    "tol=1e-9*s; exit !(a<b-tol) }'; do\n"
                 "        frozen_target=$(awk -v a=\"$current\" -v d=\""
                 << options.airflow_refresh_interval
                 << "\" -v b=\"$requested_end\" "
@@ -3248,7 +3255,8 @@ private:
             }
             output <<
                 "        if awk -v a=\"$current\" -v b=\"$requested_end\" "
-                    "'BEGIN { exit !(a<b) }'; then\n";
+                    "'BEGIN { s=(b<0?-b:b); if(s<1)s=1; "
+                    "tol=1e-9*s; exit !(a<b-tol) }'; then\n";
             if(options.use_adaptive_airflow_refresh) {
                 output <<
                     "            adaptive_airflow_refresh\n";

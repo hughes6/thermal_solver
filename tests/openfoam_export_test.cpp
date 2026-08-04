@@ -107,6 +107,8 @@ int main(int argc, char** argv) {
     assert(control_text.str().find("writeControl    adjustableRunTime;") !=
            std::string::npos);
     assert(control_text.str().find("type yPlus;") != std::string::npos);
+    assert(control_text.str().find("fluid_temperature_average") !=
+           std::string::npos);
     assert(control_text.str().find(
         "test_outlet_mass_weighted_temperature") != std::string::npos);
     assert(control_text.str().find(
