@@ -224,8 +224,15 @@ def main() -> int:
                         help="generated curve name; defaults to <device-name>_equivalent")
     parser.add_argument("--fan-curve-output", type=Path,
                         help="write a fan-curve TOML snippet when pressure rise is supplied")
-    parser.add_argument("--electrical-watts", type=positive,
-                        help="optional measured electrical dissipation for an energy check")
+    parser.add_argument("--input-watts", "--electrical-watts", dest="input_watts",
+                        type=positive,
+                        help="measured electrical input power; electrical-watts is an alias")
+    parser.add_argument("--efficiency-percent", type=positive,
+                        help="power-conversion efficiency in percent (greater than 0 and at most 100)")
+    parser.add_argument(
+        "--heat-load-source", choices=("airflow", "input", "conversion-loss"),
+        default="airflow",
+        help="source used for generated block watts (default: airflow)")
     parser.add_argument("--output", type=Path,
                         help="write a customized component TOML to this path")
     parser.add_argument("--json-output", type=Path,
@@ -235,7 +242,24 @@ def main() -> int:
     delta_t = args.exhaust_temp - args.intake_temp
     if delta_t <= 0.0:
         parser.error("exhaust-temp must be greater than intake-temp")
-    watts = args.mass_flow_kg_s * args.cp_air * delta_t
+    airside_watts = args.mass_flow_kg_s * args.cp_air * delta_t
+    if args.efficiency_percent is not None and args.efficiency_percent > 100.0:
+        parser.error("efficiency-percent must not exceed 100")
+    if args.heat_load_source in ("input", "conversion-loss") and args.input_watts is None:
+        parser.error(f"heat-load-source={args.heat_load_source} requires input-watts")
+    if args.heat_load_source == "conversion-loss" and args.efficiency_percent is None:
+        parser.error("heat-load-source=conversion-loss requires efficiency-percent")
+    efficiency = (args.efficiency_percent / 100.0
+                  if args.efficiency_percent is not None else None)
+    conversion_loss_watts = (
+        args.input_watts * (1.0 - efficiency)
+        if args.input_watts is not None and efficiency is not None else None)
+    if args.heat_load_source == "input":
+        watts = args.input_watts
+    elif args.heat_load_source == "conversion-loss":
+        watts = conversion_loss_watts
+    else:
+        watts = airside_watts
     if args.fan_free_flow_multiplier <= 1.0:
         parser.error("fan-free-flow-multiplier must be greater than 1")
     curve_name = args.fan_curve_name or f"{slug(args.name)}_equivalent"
@@ -259,7 +283,9 @@ def main() -> int:
         "exhaust_temperature": args.exhaust_temp,
         "temperature_rise_k": delta_t,
         "cp_air_j_kg_k": args.cp_air,
-        "inferred_airside_watts": watts,
+        "inferred_airside_watts": airside_watts,
+        "selected_heat_load_source": args.heat_load_source,
+        "generated_heat_block_watts": watts,
         "nominal_heat_block_qvol_w_m3": watts / volume,
         "template": f"library/components/generic_server_{args.rack_units}u.toml",
         "fan_curve_name": curve_name if curve else "generic_80mm_low_speed",
@@ -267,13 +293,20 @@ def main() -> int:
     }
     if curve:
         report["fan_curve"] = curve
-    if args.electrical_watts is not None:
-        report["electrical_watts"] = args.electrical_watts
-        report["airside_heat_fraction"] = watts / args.electrical_watts
-        report["unaccounted_watts"] = args.electrical_watts - watts
+    if args.input_watts is not None:
+        report["input_watts"] = args.input_watts
+        report["airside_heat_fraction_of_input"] = airside_watts / args.input_watts
+        report["input_minus_airside_watts"] = args.input_watts - airside_watts
+    if efficiency is not None:
+        report["efficiency_fraction"] = efficiency
+        if args.input_watts is not None:
+            report["useful_output_watts"] = args.input_watts * efficiency
+            report["conversion_loss_watts"] = conversion_loss_watts
 
     print(f"Temperature rise:       {delta_t:.6g} K")
     print(f"Mass flow:              {args.mass_flow_kg_s:.6g} kg/s")
+    print(f"Air-side heat:          {airside_watts:.6g} W")
+    print(f"Heat-load source:       {args.heat_load_source}")
     print(f"Heat-block watts:       {watts:.6g} W")
     print(f"Matching base template: generic_server_{args.rack_units}u.toml")
     if curve:
@@ -283,11 +316,18 @@ def main() -> int:
         print(f"  c:                    {curve['c']:.9g} Pa/(m^3/s)^2")
     else:
         print("Fan curve:              generic_80mm_low_speed (provisional)")
-    if args.electrical_watts is not None:
-        fraction = watts / args.electrical_watts
+    if args.input_watts is not None:
+        fraction = airside_watts / args.input_watts
+        print(f"Electrical input:       {args.input_watts:.6g} W")
         print(f"Air-side heat fraction: {100.0 * fraction:.3f}%")
         if not 0.8 <= fraction <= 1.1:
             print("WARNING: airflow heat and electrical load differ by more than 20%.")
+    if efficiency is not None and args.input_watts is not None:
+        print(f"Conversion efficiency: {100.0 * efficiency:.3f}%")
+        print(f"Conversion loss:        {conversion_loss_watts:.6g} W")
+        if args.heat_load_source == "input":
+            print("NOTE: For a server, useful PSU output also becomes heat inside the device;")
+            print("      total input watts are therefore normally the correct heat load.")
 
     if args.output:
         args.output.parent.mkdir(parents=True, exist_ok=True)
