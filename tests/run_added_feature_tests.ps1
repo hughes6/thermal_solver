@@ -32,7 +32,9 @@ Write-Host "Checking Python plotting scripts"
     "tests/coarse_heat_io_test.py" `
     "tests/engineering_tools_test.py" `
     "tests/plot_geometry_test.py" `
-    "tests/openfoam_animation_test.py"
+    "tests/openfoam_animation_test.py" `
+    "tools/validate_openfoam_case.py" `
+    "tests/openfoam_validation_test.py"
 if ($LASTEXITCODE -ne 0) {
     throw "Python plotting syntax check failed"
 }
@@ -55,6 +57,11 @@ if ($LASTEXITCODE -ne 0) {
 & python "tests/openfoam_animation_test.py"
 if ($LASTEXITCODE -ne 0) {
     throw "OpenFOAM animation tests failed"
+}
+
+& python -m unittest "tests.openfoam_validation_test"
+if ($LASTEXITCODE -ne 0) {
+    throw "OpenFOAM numerical validation tests failed"
 }
 
 Write-Host "All added-feature tests passed."
