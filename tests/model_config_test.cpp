@@ -54,13 +54,13 @@ int main() {
         "curve = \"generic_80mm_low_speed\"")==6);
     assert(model.openfoam_solver.enabled);
     assert(model.openfoam_solver.template_file ==
-           "library/openfoam_cfg/indepth_foam_cfg.toml");
+           "library/openfoam_cfg/screening_foam_cfg.toml");
     assert(model.openfoam_solver.case_directory ==
            std::filesystem::path(
                "C:/OpenFOAM/thermal_sim_v2/model"));
     assert(model.mesh.adaptive);
     assert(model.mesh.fine_dx == 0.02);
-    assert(model.mesh.coarse_dx == 0.10);
+    assert(model.mesh.coarse_dx == 0.20);
 
     ModelLoader legacy_loader;
     legacy_loader.load_model("library/tests/valid_model.toml");
@@ -353,7 +353,17 @@ int main() {
     assert(run_parallel.find(
         "Initial airflow failed to converge") != std::string::npos);
     assert(run_parallel.find(
-        "printf \"%.17g\", remaining/n") != std::string::npos);
+        "printf \"%.17g %d\", remaining/n,n") != std::string::npos);
+    assert(run_parallel.find(
+        "-entry writeControl -set timeStep") != std::string::npos);
+    assert(run_parallel.find(
+        "-entry writeInterval -set \"$stage_steps\"") != std::string::npos);
+    assert(run_parallel.find(
+        "for field in U p p_rgh phi rho k omega nut alphat") !=
+        std::string::npos);
+    assert(run_parallel.find(
+        "cp -p \"$source_field\" \"$target_field\"") !=
+        std::string::npos);
     assert(run_parallel.find(
         "printf \"%.17g\", x") != std::string::npos);
     assert(run_parallel.find(
