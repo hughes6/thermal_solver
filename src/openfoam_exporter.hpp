@@ -3006,6 +3006,12 @@ private:
                     "saved_time_file rank\n"
                 "        interval=$(awk -v end=\"$target\" -v start=\"$current\" "
                     "'BEGIN { printf \"%.17g\", end-start }')\n"
+                "        if awk -v d=\"$interval\" -v target=\"$target\" "
+                    "'BEGIN { s=(target<0?-target:target); if(s<1)s=1; "
+                    "exit !(d<=1e-9*s) }'; then\n"
+                "            current=\"$target\"\n"
+                "            return 0\n"
+                "        fi\n"
                 "        \"$foam_launcher\" foamDictionary -precision 16 "
                     "\"$case_dir/system/fluid/fvSolution\" "
                     "-entry PIMPLE/frozenFlow -set false\n"
@@ -3117,7 +3123,8 @@ private:
                     << options.maximum_airflow_refresh_duration
                     << "\" -v end=\"$requested_end\" "
                         "'BEGIN { x=a+d; limit=start+maximum; "
-                        "if(x>limit)x=limit; if(x>end)x=end; print x }')\n"
+                        "if(x>limit)x=limit; if(x>end)x=end; "
+                        "printf \"%.17g\", x }')\n"
                     "            stage false \"$refresh_target\" "
                     << options.airflow_refresh_maximum_courant_number << ' '
                     << options.maximum_time_step
@@ -3167,7 +3174,8 @@ private:
                     "            initial_target=$(awk -v a=\"$current\" -v d=\""
                     << options.initial_airflow_check_interval
                     << "\" -v limit=\"$initial_limit\" "
-                        "'BEGIN { x=a+d; print (x<limit?x:limit) }')\n"
+                        "'BEGIN { x=a+d; if(x>limit)x=limit; "
+                        "printf \"%.17g\", x }')\n"
                     "            stage false \"$initial_target\" "
                     << options.maximum_courant_number << ' '
                     << options.maximum_time_step
@@ -3267,7 +3275,8 @@ private:
                     "            refresh_target=$(awk -v a=\"$current\" -v d=\""
                     << options.airflow_refresh_duration
                     << "\" -v b=\"$requested_end\" "
-                        "'BEGIN { x=a+d; print (x<b ? x : b) }')\n"
+                        "'BEGIN { x=a+d; if(x>b)x=b; "
+                        "printf \"%.17g\", x }')\n"
                     "            stage false \"$refresh_target\" "
                     << options.maximum_courant_number << ' '
                     << options.maximum_time_step

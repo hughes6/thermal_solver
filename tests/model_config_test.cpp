@@ -355,6 +355,10 @@ int main() {
     assert(run_parallel.find(
         "printf \"%.17g\", remaining/n") != std::string::npos);
     assert(run_parallel.find(
+        "printf \"%.17g\", x") != std::string::npos);
+    assert(run_parallel.find(
+        "d<=1e-9*s") != std::string::npos);
+    assert(run_parallel.find(
         "x=(int(a/d)+1)*d") != std::string::npos);
     assert(run_parallel.find(
         "if(x<=a+1e-9)x+=d") != std::string::npos);

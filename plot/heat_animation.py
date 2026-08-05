@@ -653,10 +653,17 @@ def run_openfoam_convergence_report(args, reader) -> None:
             reader.read(), args.temperature_units
         )
         if not stats:
-            raise SystemExit(f"No T field was found at OpenFOAM time {selected_time:g}")
+            print(
+                f"Skipping OpenFOAM time {selected_time:g}: no T field "
+                "(function-object-only or incomplete write)"
+            )
+            continue
         regions.update(stats)
         records.append((selected_time, stats))
         print(f"Read convergence sample {index}/{len(times)}: t={selected_time:g} s")
+
+    if not records:
+        raise SystemExit("No complete OpenFOAM time containing T was found")
 
     output = Path(args.output).expanduser().resolve()
     if output.suffix.lower() not in {".png", ".jpg", ".jpeg"}:
