@@ -228,6 +228,13 @@ int main() {
         "Plot the latest temperature cut plane interactively") !=
         std::string::npos);
     assert(export_output.str().find(
+        "Generate the signed-flow and hot-air recirculation PNG") !=
+        std::string::npos);
+    assert(export_output.str().find(
+        "plot/recirculation_report.py") != std::string::npos ||
+           export_output.str().find(
+        "plot\\recirculation_report.py") != std::string::npos);
+    assert(export_output.str().find(
         "Plot the complete 3D rack temperature field interactively") !=
         std::string::npos);
     assert(export_output.str().find(

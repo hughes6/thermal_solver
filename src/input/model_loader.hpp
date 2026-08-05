@@ -1567,12 +1567,16 @@ struct ModelLoader {
 #endif
             const std::filesystem::path visualization_script=
                 std::filesystem::absolute("plot/heat_animation.py");
+            const std::filesystem::path recirculation_script=
+                std::filesystem::absolute("plot/recirculation_report.py");
             const std::filesystem::path visualization_output=
                 absolute_case_directory/"temperature_latest_full_rack.png";
             const std::filesystem::path animation_output=
                 absolute_case_directory/"temperature_full_rack.mp4";
             const std::filesystem::path convergence_output=
                 absolute_case_directory/"temperature_convergence.png";
+            const std::filesystem::path recirculation_output=
+                absolute_case_directory/"recirculation_report.png";
             const auto shell_display_path=[](
                 const std::filesystem::path& path) {
                 std::string value=path.string();
@@ -1591,6 +1595,10 @@ struct ModelLoader {
                 shell_display_path(animation_output);
             const std::string convergence_output_display=
                 shell_display_path(convergence_output);
+            const std::string recirculation_script_display=
+                shell_display_path(recirculation_script);
+            const std::string recirculation_output_display=
+                shell_display_path(recirculation_output);
             const auto command_quote=[](const std::string& value) {
                 std::string quoted="'";
                 for(const char character : value) {
@@ -1702,6 +1710,20 @@ struct ModelLoader {
                 << " --convergence-report --temperature-units C --skip 1 "
                    "--output "
                 << command_quote(convergence_output_display)
+                << " --save\n"
+                << "Generate the signed-flow and hot-air recirculation PNG "
+                   "and CSV (PowerShell or Git Bash):\n  "
+#ifdef _WIN32
+                << "python "
+#else
+                << "python3 "
+#endif
+                << command_quote(recirculation_script_display)
+                << " --case " << command_quote(case_directory_display)
+                << " --ambient-temperature "
+                << model.environment.T_ambient + 273.15
+                << " --output "
+                << command_quote(recirculation_output_display)
                 << " --save\n";
             return;
         }
