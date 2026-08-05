@@ -2487,3 +2487,55 @@ produce a misleading temperature match.
 Do not also place the same watts on the outer component shell. Heat assigned
 to an internal solid region and heat assigned to the enclosing component are
 separate sources and would be added together.
+
+### Generic server boundary characterization
+
+When internal electronics geometry is unavailable, use the generic 1U, 2U,
+or 3U component templates instead of inventing detailed heat-source regions.
+Each template contains one internal air region, one equivalent solid heat
+block, one front intake vent, and one rear exhaust fan. These models are for
+rack intake temperature, exhaust temperature, airflow, heat rejection, and
+recirculation studies. Their solid-block temperature is not a CPU or junction
+temperature.
+
+Only rack height, chassis depth, mass-weighted intake/exhaust temperatures,
+and device mass flow are required. Width defaults to 482 mm:
+
+```powershell
+python .\tools\generic_server_characterizer.py `
+  --name "Unknown 2U Server" `
+  --rack-units 2 `
+  --depth-mm 700 `
+  --mass-flow-kg-s 0.14 `
+  --intake-temp 298.0 `
+  --exhaust-temp 302.3 `
+  --heat-load-source airflow `
+  --output .\library\components\unknown_2u_server.toml `
+  --json-output .\unknown_2u_server.json
+```
+
+The generated heat-block load is:
+
+```text
+Q_air = mass_flow * cp_air * (T_exhaust - T_intake)
+```
+
+Use `--heat-load-source input --input-watts VALUE` for a server with measured
+wall power. Nearly all server input power ultimately becomes heat, so PSU
+efficiency must not be used to reduce total server heat. For a standalone UPS
+or converter whose useful output leaves the modeled component, use
+`--heat-load-source conversion-loss --input-watts VALUE
+--efficiency-percent VALUE`.
+
+Mass flow alone cannot identify a pressure-flow curve. If pressure rise is
+measured, add `--fan-pressure-rise-pa VALUE --fan-curve-output FILE.toml`.
+The fitted curve passes through the measured operating point and is explicitly
+an equivalent device curve, not a manufacturer fan curve. Without pressure,
+the generated component retains a provisional generic curve and its simulated
+mass flow must be checked and calibrated.
+
+The base files are `generic_server_1u.toml`, `generic_server_2u.toml`, and
+`generic_server_3u.toml` under `library/components`. The calculator can also
+derive a separate rack model without editing the detailed original by using
+`--model-source`, `--model-output`, and repeated
+`--replace-component OLD=NEW` arguments.

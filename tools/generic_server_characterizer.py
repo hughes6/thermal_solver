@@ -237,6 +237,13 @@ def main() -> int:
                         help="write a customized component TOML to this path")
     parser.add_argument("--json-output", type=Path,
                         help="write the calculated characterization as JSON")
+    parser.add_argument("--model-source", type=Path,
+                        help="existing model TOML to copy with component replacements")
+    parser.add_argument("--model-output", type=Path,
+                        help="destination for the derived model TOML")
+    parser.add_argument("--replace-component", action="append", default=[],
+                        metavar="OLD=NEW",
+                        help="component template path replacement; may be repeated")
     args = parser.parse_args()
 
     delta_t = args.exhaust_temp - args.intake_temp
@@ -345,6 +352,24 @@ def main() -> int:
         args.json_output.parent.mkdir(parents=True, exist_ok=True)
         args.json_output.write_text(json.dumps(report, indent=2) + "\n", encoding="utf-8")
         print(f"Wrote report:           {args.json_output}")
+    if (args.model_source is None) != (args.model_output is None):
+        parser.error("model-source and model-output must be supplied together")
+    if args.model_source:
+        model_text = args.model_source.read_text(encoding="utf-8")
+        for replacement in args.replace_component:
+            if "=" not in replacement:
+                parser.error("replace-component must use OLD=NEW")
+            old, new = replacement.split("=", 1)
+            if old not in model_text:
+                parser.error(f"component path not found in model-source: {old}")
+            model_text = model_text.replace(old, new)
+        model_text = (
+            "# Generic-component comparison model generated from "
+            f"{args.model_source.as_posix()}\n"
+            "# Detailed component model remains unchanged.\n" + model_text)
+        args.model_output.parent.mkdir(parents=True, exist_ok=True)
+        args.model_output.write_text(model_text, encoding="utf-8")
+        print(f"Wrote derived model:    {args.model_output}")
     return 0
 
 
