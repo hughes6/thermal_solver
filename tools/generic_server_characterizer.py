@@ -40,7 +40,7 @@ def slug(text: str) -> str:
 
 
 def component_toml(name: str, rack_units: int, width: float, depth: float,
-                   watts: float, mass_flow: float) -> str:
+                   watts: float, mass_flow: float, curve_name: str) -> str:
     height = rack_units * U_HEIGHT_MM
     margin = min(5.0, 0.08 * height)
     air_w = width - 2.0 * margin
@@ -150,7 +150,7 @@ state = "fan"
 shape = "rectangular"
 flow_type = "exhaust"
 cfm = {cfm:.9g}
-curve = "generic_80mm_low_speed" # provisional; calibrate to measured mass flow
+curve = {json.dumps(curve_name)}
 
 [internal_regions.position]
 units = "mm"
@@ -171,6 +171,37 @@ z = 0.0
 '''
 
 
+def fitted_fan_curve(mass_flow: float, rho: float, pressure: float,
+                     free_flow_multiplier: float) -> dict[str, float]:
+    """Fit P(Q)=a-cQ^2 through the measured point and zero-pressure flow."""
+    q_operating = mass_flow / rho
+    q_free = free_flow_multiplier * q_operating
+    denominator = 1.0 - (q_operating / q_free) ** 2
+    a = pressure / denominator
+    c = a / (q_free * q_free)
+    return {
+        "a": a,
+        "b": 0.0,
+        "c": c,
+        "rho_rated": rho,
+        "operating_flow_m3_s": q_operating,
+        "free_flow_m3_s": q_free,
+        "operating_pressure_pa": pressure,
+    }
+
+
+def fan_curve_toml(name: str, curve: dict[str, float]) -> str:
+    return f'''# Equivalent curve fitted by generic_server_characterizer.py.
+# Valid near the measured operating point; not a manufacturer fan curve.
+[[fan_curve]]
+name = {json.dumps(name)}
+a = {curve["a"]:.17g}
+b = {curve["b"]:.17g}
+c = {curve["c"]:.17g}
+rho_rated = {curve["rho_rated"]:.17g}
+'''
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(
         description="Infer air-side component watts and optionally write a generic server TOML.")
@@ -184,6 +215,15 @@ def main() -> int:
     parser.add_argument("--exhaust-temp", type=finite, required=True,
                         help="mass-weighted exhaust temperature in the same unit")
     parser.add_argument("--cp-air", type=positive, default=1005.5)
+    parser.add_argument("--air-density-kg-m3", type=positive, default=1.2041)
+    parser.add_argument("--fan-pressure-rise-pa", type=positive,
+                        help="measured static pressure rise at the supplied mass flow")
+    parser.add_argument("--fan-free-flow-multiplier", type=positive, default=1.25,
+                        help="assumed zero-pressure flow divided by measured flow (default: 1.25)")
+    parser.add_argument("--fan-curve-name",
+                        help="generated curve name; defaults to <device-name>_equivalent")
+    parser.add_argument("--fan-curve-output", type=Path,
+                        help="write a fan-curve TOML snippet when pressure rise is supplied")
     parser.add_argument("--electrical-watts", type=positive,
                         help="optional measured electrical dissipation for an energy check")
     parser.add_argument("--output", type=Path,
@@ -196,6 +236,16 @@ def main() -> int:
     if delta_t <= 0.0:
         parser.error("exhaust-temp must be greater than intake-temp")
     watts = args.mass_flow_kg_s * args.cp_air * delta_t
+    if args.fan_free_flow_multiplier <= 1.0:
+        parser.error("fan-free-flow-multiplier must be greater than 1")
+    curve_name = args.fan_curve_name or f"{slug(args.name)}_equivalent"
+    curve = None
+    if args.fan_pressure_rise_pa is not None:
+        curve = fitted_fan_curve(
+            args.mass_flow_kg_s, args.air_density_kg_m3,
+            args.fan_pressure_rise_pa, args.fan_free_flow_multiplier)
+    elif args.fan_curve_output is not None:
+        parser.error("fan-curve-output requires fan-pressure-rise-pa")
     volume = (0.70 * (args.width_mm - 10.0)) * (0.50 * (args.depth_mm - 10.0)) * \
              (0.40 * (args.rack_units * U_HEIGHT_MM - 10.0)) * 1.0e-9
     report = {
@@ -212,7 +262,11 @@ def main() -> int:
         "inferred_airside_watts": watts,
         "nominal_heat_block_qvol_w_m3": watts / volume,
         "template": f"library/components/generic_server_{args.rack_units}u.toml",
+        "fan_curve_name": curve_name if curve else "generic_80mm_low_speed",
+        "fan_curve_status": "operating-point fit" if curve else "provisional",
     }
+    if curve:
+        report["fan_curve"] = curve
     if args.electrical_watts is not None:
         report["electrical_watts"] = args.electrical_watts
         report["airside_heat_fraction"] = watts / args.electrical_watts
@@ -222,6 +276,13 @@ def main() -> int:
     print(f"Mass flow:              {args.mass_flow_kg_s:.6g} kg/s")
     print(f"Heat-block watts:       {watts:.6g} W")
     print(f"Matching base template: generic_server_{args.rack_units}u.toml")
+    if curve:
+        print(f"Fan curve:              {curve_name}")
+        print(f"  a:                    {curve['a']:.9g} Pa")
+        print(f"  b:                    {curve['b']:.9g} Pa/(m^3/s)")
+        print(f"  c:                    {curve['c']:.9g} Pa/(m^3/s)^2")
+    else:
+        print("Fan curve:              generic_80mm_low_speed (provisional)")
     if args.electrical_watts is not None:
         fraction = watts / args.electrical_watts
         print(f"Air-side heat fraction: {100.0 * fraction:.3f}%")
@@ -232,8 +293,14 @@ def main() -> int:
         args.output.parent.mkdir(parents=True, exist_ok=True)
         args.output.write_text(component_toml(
             args.name, args.rack_units, args.width_mm, args.depth_mm,
-            watts, args.mass_flow_kg_s), encoding="utf-8")
+            watts, args.mass_flow_kg_s,
+            curve_name if curve else "generic_80mm_low_speed"), encoding="utf-8")
         print(f"Wrote component:        {args.output}")
+    if args.fan_curve_output and curve:
+        args.fan_curve_output.parent.mkdir(parents=True, exist_ok=True)
+        args.fan_curve_output.write_text(
+            fan_curve_toml(curve_name, curve), encoding="utf-8")
+        print(f"Wrote fan curve:        {args.fan_curve_output}")
     if args.json_output:
         args.json_output.parent.mkdir(parents=True, exist_ok=True)
         args.json_output.write_text(json.dumps(report, indent=2) + "\n", encoding="utf-8")
