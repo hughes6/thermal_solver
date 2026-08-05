@@ -4,6 +4,8 @@
 #include <memory>
 #include <iomanip>
 #include <cmath>
+#include <filesystem>
+#include <cstdlib>
 
 #include "src/cell.hpp"
 #include "src/collision.hpp"
@@ -36,6 +38,7 @@ int main(int argc, char* argv[]) {
 
   bool force_native = false;
   bool geometry_only = false;
+  bool plot_existing = false;
   std::vector<std::string> positional_arguments;
   for(int i = 1; i < argc; ++i) {
     const std::string argument = argv[i];
@@ -44,14 +47,20 @@ int main(int argc, char* argv[]) {
     } else if(argument == "--geometry-only") {
       geometry_only = true;
       force_native = true;
+    } else if(argument == "--plot-existing") {
+      plot_existing = true;
     } else if(argument == "--help" || argument == "-h") {
       std::cout
           << "Usage: model_runner.exe [--native] [--geometry-only] "
+             "[--plot-existing] "
              "[model.toml] [fan_curves.toml]\n"
           << "  --native  Run the built-in solver even when the model enables "
              "OpenFOAM.\n"
           << "  --geometry-only  Write output.txt without running a transient "
-             "solver or exporting OpenFOAM.\n";
+             "solver or exporting OpenFOAM.\n"
+          << "  --plot-existing  Plot existing native results without loading "
+             "a model or modifying data. Optional positional arguments are "
+             "[simulation.csv] [output.txt].\n";
       return 0;
     } else if(!argument.empty() && argument[0] == '-') {
       std::cerr << "Unknown option: " << argument << "\n";
@@ -63,6 +72,53 @@ int main(int argc, char* argv[]) {
   if(positional_arguments.size() > 2) {
     std::cerr << "Too many arguments. Run with --help for usage.\n";
     return 2;
+  }
+
+  if(plot_existing) {
+    if(force_native || geometry_only) {
+      std::cerr << "--plot-existing cannot be combined with --native or "
+                   "--geometry-only.\n";
+      return 2;
+    }
+    const std::filesystem::path simulation_path =
+        positional_arguments.empty() ? "simulation.csv"
+                                     : positional_arguments[0];
+    const std::filesystem::path geometry_path =
+        positional_arguments.size() < 2 ? "output.txt"
+                                        : positional_arguments[1];
+    if(!std::filesystem::is_regular_file(simulation_path)) {
+      std::cerr << "Existing simulation data not found: "
+                << std::filesystem::absolute(simulation_path) << "\n";
+      return 2;
+    }
+    if(!std::filesystem::is_regular_file(geometry_path)) {
+      std::cerr << "Existing geometry report not found: "
+                << std::filesystem::absolute(geometry_path) << "\n";
+      return 2;
+    }
+    const auto quote = [](const std::filesystem::path& path) {
+      std::string value = std::filesystem::absolute(path).string();
+      std::string result = "\"";
+      for(const char character : value) {
+        if(character == '\"') result += "\\\"";
+        else result += character;
+      }
+      return result + "\"";
+    };
+    const std::filesystem::path plot_script =
+        std::filesystem::absolute("plot/heat_animation.py");
+    const std::string command =
+        "python " + quote(plot_script) + " --format native --sim " +
+        quote(simulation_path) + " --rack " + quote(geometry_path);
+    std::cout << "Plotting existing results without modifying simulation.csv "
+                 "or output.txt.\n";
+    const int status = std::system(command.c_str());
+    if(status != 0) {
+      std::cerr << "Existing-results plot command failed with status "
+                << status << ".\nCommand: " << command << "\n";
+      return 1;
+    }
+    return 0;
   }
   
   std::string load_model_path = "library/models/validation_fan_rack.toml";

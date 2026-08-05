@@ -119,6 +119,25 @@ If only the geometry report is needed, skip both transient solvers:
 This writes `output.txt` without accessing OpenFOAM or running the coarse and
 fine thermal simulations.
 
+To view an existing native result without loading the TOML, starting either
+solver, or rewriting `simulation.csv`/`output.txt`, use:
+
+```powershell
+.\model_runner.exe --plot-existing
+```
+
+Archived result and geometry files can be supplied explicitly:
+
+```powershell
+.\model_runner.exe --plot-existing `
+  .\archive\simulation.csv `
+  .\archive\output.txt
+```
+
+This mode launches `plot/heat_animation.py` directly. It never exports an
+OpenFOAM case and never constructs a new native mesh, so existing solver data
+is not deleted or replaced.
+
 ### 2.1 Source layout
 
 The repository root contains the three supported C++ entry points:
