@@ -1,102 +1,117 @@
+"""Plot an OpenFOAM boundary mass-flow report without changing its sign."""
+
+from __future__ import annotations
+
+import argparse
 from pathlib import Path
+
 import matplotlib.pyplot as plt
 
-# Change this to your actual OpenFOAM case.
-CASE = Path(r"C:\OpenFOAM\thermal_sim_v2\validation_fan_rack")
 
-# TOML name "Validation outlet" becomes Validation_outlet.
-REPORT = '\fluid\ambient_net_mass_flow'
+def report_directories(case: Path) -> list[Path]:
+    post = case / "postProcessing"
+    if not post.is_dir():
+        return []
+    return sorted(
+        path for path in post.glob("**/*mass_flow") if path.is_dir()
+    )
 
-# Use the same density as the simulation for conversion to volumetric flow.
-RHO = 1.225  # kg/m^3
-M3S_TO_CFM = 2118.880003
 
-report_root = CASE / "postProcessing" / REPORT
+def select_report(case: Path, requested: str | None) -> Path:
+    available = report_directories(case)
+    if requested:
+        normalized = requested.replace("\\", "/").strip("/")
+        direct = case / "postProcessing" / Path(normalized)
+        if direct.is_dir():
+            return direct
+        matches = [path for path in available if path.name == normalized]
+        if len(matches) == 1:
+            return matches[0]
+        if len(matches) > 1:
+            raise SystemExit(
+                f"Report name {requested!r} is ambiguous; provide its path below "
+                "postProcessing."
+            )
+    else:
+        outlets = [path for path in available if "outlet" in path.name.lower()]
+        if len(outlets) == 1:
+            return outlets[0]
 
-if not report_root.is_dir():
-    available = []
-    post = CASE / "postProcessing"
+    listing = "\n  ".join(
+        str(path.relative_to(case / "postProcessing")) for path in available
+    ) or "(none)"
+    raise SystemExit(
+        "Could not select one outlet mass-flow report. Use --report with one "
+        f"of:\n  {listing}"
+    )
 
-    if post.is_dir():
-        available = sorted(
-            item.name
-            for item in post.iterdir()
-            if item.is_dir() and "mass_flow" in item.name
+
+def read_samples(report: Path) -> tuple[list[float], list[float]]:
+    samples: dict[float, float] = {}
+    for path in report.glob("*/surfaceFieldValue.dat"):
+        with path.open("r", encoding="utf-8", errors="replace") as stream:
+            for line in stream:
+                columns = line.replace("(", " ").replace(")", " ").split()
+                if not columns or columns[0].startswith("#"):
+                    continue
+                try:
+                    samples[float(columns[0])] = float(columns[1])
+                except (ValueError, IndexError):
+                    continue
+    if not samples:
+        raise SystemExit(f"No readable flow samples found below {report}")
+    times = sorted(samples)
+    return times, [samples[time] for time in times]
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--case", type=Path, required=True)
+    parser.add_argument(
+        "--report",
+        help=(
+            "Report name or path below postProcessing, for example "
+            "fluid/Validation_outlet_mass_flow"
+        ),
+    )
+    parser.add_argument("--rho", type=float, default=1.225)
+    parser.add_argument("--expected-kg-s", type=float)
+    args = parser.parse_args()
+
+    report = select_report(args.case.resolve(), args.report)
+    times, mass_flow = read_samples(report)
+    volume_flow = [value / args.rho for value in mass_flow]
+    cfm = [value * 2118.880003 for value in volume_flow]
+
+    print(f"Report:                    {report}")
+    print(f"Latest result time:         {times[-1]:.6g} s")
+    print(f"Signed mass flow:           {mass_flow[-1]:.8g} kg/s")
+    print(f"Signed volume flow:         {volume_flow[-1]:.8g} m^3/s")
+    print(f"Signed flow:                {cfm[-1]:.4f} CFM")
+    print("Sign convention:            positive = out of domain")
+
+    fig, left = plt.subplots(figsize=(9, 5))
+    left.plot(times, mass_flow, color="tab:blue", linewidth=2)
+    if args.expected_kg_s is not None:
+        left.axhline(
+            args.expected_kg_s, color="black", linestyle="--", linewidth=1,
+            label=f"Expected: {args.expected_kg_s:g} kg/s",
         )
+        left.legend()
+    left.axhline(0.0, color="gray", linewidth=0.8)
+    left.set_xlabel("Simulation time (s)")
+    left.set_ylabel("Signed mass flow (kg/s)", color="tab:blue")
+    left.tick_params(axis="y", labelcolor="tab:blue")
+    left.grid(True, alpha=0.3)
 
-    raise SystemExit(
-        f"Could not find:\n  {report_root}\n\n"
-        f"Available mass-flow reports:\n  "
-        + "\n  ".join(available)
-    )
+    right = left.twinx()
+    right.plot(times, cfm, color="tab:orange", linewidth=1.5, alpha=0.8)
+    right.set_ylabel("Signed flow (CFM)", color="tab:orange")
+    right.tick_params(axis="y", labelcolor="tab:orange")
+    plt.title(report.name.replace("_", " ").title())
+    fig.tight_layout()
+    plt.show()
 
-# A restarted run can create several numbered output directories.
-files = list(report_root.glob("*/surfaceFieldValue.dat"))
 
-if not files:
-    raise SystemExit(
-        f"No surfaceFieldValue.dat files found below:\n  {report_root}"
-    )
-
-# Keying by time automatically replaces duplicate restart samples.
-samples = {}
-
-for path in files:
-    with path.open("r", encoding="utf-8", errors="replace") as stream:
-        for line in stream:
-            line = line.strip()
-
-            if not line or line.startswith("#"):
-                continue
-
-            columns = line.replace("(", " ").replace(")", " ").split()
-
-            try:
-                time = float(columns[0])
-                phi = float(columns[1])
-            except (ValueError, IndexError):
-                continue
-
-            samples[time] = phi
-
-if not samples:
-    raise SystemExit("The report files contained no readable flow samples.")
-
-times = sorted(samples)
-signed_mass_flow = [samples[t] for t in times]
-outlet_mass_flow = [abs(value) for value in signed_mass_flow]
-volume_flow = [value / RHO for value in outlet_mass_flow]
-cfm = [value * M3S_TO_CFM for value in volume_flow]
-velocity = [value / 0.15 for value in volume_flow]
-
-print(f"Latest result time:       {times[-1]:.6g} s")
-print(f"Signed phi:               {signed_mass_flow[-1]:.8g} kg/s")
-print(f"Outlet mass flow:         {outlet_mass_flow[-1]:.8g} kg/s")
-print(f"Outlet volume flow:       {volume_flow[-1]:.8g} m^3/s")
-print(f"Outlet flow:              {cfm[-1]:.4f} CFM")
-print(f"Area-average equivalent:  {velocity[-1]:.6g} m/s")
-
-fig, left = plt.subplots(figsize=(9, 5))
-
-left.plot(times, outlet_mass_flow, color="tab:blue", linewidth=2)
-left.axhline(
-    0.0091875,
-    color="black",
-    linestyle="--",
-    linewidth=1,
-    label="Expected: 0.0091875 kg/s",
-)
-left.set_xlabel("Simulation time (s)")
-left.set_ylabel("Outlet mass flow (kg/s)", color="tab:blue")
-left.tick_params(axis="y", labelcolor="tab:blue")
-left.grid(True, alpha=0.3)
-left.legend()
-
-right = left.twinx()
-right.plot(times, cfm, color="tab:orange", linewidth=1.5, alpha=0.8)
-right.set_ylabel("Outlet flow (CFM)", color="tab:orange")
-right.tick_params(axis="y", labelcolor="tab:orange")
-
-plt.title("Validation Outlet Flow")
-fig.tight_layout()
-plt.show()
+if __name__ == "__main__":
+    main()

@@ -34,6 +34,7 @@ Write-Host "Checking Python plotting scripts"
     "tests/plot_geometry_test.py" `
     "tests/openfoam_animation_test.py" `
     "tools/validate_openfoam_case.py" `
+    "plot_outlet_flow.py" `
     "tests/openfoam_validation_test.py"
 if ($LASTEXITCODE -ne 0) {
     throw "Python plotting syntax check failed"
