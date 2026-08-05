@@ -1616,7 +1616,27 @@ struct ModelLoader {
                 << cfg.parallel_processes;
             if(cfg.use_multirate_thermal)
                 std::cout << " --multirate " << model.simulation.duration;
-            std::cout << '\n'
+            std::cout << '\n';
+            if(cfg.use_multirate_thermal) {
+                std::cout
+                    << "\nTwo-stage long-rack convergence workflow "
+                       "(run these in order):\n"
+                    << "  # Stage 1: fully coupled airflow/thermal warm start "
+                       "to 18000 s\n"
+                    << "  cd '" << launch_directory
+                    << "' && ./run_parallel.sh " << cfg.parallel_processes
+                    << " --warm-start 18000\n"
+                    << "  # Stage 2: continue from latestTime to 100000 s; "
+                       "thermal-only between periodic airflow refreshes\n"
+                    << "  cd '" << launch_directory
+                    << "' && ./run_parallel.sh " << cfg.parallel_processes
+                    << " --multirate 100000\n"
+                    << "Stage 2 preserves the 18000 s fields and may stop "
+                       "early when thermal and refreshed-airflow convergence "
+                       "criteria pass. Do not re-export with overwrite=true "
+                       "between stages.\n\n";
+            }
+            std::cout
                 << "Plot the latest temperature cut plane interactively "
                    "(PowerShell or Git Bash):\n  "
 #ifdef _WIN32

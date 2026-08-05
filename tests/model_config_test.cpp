@@ -221,6 +221,10 @@ int main() {
     assert(export_output.str().find(
         "./run_parallel.sh 2 --multirate 10") != std::string::npos);
     assert(export_output.str().find(
+        "./run_parallel.sh 2 --warm-start 18000") != std::string::npos);
+    assert(export_output.str().find(
+        "./run_parallel.sh 2 --multirate 100000") != std::string::npos);
+    assert(export_output.str().find(
         "Plot the latest temperature cut plane interactively") !=
         std::string::npos);
     assert(export_output.str().find(
