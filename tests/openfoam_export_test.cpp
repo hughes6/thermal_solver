@@ -112,7 +112,7 @@ int main(int argc, char** argv) {
     assert(control_text.str().find(
         "test_outlet_mass_weighted_temperature") != std::string::npos);
     assert(control_text.str().find(
-        "operation absWeightedAverage;") != std::string::npos);
+        "operation weightedAverage;") != std::string::npos);
     assert(control_text.str().find("weightField phi;") != std::string::npos);
     assert(std::filesystem::is_regular_file(
         case_path/"constant"/"polyMesh"/"sets"/"test_heat_source_0"));
@@ -144,6 +144,15 @@ int main(int argc, char** argv) {
     assert(std::filesystem::is_regular_file(case_path/"0"/"fluid"/"nut"));
     assert(std::filesystem::is_regular_file(
         case_path/"0"/"test_heater_0"/"T"));
+    for(const auto& temperature_file : {
+        case_path/"0"/"fluid"/"T",
+        case_path/"0"/"test_heater_0"/"T"}) {
+        std::ifstream stream(temperature_file);
+        std::ostringstream text;
+        text << stream.rdbuf();
+        assert(text.str().find("useImplicit false") != std::string::npos);
+        assert(text.str().find("useImplicit true") == std::string::npos);
+    }
     assert(std::filesystem::is_regular_file(
         case_path/"constant"/"fluid"/"thermophysicalProperties"));
     assert(std::filesystem::is_regular_file(

@@ -141,13 +141,13 @@ def main() -> None:
         print(f"Result time:                  {selected_time:g} s")
         print(f"Outlet patch:                 {args.outlet}")
         if exact_mass_flow is not None:
-            print(f"Absolute outlet mass flow:    {abs(exact_mass_flow):.8g} kg/s")
+            print(f"Net outlet mass flow:         {exact_mass_flow:.8g} kg/s")
         print(f"Mass-weighted temperature:    {exact_temperature:.6f} K")
         print(
             "Mass-weighted temperature:    "
             f"{exact_temperature - 273.15:.6f} C"
         )
-        print("Weighting source:              OpenFOAM absWeightedAverage(T, phi)")
+        print("Weighting source:              OpenFOAM weightedAverage(T, phi)")
         return
 
     data = reader.read()
@@ -174,13 +174,13 @@ def main() -> None:
 
         temperature = np.asarray(block.cell_data["T"], dtype=float).reshape(-1)
         if "phi" in block.cell_data:
-            mass_flow = np.abs(
-                np.asarray(block.cell_data["phi"], dtype=float).reshape(-1)
-            )
+            mass_flow = np.asarray(
+                block.cell_data["phi"], dtype=float
+            ).reshape(-1)
         elif "rho" in block.cell_data and "U" in block.cell_data:
             # Some VTK/OpenFOAM combinations omit surfaceScalarField data on
             # boundary blocks. Reconstruct each face's mass flow as
-            # |rho * U dot n * area| from the volume-field boundary values.
+            # rho * U dot n * area from the volume-field boundary values.
             geometry = block.compute_cell_sizes(
                 length=False, area=True, volume=False
             ).compute_normals(
@@ -201,7 +201,7 @@ def main() -> None:
             area = np.asarray(
                 geometry.cell_data["Area"], dtype=float
             ).reshape(-1)
-            mass_flow = np.abs(
+            mass_flow = (
                 density * np.einsum("ij,ij->i", velocity, normals) * area
             )
         else:
@@ -224,14 +224,14 @@ def main() -> None:
         raise SystemExit(
             f"The reader returned no boundary faces for patch {args.outlet!r}"
         )
-    if mass_flow_sum <= 0.0:
-        raise SystemExit(f"Mass flow through patch {args.outlet!r} is zero")
+    if abs(mass_flow_sum) <= 1.0e-15:
+        raise SystemExit(f"Net mass flow through patch {args.outlet!r} is zero")
 
     temperature_k = weighted_temperature_sum / mass_flow_sum
     print(f"Result time:                  {selected_time:g} s")
     print(f"Outlet patch:                 {args.outlet}")
     print(f"Outlet faces:                 {matched_cells}")
-    print(f"Absolute outlet mass flow:    {mass_flow_sum:.8g} kg/s")
+    print(f"Net outlet mass flow:         {mass_flow_sum:.8g} kg/s")
     print(f"Mass-weighted temperature:    {temperature_k:.6f} K")
     print(f"Mass-weighted temperature:    {temperature_k - 273.15:.6f} C")
     print("Weighting source:              VTK boundary-field reconstruction")

@@ -1404,7 +1404,7 @@ private:
                 "        writeInterval " << options.report_interval << ";\n"
                 "        regionType patch;\n"
                 "        name " << foam_word(patch.name) << ";\n"
-                "        operation absWeightedAverage;\n"
+                "        operation weightedAverage;\n"
                 "        weightField phi;\n"
                 "        writeFields false;\n"
                 "        fields (T);\n"
@@ -1541,7 +1541,7 @@ private:
                        << " type compressible::"
                           "turbulentTemperatureRadCoupledMixed;\n"
                        << " Tnbr T;\n kappaMethod fluidThermo;\n"
-                       << " useImplicit true;\n qrNbr none;\n qr none;\n"
+                       << " useImplicit false;\n qrNbr none;\n qr none;\n"
                        << " value uniform " << temperature << ";\n}\n";
             output << "}\n";
         }
@@ -1856,7 +1856,7 @@ private:
                << " type compressible::"
                   "turbulentTemperatureRadCoupledMixed;\n"
                << " Tnbr T;\n kappaMethod solidThermo;\n"
-               << " useImplicit true;\n qrNbr none;\n qr none;\n"
+               << " useImplicit false;\n qrNbr none;\n qr none;\n"
                << " value uniform " << temperature << ";\n"
                << "}\n"
                << "\".*\"\n{\n"
