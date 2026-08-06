@@ -1811,6 +1811,16 @@ The script reuses valid processor partitions and the latest saved time. If a
 refresh was interrupted, `.airflow_refresh_pending` causes it to be retried.
 Do not delete hidden marker/state files when you intend to resume.
 
+`plot/recirculation_report.py` merges every OpenFOAM restart-segment report,
+including suffixed `surfaceFieldValue_<time>.dat` files. In addition to signed
+flow, boundary temperature, and the thermal re-ingestion index, its CSV and
+fourth plot panel report net sensible heat rejected relative to ambient. The
+expected applied heat is summed automatically from
+`constant/openfoamExportProperties`; use `--expected-heat-watts` only to
+override that exported value. A heat-rejection fraction below 100% during a
+transient indicates that energy is still accumulating in the rack or leaving
+through non-airflow paths, so it is a useful independent convergence check.
+
 ### 16.5 How OpenFOAM saves fields and resumes in time segments
 
 OpenFOAM saves a simulation state in directories named by **simulated time**.

@@ -4,12 +4,13 @@ from __future__ import annotations
 
 import argparse
 import csv
+import re
 from pathlib import Path
 
 
 def read_report(root: Path) -> dict[float, float]:
     samples: dict[float, float] = {}
-    for path in root.glob("*/surfaceFieldValue.dat"):
+    for path in root.glob("*/surfaceFieldValue*.dat"):
         for line in path.read_text(encoding="utf-8", errors="replace").splitlines():
             columns = line.replace("(", " ").replace(")", " ").split()
             if not columns or columns[0].startswith("#"):
@@ -43,7 +44,18 @@ def boundary_histories(case: Path) -> dict[str, dict[str, dict[float, float]]]:
     }
 
 
-def combined_samples(histories, ambient_k: float):
+def exported_heat_watts(case: Path) -> float | None:
+    path = case / "constant" / "openfoamExportProperties"
+    if not path.is_file():
+        return None
+    values = [float(value) for value in re.findall(
+        r"\bwatts\s+([\d.eE+-]+);",
+        path.read_text(encoding="utf-8", errors="replace"),
+    )]
+    return sum(values) if values else None
+
+
+def combined_samples(histories, ambient_k: float, cp_air: float = 1005.0):
     all_times = sorted({
         time for fields in histories.values() for time in fields["flow"]
         if time in fields["temperature"]
@@ -70,7 +82,12 @@ def combined_samples(histories, ambient_k: float):
             max(0.0, min(1.0, (intake_t - ambient_k) / denominator))
             if denominator > 1.0e-12 and intake_t == intake_t else float("nan")
         )
-        rows.append((time, intake_mass, exhaust_mass, intake_t, exhaust_t, index))
+        sensible_heat = cp_air * (
+            exhaust_mass * (exhaust_t - ambient_k)
+            - intake_mass * (intake_t - ambient_k)
+        )
+        rows.append((time, intake_mass, exhaust_mass, intake_t, exhaust_t,
+                     index, sensible_heat))
     return rows
 
 
@@ -78,6 +95,10 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--case", required=True, type=Path)
     parser.add_argument("--ambient-temperature", type=float, default=293.15)
+    parser.add_argument("--cp-air", type=float, default=1005.0,
+                        help="air specific heat in J/(kg K), default: 1005")
+    parser.add_argument("--expected-heat-watts", type=float,
+                        help="override exported applied heat for rejection comparison")
     parser.add_argument("--output", type=Path, default=Path("recirculation_report.png"))
     parser.add_argument("--save", action="store_true")
     args = parser.parse_args()
@@ -88,6 +109,9 @@ def main() -> None:
         raise SystemExit("Install Matplotlib with: python -m pip install matplotlib") from exc
 
     case = args.case.expanduser().resolve()
+    expected_heat_watts = args.expected_heat_watts
+    if expected_heat_watts is None:
+        expected_heat_watts = exported_heat_watts(case)
     try:
         histories = boundary_histories(case)
     except ValueError as exc:
@@ -97,7 +121,11 @@ def main() -> None:
             "No paired *_mass_flow and *_mass_weighted_temperature reports found. "
             "Re-export and run the case with the current v2.2 exporter."
         )
-    rows = combined_samples(histories, args.ambient_temperature)
+    if args.cp_air <= 0.0:
+        raise SystemExit("--cp-air must be positive")
+    if expected_heat_watts is not None and expected_heat_watts <= 0.0:
+        raise SystemExit("--expected-heat-watts must be positive")
+    rows = combined_samples(histories, args.ambient_temperature, args.cp_air)
     if not rows:
         raise SystemExit("Boundary reports have no matching time samples")
 
@@ -105,10 +133,15 @@ def main() -> None:
     with csv_path.open("w", newline="", encoding="utf-8") as stream:
         writer = csv.writer(stream)
         writer.writerow(("time_s", "intake_kg_s", "exhaust_kg_s", "intake_T_K",
-                         "exhaust_T_K", "thermal_reingestion_index"))
-        writer.writerows(rows)
+                         "exhaust_T_K", "thermal_reingestion_index",
+                         "net_sensible_heat_rejection_W",
+                         "heat_rejection_fraction"))
+        for row in rows:
+            fraction = (row[6] / expected_heat_watts
+                        if expected_heat_watts is not None else float("nan"))
+            writer.writerow((*row, fraction))
 
-    fig, axes = plt.subplots(3, 1, figsize=(11, 10), sharex=True)
+    fig, axes = plt.subplots(4, 1, figsize=(11, 13), sharex=True)
     for patch, fields in sorted(histories.items()):
         times = sorted(fields["flow"])
         axes[0].plot(times, [fields["flow"][t] for t in times], label=patch)
@@ -126,8 +159,16 @@ def main() -> None:
     axes[2].plot([row[0] for row in rows], [row[5] for row in rows], color="crimson")
     axes[2].set_ylim(-0.02, 1.02)
     axes[2].set_ylabel("Thermal re-ingestion index")
-    axes[2].set_xlabel("Simulation time (s)")
     axes[2].set_title("0 = ambient intake; 1 = exhaust-temperature intake")
+    axes[3].plot([row[0] for row in rows], [row[6] for row in rows],
+                 color="darkorange", label="Net boundary sensible heat")
+    if expected_heat_watts is not None:
+        axes[3].axhline(expected_heat_watts, color="black", linestyle="--",
+                        label=f"Applied heat: {expected_heat_watts:g} W")
+        axes[3].legend(fontsize=8)
+    axes[3].set_ylabel("Heat rejection (W)")
+    axes[3].set_xlabel("Simulation time (s)")
+    axes[3].set_title("Net sensible heat rejected relative to ambient")
     for axis in axes:
         axis.grid(True, alpha=0.3)
     fig.tight_layout()
@@ -138,6 +179,10 @@ def main() -> None:
         plt.show()
     print(f"Saved: {csv_path}")
     print(f"Latest thermal re-ingestion index: {rows[-1][5]:.6g}")
+    print(f"Latest net sensible heat rejection: {rows[-1][6]:.6g} W")
+    if expected_heat_watts is not None:
+        print("Latest heat-rejection fraction: "
+              f"{rows[-1][6] / expected_heat_watts:.6%}")
     print("Note: this temperature index indicates hot intake air but does not identify "
           "which exhaust produced it; source attribution requires a passive tracer.")
 
