@@ -147,6 +147,15 @@ rack-level closure model, not a claim about physical sheet-metal gauge. The
 exact enclosure cuts raise the final screening mesh to 204,136 cells, still
 only 26.7% of the rejected 764,694-cell global-10-mm mesh.
 
+That 204,136-cell result also revealed that the former screening settings were
+counterproductive: their 200 mm coarse target and 5 mm refinement halo forced
+extra transition-smoothing splits around the resolved enclosure planes. The
+100 mm/20 mm in-depth layout contained only 167,232 cells with identical
+component zones and volumes. Screening now uses that same mesh layout (18.1%
+fewer cells than the former screening mesh); its speed advantage comes from
+thermal timestep, refresh, and reporting policy rather than different
+geometry.
+
 `checkMesh` continues to report low determinant cells in one-cell-thick solid
 shells (with positive volumes, zero non-orthogonality, negligible skewness,
 and valid interfaces). Those warnings are retained as a known topology

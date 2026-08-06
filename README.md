@@ -1542,8 +1542,8 @@ The screening profile currently uses:
 
 ```toml
 fine_dx = 0.02
-coarse_dx = 0.20
-refinement_margin = 0.005
+coarse_dx = 0.10
+refinement_margin = 0.02
 ```
 
 The in-depth profile uses:
@@ -1554,12 +1554,14 @@ coarse_dx = 0.10
 refinement_margin = 0.02
 ```
 
-The local fine spacing remains 20 mm in both because the current Trenton rear
-fan and nearby enclosure clearance require it to preserve valid upstream and
-downstream fluid cells. Screening is accelerated by coarsening open rack
-volume, shrinking the refinement halo, writing less often, using larger
-implicit thermal steps, and refreshing airflow less often. Blindly increasing
-`fine_dx` can delete a thin air channel or strand a fan against solid cells.
+The mesh is intentionally identical between screening and in-depth profiles.
+The former 200 mm/5 mm screening layout became 22% larger than the in-depth
+mesh after transition smoothing around required 5 mm enclosure cells
+(204,136 versus 167,232 cells). Using 100 mm/20 mm for both is faster and
+removes geometry as a confounding variable when comparing solver profiles.
+Screening is accelerated by writing less often, using larger implicit thermal
+steps, and refreshing airflow less often. Blindly increasing `fine_dx` can
+delete a thin air channel or strand a fan against solid cells.
 
 When making a new component more accurate:
 

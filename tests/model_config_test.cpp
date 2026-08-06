@@ -65,7 +65,7 @@ int main() {
                "C:/OpenFOAM/thermal_sim_v2/model"));
     assert(model.mesh.adaptive);
     assert(model.mesh.fine_dx == 0.02);
-    assert(model.mesh.coarse_dx == 0.20);
+    assert(model.mesh.coarse_dx == 0.10);
 
     ModelLoader legacy_loader;
     legacy_loader.load_model("library/tests/valid_model.toml");
@@ -159,8 +159,8 @@ int main() {
     const ModelInput screening=load_fidelity_profile("screening");
     assert(screening.mesh.adaptive);
     assert(screening.mesh.fine_dx == 0.02);
-    assert(screening.mesh.coarse_dx == 0.20);
-    assert(screening.mesh.refinement_margin == 0.005);
+    assert(screening.mesh.coarse_dx == 0.10);
+    assert(screening.mesh.refinement_margin == 0.02);
     assert(
         screening.openfoam_solver.thermal_only_maximum_time_step == 10.0);
     assert(screening.openfoam_solver.airflow_refresh_duration == 0.02);
@@ -177,6 +177,9 @@ int main() {
     assert(indepth.mesh.fine_dx == 0.02);
     assert(indepth.mesh.coarse_dx == 0.10);
     assert(indepth.mesh.refinement_margin == 0.02);
+    assert(screening.mesh.fine_dx == indepth.mesh.fine_dx);
+    assert(screening.mesh.coarse_dx == indepth.mesh.coarse_dx);
+    assert(screening.mesh.refinement_margin == indepth.mesh.refinement_margin);
     assert(indepth.openfoam_solver.thermal_only_maximum_time_step == 5.0);
     assert(indepth.openfoam_solver.minimum_initial_airflow_duration == 0.30);
     assert(
