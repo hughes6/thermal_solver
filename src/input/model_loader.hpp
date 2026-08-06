@@ -80,6 +80,29 @@ namespace {
         };
     }
 
+    MaterialInput parse_material(
+        const toml::node_view<const toml::node>& node,
+        const std::string& context) {
+        if(const toml::table* table=node.as_table())
+            return parse_material(*table,context);
+
+        const auto path=node.value<std::string>();
+        if(!path)
+            throw std::runtime_error(
+                context+" must be a TOML table or material-file path");
+
+        try {
+            const toml::table root=toml::parse_file(*path);
+            if(const toml::table* nested=root["material"].as_table())
+                return parse_material(*nested,*path+".material");
+            return parse_material(root,*path);
+        } catch(const std::exception& error) {
+            throw std::runtime_error(
+                "Failed to load material '"+*path+"' for "+context+": "+
+                error.what());
+        }
+    }
+
     FanShape parse_fan_shape(const std::string& value) {
         if(value == "circular") {
             return FanShape::Circular;
@@ -156,7 +179,8 @@ namespace {
         if(internal_region.state == RegionState::Air) return internal_region;
 
         if(internal_region.state == RegionState::Solid) {
-            internal_region.material = parse_material(require_table(table["material"], context + ".material"), context + ".material");
+            internal_region.material = parse_material(
+                table["material"],context+".material");
             internal_region.watts = require_value<double>(table["watts"], context + ".watts");
             return internal_region;
         }
@@ -178,7 +202,7 @@ namespace {
         component.name = require_value<std::string>(table["name"], context + ".name");
         component.watts = require_value<double>(table["watts"], context + ".watts");
         component.size = parse_size(require_table(table["size"], context + ".size"), context + ".size");
-        component.material = parse_material(require_table(table["material"], context + ".material"), context + ".material");
+        component.material = parse_material(table["material"],context+".material");
 
         const toml::array* internal_regions = table["internal_regions"].as_array();
 
