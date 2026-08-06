@@ -406,9 +406,13 @@ int main() {
     assert(run_parallel.find(
         "printf \"%.17g %d\", remaining/n,n") != std::string::npos);
     assert(run_parallel.find(
-        "-entry writeControl -set timeStep") != std::string::npos);
+        "stage_write_control=adjustableRunTime") != std::string::npos);
     assert(run_parallel.find(
-        "-entry writeInterval -set \"$stage_steps\"") != std::string::npos);
+        "-entry writeControl -set \"$stage_write_control\"") !=
+           std::string::npos);
+    assert(run_parallel.find(
+        "-entry writeInterval -set \"$stage_write_interval\"") !=
+           std::string::npos);
     assert(run_parallel.find(
         "for field in U p p_rgh phi rho k omega nut alphat") !=
         std::string::npos);
@@ -424,13 +428,17 @@ int main() {
     assert(run_parallel.find(
         "if(x<=a+1e-9)x+=d") != std::string::npos);
     assert(run_parallel.find(
-        "limit=(flow_max<maximum?flow_max:maximum)") != std::string::npos);
+        "stage_max_dt=$(awk") != std::string::npos);
     assert(run_parallel.find(
         "-v flow_max=\"0.001") != std::string::npos);
     assert(run_parallel.find(
         "safe=remaining/10") != std::string::npos);
     assert(run_parallel.find(
-        "adjust_time_step=true") == std::string::npos);
+        "adjust_time_step=true") != std::string::npos);
+    assert(run_parallel.find(
+        "stage_write_control=timeStep") != std::string::npos);
+    assert(run_parallel.find(
+        "-entry maxDeltaT -set \"$stage_max_dt\"") != std::string::npos);
     assert(run_parallel.find(
         "-entry index -set 0") != std::string::npos);
     assert(run_parallel.find(
