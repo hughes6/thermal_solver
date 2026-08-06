@@ -373,6 +373,19 @@ int main() {
     assert(run_parallel.find("Fan ramp stage") != std::string::npos);
     assert(run_parallel.find("adaptive_initial_airflow") !=
            std::string::npos);
+    const std::size_t adaptive_refresh_start=
+        run_parallel.find("adaptive_airflow_refresh()");
+    const std::size_t adaptive_initial_start=
+        run_parallel.find("adaptive_initial_airflow()", adaptive_refresh_start);
+    assert(adaptive_refresh_start != std::string::npos);
+    assert(adaptive_initial_start != std::string::npos);
+    const std::string adaptive_refresh=run_parallel.substr(
+        adaptive_refresh_start, adaptive_initial_start-adaptive_refresh_start);
+    assert(adaptive_refresh.find("previous_flows=()") == std::string::npos);
+    assert(adaptive_refresh.find("Retain the last accepted operating point") !=
+           std::string::npos);
+    assert(run_parallel.find("previous_flows=()", adaptive_initial_start) !=
+           std::string::npos);
     assert(run_parallel.find("internal_fan_names") != std::string::npos);
     assert(run_parallel.find("boundary_flow_lookup") != std::string::npos);
     assert(run_parallel.find("boundary_flow_floor") != std::string::npos);

@@ -210,6 +210,14 @@ the transition into meaningful intake, exhaust, or recirculation observable.
 Internal fan operating points retain their original full relative-change
 check. The supplied value is `0.0001`, or 0.01% of rack throughput.
 
+Adaptive refreshes also retain the last accepted flow vector within a runner
+invocation. Their first live-flow window therefore measures the operating-point
+change accumulated during the preceding thermal-only interval. Previously the
+refresh cleared that vector, spent one costly window establishing a new
+baseline, and could not detect the across-interval change. A restarted runner
+still reacquires a baseline conservatively because its in-memory vector is
+unavailable.
+
 The independently exported 167,232-cell production case then passed live at
 `t = 0.36 s`: ambient mass imbalance was 0.1978%, maximum meaningful device
 flow change was 0.6477%, the boundary-flow floor was `2.46223e-5 kg/s`, and

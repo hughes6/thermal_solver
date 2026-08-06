@@ -3298,7 +3298,12 @@ private:
                         "refresh_elapsed=0 refresh_target\n"
                     "        printf '%s\n' \"$refresh_start\" > "
                         "\"$refresh_pending_marker\"\n"
-                    "        previous_flows=()\n"
+                    "        # Retain the last accepted operating point. The "
+                        "first live window must measure the airflow change "
+                        "caused by the preceding thermal-only interval, not "
+                        "silently establish a fresh baseline. A restarted "
+                        "runner begins with an empty array and therefore "
+                        "conservatively reacquires one.\n"
                     "        while true; do\n"
                     "            refresh_target=$(awk -v a=\"$current\" -v d=\""
                     << options.airflow_refresh_check_interval

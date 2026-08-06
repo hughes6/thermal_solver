@@ -1650,7 +1650,7 @@ airflow and retain a conservative 0.001 s coupled-flow timestep.
 | Setting | Meaning |
 |---|---|
 | `airflow_refresh_duration` | Minimum physical duration of a refresh before flow metrics may accept it. |
-| `use_adaptive_airflow_refresh` | Stops a refresh when mass balance, device-flow change, and direction checks pass. |
+| `use_adaptive_airflow_refresh` | Stops a refresh when mass balance, device-flow change, and direction checks pass. Within one runner invocation, the first live window is compared with the last accepted operating point before the thermal-only interval. |
 | `airflow_refresh_maximum_courant_number` | `maxCo` during refresh windows. |
 | `airflow_refresh_check_interval` | Physical seconds added between refresh convergence checks. |
 | `maximum_airflow_refresh_duration` | Safety limit; failure to converge before this duration stops the run with an error. |
@@ -1658,15 +1658,20 @@ airflow and retain a conservative 0.001 s coupled-flow timestep.
 | `maximum_device_flow_change_fraction` | Maximum relative change in tracked fan/device flow between comparison windows. |
 | `minimum_tracked_boundary_flow_fraction` | Exterior flow below this fraction of total one-way rack throughput is negligible for stability only when both consecutive samples remain below the floor. |
 
-At least one measurement establishes a baseline before a flow-change decision
-can pass. Flow direction checks ensure intake/exhaust devices are operating in
-their intended directions.
+Initial airflow requires one measurement to establish a baseline before a
+flow-change decision can pass. Later adaptive refreshes retain the last
+accepted flow vector in the running process, so their first live window checks
+both the thermally accumulated operating-point change and current stability.
+A restarted runner conservatively reacquires a baseline because that in-memory
+vector is unavailable. Flow direction checks ensure intake/exhaust devices are
+operating in their intended directions.
 
-The screening profile uses a short `airflow_refresh_duration = 0.01`; adaptive
-checking still requires a baseline and a later comparison, so it cannot accept
-after only one window. Screening, default, validation, and in-depth profiles
-all use a 1% device-flow tolerance. In-depth and validation retain longer
-minimum refresh windows for higher-fidelity updates.
+The screening profile uses a short `airflow_refresh_duration = 0.01`. Once the
+initial baseline exists, an unchanged operating point can pass after one
+window; a meaningful change triggers additional comparison windows. Screening,
+default, validation, and in-depth profiles all use a 1% device-flow tolerance.
+In-depth and validation retain longer minimum refresh windows for
+higher-fidelity updates.
 
 The supplied profiles use
 `minimum_tracked_boundary_flow_fraction = 0.0001`. This prevents numerical
