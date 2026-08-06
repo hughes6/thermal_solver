@@ -2516,6 +2516,14 @@ enclosure boundary. For a real fanless device (for example, the Eaton KVM), do
 not use a generic server fan or fabricate a fan curve. Model its measured
 openings as passive vents and retain natural or rack-driven flow.
 
+OpenFOAM exports a volume-average temperature history for every internal vent
+and fan cell zone under
+`postProcessing/fluid/internal_<device>_temperature_average`. Pair the front
+vent and rear fan reports to check the modeled component air-temperature rise.
+These are small cell-zone averages rather than exact surface mass-weighted
+temperatures, so use them as calibration diagnostics and retain measured
+intake/exhaust values as the acceptance reference.
+
 Only rack height, chassis depth, mass-weighted intake/exhaust temperatures,
 and device mass flow are required. Width defaults to 482 mm:
 

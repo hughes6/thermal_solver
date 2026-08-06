@@ -1379,6 +1379,24 @@ private:
                 "        fields (T);\n"
                 "    }\n";
         }
+        for(const auto& device :
+            mesh.get_openfoam_internal_flow_devices()) {
+            const std::string name=internal_device_name(device);
+            output <<
+                "    " << name << "_temperature_average\n"
+                "    {\n"
+                "        type volFieldValue;\n"
+                "        libs (fieldFunctionObjects);\n"
+                "        region fluid;\n"
+                "        writeControl adjustableRunTime;\n"
+                "        writeInterval " << options.report_interval << ";\n"
+                "        regionType cellZone;\n"
+                "        name " << name << ";\n"
+                "        operation volAverage;\n"
+                "        writeFields false;\n"
+                "        fields (T);\n"
+                "    }\n";
+        }
         for(const auto& patch : mesh.get_openfoam_boundary_patches()) {
             output <<
                 "    " << foam_word(patch.name) << "_mass_flow\n"

@@ -329,6 +329,12 @@ int main() {
     assert(control.find("purgeWrite      3") != std::string::npos);
     assert(control.find("writeFormat     binary") != std::string::npos);
     assert(control.find("timePrecision   17") != std::string::npos);
+    assert(control.find(
+        "internal_Passive_test_vent_0_temperature_average") !=
+        std::string::npos);
+    assert(control.find("regionType cellZone") != std::string::npos);
+    assert(control.find(
+        "name internal_Passive_test_vent_0") != std::string::npos);
     assert(decomposition.find("numberOfSubdomains 2") != std::string::npos);
     assert(gravity.find("(0 0 -9.80665)") != std::string::npos);
     assert(fluid_solution.find("pRefCell") != std::string::npos);
