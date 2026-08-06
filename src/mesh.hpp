@@ -1502,11 +1502,22 @@ public:
                     const std::array<int, 3> downstream{i, j, k};
                     if(in_bounds(upstream[0], upstream[1], upstream[2])) {
                         if(!at(upstream[0], upstream[1], upstream[2]).is_fluid()) {
-                            std::cout << "upstream: " << upstream[0] << " " << upstream[1] << " " << upstream[2] << std::endl;
+                            const Cell& upstream_cell =
+                                at(upstream[0], upstream[1], upstream[2]);
                             throw std::runtime_error(
-                                "Internal fan '" + r.get_name() +
-                                "' has no fluid cell immediately upstream. "
-                                "Add an internal air region that reaches the fan face.");
+                                "Component '" + c.get_name() +
+                                "' internal fan '" + r.get_name() +
+                                "' has no fluid cell immediately upstream at index (" +
+                                std::to_string(upstream[0]) + ", " +
+                                std::to_string(upstream[1]) + ", " +
+                                std::to_string(upstream[2]) + "), center (" +
+                                std::to_string(cell_center_x(upstream[0])) + ", " +
+                                std::to_string(cell_center_y(upstream[1])) + ", " +
+                                std::to_string(cell_center_z(upstream[2])) +
+                                ") m, state " +
+                                std::to_string(static_cast<int>(upstream_cell.get_state())) +
+                                ". Add an internal air region that reaches the fan face."
+                            );
                         }
                         internal_fans.push_back(
                             {upstream, downstream, Q_per_cell, {nnx, nny, nnz},

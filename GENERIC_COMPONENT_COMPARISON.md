@@ -56,6 +56,12 @@ temperature field are not validated until the equivalent device curves are
 calibrated and the coupled airflow stage reaches mass and device-flow
 convergence.
 
+The first comparison also incorrectly assigned an equivalent fan to the KVM.
+The physical KVM is fanless. Its generic file now uses passive front and rear
+vents, and the selective production experiment retains the original KVM
+component. Results above are preserved as failure evidence and must not be
+used as the corrected KVM result.
+
 ## Conclusion
 
 The generic architecture is viable for rack-level work and reduced cell count

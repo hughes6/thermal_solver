@@ -2498,6 +2498,15 @@ rack intake temperature, exhaust temperature, airflow, heat rejection, and
 recirculation studies. Their solid-block temperature is not a CPU or junction
 temperature.
 
+The generated air region is a continuous front-to-rear tunnel. The intake and
+fan planes are inset from the chassis faces, and both span the tunnel section
+so flow cannot bypass around the equivalent fan. The adaptive mesher requires
+that an internal
+fan must have fluid cells on both sides and must not be placed directly on an
+enclosure boundary. For a real fanless device (for example, the Eaton KVM), do
+not use a generic server fan or fabricate a fan curve. Model its measured
+openings as passive vents and retain natural or rack-driven flow.
+
 Only rack height, chassis depth, mass-weighted intake/exhaust temperatures,
 and device mass flow are required. Width defaults to 482 mm:
 
@@ -2539,3 +2548,8 @@ The base files are `generic_server_1u.toml`, `generic_server_2u.toml`, and
 derive a separate rack model without editing the detailed original by using
 `--model-source`, `--model-output`, and repeated
 `--replace-component OLD=NEW` arguments.
+
+Replace detailed components selectively. Accept a generic replacement only
+after its simulated mass flow agrees with measured device flow and the rack
+inlet/outlet mass imbalance is acceptably small. A temperature match with the
+wrong component airflow is not a valid calibration.
