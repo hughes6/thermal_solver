@@ -489,17 +489,25 @@ int main() {
         std::string::npos);
     const std::size_t prune_function=
         run_parallel.find("prune_processor_times()");
-    const std::size_t prune_call=
-        run_parallel.find("        prune_processor_times\n",prune_function);
+    const std::size_t ramp_prune_call=run_parallel.find(
+        "        prune_processor_times\n",
+        run_parallel.find("Fan ramp stage"));
+    const std::size_t stage_flow_copy=
+        run_parallel.find("cp -p \"$source_field\"");
+    const std::size_t stage_prune_call=run_parallel.find(
+        "        prune_processor_times\n",stage_flow_copy);
     assert(prune_function!=std::string::npos);
+    assert(prune_function<run_parallel.find("run_fan_ramp()"));
     assert(run_parallel.find("local keep=\"3\"",prune_function)!=
         std::string::npos);
     assert(run_parallel.find("$0 != \"0\"",prune_function)!=
         std::string::npos);
     assert(run_parallel.find(
         "rm -rf -- \"$target\"",prune_function)!=std::string::npos);
-    assert(prune_call!=std::string::npos);
-    assert(prune_call>run_parallel.find("cp -p \"$source_field\""));
+    assert(ramp_prune_call!=std::string::npos);
+    assert(stage_flow_copy!=std::string::npos);
+    assert(stage_prune_call!=std::string::npos);
+    assert(stage_prune_call>stage_flow_copy);
     assert(run_parallel.find(
         "x=duration*i/n; print (x<limit?x:limit)") !=
         std::string::npos);

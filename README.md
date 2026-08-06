@@ -1911,7 +1911,7 @@ The important time controls are:
   completed numeric `processorN` checkpoints after restart fields are copied.
   It preserves time `0` plus the newest `saved_time_directories` nonzero times.
   This second layer is required to bound disk usage across adaptive airflow
-  windows and thermal segments.
+  windows, fan-ramp stages, and thermal segments.
 
 Therefore, the segment from 300 to 600 seconds uses `startTime = 300` and
 `endTime = 600`; it does **not** use `endTime = 300` again. Time and thermal

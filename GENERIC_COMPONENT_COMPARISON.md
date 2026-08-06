@@ -178,6 +178,13 @@ into the new restart checkpoint. It preserves time `0` and the newest
 numeric time-directory names beneath the explicit processor root before they
 can be removed.
 
+A later production launch showed that the five startup fan-ramp segments call
+the solver directly rather than through the general stage helper. They were
+bounded to five directories and pruned by the first adaptive window, but did
+not obey the configured retention count during the ramp itself. The pruning
+function is now defined before the ramp and called after every completed ramp
+segment as well.
+
 The generated script passed `bash -n`. A non-destructive two-rank dry run with
 times `0` through `5` and retention set to three selected only times `1` and `2`
 on both ranks, preserving `0`, `3`, `4`, and `5`. The full C++ and Python
