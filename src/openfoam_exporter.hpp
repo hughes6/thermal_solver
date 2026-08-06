@@ -3067,7 +3067,7 @@ private:
                     << options.initial_time_step
                     << "\" -v remaining=\"$interval\" "
                     "'BEGIN { limit=(initial<maximum?initial:maximum); "
-                    "safe=remaining/20; if(safe<limit)limit=safe; "
+                    "safe=remaining/10; if(safe<limit)limit=safe; "
                     "n=int(remaining/limit); "
                     "if(n*limit<remaining-1e-12)n++; if(n<1)n=1; "
                     "printf \"%.17g %d\", remaining/n,n }')\n"

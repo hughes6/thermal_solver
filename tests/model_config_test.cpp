@@ -375,7 +375,7 @@ int main() {
     assert(run_parallel.find(
         "limit=(initial<maximum?initial:maximum)") != std::string::npos);
     assert(run_parallel.find(
-        "safe=remaining/20") != std::string::npos);
+        "safe=remaining/10") != std::string::npos);
     assert(run_parallel.find(
         "adjust_time_step=true") == std::string::npos);
     assert(run_parallel.find(
