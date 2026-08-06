@@ -475,7 +475,20 @@ int main() {
         std::string::npos);
     assert(run_parallel.find("gsub(/[()\\r]/") != std::string::npos);
     assert(run_parallel.find("Fan ramp scaling verification failed") !=
-           std::string::npos);
+        std::string::npos);
+    const std::size_t prune_function=
+        run_parallel.find("prune_processor_times()");
+    const std::size_t prune_call=
+        run_parallel.find("        prune_processor_times\n",prune_function);
+    assert(prune_function!=std::string::npos);
+    assert(run_parallel.find("local keep=\"3\"",prune_function)!=
+        std::string::npos);
+    assert(run_parallel.find("$0 != \"0\"",prune_function)!=
+        std::string::npos);
+    assert(run_parallel.find(
+        "rm -rf -- \"$target\"",prune_function)!=std::string::npos);
+    assert(prune_call!=std::string::npos);
+    assert(prune_call>run_parallel.find("cp -p \"$source_field\""));
     assert(run_parallel.find(
         "x=duration*i/n; print (x<limit?x:limit)") !=
         std::string::npos);

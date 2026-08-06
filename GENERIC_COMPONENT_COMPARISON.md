@@ -162,6 +162,28 @@ and valid interfaces). Those warnings are retained as a known topology
 limitation; global refinement did not remove the Dell/KVM fractions and is not
 used as a substitute for thermal/flow validation.
 
+## Multirate checkpoint-retention correction (2026-08-06)
+
+The former 204,136-cell screening baseline exposed a disk-retention defect
+during its live startup. At the 0.18 s airflow stage, every processor contained
+time `0` plus 19 nonzero checkpoint directories even though `purgeWrite 3` was
+configured. OpenFOAM applies `purgeWrite` only to writes made during one solver
+invocation; the multirate wrapper starts a new invocation for every airflow or
+thermal window, so old invocations accumulated indefinitely.
+
+The generated parallel wrapper now prunes checkpoints after a stage completes
+and, for thermal-only stages, only after the frozen flow fields have been copied
+into the new restart checkpoint. It preserves time `0` and the newest
+`saved_time_directories` nonzero times on every processor rank. Targets must be
+numeric time-directory names beneath the explicit processor root before they
+can be removed.
+
+The generated script passed `bash -n`. A non-destructive two-rank dry run with
+times `0` through `5` and retention set to three selected only times `1` and `2`
+on both ranks, preserving `0`, `3`, `4`, and `5`. The full C++ and Python
+regression suite also passed. The running legacy baseline was deliberately not
+modified; the correction applies to newly exported cases.
+
 ## Conclusion
 
 The generic architecture is viable for rack-level work and reduced cell count

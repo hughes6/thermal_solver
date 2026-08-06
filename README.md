@@ -1591,7 +1591,7 @@ OpenFOAM-profile `[mesh]` directly controls the exported OpenFOAM case.
 | `maximum_time_step` | Largest timestep during fully coupled airflow/CHT stages. |
 | `maximum_courant_number` | Coupled-stage `maxCo`; OpenFOAM reduces `deltaT` to satisfy it. |
 | `field_write_interval` | Simulated seconds between full restart/visualization field writes. |
-| `saved_time_directories` | Number of recent field time directories retained through `purgeWrite`. |
+| `saved_time_directories` | Number of recent nonzero processor checkpoints retained; time `0` is also preserved. |
 | `report_interval` | Simulated seconds between function-object reports such as temperature extrema, component averages, mass flow, and y-plus. |
 
 `field_write_interval` controls large field output. `report_interval` controls
@@ -1897,8 +1897,12 @@ The important time controls are:
 - `endTime` is an absolute target, not the length of the segment.
 - `writeInterval` determines when complete restart/visualization fields are
   written.
-- `purgeWrite`, generated from `saved_time_directories`, keeps only the newest
-  configured number of field directories to bound disk usage.
+- `purgeWrite` bounds writes made inside one solver invocation. Multirate runs
+  launch many short solver invocations, so the generated wrapper also prunes
+  completed numeric `processorN` checkpoints after restart fields are copied.
+  It preserves time `0` plus the newest `saved_time_directories` nonzero times.
+  This second layer is required to bound disk usage across adaptive airflow
+  windows and thermal segments.
 
 Therefore, the segment from 300 to 600 seconds uses `startTime = 300` and
 `endTime = 600`; it does **not** use `endTime = 300` again. Time and thermal
