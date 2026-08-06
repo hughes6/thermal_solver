@@ -231,6 +231,45 @@ the opening being effectively stagnant. `recirculation_report.py` now excludes
 such undefined temperature samples from re-ingestion and sensible-heat metrics
 while continuing to plot the signed flow itself.
 
+## Long screening convergence result (2026-08-06)
+
+The independent 167,232-cell screening case
+`model_generic_components_screening_optimized_167232_v2_floor` requested
+18,000 s but satisfied two consecutive thermal and refreshed-airflow
+checkpoints and stopped cleanly at `t = 14400.02 s`. The KVM remained fanless;
+its reported opening flow was treated as passive throughout.
+
+| Thermal checkpoint (s) | Fluid peak T (K) | Eaton avg (K) | Dell avg (K) | Trenton avg (K) | KVM avg (K) | Peak change (K/300 s) | Max avg change (K/300 s) | Air heat rejection |
+|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| 2,400 | 472.986 | 312.457 | 326.600 | 335.299 | 300.818 | baseline | baseline | 81.55% |
+| 4,800 | 544.954 | 320.716 | 334.797 | 353.512 | 305.695 | 8.996 | 2.277 | 91.84% |
+| 7,200 | 568.755 | 323.907 | 337.140 | 360.195 | 308.364 | 2.975 | 0.835 | 96.77% |
+| 9,600 | 575.443 | 325.121 | 337.845 | 362.441 | 309.771 | 0.836 | 0.281 | 98.48% |
+| 12,000 | 576.526 | 325.593 | 338.074 | 363.065 | 310.556 | 0.135 | 0.098 | 99.16% |
+| 14,400 | 576.020 | 325.800 | 338.147 | 363.108 | 311.046 | 0.063 | 0.061 | 99.40% |
+
+The screening limits are 0.25 K/300 s for fluid peak change and 0.10 K/300 s
+for every component-average change. The 12,000 s checkpoint was accepted as
+1/2 and 14,400 s as 2/2. At the final airflow sample, exterior mass imbalance
+was 0.128%, maximum meaningful device-flow change was 0.392%, all configured
+directions passed, and the hot-air re-ingestion index remained zero.
+
+The run also exposed the limit of boundary-only refresh convergence. Although
+each late refresh passed its boundary totals after 0.02 s, volume-field audits
+between its 0.01 and 0.02 s states found the following fluid-velocity changes:
+
+| Refresh checkpoint (s) | U RMS change | U maximum local change | T RMS change |
+|---:|---:|---:|---:|
+| 7,200 | 2.581% | 1.832 m/s | 0.0308 K |
+| 9,600 | 2.466% | 2.883 m/s | 0.0284 K |
+| 14,400 | 2.286% | 2.343 m/s | 0.0273 K |
+
+Consequently, short boundary-stable screening refreshes are not yet evidence
+that the full recirculation field is steady. A byte-for-byte verified clone at
+`t = 9600.02 s` is being continued with preserved 0.10, 0.50, and 1.00 s
+fully coupled checkpoints. Profile refresh durations will be tuned only after
+those internal `U` fields are compared with the 1.00 s reference.
+
 ## Conclusion
 
 The generic architecture is viable for rack-level work and reduced cell count
