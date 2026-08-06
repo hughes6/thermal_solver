@@ -62,6 +62,97 @@ vents, and the selective production experiment retains the original KVM
 component. Results above are preserved as failure evidence and must not be
 used as the corrected KVM result.
 
+## Corrected startup-airflow convergence study (2026-08-06)
+
+A controlled 166,093-cell generic case used the same exported geometry, heat
+loads, fan curves, and OpenFOAM properties as its baseline. The coupled
+airflow timestep remained 0.001 s. Only the post-ramp minimum duration was
+extended from 0.02 s to 0.30 s so the complete transient operating-point
+history could be observed.
+
+The former rule accepted at 0.16 s while flow was still evolving. The extended
+case recorded its first complete all-device baseline at 0.35 s and compared it
+with 0.36 s:
+
+- boundary mass imbalance: 0.257%;
+- maximum tracked device-flow change: 0.852%;
+- all intake/exhaust direction checks: passed;
+- nine roof-fan flows: 28.9-30.1% higher than the old 0.16 s values;
+- main-intake magnitude: 34.7% higher;
+- passive KVM intake magnitude: 14.7% higher.
+
+The corrected 0.36 s roof-fan and main-intake flows already matched the old
+case's much-later 16,800 s refreshed state. Internal device fans also showed
+why adjacent-window change alone is unsafe: Dell flow first rose, then slowly
+reversed while individual 0.01 s changes were already below 1%.
+
+The supplied profiles now require at least 0.30 s of post-ramp airflow, retain
+the validated 0.001 s airflow timestep, and require no more than 1% change in
+tracked device flow. A tested 0.002 s timestep was rejected because rack-fan
+flows diverged from the 0.001 s reference by approximately 13% at equal
+physical time and by approximately 17% at each case's former acceptance point.
+
+## Screening mesh determinant study (2026-08-06)
+
+The normal 20 mm screening mesh and an isolated 10 mm fine-spacing candidate
+were prepared and checked without running competing solvers:
+
+| Region | 20 mm cells | 20 mm low-det. | 20 mm fraction | 10 mm cells | 10 mm low-det. | 10 mm fraction |
+|---|---:|---:|---:|---:|---:|---:|
+| Fluid | 146,079 | 2,566 | 1.76% | 672,600 | 4,086 | 0.61% |
+| Eaton UPS | 4,718 | 792 | 16.79% | 24,188 | 0 | 0.00% |
+| Dell 1U | 5,840 | 2,700 | 46.23% | 21,392 | 9,024 | 42.18% |
+| Trenton 3U | 6,748 | 0 | 0.00% | 32,064 | 0 | 0.00% |
+| KVM 1U | 2,708 | 1,846 | 68.17% | 14,450 | 9,890 | 68.44% |
+
+The 10 mm candidate increased total cells from 166,093 to 764,694 (4.60x)
+and required 148 s just to split regions, create sets, and run mesh checks.
+It reduced the fluid failure fraction and fixed the 2U UPS, but did not fix the
+thin Dell/KVM solid topology. Those persistent solid warnings come from
+one-cell-thick shell regions lacking internal/coupled faces in every direction,
+not from skewness, negative volume, non-orthogonality, AMI mismatch, or device
+cell-zone overlap. Global 10 mm refinement is therefore not accepted as a
+cost-effective correction; thin-shell representation and a targeted fluid
+refinement strategy require separate validation.
+
+## Geometry-cut and profile-invariance correction (2026-08-06)
+
+The determinant study exposed a more serious issue than the warnings: with
+the same 20 mm fine spacing, changing only coarse spacing/refinement margin
+changed represented Dell, Trenton, and KVM volumes. The KVM differed by almost
+50%. Two independent defects caused this:
+
+1. sorted coordinate deduplication allowed lower-priority internal or
+   refinement-band planes to displace a component envelope;
+2. cumulative floating-point coordinates made an exact maximum appear just
+   beyond its mesh face, so the stamper included the next profile-dependent
+   cell layer.
+
+The planner now gives rack bounds and component envelopes semantic priority,
+retains cuts exactly at the 5 mm anti-sliver threshold, and maps merged
+coordinates to the nearest retained face. The final independently exported
+and prepared screening/in-depth meshes produced identical component results:
+
+| Region | Screening cells | In-depth cells | Screening volume (m^3) | In-depth volume (m^3) |
+|---|---:|---:|---:|---:|
+| Eaton UPS | 3,726 | 3,726 | 0.0134536 | 0.0134536 |
+| Dell 1U | 5,167 | 5,167 | 0.0102842 | 0.0102842 |
+| Trenton 3U | 6,438 | 6,438 | 0.0176997 | 0.0176997 |
+| Fanless KVM | 3,657 | 3,657 | 0.0063702 | 0.0063702 |
+
+The generic KVM originally used a 3.556 mm air inset, below the standard
+profile's 5 mm cut threshold. Its enclosure disappeared and allowed lateral
+fluid bypass. It now uses a 5 mm effective mesh-resolved enclosure. This is a
+rack-level closure model, not a claim about physical sheet-metal gauge. The
+exact enclosure cuts raise the final screening mesh to 204,136 cells, still
+only 26.7% of the rejected 764,694-cell global-10-mm mesh.
+
+`checkMesh` continues to report low determinant cells in one-cell-thick solid
+shells (with positive volumes, zero non-orthogonality, negligible skewness,
+and valid interfaces). Those warnings are retained as a known topology
+limitation; global refinement did not remove the Dell/KVM fractions and is not
+used as a substitute for thermal/flow validation.
+
 ## Conclusion
 
 The generic architecture is viable for rack-level work and reduced cell count

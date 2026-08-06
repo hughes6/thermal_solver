@@ -1527,6 +1527,17 @@ Exact geometry cuts are always inserted at important boundaries. Therefore,
 widths. A small clearance or two nearby exact cuts can create a cell narrower
 than `fine_dx`.
 
+Cuts closer than one quarter of `fine_dx` are merged to avoid rack-wide sliver
+planes. Rack bounds take priority, then component envelopes, then internal
+regions/openings, and refinement-band edges are last. A merged coordinate is
+stamped to the nearest retained face. This makes represented component volume
+independent of `coarse_dx` and `refinement_margin`; the former outward-only
+rounding could change a 1U component volume by nearly 50% between profiles.
+At the standard 20 mm fine spacing, an effective enclosure must be at least
+5 mm thick to retain its own inner and outer cuts. The generic fanless KVM uses
+this 5 mm mesh-resolved enclosure so its side, top, and bottom walls cannot
+collapse into fluid bypass paths.
+
 The screening profile currently uses:
 
 ```toml
@@ -1624,6 +1635,14 @@ larger than the fully coupled CFD timestep. A large implicit step can be stable
 without being accurate; use screening for tuning and in-depth results for final
 claims.
 
+Do not shorten startup acceptance based only on a small change across one
+0.01 s window. In the generic-rack benchmark, the former 0.02 s minimum
+accepted the operating point at 0.16 s even though the nine rack-fan flows were
+about 29% below the result obtained after a 0.30 s post-ramp minimum. Internal
+device flow also overshot and slowly reversed while adjacent changes were less
+than 1%. The supplied profiles therefore require at least 0.30 s of post-ramp
+airflow and retain a conservative 0.001 s coupled-flow timestep.
+
 ### 15.4 Adaptive airflow refresh
 
 | Setting | Meaning |
@@ -1640,9 +1659,11 @@ At least one measurement establishes a baseline before a flow-change decision
 can pass. Flow direction checks ensure intake/exhaust devices are operating in
 their intended directions.
 
-The screening profile uses a short `airflow_refresh_duration = 0.02` and a 3%
-device-flow tolerance to avoid chasing coarse-mesh numerical noise. The
-in-depth profile uses a longer minimum refresh and a stricter 2% tolerance.
+The screening profile uses a short `airflow_refresh_duration = 0.01`; adaptive
+checking still requires a baseline and a later comparison, so it cannot accept
+after only one window. Screening, default, validation, and in-depth profiles
+all use a 1% device-flow tolerance. In-depth and validation retain longer
+minimum refresh windows for higher-fidelity updates.
 
 ### 15.5 Automatic thermal convergence
 
@@ -2539,7 +2560,11 @@ that an internal
 fan must have fluid cells on both sides and must not be placed directly on an
 enclosure boundary. For a real fanless device (for example, the Eaton KVM), do
 not use a generic server fan or fabricate a fan curve. Model its measured
-openings as passive vents and retain natural or rack-driven flow.
+openings as passive vents and retain natural or rack-driven flow. A measured
+fanless-device mass flow may be used with its temperature rise to infer heat,
+but it is not a flow boundary condition: calibrate vent free area/discharge
+coefficient or another measured pressure-loss relation so the rack pressure
+field reproduces that flow.
 
 OpenFOAM exports a volume-average temperature history for every internal vent
 and fan cell zone under

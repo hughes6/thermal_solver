@@ -63,11 +63,30 @@ class EngineeringToolsTest(unittest.TestCase):
 
     def test_kvm_component_is_fanless(self) -> None:
         root = Path(__file__).resolve().parents[1]
-        for filename in ("eaton_KVM.toml", "generic_kvm_1u.toml"):
+        for filename in (
+                "eaton_KVM.toml",
+                "generic_kvm_1u.toml",
+                "tripplite_b020_u08_19_ip_kvm.toml"):
             with (root / "library/components" / filename).open("rb") as stream:
                 document = tomllib.load(stream)
             region_states = [region["state"] for region in document["internal_regions"]]
             self.assertNotIn("fan", region_states, filename)
+
+    def test_generic_kvm_enclosure_is_resolved_by_standard_mesh(self) -> None:
+        root = Path(__file__).resolve().parents[1]
+        with (root / "library/components/generic_kvm_1u.toml").open("rb") as stream:
+            document = tomllib.load(stream)
+        air = next(
+            region for region in document["internal_regions"]
+            if region["name"] == "Interior air")
+        minimum_wall_mm = 5.0
+        for axis, size_key in (("x", "width"), ("y", "depth"), ("z", "height")):
+            lower_wall = air["position"][axis]
+            upper_wall = (
+                document["size"][size_key] - lower_wall -
+                air["size"][size_key])
+            self.assertGreaterEqual(lower_wall, minimum_wall_mm)
+            self.assertGreaterEqual(upper_wall, minimum_wall_mm)
 
 
 if __name__ == "__main__":

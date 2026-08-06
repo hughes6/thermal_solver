@@ -2629,6 +2629,11 @@ private:
     // }
 
     static int locate_floor(const std::vector<double>& bounds, double coord) {
+        const int snapped=locate_near_boundary(bounds,coord);
+        if(snapped>=0) {
+            const int n=static_cast<int>(bounds.size())-1;
+            return std::min(snapped,n-1);
+        }
         auto it = std::upper_bound(bounds.begin(), bounds.end(), coord);
         int idx = static_cast<int>(it - bounds.begin()) - 1;
         // A coordinate exactly on (or fractionally past) the outer boundary
@@ -2639,8 +2644,39 @@ private:
     }
 
     static int locate_ceil(const std::vector<double>& bounds, double coord) {
+        const int snapped=locate_near_boundary(bounds,coord);
+        if(snapped>=0) return snapped;
         auto it = std::lower_bound(bounds.begin(), bounds.end(), coord);
         return static_cast<int>(it - bounds.begin());
+    }
+
+    static int locate_near_boundary(const std::vector<double>& bounds,
+                                    double coord) {
+        if(bounds.empty() || !std::isfinite(coord)) return -1;
+        const double scale=std::max(
+            {1.0,std::abs(coord),std::abs(bounds.back())});
+        const double numeric_tolerance=
+            64.0*std::numeric_limits<double>::epsilon()*scale;
+        auto it=std::lower_bound(bounds.begin(),bounds.end(),coord);
+        if(it==bounds.begin())
+            return std::abs(*it-coord)<=numeric_tolerance ? 0 : -1;
+        if(it==bounds.end()) {
+            const int last=static_cast<int>(bounds.size())-1;
+            return std::abs(bounds.back()-coord)<=numeric_tolerance ? last : -1;
+        }
+
+        // Geometry cuts closer than the planner's anti-sliver threshold are
+        // deliberately represented by one retained face. Round a coordinate
+        // inside a nonuniform cell to its nearest face, rather than always
+        // expanding a stamped region to both enclosing faces. Exact/planned
+        // cuts still land on themselves; merged cuts now remain independent
+        // of refinement-band spacing.
+        const auto previous=std::prev(it);
+        const double lower_distance=coord-*previous;
+        const double upper_distance=*it-coord;
+        if(lower_distance<=upper_distance+numeric_tolerance)
+            return static_cast<int>(previous-bounds.begin());
+        return static_cast<int>(it-bounds.begin());
     }
 };
 

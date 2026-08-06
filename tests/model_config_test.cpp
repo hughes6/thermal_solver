@@ -114,7 +114,7 @@ int main() {
     assert(foam.openfoam_solver.fan_startup_ramp_time == 0.05);
     assert(foam.openfoam_solver.fan_startup_ramp_steps == 5);
     assert(foam.openfoam_solver.initial_airflow_check_interval == 0.01);
-    assert(foam.openfoam_solver.minimum_initial_airflow_duration == 0.02);
+    assert(foam.openfoam_solver.minimum_initial_airflow_duration == 0.30);
     assert(foam.openfoam_solver.airflow_maximum_time_step == 0.001);
     assert(foam.openfoam_solver.thermal_only_maximum_time_step == 5.0);
     assert(foam.openfoam_solver.airflow_refresh_check_interval == 0.01);
@@ -166,7 +166,7 @@ int main() {
     assert(screening.openfoam_solver.airflow_refresh_duration == 0.02);
     assert(screening.openfoam_solver.airflow_maximum_time_step == 0.001);
     assert(
-        screening.openfoam_solver.maximum_device_flow_change_fraction == 0.03);
+        screening.openfoam_solver.maximum_device_flow_change_fraction == 0.01);
     // Inline test-model values remain authoritative over profile defaults.
     assert(screening.openfoam_solver.airflow_refresh_interval == 5.0);
     assert(screening.openfoam_solver.report_interval == 1.0);
@@ -178,6 +178,9 @@ int main() {
     assert(indepth.mesh.coarse_dx == 0.10);
     assert(indepth.mesh.refinement_margin == 0.02);
     assert(indepth.openfoam_solver.thermal_only_maximum_time_step == 5.0);
+    assert(indepth.openfoam_solver.minimum_initial_airflow_duration == 0.30);
+    assert(
+        indepth.openfoam_solver.maximum_device_flow_change_fraction == 0.01);
     assert(indepth.openfoam_solver.airflow_maximum_time_step == 0.001);
     assert(indepth.openfoam_solver.maximum_temperature_change == 0.10);
 
@@ -505,6 +508,70 @@ int main() {
     assert(maximum_adjacent_ratio(refinement.dxs)<=4.0+1e-12);
     assert(maximum_adjacent_ratio(refinement.dys)<=4.0+1e-12);
     assert(maximum_adjacent_ratio(refinement.dzs)<=4.0+1e-12);
+
+    // Refinement-band edges must never displace required component or
+    // internal-region boundaries. Otherwise changing only margin/coarse_dx
+    // changes the represented solid and air volumes.
+    Component cut_component=
+        Component::from_meters(0.20,0.20,0.20,"cut priority");
+    cut_component.set_coords_m(0.15,0.15,0.15);
+    cut_component.add_region(InternalRegion(
+        "interior air",{0.17,0.17,0.17},{0.015,0.015,0.015}));
+    // This lower-priority feature plane is only 3 mm from the 150 mm
+    // component face in a 20 mm mesh. Sliver suppression must retain the
+    // material boundary, not whichever coordinate sorts first.
+    cut_component.add_region(InternalRegion(
+        "near-wall feature",{0.05,0.05,0.05},{0.003,0.003,0.003}));
+    cut_component.add_region(InternalRegion(
+        "minimum-resolved feature",{0.05,0.05,0.05},{0.005,0.005,0.005}));
+    const MeshRefinementPlan narrow_band=MeshRefinementPlanner::plan(
+        planner_rack,{cut_component},{},{},0.02,0.20,0.005);
+    const MeshRefinementPlan wide_band=MeshRefinementPlanner::plan(
+        planner_rack,{cut_component},{},{},0.02,0.10,0.02);
+    const auto has_boundary=[](
+        const std::vector<double>& widths,double target) {
+        double coordinate=0.0;
+        for(double width : widths) {
+            coordinate+=width;
+            if(std::abs(coordinate-target)<1e-12) return true;
+        }
+        return target==0.0;
+    };
+    for(const auto* plan : {&narrow_band,&wide_band}) {
+        for(const auto* widths : {&plan->dxs,&plan->dys,&plan->dzs}) {
+            assert(has_boundary(*widths,0.15));
+            assert(!has_boundary(*widths,0.153));
+            assert(has_boundary(*widths,0.155));
+            assert(has_boundary(*widths,0.165));
+            assert(has_boundary(*widths,0.335));
+            assert(has_boundary(*widths,0.35));
+        }
+    }
+
+    // Cumulative width sums are not bit-identical to the source geometry
+    // coordinates. Both profiles must still stamp exactly the same component
+    // volume when its faces coincide with planned mesh boundaries.
+    Component volume_component=
+        Component::from_meters(0.20,0.20,0.20,"volume invariant");
+    volume_component.set_coords_m(0.15,0.15,0.15);
+    Environment mesh_environment(
+        30.0,5800.0,20.0,1005.0,0.02587,0.000018,0.71,1.225);
+    Workload mesh_workload(100000,10000000,1000000,100);
+    const auto stamped_solid_volume=[&](const MeshRefinementPlan& plan) {
+        Mesh mesh=Mesh().build_adaptive_mesh(
+            planner_rack,plan.dxs,plan.dys,plan.dzs,
+            mesh_environment,mesh_workload);
+        mesh.stamp_component_adaptive(volume_component);
+        double volume=0.0;
+        for(const Cell& cell : mesh.get_cells())
+            if(cell.is_solid()) volume+=cell.volume();
+        return volume;
+    };
+    const double narrow_volume=stamped_solid_volume(narrow_band);
+    const double wide_volume=stamped_solid_volume(wide_band);
+    assert(std::abs(narrow_volume-0.008)<1e-12);
+    assert(std::abs(wide_volume-0.008)<1e-12);
+    assert(std::abs(narrow_volume-wide_volume)<1e-12);
 
     std::filesystem::remove_all(test_root);
     std::cout << "model_config_test PASSED\n";

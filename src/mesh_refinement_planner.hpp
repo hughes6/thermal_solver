@@ -85,11 +85,24 @@ private:
         }
 
         std::vector<std::pair<double, double>> bands;
-        std::vector<double> cuts{0.0, extent};
+        struct PrioritizedCut {
+            double coordinate;
+            int priority;
+        };
+        // Rack bounds are immutable, component envelopes define the material
+        // regions, and internal features/openings are fitted inside them.
+        // Keeping this priority explicit prevents a nearby lower-priority
+        // feature from erasing a component face during sliver suppression.
+        constexpr int rack_cut_priority=3;
+        constexpr int component_cut_priority=2;
+        constexpr int feature_cut_priority=1;
+        std::vector<PrioritizedCut> prioritized_cuts{
+            {0.0,rack_cut_priority},{extent,rack_cut_priority}};
 
-        auto add_cut = [&](double coordinate) {
+        auto add_cut = [&](double coordinate,int priority) {
             if (!std::isfinite(coordinate)) return;
-            cuts.push_back(std::clamp(coordinate, 0.0, extent));
+            prioritized_cuts.push_back(
+                {std::clamp(coordinate,0.0,extent),priority});
         };
 
         for (const auto& component : components) {
@@ -106,8 +119,8 @@ private:
                 std::max(0.0, component_min - margin),
                 std::min(extent, component_max + margin)
             });
-            add_cut(component_min);
-            add_cut(component_max);
+            add_cut(component_min,component_cut_priority);
+            add_cut(component_max,component_cut_priority);
 
             if (align_internal_geometry) {
             for (const InternalRegion& region : component.get_regions()) {
@@ -116,8 +129,8 @@ private:
 
                 if (region.get_region_type() == RegionType::Air ||
                     region.get_region_type() == RegionType::HeatSource) {
-                    add_cut(position[axis]);
-                    add_cut(position[axis] + region_size[axis]);
+                    add_cut(position[axis],feature_cut_priority);
+                    add_cut(position[axis]+region_size[axis],feature_cut_priority);
                     continue;
                 }
 
@@ -135,16 +148,16 @@ private:
                     ay >= az ? 1 : 2;
 
                 if (axis == normal_axis) {
-                    add_cut(position[axis]);
+                    add_cut(position[axis],feature_cut_priority);
                 } else if (region.is_circular()) {
                     const double radius = region.get_diameter() / 2.0;
-                    add_cut(position[axis] - radius);
-                    add_cut(position[axis] + radius);
+                    add_cut(position[axis]-radius,feature_cut_priority);
+                    add_cut(position[axis]+radius,feature_cut_priority);
                 } else {
                     // Rectangular fan/vent positions are centers.
                     const double half_extent = region_size[axis] / 2.0;
-                    add_cut(position[axis] - half_extent);
-                    add_cut(position[axis] + half_extent);
+                    add_cut(position[axis]-half_extent,feature_cut_priority);
+                    add_cut(position[axis]+half_extent,feature_cut_priority);
                 }
             }
             }
@@ -157,8 +170,8 @@ private:
                 std::max(0.0, lo - margin),
                 std::min(extent, hi + margin)
             });
-            add_cut(lo);
-            add_cut(hi);
+            add_cut(lo,feature_cut_priority);
+            add_cut(hi,feature_cut_priority);
         }
 
         for (const auto& vent : vents) {
@@ -168,11 +181,10 @@ private:
                 std::max(0.0, lo - margin),
                 std::min(extent, hi + margin)
             });
-            add_cut(lo);
-            add_cut(hi);
+            add_cut(lo,feature_cut_priority);
+            add_cut(hi,feature_cut_priority);
         }
 
-        std::sort(cuts.begin(), cuts.end());
         constexpr double cut_eps = 1e-12;
         // Exact feature cuts that land almost on top of another cut create
         // rack-wide rectilinear sliver planes. Those planes produced 1.1 mm
@@ -181,14 +193,24 @@ private:
         // quarter of the requested fine spacing; the geometric error remains
         // bounded by 0.25*fine_dx while avoiding pathological cells.
         const double minimum_interval = 0.25*fine_dx;
-        std::vector<double> unique_cuts;
-        for (double cut : cuts) {
-            if (unique_cuts.empty() ||
-                std::abs(cut - unique_cuts.back()) >= minimum_interval) {
-                unique_cuts.push_back(cut);
+        std::sort(prioritized_cuts.begin(),prioritized_cuts.end(),
+            [](const PrioritizedCut& a,const PrioritizedCut& b) {
+                if(a.priority!=b.priority) return a.priority>b.priority;
+                return a.coordinate<b.coordinate;
+            });
+        std::vector<double> cuts;
+        for(const PrioritizedCut& candidate : prioritized_cuts) {
+            bool separated=true;
+            for(double accepted : cuts) {
+                if(std::abs(candidate.coordinate-accepted)+cut_eps<
+                   minimum_interval) {
+                    separated=false;
+                    break;
+                }
             }
+            if(separated) cuts.push_back(candidate.coordinate);
         }
-        cuts.swap(unique_cuts);
+        std::sort(cuts.begin(),cuts.end());
 
         std::sort(bands.begin(), bands.end());
         std::vector<std::pair<double, double>> merged;
@@ -210,26 +232,25 @@ private:
         // Partition every interval evenly instead of greedily laying down
         // target-sized cells and leaving a microscopic remainder before an
         // exact feature plane.
-        std::vector<double> breakpoints=cuts;
+        // Required geometry cuts take priority over refinement-band edges.
+        // The previous sorted first-come deduplication allowed a band edge to
+        // suppress a nearby component or internal-region boundary. Changing
+        // only refinement_margin could therefore change component volume.
+        std::vector<double> clean_breakpoints=cuts;
         for(const auto& band : merged) {
-            breakpoints.push_back(band.first);
-            breakpoints.push_back(band.second);
+            for(double point : {band.first,band.second}) {
+                point=std::clamp(point,0.0,extent);
+                bool separated=true;
+                for(double required : clean_breakpoints) {
+                    if(std::abs(point-required)+cut_eps<minimum_interval) {
+                        separated=false;
+                        break;
+                    }
+                }
+                if(separated) clean_breakpoints.push_back(point);
+            }
         }
-        std::sort(breakpoints.begin(),breakpoints.end());
-        std::vector<double> clean_breakpoints;
-        for(double point : breakpoints) {
-            point=std::clamp(point,0.0,extent);
-            if(clean_breakpoints.empty() ||
-               point-clean_breakpoints.back()>=minimum_interval)
-                clean_breakpoints.push_back(point);
-        }
-        if(clean_breakpoints.empty() ||
-           clean_breakpoints.front()>cut_eps)
-            clean_breakpoints.insert(clean_breakpoints.begin(),0.0);
-        if(extent-clean_breakpoints.back()<minimum_interval)
-            clean_breakpoints.back()=extent;
-        else if(extent-clean_breakpoints.back()>cut_eps)
-            clean_breakpoints.push_back(extent);
+        std::sort(clean_breakpoints.begin(),clean_breakpoints.end());
 
         std::vector<double> widths;
         for(std::size_t i=1;i<clean_breakpoints.size();++i) {
