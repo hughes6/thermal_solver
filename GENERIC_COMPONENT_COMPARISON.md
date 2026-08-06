@@ -156,6 +156,26 @@ fewer cells than the former screening mesh); its speed advantage comes from
 thermal timestep, refresh, and reporting policy rather than different
 geometry.
 
+An additional isolated 30 mm fine / 120 mm coarse screening candidate reduced
+the mesh from 167,232 to 57,420 cells (65.7%). Region preparation completed and
+all heat-source, vent, and fan zones remained nonempty, but the represented
+component volumes failed the geometry-invariance requirement:
+
+| Region | Accepted 20 mm volume (m3) | 30 mm candidate volume (m3) | Change |
+|---|---:|---:|---:|
+| Eaton UPS | 0.0134536 | 0.0131150 | -2.52% |
+| Dell 1U | 0.0102842 | 0.0133234 | +29.55% |
+| Trenton 3U | 0.0176997 | 0.0180377 | +1.91% |
+| Fanless KVM | 0.0063702 | 0.00543974 | -14.61% |
+
+At 30 mm, the planner's anti-sliver spacing exceeds the generic components'
+5 mm effective enclosure cut. The candidate therefore changes equipment
+geometry rather than only reducing fluid resolution and is rejected. The
+candidate also introduced low-determinant fractions of 41-45% in the Eaton
+and Trenton solids, which are not present at that magnitude in the accepted
+mesh. The 20 mm mesh remains the coarsest validated common geometry for these
+templates.
+
 `checkMesh` continues to report low determinant cells in one-cell-thick solid
 shells (with positive volumes, zero non-orthogonality, negligible skewness,
 and valid interfaces). Those warnings are retained as a known topology
@@ -266,9 +286,35 @@ between its 0.01 and 0.02 s states found the following fluid-velocity changes:
 
 Consequently, short boundary-stable screening refreshes are not yet evidence
 that the full recirculation field is steady. A byte-for-byte verified clone at
-`t = 9600.02 s` is being continued with preserved 0.10, 0.50, and 1.00 s
-fully coupled checkpoints. Profile refresh durations will be tuned only after
-those internal `U` fields are compared with the 1.00 s reference.
+`t = 9600.02 s` was continued with preserved 0.10 and 0.50 s fully coupled
+checkpoints while its 1.00 s leg remained in progress. Spatial drift increased
+rather than disappearing over the longer comparison:
+
+| Coupled-flow interval | U RMS change | U relative RMS change | U maximum local change | T RMS change | T maximum local change |
+|---:|---:|---:|---:|---:|---:|
+| 0.02 -> 0.10 s | 0.2201 m/s | 15.98% | 4.747 m/s | 0.4757 K | 15.634 K |
+| 0.10 -> 0.50 s | 0.7196 m/s | 43.29% | 5.674 m/s | 1.7166 K | 21.253 K |
+
+The 0.50 s result proves that neither the screening profile's 0.01 s minimum
+nor a nominal 0.1-0.5 s window is sufficient to establish the internal hot-rack
+flow field. Profile refresh durations will be tuned only after the 1.00 s
+checkpoint is compared and, if necessary, the isolated study is extended.
+The nine exterior fans carried approximately `0.2578 kg/s` in total and the
+audited fluid volume was `1.0436 m3`. For a representative hot-rack density of
+1.0-1.2 kg/m3, one nominal air-volume exchange therefore takes roughly
+4.05-4.86 s. A 0.5 s study spans only about 0.10-0.12 air exchanges, so a
+several-second continuation is physically warranted even before applying the
+spatial-field convergence criterion.
+
+The same study exposed a separate timestep-control defect. OpenFOAM
+`adjustableRunTime` write alignment enlarged configured 0.001 s live-flow
+steps to the complete 0.01 s stage. Generated multirate runners now use exact
+divisible fixed steps, measure the saved parallel field's global `max(Co)` to
+size restarted live stages with a 20% margin, and audit the final saved field
+against the configured limit. Startup ramps use a conservative fixed fallback.
+A two-rank runtime case verified 100 x 0.0001 s startup steps and then a
+preflight-approved 10 x 0.001 s restarted stage; its checkpoint metadata and
+postflight Courant audit agreed with the intended controls.
 
 ## Conclusion
 

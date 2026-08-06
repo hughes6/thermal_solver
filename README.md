@@ -1866,6 +1866,13 @@ many Courant-safe flow steps, not ten 0.1 s steps. The shipped profiles use
 differences on the actual hot rack; changing the comparison interval must never
 silently enlarge the CFD timestep.
 
+Each airflow convergence line also reports `estimatedAirExchangeTime`. The
+runner calculates it as exported fluid volume times configured ambient density
+divided by one-way exterior mass throughput (half the sum of absolute exterior
+patch flows). This is a nominal transport timescale, not a convergence test:
+compare it with the actual coupled-flow window and verify internal `U` fields
+before treating recirculation as settled.
+
 Both generated solver launchers take an exclusive per-case lock before they
 prepare, decompose, or advance a case. A second `run_cht.sh` or
 `run_parallel.sh` process exits instead of concurrently writing the same time

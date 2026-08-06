@@ -392,6 +392,9 @@ int main() {
     assert(run_parallel.find(
         "floor>0 && aa<floor && bb<floor") != std::string::npos);
     assert(run_parallel.find("boundaryFlowFloor=") != std::string::npos);
+    assert(run_parallel.find("estimatedAirExchangeTime=") !=
+           std::string::npos);
+    assert(run_parallel.find("volume*rho/one_way") != std::string::npos);
     assert(run_parallel.find("${#boundary_flow_names[@]} -eq 0") !=
            std::string::npos);
     assert(run_parallel.find("imbalance=0") != std::string::npos);

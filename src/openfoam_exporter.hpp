@@ -2550,6 +2550,18 @@ private:
         const Mesh& mesh,
         const OpenFoamExportOptions& options,
         const std::filesystem::path& path) {
+        double fluid_volume_m3=0.0;
+        const auto& cells=mesh.get_cells();
+        const auto& metadata=mesh.get_openfoam_cell_metadata();
+        if(cells.size()!=metadata.size())
+            throw std::logic_error(
+                "OpenFoamExporter: missing cell metadata while writing "
+                "parallel runner.");
+        for(std::size_t cell=0;cell<cells.size();++cell)
+            if(metadata[cell].region_type==
+               Mesh::OpenFoamCellMetadata::RegionType::Fluid)
+                fluid_volume_m3+=cells[cell].volume();
+        validate_positive_finite(fluid_volume_m3,"fluid volume");
         std::ofstream output(path,std::ios::binary);
         require_stream(output,path);
         output.precision(17);
@@ -2940,7 +2952,7 @@ private:
                 "    airflow_metrics_converged()\n"
                 "    {\n"
                 "        local report name value rule expected net=0 "
-                    "sum_abs=0 flow_time properties\n"
+                    "sum_abs=0 flow_time properties air_exchange_time\n"
                 "        local imbalance stable=1 directions_ok=1 "
                     "maximum_change=0 change boundary_flow_floor=0 "
                     "flow_floor=0\n"
@@ -3031,6 +3043,11 @@ private:
                     "'BEGIN { if(n<0)n=-n; d=0.5*s; "
                     "print (d>1e-12?n/d:1e30) }')\n"
                 "        fi\n"
+                "        air_exchange_time=$(awk -v volume=\""
+                << fluid_volume_m3 << "\" -v rho=\""
+                << mesh.get_env().get_rho()
+                << "\" -v s=\"$sum_abs\" 'BEGIN { one_way=0.5*s; "
+                    "print (one_way>1e-12?volume*rho/one_way:1e30) }')\n"
                 "        for rule in \"${fan_direction_rules[@]}\"; do\n"
                 "            name=\"${rule%%:*}\"\n"
                 "            expected=\"${rule##*:}\"\n"
@@ -3055,7 +3072,8 @@ private:
                 "        echo \"Airflow refresh metrics: imbalance=$imbalance, "
                     "maxFlowChange=$maximum_change, boundaryFlowFloor="
                     "$boundary_flow_floor, directionsOK="
-                    "$directions_ok\"\n"
+                    "$directions_ok, estimatedAirExchangeTime="
+                    "$air_exchange_time s\"\n"
                 "        [[ \"$stable\" == 1 && \"$directions_ok\" == 1 ]]\n"
                 "    }\n";
             if(options.stop_when_thermally_converged) {
