@@ -273,7 +273,8 @@ def main() -> None:
         if row["region"] != "all":
             continue
         print(
-            f"{row['sample_time']:g} -> {row['reference_time']:g} | all | "
+            f"{row['sample_time']:.12g} -> "
+            f"{row['reference_time']:.12g} | all | "
             f"{row['field']} | {row['rms']:.8g} | {row['maximum']:.8g} | "
             f"{row['relative_rms']:.6%}"
         )
