@@ -1589,7 +1589,7 @@ OpenFOAM-profile `[mesh]` directly controls the exported OpenFOAM case.
 | `overwrite` | Allows a new export to replace the existing case directory and old restart markers. |
 | `parallel_processes` | Default MPI process count written into instructions and decomposition settings. |
 | `maximum_time_step` | Largest timestep during fully coupled airflow/CHT stages. |
-| `maximum_courant_number` | Coupled-stage `maxCo`; OpenFOAM reduces `deltaT` to satisfy it. |
+| `maximum_courant_number` | Coupled-stage Courant limit. Multirate live-flow stages measure the saved field's global `max(Co)`, apply a 20% safety margin, and use an exact divisible fixed timestep no larger than the configured airflow cap. |
 | `field_write_interval` | Simulated seconds between full restart/visualization field writes. |
 | `saved_time_directories` | Number of recent nonzero processor checkpoints retained; time `0` is also preserved. |
 | `report_interval` | Simulated seconds between function-object reports such as temperature extrema, component averages, mass flow, and y-plus. |
@@ -1848,10 +1848,18 @@ the initial operating-point solve and each adaptive airflow refresh still use
 the profile's convergence limits. Do not use a long override when temperatures
 or buoyancy are changing rapidly.
 
-`airflow_maximum_time_step` independently caps every live-airflow step. Live
-stages use adaptive timestepping, so OpenFOAM reduces `deltaT` further whenever
-the stage's `maxCo` requires it; `adjustableRunTime` clips the final step to the
-exact refresh target. Keep this cap separate from
+`airflow_maximum_time_step` independently caps every live-airflow step. Before
+each restarted live-flow stage, the runner evaluates `CourantNo` from the saved
+parallel `phi` and `rho` fields, reduces the proposed timestep to 80% of the
+configured `maxCo` when necessary, and divides the stage into equal fixed steps
+that land exactly on the refresh target. A conservative `maxCo/10` fallback is
+used before a usable saved flow field exists. This avoids OpenFOAM
+`adjustableRunTime` write alignment enlarging a timestep beyond `maxDeltaT`.
+The runner re-evaluates the final saved field after every live-flow stage and
+stops with a diagnostic if the measured `max(Co)` exceeds the stage limit.
+Fan-startup-ramp stages use the same conservative fixed-step fallback because
+no established operating-point field exists yet.
+Keep this cap separate from
 `airflow_refresh_check_interval`: a 1 s in-depth comparison window still needs
 many Courant-safe flow steps, not ten 0.1 s steps. The shipped profiles use
 0.001 s. Increase it only after measuring the maximum Courant number and field

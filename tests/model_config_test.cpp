@@ -406,7 +406,27 @@ int main() {
     assert(run_parallel.find(
         "printf \"%.17g %d\", remaining/n,n") != std::string::npos);
     assert(run_parallel.find(
-        "stage_write_control=adjustableRunTime") != std::string::npos);
+        "-funcs '(CourantNo fieldMinMax(Co))'") != std::string::npos);
+    assert(run_parallel.find(
+        "Courant preflight: predictedMaxCo=") != std::string::npos);
+    assert(run_parallel.find(
+        "dt*0.8*limit/observed") != std::string::npos);
+    assert(run_parallel.find(
+        "safe=(observed>0?dt*0.8*limit/observed:hard)") !=
+           std::string::npos);
+    assert(run_parallel.find(
+        "Courant postflight: actualMaxCo=") != std::string::npos);
+    assert(run_parallel.find(
+        "Live-flow Courant limit exceeded") != std::string::npos);
+    assert(run_parallel.find(
+        "scale=(co<10?co/10:1)") != std::string::npos);
+    assert(run_parallel.find(
+        "Startup has no established flow field") != std::string::npos);
+    assert(run_parallel.find(
+        "-entry writeInterval -set \"$ramp_steps\"") !=
+           std::string::npos);
+    assert(run_parallel.find(
+        "deltaT=$ramp_dt, steps=$ramp_steps") != std::string::npos);
     assert(run_parallel.find(
         "-entry writeControl -set \"$stage_write_control\"") !=
            std::string::npos);
@@ -432,9 +452,7 @@ int main() {
     assert(run_parallel.find(
         "-v flow_max=\"0.001") != std::string::npos);
     assert(run_parallel.find(
-        "safe=remaining/10") != std::string::npos);
-    assert(run_parallel.find(
-        "adjust_time_step=true") != std::string::npos);
+        "adjust_time_step=false") != std::string::npos);
     assert(run_parallel.find(
         "stage_write_control=timeStep") != std::string::npos);
     assert(run_parallel.find(
