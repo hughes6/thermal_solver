@@ -56,6 +56,7 @@ struct OpenFoamExportOptions {
     double maximum_airflow_refresh_duration = 0.2;
     double maximum_mass_imbalance_fraction = 0.01;
     double maximum_device_flow_change_fraction = 0.02;
+    double minimum_tracked_boundary_flow_fraction = 1e-4;
     bool stop_when_thermally_converged = false;
     double minimum_thermal_convergence_time = 3600.0;
     double thermal_convergence_reference_interval = 300.0;
@@ -1254,6 +1255,13 @@ private:
             validate_positive_finite(
                 options.maximum_device_flow_change_fraction,
                 "maximum_device_flow_change_fraction");
+            validate_positive_finite(
+                options.minimum_tracked_boundary_flow_fraction,
+                "minimum_tracked_boundary_flow_fraction");
+            if(options.minimum_tracked_boundary_flow_fraction >= 1.0)
+                throw std::invalid_argument(
+                    "OpenFoamExporter: minimum_tracked_boundary_flow_fraction "
+                    "must be less than 1.");
             if(options.stop_when_thermally_converged) {
                 validate_positive_finite(
                     options.minimum_thermal_convergence_time,
@@ -2811,7 +2819,13 @@ private:
             output << "    boundary_flow_names=(";
             for(const auto& patch : mesh.get_openfoam_boundary_patches())
                 output << '"' << foam_word(patch.name) << "\" ";
-            output << ")\n    tracked_flow_names=(";
+            output <<
+                ")\n"
+                "    declare -A boundary_flow_lookup=()\n"
+                "    for name in \"${boundary_flow_names[@]}\"; do\n"
+                "        boundary_flow_lookup[\"$name\"]=1\n"
+                "    done\n"
+                "    tracked_flow_names=(";
             for(const auto& patch : mesh.get_openfoam_boundary_patches())
                 output << '"' << foam_word(patch.name) << "\" ";
             output << ")\n    internal_fan_names=(";
@@ -2849,7 +2863,8 @@ private:
                 "        local report name value rule expected net=0 "
                     "sum_abs=0 flow_time properties\n"
                 "        local imbalance stable=1 directions_ok=1 "
-                    "maximum_change=0 change\n"
+                    "maximum_change=0 change boundary_flow_floor=0 "
+                    "flow_floor=0\n"
                 "        if ! report=$(\"$foam_launcher\" mpirun -np "
                     "\"$processes\" postProcess -case \"$case_dir\" "
                     "-parallel -region fluid -latestTime -field phi 2>&1); "
@@ -2894,26 +2909,39 @@ private:
                     "through-flow: $name flow_rate=$value m3/s\" >&2\n"
                 "            fi\n"
                 "        done\n"
-                "        for name in \"${stability_flow_names[@]}\"; do\n"
-                "            value=\"${flows[$name]}\"\n"
-                "            if [[ -n \"${previous_flows[$name]+set}\" ]]; "
-                    "then\n"
-                "                change=$(awk -v a=\"$value\" "
-                    "-v b=\"${previous_flows[$name]}\" "
-                    "'BEGIN { d=a-b; if(d<0)d=-d; s=b; if(s<0)s=-s; "
-                    "if(s<1e-12)s=1e-12; print d/s }')\n"
-                "                maximum_change=$(awk -v a=\"$maximum_change\" "
-                    "-v b=\"$change\" 'BEGIN { print (a>b?a:b) }')\n"
-                "            else\n"
-                "                stable=0\n"
-                "            fi\n"
-                "        done\n"
                 "        for name in \"${boundary_flow_names[@]}\"; do\n"
                 "            value=\"${flows[$name]}\"\n"
                 "            net=$(awk -v a=\"$net\" -v b=\"$value\" "
                     "'BEGIN { print a+b }')\n"
                 "            sum_abs=$(awk -v a=\"$sum_abs\" -v b=\"$value\" "
                     "'BEGIN { if(b<0)b=-b; print a+b }')\n"
+                "        done\n"
+                "        boundary_flow_floor=$(awk -v s=\"$sum_abs\" "
+                    "-v f=\""
+                << options.minimum_tracked_boundary_flow_fraction
+                << "\" 'BEGIN { print 0.5*s*f }')\n"
+                "        for name in \"${stability_flow_names[@]}\"; do\n"
+                "            value=\"${flows[$name]}\"\n"
+                "            flow_floor=0\n"
+                "            if [[ -n "
+                    "\"${boundary_flow_lookup[$name]+set}\" ]]; then\n"
+                "                flow_floor=\"$boundary_flow_floor\"\n"
+                "            fi\n"
+                "            if [[ -n \"${previous_flows[$name]+set}\" ]]; "
+                    "then\n"
+                "                change=$(awk -v a=\"$value\" "
+                    "-v b=\"${previous_flows[$name]}\" "
+                    "-v floor=\"$flow_floor\" "
+                    "'BEGIN { d=a-b; if(d<0)d=-d; aa=a; if(aa<0)aa=-aa; "
+                    "bb=b; if(bb<0)bb=-bb; "
+                    "if(floor>0 && aa<floor && bb<floor) { print 0; exit } "
+                    "s=bb; if(s<floor)s=floor; if(s<1e-12)s=1e-12; "
+                    "print d/s }')\n"
+                "                maximum_change=$(awk -v a=\"$maximum_change\" "
+                    "-v b=\"$change\" 'BEGIN { print (a>b?a:b) }')\n"
+                "            else\n"
+                "                stable=0\n"
+                "            fi\n"
                 "        done\n"
                 "        if [[ ${#boundary_flow_names[@]} -eq 0 ]]; then\n"
                 "            # A sealed domain has no ambient mass-flow balance to "
@@ -2946,7 +2974,8 @@ private:
                 << options.maximum_device_flow_change_fraction
                 << "\" 'BEGIN { exit !(v<=limit) }'; then stable=0; fi\n"
                 "        echo \"Airflow refresh metrics: imbalance=$imbalance, "
-                    "maxFlowChange=$maximum_change, directionsOK="
+                    "maxFlowChange=$maximum_change, boundaryFlowFloor="
+                    "$boundary_flow_floor, directionsOK="
                     "$directions_ok\"\n"
                 "        [[ \"$stable\" == 1 && \"$directions_ok\" == 1 ]]\n"
                 "    }\n";

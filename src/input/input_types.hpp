@@ -165,6 +165,7 @@ struct OpenFoamSolverInput {
     double maximum_airflow_refresh_duration = 0.2;
     double maximum_mass_imbalance_fraction = 0.01;
     double maximum_device_flow_change_fraction = 0.02;
+    double minimum_tracked_boundary_flow_fraction = 1e-4;
     bool stop_when_thermally_converged = true;
     double minimum_thermal_convergence_time = 3600.0;
     double thermal_convergence_reference_interval = 300.0;

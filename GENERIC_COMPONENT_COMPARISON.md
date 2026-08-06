@@ -184,6 +184,25 @@ on both ranks, preserving `0`, `3`, `4`, and `5`. The full C++ and Python
 regression suite also passed. The running legacy baseline was deliberately not
 modified; the correction applies to newly exported cases.
 
+## Fanless-KVM convergence correction (2026-08-06)
+
+The completed legacy checkpoints exposed a second independent startup issue.
+Rack ambient mass imbalance was already only 0.16-0.20%, and every rack fan
+and the main intake changed by approximately 0.6% per comparison window,
+inside the configured 1% stability tolerance. The fanless KVM's passive front
+opening carried only about `1e-8` kg/s, however. Sign and roundoff changes in
+that effectively zero flow produced reported relative changes from 12% to
+322%, preventing the rack from ever leaving coupled-flow startup.
+
+Boundary-flow stability now uses a throughput-scaled negligible-flow floor.
+When both consecutive samples for an exterior opening are below
+`minimum_tracked_boundary_flow_fraction` times total one-way exterior
+throughput, its stability change is zero. If either sample crosses the floor,
+the change is evaluated using the floor as the minimum denominator. This keeps
+the transition into meaningful intake, exhaust, or recirculation observable.
+Internal fan operating points retain their original full relative-change
+check. The supplied value is `0.0001`, or 0.01% of rack throughput.
+
 ## Conclusion
 
 The generic architecture is viable for rack-level work and reduced cell count

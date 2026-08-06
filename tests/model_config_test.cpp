@@ -167,6 +167,9 @@ int main() {
     assert(screening.openfoam_solver.airflow_maximum_time_step == 0.001);
     assert(
         screening.openfoam_solver.maximum_device_flow_change_fraction == 0.01);
+    assert(
+        screening.openfoam_solver.minimum_tracked_boundary_flow_fraction ==
+        0.0001);
     // Inline test-model values remain authoritative over profile defaults.
     assert(screening.openfoam_solver.airflow_refresh_interval == 5.0);
     assert(screening.openfoam_solver.report_interval == 1.0);
@@ -184,6 +187,9 @@ int main() {
     assert(indepth.openfoam_solver.minimum_initial_airflow_duration == 0.30);
     assert(
         indepth.openfoam_solver.maximum_device_flow_change_fraction == 0.01);
+    assert(
+        indepth.openfoam_solver.minimum_tracked_boundary_flow_fraction ==
+        0.0001);
     assert(indepth.openfoam_solver.airflow_maximum_time_step == 0.001);
     assert(indepth.openfoam_solver.maximum_temperature_change == 0.10);
 
@@ -368,6 +374,11 @@ int main() {
     assert(run_parallel.find("adaptive_initial_airflow") !=
            std::string::npos);
     assert(run_parallel.find("internal_fan_names") != std::string::npos);
+    assert(run_parallel.find("boundary_flow_lookup") != std::string::npos);
+    assert(run_parallel.find("boundary_flow_floor") != std::string::npos);
+    assert(run_parallel.find(
+        "floor>0 && aa<floor && bb<floor") != std::string::npos);
+    assert(run_parallel.find("boundaryFlowFloor=") != std::string::npos);
     assert(run_parallel.find("${#boundary_flow_names[@]} -eq 0") !=
            std::string::npos);
     assert(run_parallel.find("imbalance=0") != std::string::npos);
