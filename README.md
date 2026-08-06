@@ -1802,6 +1802,14 @@ shipped profiles use 0.001 s. Increase it only after measuring the maximum
 Courant number on the actual hot rack; changing the comparison interval must
 never silently enlarge the CFD timestep.
 
+Both generated solver launchers take an exclusive per-case lock before they
+prepare, decompose, or advance a case. A second `run_cht.sh` or
+`run_parallel.sh` process exits instead of concurrently writing the same time
+directories. Plotting and report scripts remain usable while the solver runs
+because they do not acquire this write lock. The hidden
+`.thermal_solver_run.lock` file may remain after a run; the operating-system
+lock, not the file's presence, determines whether a solver is active.
+
 The multirate sequence is:
 
 1. prepare/decompose the regions if needed

@@ -330,6 +330,8 @@ int main() {
         read_file(case_directory/"0/heated_block_0/T");
     const std::string run_parallel=
         read_file(case_directory/"run_parallel.sh");
+    const std::string run_serial=
+        read_file(case_directory/"run_cht.sh");
     assert(control.find("endTime         10") != std::string::npos);
     assert(control.find("deltaT          0.01") != std::string::npos);
     assert(control.find("purgeWrite      3") != std::string::npos);
@@ -349,6 +351,13 @@ int main() {
     assert(std::filesystem::is_regular_file(
         case_directory/"constant/fluid/fvOptions.fullFan"));
     assert(run_parallel.find("run_fan_ramp") != std::string::npos);
+    assert(run_parallel.find("flock -n 9") != std::string::npos);
+    assert(run_parallel.find("exec 9>>\"$run_lock\"") !=
+           std::string::npos);
+    assert(run_parallel.find("command -v flock") != std::string::npos);
+    assert(run_parallel.find("Another thermal solver is already writing") !=
+           std::string::npos);
+    assert(run_serial.find("flock -n 9") != std::string::npos);
     assert(run_parallel.find("Fan ramp stage") != std::string::npos);
     assert(run_parallel.find("adaptive_initial_airflow") !=
            std::string::npos);
