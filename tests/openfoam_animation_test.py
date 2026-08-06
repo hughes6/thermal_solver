@@ -13,6 +13,7 @@ from heat_animation import (
     run_openfoam_animation,
     run_openfoam_convergence_report,
     select_openfoam_animation_times,
+    temperature_region_hotspots,
 )
 
 
@@ -142,6 +143,25 @@ class OpenFoamAnimationTest(unittest.TestCase):
             self.assertGreater(output.stat().st_size, 0)
             self.assertIn("fluid_mean", csv_output.read_text(encoding="utf-8"))
             self.assertIn("server_0_maximum", csv_output.read_text(encoding="utf-8"))
+
+    def test_region_hotspots_include_owning_region_and_cell_center(self):
+        try:
+            import numpy as np
+            import pyvista as pv
+        except ImportError:
+            self.skipTest("optional PyVista dependency is unavailable")
+
+        grid = pv.ImageData(dimensions=(3, 2, 2), spacing=(0.5, 1.0, 1.0))
+        grid.cell_data["T"] = np.asarray([300.0, 325.0])
+        multiblock = pv.MultiBlock({
+            "server_0": pv.MultiBlock({"internalMesh": grid})
+        })
+        heat_animation.np = np
+        hotspots = temperature_region_hotspots(multiblock, "K")
+        self.assertEqual(len(hotspots), 1)
+        self.assertEqual(hotspots[0]["region"], "server_0")
+        self.assertEqual(hotspots[0]["maximum"], 325.0)
+        np.testing.assert_allclose(hotspots[0]["point"], [0.75, 0.5, 0.5])
 
 
 if __name__ == "__main__":

@@ -470,6 +470,23 @@ def enable_internal_meshes_only(reader) -> None:
         reader.enable_patch_array(name)
 
 
+def read_openfoam_internal_meshes(reader):
+    """Read selected meshes without warnings from empty processor partitions."""
+    warning_state = None
+    try:
+        import vtk
+
+        warning_state = vtk.vtkObject.GetGlobalWarningDisplay()
+        vtk.vtkObject.GlobalWarningDisplayOff()
+    except (ImportError, AttributeError):
+        vtk = None
+    try:
+        return reader.read()
+    finally:
+        if vtk is not None and warning_state:
+            vtk.vtkObject.GlobalWarningDisplayOn()
+
+
 def select_openfoam_animation_times(available, start_time=None, end_time=None,
                                     skip=1):
     """Select an inclusive, ordered subset of written OpenFOAM times."""
@@ -637,6 +654,39 @@ def temperature_region_statistics(multiblock, temperature_units):
     }
 
 
+def temperature_region_hotspots(multiblock, temperature_units):
+    """Return each internal mesh region's hottest value and coordinates."""
+    candidates = list(iter_named_pyvista_datasets(multiblock))
+    internal = [item for item in candidates if "internalMesh" in item[0]]
+    if internal:
+        candidates = internal
+    hotspots = []
+    for path, leaf in candidates:
+        leaf, scalar_name = dataset_with_temperature(leaf, temperature_units)
+        if leaf is None:
+            continue
+        if scalar_name in leaf.cell_data:
+            values = np.asarray(leaf.cell_data[scalar_name])
+            points = leaf.cell_centers().points
+        else:
+            values = np.asarray(leaf.point_data[scalar_name])
+            points = leaf.points
+        if not values.size or not np.isfinite(values).any():
+            continue
+        index = int(np.nanargmax(values))
+        region = next(
+            (name for name in path
+             if name not in {"internalMesh", "boundary"}),
+            "rack",
+        )
+        hotspots.append({
+            "region": region,
+            "maximum": float(values[index]),
+            "point": np.asarray(points[index], dtype=float),
+        })
+    return hotspots
+
+
 def run_openfoam_convergence_report(args, reader) -> None:
     """Write CSV data and a PNG temperature-history convergence report."""
     try:
@@ -650,7 +700,7 @@ def run_openfoam_convergence_report(args, reader) -> None:
     for index, selected_time in enumerate(times, start=1):
         reader.set_active_time_value(selected_time)
         stats = temperature_region_statistics(
-            reader.read(), args.temperature_units
+            read_openfoam_internal_meshes(reader), args.temperature_units
         )
         if not stats:
             print(
@@ -761,7 +811,7 @@ def run_openfoam_animation(args, pv, reader, rack) -> None:
     for selected_time in times:
         reader.set_active_time_value(selected_time)
         _, frame_ranges = prepare_temperature_datasets(
-            reader.read(), args.temperature_units
+            read_openfoam_internal_meshes(reader), args.temperature_units
         )
         ranges.extend(frame_ranges)
     if not ranges:
@@ -794,7 +844,7 @@ def run_openfoam_animation(args, pv, reader, rack) -> None:
     for frame_number, selected_time in enumerate(times, start=1):
         reader.set_active_time_value(selected_time)
         prepared, _ = prepare_temperature_datasets(
-            reader.read(), args.temperature_units
+            read_openfoam_internal_meshes(reader), args.temperature_units
         )
         plotter.clear()
         plotted = 0
@@ -864,18 +914,30 @@ def run_openfoam(args: argparse.Namespace) -> None:
 
     marker = case_directory / f"{case_directory.name}.foam"
     marker.touch(exist_ok=True)
-    reader = pv.POpenFOAMReader(str(marker))
-    # vtkPOpenFOAMReader defaults to reconstructed mode and will otherwise
-    # silently ignore newer processor*/<time> results during a parallel run.
-    if any(case_directory.glob("processor[0-9]*")):
-        reader.case_type = "decomposed"
-    reader.cell_to_point_creation = True
+    warning_state = None
     try:
-        enable_internal_meshes_only(reader)
-    except AttributeError:
-        pass
-    selected_time = select_openfoam_time(reader, args.time)
-    multiblock = reader.read()
+        import vtk
+
+        warning_state = vtk.vtkObject.GetGlobalWarningDisplay()
+        vtk.vtkObject.GlobalWarningDisplayOff()
+    except (ImportError, AttributeError):
+        vtk = None
+    try:
+        reader = pv.POpenFOAMReader(str(marker))
+        # vtkPOpenFOAMReader defaults to reconstructed mode and will otherwise
+        # silently ignore newer processor*/<time> results during a parallel run.
+        if any(case_directory.glob("processor[0-9]*")):
+            reader.case_type = "decomposed"
+        reader.cell_to_point_creation = True
+        try:
+            enable_internal_meshes_only(reader)
+        except AttributeError:
+            pass
+        selected_time = select_openfoam_time(reader, args.time)
+        multiblock = read_openfoam_internal_meshes(reader)
+    finally:
+        if vtk is not None and warning_state:
+            vtk.vtkObject.GlobalWarningDisplayOn()
 
     rack = None
     rack_path = Path(args.rack) if args.rack else case_directory / "geometry.txt"
@@ -947,30 +1009,12 @@ def run_openfoam(args: argparse.Namespace) -> None:
             high = mesh_bounds[2 * axis_index + 1]
             slice_position = (low + high) / 2
 
-    hottest_value = -np.inf
-    hottest_point = None
+    hotspots = temperature_region_hotspots(multiblock, args.temperature_units)
+    hottest = max(hotspots, key=lambda item: item["maximum"], default=None)
+    hottest_value = hottest["maximum"] if hottest is not None else -np.inf
+    hottest_point = hottest["point"] if hottest is not None else None
+    hottest_region = hottest["region"] if hottest is not None else None
     for leaf, scalar_name in prepared:
-        if scalar_name in leaf.cell_data:
-            values = np.asarray(leaf.cell_data[scalar_name])
-            if values.size and np.isfinite(values).any():
-                index = int(np.nanargmax(values))
-                value = float(values[index])
-                point = leaf.cell_centers().points[index]
-            else:
-                value = -np.inf
-                point = None
-        else:
-            values = np.asarray(leaf.point_data[scalar_name])
-            if values.size and np.isfinite(values).any():
-                index = int(np.nanargmax(values))
-                value = float(values[index])
-                point = leaf.points[index]
-            else:
-                value = -np.inf
-                point = None
-        if value > hottest_value:
-            hottest_value, hottest_point = value, point
-
         shown = leaf
         if axis != "none":
             bounds = leaf.bounds
@@ -1000,6 +1044,13 @@ def run_openfoam(args: argparse.Namespace) -> None:
     if rack is not None:
         add_pyvista_geometry(plotter, pv, rack)
     if hottest_point is not None:
+        coordinates = np.asarray(hottest_point, dtype=float)
+        print(
+            f"Global hotspot ({hottest_region}): "
+            f"{hottest_value:.6g} {args.temperature_units} at "
+            f"({coordinates[0]:.9g}, {coordinates[1]:.9g}, "
+            f"{coordinates[2]:.9g}) m"
+        )
         point = np.asarray(hottest_point, dtype=float).reshape(1, 3)
         plotter.add_mesh(
             pv.Sphere(radius=0.008, center=hottest_point), color="cyan",

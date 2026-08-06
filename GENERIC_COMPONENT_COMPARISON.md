@@ -286,19 +286,20 @@ between its 0.01 and 0.02 s states found the following fluid-velocity changes:
 
 Consequently, short boundary-stable screening refreshes are not yet evidence
 that the full recirculation field is steady. A byte-for-byte verified clone at
-`t = 9600.02 s` was continued with preserved 0.10 and 0.50 s fully coupled
-checkpoints while its 1.00 s leg remained in progress. Spatial drift increased
-rather than disappearing over the longer comparison:
+`t = 9600.02 s` was continued with preserved 0.10, 0.50, and 1.00 s fully
+coupled checkpoints. Spatial drift remained large rather than disappearing
+over the longer comparisons:
 
 | Coupled-flow interval | U RMS change | U relative RMS change | U maximum local change | T RMS change | T maximum local change |
 |---:|---:|---:|---:|---:|---:|
 | 0.02 -> 0.10 s | 0.2201 m/s | 15.98% | 4.747 m/s | 0.4757 K | 15.634 K |
 | 0.10 -> 0.50 s | 0.7196 m/s | 43.29% | 5.674 m/s | 1.7166 K | 21.253 K |
+| 0.50 -> 1.00 s | 0.6431 m/s | 34.96% | 6.698 m/s | 1.5065 K | 13.735 K |
 
-The 0.50 s result proves that neither the screening profile's 0.01 s minimum
-nor a nominal 0.1-0.5 s window is sufficient to establish the internal hot-rack
-flow field. Profile refresh durations will be tuned only after the 1.00 s
-checkpoint is compared and, if necessary, the isolated study is extended.
+The 1.00 s result proves that neither the screening profile's 0.01 s minimum
+nor a nominal 0.1-1.0 s window is sufficient to establish the internal
+hot-rack flow field. The isolated study therefore continues to 2 and 5 s
+before profile refresh durations are tuned.
 The nine exterior fans carried approximately `0.2578 kg/s` in total and the
 audited fluid volume was `1.0436 m3`. For a representative hot-rack density of
 1.0-1.2 kg/m3, one nominal air-volume exchange therefore takes roughly
@@ -315,6 +316,18 @@ against the configured limit. Startup ramps use a conservative fixed fallback.
 A two-rank runtime case verified 100 x 0.0001 s startup steps and then a
 preflight-approved 10 x 0.001 s restarted stage; its checkpoint metadata and
 postflight Courant audit agreed with the intended controls.
+
+The `t = 9601 s` temperature audit also clarified an easy-to-misread solver
+diagnostic. The solver printed a fluid-region maximum near 575 K because its
+field min/max line includes coupled boundary values copied from a hot solid
+interface. The internal-cell reader found a rack-fluid maximum of only
+`340.035 K`; the global internal-cell maximum was `578.121 K` at the centre of
+the Generic Trenton equivalent heat block. The block is an intentionally
+simplified rack-level heat source and its temperature is not a predicted chip
+temperature. `plot/heat_animation.py` now prints the owning mesh region and
+coordinates of the global internal-cell hotspot, and suppresses only VTK's
+false empty-processor-partition warnings while retaining explicit empty-mesh
+and missing-temperature checks.
 
 ## Conclusion
 
