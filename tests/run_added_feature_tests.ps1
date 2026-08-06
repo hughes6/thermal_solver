@@ -29,10 +29,12 @@ Write-Host "Checking Python plotting scripts"
     "plot/plot.py" `
     "tools/fan_curve_fitter.py" `
     "tools/heat_load_estimator.py" `
+    "tools/openfoam_field_convergence.py" `
     "tests/coarse_heat_io_test.py" `
     "tests/engineering_tools_test.py" `
     "tests/plot_geometry_test.py" `
     "tests/openfoam_animation_test.py" `
+    "tests/openfoam_field_convergence_test.py" `
     "tools/validate_openfoam_case.py" `
     "plot_outlet_flow.py" `
     "plot/recirculation_report.py" `
@@ -65,6 +67,11 @@ if ($LASTEXITCODE -ne 0) {
 & python -m unittest "tests.recirculation_report_test"
 if ($LASTEXITCODE -ne 0) {
     throw "Recirculation reporting tests failed"
+}
+
+& python -m unittest "tests.openfoam_field_convergence_test"
+if ($LASTEXITCODE -ne 0) {
+    throw "OpenFOAM field convergence tests failed"
 }
 
 & python -m unittest "tests.openfoam_validation_test"

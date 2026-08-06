@@ -1681,6 +1681,22 @@ exterior mass flows, so it scales with rack throughput. A boundary device that
 crosses the floor is still compared and cannot be hidden by this setting.
 Internal fan operating points are never suppressed by the boundary-flow floor.
 
+For a refresh-duration study, preserve a case with written live-flow times and
+compare internal velocity and temperature fields directly:
+
+```powershell
+python .\tools\openfoam_field_convergence.py CASE `
+  --times 7200.02 7200.10 7200.50 7201.00 `
+  --fields U T `
+  --reference final `
+  --csv CASE\field_convergence.csv
+```
+
+The report uses cell-volume weighting and prints RMS, maximum, and relative-RMS
+differences for every region plus the full case. Boundary-flow stability alone
+is not sufficient evidence for shortening a high-fidelity refresh; confirm that
+the internal `U` field is also insensitive to the longer reference duration.
+
 ### 15.5 Automatic thermal convergence
 
 | Setting | Meaning |
