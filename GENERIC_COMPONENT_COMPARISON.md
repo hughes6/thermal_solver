@@ -295,11 +295,14 @@ over the longer comparisons:
 | 0.02 -> 0.10 s | 0.2201 m/s | 15.98% | 4.747 m/s | 0.4757 K | 15.634 K |
 | 0.10 -> 0.50 s | 0.7196 m/s | 43.29% | 5.674 m/s | 1.7166 K | 21.253 K |
 | 0.50 -> 1.00 s | 0.6431 m/s | 34.96% | 6.698 m/s | 1.5065 K | 13.735 K |
+| 1.00 -> 2.00 s | 0.5426 m/s | 29.21% | 7.004 m/s | 1.4530 K | 12.956 K |
 
-The 1.00 s result proves that neither the screening profile's 0.01 s minimum
-nor a nominal 0.1-1.0 s window is sufficient to establish the internal
-hot-rack flow field. The isolated study therefore continues to 2 and 5 s
-before profile refresh durations are tuned.
+The 2.00 s result proves that neither the screening profile's 0.01 s minimum
+nor a nominal 0.1-2.0 s window is sufficient to establish the internal
+hot-rack flow field. Relative velocity drift decreased from 34.96% over the
+0.5-1.0 s interval to 29.21% over 1.0-2.0 s, but remains much too large to call
+the field settled. The isolated study therefore continues to 5 s before
+profile refresh durations are tuned.
 The nine exterior fans carried approximately `0.2578 kg/s` in total and the
 audited fluid volume was `1.0436 m3`. For a representative hot-rack density of
 1.0-1.2 kg/m3, one nominal air-volume exchange therefore takes roughly
