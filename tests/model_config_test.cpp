@@ -11,6 +11,11 @@
 #include "../src/input/model_loader.hpp"
 
 int main() {
+    const std::filesystem::path test_root=
+        std::filesystem::temp_directory_path()/
+        "thermal_sim_model_config_test";
+    std::filesystem::remove_all(test_root);
+    std::filesystem::create_directories(test_root);
     auto read_file=[](const std::filesystem::path& path) {
         std::ifstream input(path);
         std::ostringstream contents;
@@ -77,10 +82,8 @@ int main() {
     foam_loader.load_model("library/tests/openfoam_model.toml");
     assert(foam_loader.model.openfoam_solver.case_directory ==
            std::filesystem::path("openfoam_cases/openfoam_model"));
-    // Keep generated regression-test output in its established fixture path;
-    // the assertion above verifies the user-facing default independently.
     foam_loader.model.openfoam_solver.case_directory=
-        "temp_foam_regions/toml_export";
+        test_root/"toml_export";
 #ifdef _WIN32
     {
         const std::string resolved_test_case=std::filesystem::absolute(
@@ -112,6 +115,7 @@ int main() {
     assert(foam.openfoam_solver.fan_startup_ramp_steps == 5);
     assert(foam.openfoam_solver.initial_airflow_check_interval == 0.01);
     assert(foam.openfoam_solver.minimum_initial_airflow_duration == 0.02);
+    assert(foam.openfoam_solver.airflow_maximum_time_step == 0.001);
     assert(foam.openfoam_solver.thermal_only_maximum_time_step == 5.0);
     assert(foam.openfoam_solver.airflow_refresh_check_interval == 0.01);
     assert(
@@ -143,7 +147,7 @@ int main() {
         profile_model.replace(
             profile_at,default_profile.size(),selected_profile);
         const std::filesystem::path profile_path=
-            "temp_foam_regions/"+profile_name+"_profile_model.toml";
+            test_root/(profile_name+"_profile_model.toml");
         std::filesystem::create_directories(profile_path.parent_path());
         std::ofstream output(profile_path);
         output << profile_model;
@@ -160,6 +164,7 @@ int main() {
     assert(
         screening.openfoam_solver.thermal_only_maximum_time_step == 10.0);
     assert(screening.openfoam_solver.airflow_refresh_duration == 0.02);
+    assert(screening.openfoam_solver.airflow_maximum_time_step == 0.001);
     assert(
         screening.openfoam_solver.maximum_device_flow_change_fraction == 0.03);
     // Inline test-model values remain authoritative over profile defaults.
@@ -173,12 +178,13 @@ int main() {
     assert(indepth.mesh.coarse_dx == 0.10);
     assert(indepth.mesh.refinement_margin == 0.02);
     assert(indepth.openfoam_solver.thermal_only_maximum_time_step == 5.0);
+    assert(indepth.openfoam_solver.airflow_maximum_time_step == 0.001);
     assert(indepth.openfoam_solver.maximum_temperature_change == 0.10);
 
     ModelLoader unsafe_path_loader;
     unsafe_path_loader.load_model("library/tests/openfoam_model.toml");
     unsafe_path_loader.model.openfoam_solver.case_directory=
-        "temp_foam_regions/unsafe case";
+        test_root/"unsafe case";
     bool rejected_unsafe_path=false;
     try {
         unsafe_path_loader.run();
@@ -379,7 +385,9 @@ int main() {
     assert(run_parallel.find(
         "if(x<=a+1e-9)x+=d") != std::string::npos);
     assert(run_parallel.find(
-        "limit=(initial<maximum?initial:maximum)") != std::string::npos);
+        "limit=(flow_max<maximum?flow_max:maximum)") != std::string::npos);
+    assert(run_parallel.find(
+        "-v flow_max=\"0.001") != std::string::npos);
     assert(run_parallel.find(
         "safe=remaining/10") != std::string::npos);
     assert(run_parallel.find(
@@ -489,5 +497,6 @@ int main() {
     assert(maximum_adjacent_ratio(refinement.dys)<=4.0+1e-12);
     assert(maximum_adjacent_ratio(refinement.dzs)<=4.0+1e-12);
 
+    std::filesystem::remove_all(test_root);
     std::cout << "model_config_test PASSED\n";
 }

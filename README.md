@@ -1795,6 +1795,13 @@ the initial operating-point solve and each adaptive airflow refresh still use
 the profile's convergence limits. Do not use a long override when temperatures
 or buoyancy are changing rapidly.
 
+`airflow_maximum_time_step` independently caps every fixed airflow step. Keep
+it separate from `airflow_refresh_check_interval`: a 1 s in-depth comparison
+window still needs many Courant-safe flow steps, not ten 0.1 s steps. The
+shipped profiles use 0.001 s. Increase it only after measuring the maximum
+Courant number on the actual hot rack; changing the comparison interval must
+never silently enlarge the CFD timestep.
+
 The multirate sequence is:
 
 1. prepare/decompose the regions if needed

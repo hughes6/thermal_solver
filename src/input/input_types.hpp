@@ -154,6 +154,7 @@ struct OpenFoamSolverInput {
     int fan_startup_ramp_steps = 5;
     double initial_airflow_check_interval = 0.01;
     double minimum_initial_airflow_duration = 0.02;
+    double airflow_maximum_time_step = 0.001;
     double thermal_only_maximum_time_step = 1.0;
     double thermal_only_maximum_courant_number = 1000.0;
     double airflow_refresh_interval = 300.0;

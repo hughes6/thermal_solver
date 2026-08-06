@@ -958,6 +958,9 @@ struct ModelLoader {
                 cfg.minimum_initial_airflow_duration=
                     value("minimum_initial_airflow_duration")
                         .value<double>().value_or(0.02);
+                cfg.airflow_maximum_time_step=
+                    value("airflow_maximum_time_step")
+                        .value<double>().value_or(0.001);
                 cfg.thermal_only_maximum_time_step=
                     value("thermal_only_maximum_time_step")
                         .value<double>().value_or(1.0);
@@ -1497,6 +1500,8 @@ struct ModelLoader {
                     cfg.initial_airflow_check_interval,
                 .minimum_initial_airflow_duration=
                     cfg.minimum_initial_airflow_duration,
+                .airflow_maximum_time_step=
+                    cfg.airflow_maximum_time_step,
                 .frozen_flow_maximum_time_step=
                     cfg.thermal_only_maximum_time_step,
                 .frozen_flow_maximum_courant_number=

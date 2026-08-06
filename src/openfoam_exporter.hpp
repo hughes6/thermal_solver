@@ -43,6 +43,7 @@ struct OpenFoamExportOptions {
     int fan_startup_ramp_steps = 5;
     double initial_airflow_check_interval = 0.01;
     double minimum_initial_airflow_duration = 0.02;
+    double airflow_maximum_time_step = 0.001;
     // Retain these names until the TOML schema is finalized. They control the
     // thermal-only stage, not OpenFOAM's native frozenFlow implementation.
     double frozen_flow_maximum_time_step = 1.0;
@@ -1199,6 +1200,9 @@ private:
             validate_positive_finite(
                 options.minimum_initial_airflow_duration,
                 "minimum_initial_airflow_duration");
+            validate_positive_finite(
+                options.airflow_maximum_time_step,
+                "airflow_maximum_time_step");
             if(options.minimum_initial_airflow_duration >
                options.airflow_warmup_time)
                 throw std::invalid_argument(
@@ -3081,10 +3085,10 @@ private:
                 "            # final airflow state is a complete restart checkpoint.\n"
                 "            adjust_time_step=false\n"
                 "            stage_plan=$(awk -v maximum=\"$max_dt\" "
-                    "-v initial=\""
-                    << options.initial_time_step
+                    "-v flow_max=\""
+                    << options.airflow_maximum_time_step
                     << "\" -v remaining=\"$interval\" "
-                    "'BEGIN { limit=(initial<maximum?initial:maximum); "
+                    "'BEGIN { limit=(flow_max<maximum?flow_max:maximum); "
                     "safe=remaining/10; if(safe<limit)limit=safe; "
                     "n=int(remaining/limit); "
                     "if(n*limit<remaining-1e-12)n++; if(n<1)n=1; "
