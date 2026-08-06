@@ -4,6 +4,7 @@ import unittest
 from pathlib import Path
 
 from plot.recirculation_report import (
+    boundary_flow_floors,
     boundary_histories,
     combined_samples,
     exported_heat_watts,
@@ -41,6 +42,31 @@ class RecirculationReportTest(unittest.TestCase):
         self.assertTrue(math.isnan(row[4]))
         self.assertTrue(math.isnan(row[5]))
         self.assertTrue(math.isnan(row[6]))
+
+    def test_negligible_flow_temperature_is_excluded(self):
+        histories = {
+            "intake": {
+                "flow": {10.0: -1.0},
+                "temperature": {10.0: 300.0},
+            },
+            "exhaust": {
+                "flow": {10.0: 1.0},
+                "temperature": {10.0: 310.0},
+            },
+            "stagnant_kvm": {
+                "flow": {10.0: -2.0e-9},
+                "temperature": {10.0: -215008.0},
+            },
+        }
+        floor = boundary_flow_floors(histories)[10.0]
+        self.assertGreater(floor, abs(histories["stagnant_kvm"]["flow"][10.0]))
+        row = combined_samples(histories, ambient_k=290.0, cp_air=1000.0)[0]
+        self.assertAlmostEqual(row[1], 1.0)
+        self.assertAlmostEqual(row[2], 1.0)
+        self.assertAlmostEqual(row[3], 300.0)
+        self.assertAlmostEqual(row[4], 310.0)
+        self.assertAlmostEqual(row[5], 0.5)
+        self.assertAlmostEqual(row[6], 10000.0)
 
     def test_exported_heat_is_summed(self):
         with tempfile.TemporaryDirectory() as directory:

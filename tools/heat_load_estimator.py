@@ -1,10 +1,11 @@
 """Estimate component watts for a Thermal Sim internal solid region.
 
 Electrical input is normally the best rack heat estimate: almost all power
-consumed by a server ultimately becomes heat in or near the rack. Temperature
-can estimate watts only when thermal resistance or transient thermal mass is
-also known. This utility reports each available method separately and prints a
-copy-ready TOML snippet.
+consumed by a server ultimately becomes heat in or near the rack. Air-side heat
+can also be measured from mass flow and the intake-to-exhaust temperature rise.
+Surface temperature can estimate watts only when thermal resistance or
+transient thermal mass is also known. This utility reports each available
+method separately and prints a copy-ready TOML snippet.
 """
 
 from __future__ import annotations
@@ -33,6 +34,25 @@ def estimate_methods(args: argparse.Namespace) -> dict[str, float]:
         efficiency = normalize_efficiency(args.efficiency)
         wall_power = args.dc_load_w / efficiency
         estimates["dc_load_and_efficiency"] = wall_power - exported
+
+    airflow_values = (
+        getattr(args, "mass_flow_kg_s", None),
+        getattr(args, "inlet_temp", None),
+        getattr(args, "outlet_temp", None),
+    )
+    if any(value is not None for value in airflow_values):
+        if any(value is None for value in airflow_values):
+            raise ValueError(
+                "Airflow estimation requires --mass-flow-kg-s, "
+                "--inlet-temp, and --outlet-temp."
+            )
+        cp_air = getattr(args, "cp_air_j_kg_k", 1005.5)
+        if args.mass_flow_kg_s <= 0 or cp_air <= 0:
+            raise ValueError("Mass flow and air specific heat must be positive.")
+        delta_t = args.outlet_temp - args.inlet_temp
+        if delta_t <= 0:
+            raise ValueError("--outlet-temp must be greater than --inlet-temp.")
+        estimates["airflow_temperature"] = args.mass_flow_kg_s * cp_air * delta_t
 
     if args.surface_c is not None:
         if args.ambient_c is None or args.thermal_resistance_k_per_w is None:
@@ -87,13 +107,16 @@ def interactive_namespace() -> argparse.Namespace:
     print("  1: measured wall/input electrical power")
     print("  2: DC load and power-supply efficiency")
     print("  3: steady surface/ambient temperature and thermal resistance")
-    choice = input("Method [1/2/3]: ").strip()
+    print("  4: air mass flow and intake/exhaust temperatures")
+    choice = input("Method [1/2/3/4]: ").strip()
     values = {
         "input_power_w": None, "dc_load_w": None, "efficiency": None,
         "exported_power_w": 0.0, "surface_c": None, "ambient_c": None,
         "thermal_resistance_k_per_w": None, "mass_kg": None,
         "specific_heat_j_kg_k": None, "start_c": None, "end_c": None,
-        "duration_s": None, "name": "Estimated heat source", "method": None,
+        "duration_s": None, "mass_flow_kg_s": None, "inlet_temp": None,
+        "outlet_temp": None, "cp_air_j_kg_k": 1005.5,
+        "name": "Estimated heat source", "method": None,
     }
     values["name"] = input("Internal-region name [Estimated heat source]: ").strip() \
         or values["name"]
@@ -108,8 +131,16 @@ def interactive_namespace() -> argparse.Namespace:
         values["thermal_resistance_k_per_w"] = float(
             input("Measured/known thermal resistance (K/W): ")
         )
+    elif choice == "4":
+        values["mass_flow_kg_s"] = float(input("Air mass flow (kg/s): "))
+        values["inlet_temp"] = float(
+            input("Mass-weighted inlet temperature (C or K): ")
+        )
+        values["outlet_temp"] = float(
+            input("Mass-weighted outlet temperature (same unit): ")
+        )
     else:
-        raise ValueError("Choose 1, 2, or 3.")
+        raise ValueError("Choose 1, 2, 3, or 4.")
     return argparse.Namespace(**values)
 
 
@@ -124,6 +155,14 @@ def build_parser() -> argparse.ArgumentParser:
                         help="PSU efficiency as 0-1 or percent")
     parser.add_argument("--exported-power-w", type=float, default=0.0,
                         help="Power leaving as light, shaft work, cables, etc.")
+    parser.add_argument("--mass-flow-kg-s", type=float,
+                        help="Measured device air mass flow")
+    parser.add_argument("--inlet-temp", "--intake-temp", dest="inlet_temp", type=float,
+                        help="Mass-weighted device inlet temperature in C or K")
+    parser.add_argument("--outlet-temp", "--exhaust-temp", dest="outlet_temp", type=float,
+                        help="Mass-weighted device outlet temperature in the same unit")
+    parser.add_argument("--cp-air-j-kg-k", type=float, default=1005.5,
+                        help="Air specific heat (default: 1005.5 J/kg-K)")
     parser.add_argument("--surface-c", type=float)
     parser.add_argument("--ambient-c", type=float)
     parser.add_argument("--thermal-resistance-k-per-w", type=float)
@@ -135,7 +174,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--method",
         choices=("electrical_input", "dc_load_and_efficiency",
-                 "steady_temperature", "transient_temperature", "median"),
+                 "airflow_temperature", "steady_temperature",
+                 "transient_temperature", "median"),
         help="Estimate to place in the TOML snippet"
     )
     return parser
@@ -145,7 +185,8 @@ def main() -> None:
     parser = build_parser()
     args = parser.parse_args()
     supplied = any(value is not None for value in (
-        args.input_power_w, args.dc_load_w, args.surface_c, args.mass_kg
+        args.input_power_w, args.dc_load_w, args.mass_flow_kg_s,
+        args.surface_c, args.mass_kg
     ))
     if not supplied:
         args = interactive_namespace()
@@ -158,6 +199,18 @@ def main() -> None:
     for method, watts in estimates.items():
         print(f"  {method}: {watts:.6g} W")
 
+    if "airflow_temperature" in estimates:
+        for reference in ("electrical_input", "dc_load_and_efficiency"):
+            if reference in estimates and estimates[reference] > 0.0:
+                difference = (
+                    estimates["airflow_temperature"] - estimates[reference]
+                ) / estimates[reference] * 100.0
+                print(
+                    f"  airflow vs {reference}: {difference:+.2f}% "
+                    "(energy-balance check)"
+                )
+                break
+
     selected_method = args.method
     if selected_method == "median":
         selected_watts = statistics.median(estimates.values())
@@ -167,6 +220,7 @@ def main() -> None:
         selected_watts = estimates[selected_method]
     else:
         priority = ("electrical_input", "dc_load_and_efficiency",
+                    "airflow_temperature",
                     "steady_temperature", "transient_temperature")
         selected_method = next(method for method in priority if method in estimates)
         selected_watts = estimates[selected_method]
@@ -183,6 +237,8 @@ def main() -> None:
           "is used only when converting a known DC load to wall/input power.")
     print("Temperature alone cannot determine watts; it requires a calibrated "
           "thermal resistance or transient mass and specific heat.")
+    print("Airflow heat uses mass-weighted inlet/outlet temperatures and total "
+          "device mass flow. Leakage or unmeasured flow will bias that estimate.")
 
 
 if __name__ == "__main__":

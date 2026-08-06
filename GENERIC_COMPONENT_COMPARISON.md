@@ -210,6 +210,19 @@ the transition into meaningful intake, exhaust, or recirculation observable.
 Internal fan operating points retain their original full relative-change
 check. The supplied value is `0.0001`, or 0.01% of rack throughput.
 
+The independently exported 167,232-cell production case then passed live at
+`t = 0.36 s`: ambient mass imbalance was 0.1978%, maximum meaningful device
+flow change was 0.6477%, the boundary-flow floor was `2.46223e-5 kg/s`, and
+all direction checks passed. Its first four 0.01 s adaptive windows averaged
+113.0 wall seconds, 32.7% faster than the 167.9 s legacy-mesh average.
+
+The same checkpoint demonstrated why downstream reports need the identical
+near-zero-flow policy. The passive KVM opening carried approximately
+`-1.9e-9 kg/s`; OpenFOAM's mass-weighted division reported `-215008 K` despite
+the opening being effectively stagnant. `recirculation_report.py` now excludes
+such undefined temperature samples from re-ingestion and sensible-heat metrics
+while continuing to plot the signed flow itself.
+
 ## Conclusion
 
 The generic architecture is viable for rack-level work and reduced cell count

@@ -55,11 +55,31 @@ def exported_heat_watts(case: Path) -> float | None:
     return sum(values) if values else None
 
 
-def combined_samples(histories, ambient_k: float, cp_air: float = 1005.0):
+def boundary_flow_floors(histories, minimum_flow_fraction: float = 1.0e-4):
+    """Return a per-time negligible-flow floor scaled to rack throughput."""
+    all_times = sorted({
+        time for fields in histories.values() for time in fields["flow"]
+    })
+    return {
+        time: 0.5 * minimum_flow_fraction * sum(
+            abs(fields["flow"].get(time, 0.0))
+            for fields in histories.values()
+        )
+        for time in all_times
+    }
+
+
+def combined_samples(
+    histories,
+    ambient_k: float,
+    cp_air: float = 1005.0,
+    minimum_flow_fraction: float = 1.0e-4,
+):
     all_times = sorted({
         time for fields in histories.values() for time in fields["flow"]
         if time in fields["temperature"]
     })
+    floors = boundary_flow_floors(histories, minimum_flow_fraction)
     rows = []
     for time in all_times:
         intake_mass = exhaust_mass = 0.0
@@ -69,6 +89,11 @@ def combined_samples(histories, ambient_k: float, cp_air: float = 1005.0):
                 continue
             flow = fields["flow"][time]
             temperature = fields["temperature"][time]
+            # A mass-weighted temperature is undefined as flow approaches
+            # zero. OpenFOAM can report enormous signed values in that limit;
+            # exclude them from both heat balance and re-ingestion metrics.
+            if abs(flow) <= floors[time]:
+                continue
             if flow < 0.0:
                 intake_mass += -flow
                 intake_t_sum += -flow * temperature
@@ -99,6 +124,11 @@ def main() -> None:
                         help="air specific heat in J/(kg K), default: 1005")
     parser.add_argument("--expected-heat-watts", type=float,
                         help="override exported applied heat for rejection comparison")
+    parser.add_argument(
+        "--minimum-flow-fraction", type=float, default=1.0e-4,
+        help=("ignore boundary temperatures when absolute flow is at or below "
+              "this fraction of total one-way rack throughput; default: 0.0001"),
+    )
     parser.add_argument("--output", type=Path, default=Path("recirculation_report.png"))
     parser.add_argument("--save", action="store_true")
     args = parser.parse_args()
@@ -125,7 +155,12 @@ def main() -> None:
         raise SystemExit("--cp-air must be positive")
     if expected_heat_watts is not None and expected_heat_watts <= 0.0:
         raise SystemExit("--expected-heat-watts must be positive")
-    rows = combined_samples(histories, args.ambient_temperature, args.cp_air)
+    if not 0.0 <= args.minimum_flow_fraction < 1.0:
+        raise SystemExit("--minimum-flow-fraction must be in [0, 1)")
+    rows = combined_samples(
+        histories, args.ambient_temperature, args.cp_air,
+        args.minimum_flow_fraction,
+    )
     if not rows:
         raise SystemExit("Boundary reports have no matching time samples")
 
@@ -142,11 +177,21 @@ def main() -> None:
             writer.writerow((*row, fraction))
 
     fig, axes = plt.subplots(4, 1, figsize=(11, 13), sharex=True)
+    flow_floors = boundary_flow_floors(
+        histories, args.minimum_flow_fraction)
+    ignored_temperature_samples = 0
     for patch, fields in sorted(histories.items()):
         times = sorted(fields["flow"])
         axes[0].plot(times, [fields["flow"][t] for t in times], label=patch)
         common = [t for t in times if t in fields["temperature"]]
-        axes[1].plot(common, [fields["temperature"][t] for t in common], label=patch)
+        temperatures = []
+        for time in common:
+            if abs(fields["flow"][time]) <= flow_floors[time]:
+                temperatures.append(float("nan"))
+                ignored_temperature_samples += 1
+            else:
+                temperatures.append(fields["temperature"][time])
+        axes[1].plot(common, temperatures, label=patch)
     axes[0].axhline(0.0, color="black", linewidth=0.8)
     axes[0].set_ylabel("Signed mass flow (kg/s)\n+out / -in")
     axes[0].set_title("Boundary flow direction and reversal")
@@ -154,7 +199,8 @@ def main() -> None:
     axes[1].axhline(args.ambient_temperature, color="black", linestyle="--",
                     label="Ambient")
     axes[1].set_ylabel("Mass-weighted T (K)")
-    axes[1].set_title("Hot-air ingestion at nominal intakes")
+    axes[1].set_title(
+        "Boundary mass-weighted temperature (near-zero flow omitted)")
     axes[1].legend(fontsize=8, ncol=2)
     axes[2].plot([row[0] for row in rows], [row[5] for row in rows], color="crimson")
     axes[2].set_ylim(-0.02, 1.02)
@@ -180,6 +226,8 @@ def main() -> None:
     print(f"Saved: {csv_path}")
     print(f"Latest thermal re-ingestion index: {rows[-1][5]:.6g}")
     print(f"Latest net sensible heat rejection: {rows[-1][6]:.6g} W")
+    print("Ignored undefined near-zero-flow boundary-temperature samples: "
+          f"{ignored_temperature_samples}")
     if expected_heat_watts is not None:
         print("Latest heat-rejection fraction: "
               f"{rows[-1][6] / expected_heat_watts:.6%}")

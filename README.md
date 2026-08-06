@@ -1868,6 +1868,14 @@ override that exported value. A heat-rejection fraction below 100% during a
 transient indicates that energy is still accumulating in the rack or leaving
 through non-airflow paths, so it is a useful independent convergence check.
 
+Mass-weighted temperature is undefined when a boundary's mass flow approaches
+zero. OpenFOAM may emit an arbitrarily large signed value for such a sample.
+The recirculation tool therefore omits boundary-temperature samples at or below
+`--minimum-flow-fraction` times total one-way rack throughput (default
+`0.0001`) from temperature, heat-rejection, and re-ingestion calculations.
+Signed flow is still plotted, so a formerly stagnant opening becoming active
+remains visible.
+
 ### 16.5 How OpenFOAM saves fields and resumes in time segments
 
 OpenFOAM saves a simulation state in directories named by **simulated time**.
@@ -2422,8 +2430,9 @@ order when available:
 
 1. measured whole-device wall power under the workload being modeled;
 2. DC load plus measured or specified PSU efficiency;
-3. steady temperature plus a calibrated total thermal resistance;
-4. transient temperature rise plus calibrated effective thermal mass and heat
+3. total air mass flow plus mass-weighted inlet/exhaust temperatures;
+4. steady temperature plus a calibrated total thermal resistance;
+5. transient temperature rise plus calibrated effective thermal mass and heat
    loss.
 
 For a printable/fillable measurement worksheet, thermal-camera guidance,
@@ -2468,6 +2477,25 @@ heat = wall power - exported nonthermal power
 ```
 
 Efficiency accepts either `0.90` or `90`.
+
+If total device air mass flow and mass-weighted inlet/exhaust temperatures are
+available, estimate the heat transferred to the air with:
+
+```powershell
+python .\tools\heat_load_estimator.py `
+  --name "Server electronics" `
+  --mass-flow-kg-s 0.10 `
+  --inlet-temp 25 `
+  --outlet-temp 30
+```
+
+This uses `heat = mass flow * cp_air * (outlet - inlet)` and gives 502.75 W
+with the default `--cp-air-j-kg-k 1005.5`. Temperatures may be in C or K but
+must use the same unit. Use total device flow and mass-weighted temperatures;
+leakage or an incomplete flow traverse biases this estimate. When electrical
+and airflow inputs are both provided, the tool prints their percentage energy-
+balance difference and keeps measured electrical input as the default selected
+heat load.
 
 Temperature alone cannot uniquely determine watts. A steady temperature
 estimate requires a measured or calibrated total thermal resistance:
@@ -2515,6 +2543,7 @@ Select the value written into the TOML snippet with, for example:
 
 ```powershell
 --method electrical_input
+--method airflow_temperature
 --method steady_temperature
 --method transient_temperature
 --method median

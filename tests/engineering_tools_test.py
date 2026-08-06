@@ -29,6 +29,10 @@ class EngineeringToolsTest(unittest.TestCase):
             dc_load_w=450.0,
             efficiency=90.0,
             exported_power_w=10.0,
+            mass_flow_kg_s=0.1,
+            inlet_temp=25.0,
+            outlet_temp=30.0,
+            cp_air_j_kg_k=1005.5,
             surface_c=60.0,
             ambient_c=20.0,
             thermal_resistance_k_per_w=0.2,
@@ -41,8 +45,24 @@ class EngineeringToolsTest(unittest.TestCase):
         estimates = estimate_methods(args)
         self.assertAlmostEqual(estimates["electrical_input"], 490.0)
         self.assertAlmostEqual(estimates["dc_load_and_efficiency"], 490.0)
+        self.assertAlmostEqual(estimates["airflow_temperature"], 502.75)
         self.assertAlmostEqual(estimates["steady_temperature"], 200.0)
         self.assertAlmostEqual(estimates["transient_temperature"], 190.0)
+
+    def test_airflow_estimation_requires_complete_positive_measurements(self) -> None:
+        values = dict(
+            input_power_w=None, dc_load_w=None, efficiency=None,
+            exported_power_w=0.0, surface_c=None, ambient_c=None,
+            thermal_resistance_k_per_w=None, mass_kg=None,
+            specific_heat_j_kg_k=None, start_c=None, end_c=None,
+            duration_s=None, mass_flow_kg_s=0.1, inlet_temp=25.0,
+            outlet_temp=None, cp_air_j_kg_k=1005.5,
+        )
+        with self.assertRaisesRegex(ValueError, "Airflow estimation requires"):
+            estimate_methods(Namespace(**values))
+        values["outlet_temp"] = 24.0
+        with self.assertRaisesRegex(ValueError, "outlet-temp"):
+            estimate_methods(Namespace(**values))
 
     def test_generic_component_has_connected_air_tunnel_and_inset_fan(self) -> None:
         document = tomllib.loads(component_toml(

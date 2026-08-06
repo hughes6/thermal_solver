@@ -36,6 +36,7 @@ Write-Host "Checking Python plotting scripts"
     "tools/validate_openfoam_case.py" `
     "plot_outlet_flow.py" `
     "plot/recirculation_report.py" `
+    "tests/recirculation_report_test.py" `
     "tests/openfoam_validation_test.py"
 if ($LASTEXITCODE -ne 0) {
     throw "Python plotting syntax check failed"
@@ -59,6 +60,11 @@ if ($LASTEXITCODE -ne 0) {
 & python "tests/openfoam_animation_test.py"
 if ($LASTEXITCODE -ne 0) {
     throw "OpenFOAM animation tests failed"
+}
+
+& python -m unittest "tests.recirculation_report_test"
+if ($LASTEXITCODE -ne 0) {
+    throw "Recirculation reporting tests failed"
 }
 
 & python -m unittest "tests.openfoam_validation_test"
