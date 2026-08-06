@@ -1784,7 +1784,16 @@ From inside the case directory:
 
 # Recommended accelerated airflow/thermal schedule
 ./run_parallel.sh 4 --multirate 18000
+
+# Continue to 100000 s while refreshing airflow every 10000 simulated seconds
+./run_parallel.sh 4 --multirate 100000 10000
 ```
+
+The optional fourth argument overrides `airflow_refresh_interval` for that
+invocation. It changes only the spacing between completed thermal-only stages;
+the initial operating-point solve and each adaptive airflow refresh still use
+the profile's convergence limits. Do not use a long override when temperatures
+or buoyancy are changing rapidly.
 
 The multirate sequence is:
 

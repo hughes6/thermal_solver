@@ -221,9 +221,9 @@ int main() {
     assert(export_output.str().find(
         "./run_parallel.sh 2 --multirate 10") != std::string::npos);
     assert(export_output.str().find(
-        "./run_parallel.sh 2 --warm-start 18000") != std::string::npos);
+        "./run_parallel.sh 2 --multirate 18000") != std::string::npos);
     assert(export_output.str().find(
-        "./run_parallel.sh 2 --multirate 100000") != std::string::npos);
+        "./run_parallel.sh 2 --multirate 100000 10000") != std::string::npos);
     assert(export_output.str().find(
         "Plot the latest temperature cut plane interactively") !=
         std::string::npos);
@@ -328,7 +328,7 @@ int main() {
     assert(control.find("deltaT          0.01") != std::string::npos);
     assert(control.find("purgeWrite      3") != std::string::npos);
     assert(control.find("writeFormat     binary") != std::string::npos);
-    assert(control.find("timePrecision   12") != std::string::npos);
+    assert(control.find("timePrecision   17") != std::string::npos);
     assert(decomposition.find("numberOfSubdomains 2") != std::string::npos);
     assert(gravity.find("(0 0 -9.80665)") != std::string::npos);
     assert(fluid_solution.find("pRefCell") != std::string::npos);
@@ -373,11 +373,21 @@ int main() {
     assert(run_parallel.find(
         "if(x<=a+1e-9)x+=d") != std::string::npos);
     assert(run_parallel.find(
-        "half=remaining/2") != std::string::npos);
+        "limit=(initial<maximum?initial:maximum)") != std::string::npos);
+    assert(run_parallel.find(
+        "safe=remaining/20") != std::string::npos);
+    assert(run_parallel.find(
+        "adjust_time_step=true") == std::string::npos);
+    assert(run_parallel.find(
+        "-entry index -set 0") != std::string::npos);
+    assert(run_parallel.find(
+        "Normalized legacy checkpoint directory") != std::string::npos);
+    assert(run_parallel.find(
+        "printf \"%.17g\", t") != std::string::npos);
     assert(run_parallel.find(
         "${saved_time}/uniform/time") != std::string::npos);
     assert(run_parallel.find(
-        "restart_dt=$(awk") != std::string::npos);
+        "restart_dt=\"$stage_dt\"") != std::string::npos);
     assert(run_parallel.find(
         "-entry deltaT0") != std::string::npos);
     assert(run_parallel.find(
@@ -398,6 +408,9 @@ int main() {
         "thermal_metrics_converged") != std::string::npos);
     assert(run_parallel.find(
         ".thermal_convergence_state") != std::string::npos);
+    assert(run_parallel.find(
+        "Discarding future thermal-convergence state") !=
+        std::string::npos);
     assert(run_parallel.find(
         "-name 'volFieldValue*.dat'") != std::string::npos);
     assert(run_parallel.find(
@@ -438,6 +451,9 @@ int main() {
         "x=duration*i/n; print (x<limit?x:limit)") !=
         std::string::npos);
     assert(run_parallel.find("then continue; fi") != std::string::npos);
+    assert(run_parallel.find(
+        "\"$saved_time_file\" -entry index -set 0") !=
+        std::string::npos);
     assert(run_parallel.find("x=target/duration") != std::string::npos);
     assert(run_parallel.find("-latestTime -withZero") ==
            std::string::npos);
@@ -451,9 +467,21 @@ int main() {
     const auto minimum_width=[](const std::vector<double>& widths) {
         return *std::min_element(widths.begin(),widths.end());
     };
-    assert(minimum_width(refinement.dxs)>=0.001-1e-12);
-    assert(minimum_width(refinement.dys)>=0.001-1e-12);
-    assert(minimum_width(refinement.dzs)>=0.001-1e-12);
+    assert(minimum_width(refinement.dxs)>=0.005-1e-12);
+    assert(minimum_width(refinement.dys)>=0.005-1e-12);
+    assert(minimum_width(refinement.dzs)>=0.005-1e-12);
+    const auto maximum_adjacent_ratio=[](
+        const std::vector<double>& widths) {
+        double ratio=1.0;
+        for(std::size_t i=1;i<widths.size();++i)
+            ratio=std::max(
+                ratio,std::max(widths[i-1],widths[i])/
+                    std::min(widths[i-1],widths[i]));
+        return ratio;
+    };
+    assert(maximum_adjacent_ratio(refinement.dxs)<=4.0+1e-12);
+    assert(maximum_adjacent_ratio(refinement.dys)<=4.0+1e-12);
+    assert(maximum_adjacent_ratio(refinement.dzs)<=4.0+1e-12);
 
     std::cout << "model_config_test PASSED\n";
 }

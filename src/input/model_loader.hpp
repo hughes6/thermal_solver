@@ -1629,16 +1629,16 @@ struct ModelLoader {
                 std::cout
                     << "\nTwo-stage long-rack convergence workflow "
                        "(run these in order):\n"
-                    << "  # Stage 1: fully coupled airflow/thermal warm start "
+                    << "  # Stage 1: adaptive airflow plus periodic refreshes "
                        "to 18000 s\n"
                     << "  cd '" << launch_directory
                     << "' && ./run_parallel.sh " << cfg.parallel_processes
-                    << " --warm-start 18000\n"
+                    << " --multirate 18000\n"
                     << "  # Stage 2: continue from latestTime to 100000 s; "
-                       "thermal-only between periodic airflow refreshes\n"
+                       "thermal-only with a 10000 s airflow refresh interval\n"
                     << "  cd '" << launch_directory
                     << "' && ./run_parallel.sh " << cfg.parallel_processes
-                    << " --multirate 100000\n"
+                    << " --multirate 100000 10000\n"
                     << "Stage 2 preserves the 18000 s fields and may stop "
                        "early when thermal and refreshed-airflow convergence "
                        "criteria pass. Do not re-export with overwrite=true "

@@ -174,7 +174,13 @@ private:
 
         std::sort(cuts.begin(), cuts.end());
         constexpr double cut_eps = 1e-12;
-        const double minimum_interval = 0.05*fine_dx;
+        // Exact feature cuts that land almost on top of another cut create
+        // rack-wide rectilinear sliver planes. Those planes produced 1.1 mm
+        // cells in a nominal 20 mm screening mesh, aspect ratios near 178,
+        // and low OpenFOAM interpolation weights. Snap cuts closer than one
+        // quarter of the requested fine spacing; the geometric error remains
+        // bounded by 0.25*fine_dx while avoiding pathological cells.
+        const double minimum_interval = 0.25*fine_dx;
         std::vector<double> unique_cuts;
         for (double cut : cuts) {
             if (unique_cuts.empty() ||
@@ -238,6 +244,35 @@ private:
             const double width=length/static_cast<double>(count);
             widths.insert(
                 widths.end(),static_cast<std::size_t>(count),width);
+        }
+
+        // Smooth abrupt transitions without refining the entire coarse
+        // domain. A tiny feature-aligned interval directly beside a coarse
+        // interval otherwise creates low interpolation weights in OpenFOAM.
+        // Split only the larger neighbor until every adjacent ratio is at
+        // most four; repeat because a split can expose the next transition.
+        constexpr double maximum_adjacent_ratio=4.0;
+        bool changed=true;
+        while(changed) {
+            changed=false;
+            for(std::size_t i=1;i<widths.size();++i) {
+                const double smaller=std::min(widths[i-1],widths[i]);
+                const double larger=std::max(widths[i-1],widths[i]);
+                if(larger<=maximum_adjacent_ratio*smaller+cut_eps) continue;
+                const std::size_t large_index=
+                    widths[i-1]>widths[i] ? i-1 : i;
+                const int pieces=std::max(
+                    2,static_cast<int>(std::ceil(
+                        widths[large_index]/
+                        (maximum_adjacent_ratio*smaller))));
+                const double piece=widths[large_index]/pieces;
+                widths.erase(widths.begin()+large_index);
+                widths.insert(
+                    widths.begin()+large_index,
+                    static_cast<std::size_t>(pieces),piece);
+                changed=true;
+                break;
+            }
         }
 
         if (widths.empty()) widths.push_back(extent);
