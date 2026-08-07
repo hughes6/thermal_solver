@@ -515,6 +515,26 @@ int main() {
     assert(run_parallel.find(
         "system/controlDict\" -entry writeInterval -set") !=
         std::string::npos);
+    const std::string production_write_control =
+        "system/controlDict\" -entry writeControl -set "
+        "adjustableRunTime";
+    const auto warm_start_position = run_parallel.find(
+        "if [[ \"$mode\" == \"--warm-start\" ]]");
+    const auto warm_interval_position = run_parallel.find(
+        "-entry writeInterval -set \"$warm_interval\"",
+        warm_start_position);
+    const auto warm_write_control_position = run_parallel.find(
+        production_write_control,warm_start_position);
+    assert(warm_start_position != std::string::npos);
+    assert(warm_write_control_position != std::string::npos);
+    assert(warm_interval_position != std::string::npos);
+    assert(warm_write_control_position < warm_interval_position);
+    const auto restored_write_control_position = run_parallel.find(
+        production_write_control,warm_interval_position);
+    assert(restored_write_control_position != std::string::npos);
+    assert(run_parallel.find(
+        production_write_control,restored_write_control_position + 1) !=
+        std::string::npos);
     assert(run_parallel.find(
         "touch \"$initial_convergence_marker\"") != std::string::npos);
     assert(run_parallel.find(

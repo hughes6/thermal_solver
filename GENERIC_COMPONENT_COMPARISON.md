@@ -424,3 +424,22 @@ Its ambient mass imbalance was `0.0881%` of throughput versus `0.0838%` for
 the reference, both well inside the configured 1% limit. Screening therefore
 uses `pimple_outer_correctors = 3` and `pimple_pressure_correctors = 2`;
 default, in-depth, and validation profiles retain `3x3`.
+
+### Warm-start restart check (2026-08-06)
+
+Extending the retained `3x2` checkpoint exposed a restart-control defect before
+the solver advanced: `--warm-start` wrote its duration in seconds to
+`writeInterval`, but a preceding multirate airflow stage can leave
+`writeControl = timeStep`. OpenFOAM then rejected a fractional interval with
+`writeInterval < 1 for writeControl timeStep`. The generated runner now forces
+`adjustableRunTime` before applying the warm-start interval and restores that
+production write control after both warm-start and multirate runs.
+
+The corrected four-rank command completed 40 full steps from
+`t = 9605.0899783743262 s` before a deliberate resource-safety interrupt.
+Across those completed steps, maximum Courant number stayed between `7.22510`
+and `7.22601`, and there were no OpenFOAM fatal errors. Wall time was
+`19.95 s/step` while the host had less than `0.5 GB` free RAM, versus
+`8.28 s/step` in the earlier `3x2` study. The unchanged timestep and Courant
+behavior show that this slowdown was host memory pressure rather than a solver
+timestep collapse. The original complete checkpoint remained intact.
