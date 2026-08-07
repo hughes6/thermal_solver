@@ -1541,9 +1541,11 @@ stamped to the nearest retained face. This makes represented component volume
 independent of `coarse_dx` and `refinement_margin`; the former outward-only
 rounding could change a 1U component volume by nearly 50% between profiles.
 At the standard 20 mm fine spacing, an effective enclosure must be at least
-5 mm thick to retain its own inner and outer cuts. The generic fanless KVM uses
-this 5 mm mesh-resolved enclosure so its side, top, and bottom walls cannot
-collapse into fluid bypass paths.
+5 mm thick to retain its own inner and outer cuts. Required chassis walls,
+equivalent heat blocks, and air gaps between a heat block and its enclosing
+tunnel are each assigned at least two cells. This targeted through-thickness
+rule prevents singular one-cell material layers without reducing `fine_dx`
+throughout the rack.
 
 The screening profile currently uses:
 
@@ -1562,23 +1564,28 @@ refinement_margin = 0.02
 ```
 
 The profiles intentionally use different spatial resolutions. On the current
-generic production rack, screening exports 167,232 cells and in-depth exports
-288,757 cells, so in-depth is 72.7% larger. Screening is accelerated by that
+generic production rack, screening exports 208,772 cells and in-depth exports
+335,580 cells, so in-depth is 60.7% larger. Screening is accelerated by that
 coarser local mesh, writing less often, using larger implicit thermal steps,
 and refreshing airflow less often. A separate same-mesh 30-step comparison is
 used when isolating solver-policy changes; do not cite that comparison as a
 mesh-convergence result. Blindly increasing `fine_dx` can delete a thin air
 channel or strand a fan against solid cells.
 
-Full `checkMesh -allRegions -allGeometry -allTopology` can report small cell
-determinants for generic component abstractions whose chassis walls, internal
-air clearances, or equivalent heat blocks are only one cell thick. The
-preparation script now saves `checkMesh.prepare.log` and prints an explicit
-warning when OpenFOAM reports failed checks; OpenFOAM itself can return status
-zero for that condition. A case with this warning may be useful for screening,
-but it is not a mesh-validated component-temperature model. Increase resolved
-internal thickness or use a geometry-specific component before making local
-temperature claims.
+The former meshes produced zero/near-zero determinants in one-cell-thick
+generic chassis, heat-block, and air-gap layers. The targeted rule raises the
+screening mesh by 24.8% and the in-depth mesh by 16.2%, but the current generic
+production model now passes full `checkMesh` in the fluid and all four solid
+regions. Minimum determinants are 0.001384 in fluid, 0.0534 in Eaton, 0.0133
+in Dell, 0.0704 in Trenton, and 0.00840 in KVM on screening. The preparation
+script still saves `checkMesh.prepare.log` and warns explicitly if a different
+model fails, because OpenFOAM can return status zero despite reported failures.
+
+The fanless generic KVM uses an air-tunnel cross-section exactly equal to its
+front passive vent and extending to the front face, with a 5 mm rear wall. This
+avoids a narrow one-cell bezel/tunnel mismatch and prevents an unresisted
+opening around the vent. It remains a rack-level effective geometry rather
+than a literal internal CAD model.
 
 When making a new component more accurate:
 

@@ -741,6 +741,25 @@ int main() {
         }
     }
 
+    Component thin_layer_component=
+        Component::from_meters(0.20,0.20,0.20,"thin layers");
+    thin_layer_component.set_coords_m(0.10,0.10,0.10);
+    thin_layer_component.add_region(InternalRegion(
+        "air",{0.19,0.19,0.19},{0.005,0.005,0.005}));
+    thin_layer_component.add_region(InternalRegion(
+        "thin heat block",{0.02,0.02,0.02},{0.09,0.09,0.09},
+        800.0,1200.0,10.0,100.0));
+    const MeshRefinementPlan thin_layer_plan=MeshRefinementPlanner::plan(
+        planner_rack,{thin_layer_component},{},{},0.02,0.10,0.02);
+    for(const auto* widths : {
+            &thin_layer_plan.dxs,&thin_layer_plan.dys,
+            &thin_layer_plan.dzs}) {
+        // Two cells through the 5 mm chassis and the 20 mm heat block.
+        assert(has_boundary(*widths,0.1025));
+        assert(has_boundary(*widths,0.20));
+        assert(has_boundary(*widths,0.2975));
+    }
+
     // Cumulative width sums are not bit-identical to the source geometry
     // coordinates. Both profiles must still stamp exactly the same component
     // volume when its faces coincide with planned mesh boundaries.

@@ -85,6 +85,11 @@ private:
         }
 
         std::vector<std::pair<double, double>> bands;
+        // OpenFOAM's cell-determinant check becomes singular for a material
+        // layer that is only one cell thick between coupled boundaries. Keep
+        // reduced-order chassis walls, heat blocks, and their surrounding air
+        // gaps at a minimum of two cells without refining the whole rack.
+        std::vector<std::pair<double,double>> minimum_two_cell_spans;
         struct PrioritizedCut {
             double coordinate;
             int priority;
@@ -123,6 +128,8 @@ private:
             add_cut(component_max,component_cut_priority);
 
             if (align_internal_geometry) {
+            std::vector<std::pair<double,double>> air_spans;
+            std::vector<std::pair<double,double>> heat_source_spans;
             for (const InternalRegion& region : component.get_regions()) {
                 const auto position = region.get_global_position();
                 const auto region_size = region.get_size_m();
@@ -131,6 +138,10 @@ private:
                     region.get_region_type() == RegionType::HeatSource) {
                     add_cut(position[axis],feature_cut_priority);
                     add_cut(position[axis]+region_size[axis],feature_cut_priority);
+                    auto& spans=region.get_region_type()==RegionType::Air
+                        ? air_spans : heat_source_spans;
+                    spans.push_back(
+                        {position[axis],position[axis]+region_size[axis]});
                     continue;
                 }
 
@@ -160,6 +171,29 @@ private:
                     add_cut(position[axis]+half_extent,feature_cut_priority);
                 }
             }
+            constexpr double containment_tolerance=1e-12;
+            for(const auto& air : air_spans) {
+                if(air.first>component_min+containment_tolerance)
+                    minimum_two_cell_spans.push_back(
+                        {component_min,air.first});
+                if(air.second<component_max-containment_tolerance)
+                    minimum_two_cell_spans.push_back(
+                        {air.second,component_max});
+                for(const auto& heat_source : heat_source_spans) {
+                    if(heat_source.first<air.first-containment_tolerance ||
+                       heat_source.second>air.second+containment_tolerance)
+                        continue;
+                    if(heat_source.first>air.first+containment_tolerance)
+                        minimum_two_cell_spans.push_back(
+                            {air.first,heat_source.first});
+                    if(heat_source.second<air.second-containment_tolerance)
+                        minimum_two_cell_spans.push_back(
+                            {heat_source.second,air.second});
+                }
+            }
+            minimum_two_cell_spans.insert(
+                minimum_two_cell_spans.end(),heat_source_spans.begin(),
+                heat_source_spans.end());
             }
         }
 
@@ -280,8 +314,15 @@ private:
             if(length<=cut_eps) continue;
             const double target=
                 is_fine(0.5*(begin+end)) ? fine_dx : coarse_dx;
-            const int count=std::max(
+            int count=std::max(
                 1,static_cast<int>(std::ceil(length/target)));
+            const bool requires_two_cells=std::any_of(
+                minimum_two_cell_spans.begin(),minimum_two_cell_spans.end(),
+                [&](const auto& span) {
+                    return std::abs(begin-span.first)<cut_eps &&
+                           std::abs(end-span.second)<cut_eps;
+                });
+            if(requires_two_cells) count=std::max(count,2);
             const double width=length/static_cast<double>(count);
             widths.insert(
                 widths.end(),static_cast<std::size_t>(count),width);

@@ -158,12 +158,25 @@ removal remains independently validated here.
 ## Production-profile benchmark (2026-08-07)
 
 The current generic production rack was exported into separate, non-overwriting
-case roots with the current screening and in-depth profiles. Screening contains
-167,232 cells; in-depth contains 288,757 cells (72.7% more). Both complete
-region preparation, but full `checkMesh` reports small determinants in thin
-generic component layers. These warnings do not invalidate the separate
-fan-rack bulk-temperature validation above, but they prevent claiming that the
-generic components' local solid temperatures are mesh-validated.
+case roots with the current screening and in-depth profiles. The original
+screening and in-depth meshes contained 167,232 and 288,757 cells, but full
+`checkMesh` reported zero/near-zero determinants in one-cell-thick generic
+component layers.
+
+The refinement planner now guarantees at least two cells through reduced-order
+chassis walls, heat blocks, and sandwiched internal air gaps. The fanless KVM
+tunnel was also aligned exactly with its passive front vent. Corrected screening
+contains 208,772 cells (+24.8%) and corrected in-depth contains 335,580 cells
+(+16.2%). Both now pass full topology/geometry checks in the fluid and all four
+solid regions. Screening minimum determinants are 0.001384 (fluid), 0.0534
+(Eaton), 0.0133 (Dell), 0.0704 (Trenton), and 0.00840 (KVM). A five-step
+screening startup reached exactly 0.005 s, remained stable with peak Co 0.861
+against the profile limit of 5, and completed end-to-end in 146.97 s.
+
+This establishes numerically valid generic-region meshes; it does not calibrate
+the effective component temperatures against physical hardware. Local generic
+component temperatures remain engineering estimates until measured thermal
+resistance/capacitance data are supplied.
 
 At a 0.005 s startup checkpoint, the former fixed ramp required 50 in-depth
 steps at 0.0001 s. Peak Co was only 0.095 and end-to-end wall time was 443.47 s.

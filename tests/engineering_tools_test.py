@@ -122,21 +122,27 @@ class EngineeringToolsTest(unittest.TestCase):
             ]
             self.assertEqual([], rear_exhausts, filename)
 
-    def test_generic_kvm_enclosure_is_resolved_by_standard_mesh(self) -> None:
+    def test_generic_kvm_tunnel_matches_passive_front_vent(self) -> None:
         root = Path(__file__).resolve().parents[1]
         with (root / "library/components/generic_kvm_1u.toml").open("rb") as stream:
             document = tomllib.load(stream)
         air = next(
             region for region in document["internal_regions"]
             if region["name"] == "Interior air")
-        minimum_wall_mm = 5.0
-        for axis, size_key in (("x", "width"), ("y", "depth"), ("z", "height")):
-            lower_wall = air["position"][axis]
-            upper_wall = (
-                document["size"][size_key] - lower_wall -
-                air["size"][size_key])
-            self.assertGreaterEqual(lower_wall, minimum_wall_mm)
-            self.assertGreaterEqual(upper_wall, minimum_wall_mm)
+        vent = next(
+            region for region in document["internal_regions"]
+            if region["name"] == "Front intake")
+        self.assertEqual(0.0, air["position"]["y"])
+        self.assertAlmostEqual(air["size"]["width"], vent["size"]["width"])
+        self.assertAlmostEqual(air["size"]["height"], vent["size"]["height"])
+        self.assertAlmostEqual(
+            air["position"]["x"],
+            vent["position"]["x"] - vent["size"]["width"] / 2.0)
+        self.assertAlmostEqual(
+            air["position"]["z"],
+            vent["position"]["z"] - vent["size"]["height"] / 2.0)
+        rear_wall = document["size"]["depth"] - air["size"]["depth"]
+        self.assertGreaterEqual(rear_wall, 5.0)
 
 
 if __name__ == "__main__":
