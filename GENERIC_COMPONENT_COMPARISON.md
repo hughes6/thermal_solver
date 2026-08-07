@@ -563,6 +563,19 @@ near-zero floor is now 0.1% of rack throughput, so such passive sign noise does
 not control convergence; the flow remains included in ambient mass balance.
 
 The in-depth refresh and check intervals are now `0.01 s`, with a bounded
-`0.10 s` maximum refresh duration. This reduces a normal two-sample strict-Co
-refresh from roughly 6,600 planned steps to about 68 without relaxing the
-Courant, fan-flow-change, direction, or mass-balance criteria.
+`0.10 s` maximum refresh duration. A later full 1,200 s thermal-hold replay
+found a timestep-scale period-two mode in two internal `fanMomentumSource`
+operating-point reports: fan 1 alternated between about `0.01471` and
+`0.01665 m3/s`, while rack boundary flows were already stable to about
+`0.03%`. Direct instantaneous comparison therefore failed at `11.7-13.6%`
+despite `Co_max < 0.78`, mass imbalance below `0.052%`, and correct directions.
+
+Reducing velocity relaxation from 0.7 to 0.5 only reduced the alternating
+amplitude to `9-10%`; it did not remove the numerical mode. The runner now
+compares consecutive two-sample means for internal fan operating points while
+continuing to compare rack boundary flows directly. This preserves sensitivity
+to mean-flow drift without treating timestep parity as physical divergence.
+The byte-identical-mesh replay then converged after three `0.01 s` samples:
+worst smoothed internal-fan change `0.0965%`, worst boundary-flow change about
+`0.033%`, mass imbalance `0.00303%`, directions valid, and `Co_max=0.779`.
+The report now identifies the device responsible for the maximum change.

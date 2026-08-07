@@ -387,6 +387,10 @@ int main() {
     assert(run_parallel.find("previous_flows=()", adaptive_initial_start) !=
            std::string::npos);
     assert(run_parallel.find("internal_fan_names") != std::string::npos);
+    assert(run_parallel.find("previous_smoothed_internal_flows") !=
+           std::string::npos);
+    assert(run_parallel.find("0.5*(a+b)") != std::string::npos);
+    assert(run_parallel.find("maxFlowDevice=") != std::string::npos);
     assert(run_parallel.find("boundary_flow_lookup") != std::string::npos);
     assert(run_parallel.find("boundary_flow_floor") != std::string::npos);
     assert(run_parallel.find(
