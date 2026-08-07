@@ -189,7 +189,7 @@ int main() {
         indepth.openfoam_solver.maximum_device_flow_change_fraction == 0.01);
     assert(
         indepth.openfoam_solver.minimum_tracked_boundary_flow_fraction ==
-        0.0001);
+        0.001);
     assert(indepth.openfoam_solver.airflow_maximum_time_step == 0.001);
     assert(indepth.openfoam_solver.maximum_temperature_change == 0.10);
 

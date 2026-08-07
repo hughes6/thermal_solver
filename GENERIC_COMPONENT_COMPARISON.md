@@ -543,3 +543,26 @@ five-second thermal timesteps, 1,200 s refreshes, 60 s reporting, and tighter
 convergence thresholds, it now uses the validated `3x2` correction policy.
 It also defaults to two ranks on the 8 GB workstation. The strict validation
 profile remains at four ranks and `3x3` for independent reference studies.
+
+### Strict-Co airflow-refresh sampling (2026-08-07)
+
+At `Co_max ~= 0.722`, the old in-depth one-second check interval required about
+3,300 live-flow steps per sample. A controlled test instead advanced two
+consecutive `0.0102 s` samples of 34 fixed `0.0003 s` steps from the converged
+checkpoint. The samples took `283.35 s` and `288.78 s` respectively.
+
+Between samples 1 and 2, the nine fan boundary flows changed by at most
+`0.0456%`, main-intake flow by `0.0101%`, and three internal fan operating
+points by at most `0.180%`. All meaningful flows therefore satisfied the 1%
+criterion after two samples while retaining strict `Co <= 1` fidelity.
+
+The passive KVM opening crossed through zero between approximately
+`-0.000073` and `+0.000048 kg/s`, only `0.016-0.024%` of main-intake flow. Its
+relative change is mathematically large but thermally negligible. The in-depth
+near-zero floor is now 0.1% of rack throughput, so such passive sign noise does
+not control convergence; the flow remains included in ambient mass balance.
+
+The in-depth refresh and check intervals are now `0.01 s`, with a bounded
+`0.10 s` maximum refresh duration. This reduces a normal two-sample strict-Co
+refresh from roughly 6,600 planned steps to about 68 without relaxing the
+Courant, fan-flow-change, direction, or mass-balance criteria.

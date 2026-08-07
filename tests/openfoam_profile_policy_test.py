@@ -33,6 +33,10 @@ class OpenFoamProfilePolicyTest(unittest.TestCase):
         self.assertEqual(profile["parallel_processes"], 2)
         self.assertEqual(profile["pimple_outer_correctors"], 3)
         self.assertEqual(profile["pimple_pressure_correctors"], 2)
+        self.assertEqual(profile["airflow_refresh_duration"], 0.01)
+        self.assertEqual(profile["airflow_refresh_check_interval"], 0.01)
+        self.assertEqual(profile["maximum_airflow_refresh_duration"], 0.10)
+        self.assertEqual(profile["minimum_tracked_boundary_flow_fraction"], 0.001)
 
     def test_strict_validation_retains_three_by_three(self):
         profile = self.profile("validation_foam_cfg.toml")
