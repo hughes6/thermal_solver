@@ -7,7 +7,9 @@ import unittest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from tools.fan_curve_fitter import fit_curve, rpm_at_load, scale_curve_for_rpm
+from tools.fan_curve_fitter import (
+    fit_curve, rpm_at_load, scale_curve_for_rpm, write_curve_plot,
+)
 from tools.heat_load_estimator import estimate_methods
 from tools.generic_server_characterizer import component_toml
 
@@ -32,6 +34,18 @@ class EngineeringToolsTest(unittest.TestCase):
         self.assertEqual(a, 75.0)
         self.assertEqual(b, 1000.0)
         self.assertEqual(c, 8000.0)
+
+    def test_fan_curve_svg_plot(self) -> None:
+        import tempfile
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "curve.svg"
+            write_curve_plot(path, [(0.0, 300.0), (0.1, 0.0)],
+                             300.0, 0.0, 30000.0,
+                             "cfm", "inh2o", "Test fan")
+            contents = path.read_text(encoding="utf-8")
+            self.assertIn("<svg", contents)
+            self.assertIn("Flow (cfm)", contents)
+            self.assertIn("Pressure (inh2o)", contents)
 
     def test_heat_estimation_methods(self) -> None:
         args = Namespace(

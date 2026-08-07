@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import argparse
 import csv
+import html
 import math
 from pathlib import Path
 
@@ -131,6 +132,86 @@ def scale_curve_for_rpm(a: float, b: float, c: float,
     return a * ratio * ratio, b * ratio, c
 
 
+def write_curve_plot(path: Path, points_si: list[tuple[float, float]],
+                     a: float, b: float, c: float, flow_unit: str,
+                     pressure_unit: str, title: str) -> None:
+    """Write a dependency-free SVG plot in the user's selected units."""
+    width, height = 800, 520
+    left, right, top, bottom = 85, 25, 55, 70
+    plot_width = width - left - right
+    plot_height = height - top - bottom
+    flow_factor = FLOW_TO_M3S[flow_unit]
+    pressure_factor = PRESSURE_TO_PA[pressure_unit]
+    point_values = [(q / flow_factor, p / pressure_factor)
+                    for q, p in points_si]
+    max_flow = max(q for q, _ in point_values)
+    if max_flow <= 0.0:
+        raise ValueError("Plot requires at least one positive flow value.")
+    curve_values = []
+    for index in range(201):
+        flow = max_flow * index / 200.0
+        flow_si = flow * flow_factor
+        pressure = max(a - b * flow_si - c * flow_si * flow_si, 0.0)
+        curve_values.append((flow, pressure / pressure_factor))
+    max_pressure = max([p for _, p in point_values] +
+                       [p for _, p in curve_values] + [1.0])
+    max_flow *= 1.05
+    max_pressure *= 1.08
+
+    def x_pixel(flow: float) -> float:
+        return left + plot_width * flow / max_flow
+
+    def y_pixel(pressure: float) -> float:
+        return top + plot_height * (1.0 - pressure / max_pressure)
+
+    svg = [
+        f'<svg xmlns="http://www.w3.org/2000/svg" width="{width}" '
+        f'height="{height}" viewBox="0 0 {width} {height}">',
+        '<rect width="100%" height="100%" fill="white"/>',
+        '<style>text{font-family:Arial,sans-serif;fill:#222}'
+        '.grid{stroke:#ddd;stroke-width:1}.axis{stroke:#222;stroke-width:1.5}'
+        '.curve{fill:none;stroke:#1769aa;stroke-width:3}'
+        '.point{fill:#d84315;stroke:white;stroke-width:1.5}</style>',
+        f'<text x="{width/2}" y="30" text-anchor="middle" '
+        f'font-size="20">{html.escape(title)}</text>',
+    ]
+    for index in range(6):
+        fraction = index / 5.0
+        x = left + plot_width * fraction
+        y = top + plot_height * (1.0 - fraction)
+        flow_label = max_flow * fraction
+        pressure_label = max_pressure * fraction
+        svg.extend([
+            f'<line class="grid" x1="{x:.2f}" y1="{top}" '
+            f'x2="{x:.2f}" y2="{top + plot_height}"/>',
+            f'<text x="{x:.2f}" y="{top + plot_height + 24}" '
+            f'text-anchor="middle" font-size="12">{flow_label:.4g}</text>',
+            f'<line class="grid" x1="{left}" y1="{y:.2f}" '
+            f'x2="{left + plot_width}" y2="{y:.2f}"/>',
+            f'<text x="{left - 10}" y="{y + 4:.2f}" text-anchor="end" '
+            f'font-size="12">{pressure_label:.4g}</text>',
+        ])
+    svg.extend([
+        f'<line class="axis" x1="{left}" y1="{top + plot_height}" '
+        f'x2="{left + plot_width}" y2="{top + plot_height}"/>',
+        f'<line class="axis" x1="{left}" y1="{top}" '
+        f'x2="{left}" y2="{top + plot_height}"/>',
+        f'<text x="{left + plot_width/2}" y="{height - 18}" '
+        f'text-anchor="middle" font-size="15">Flow ({html.escape(flow_unit)})</text>',
+        f'<text x="20" y="{top + plot_height/2}" text-anchor="middle" '
+        f'font-size="15" transform="rotate(-90 20 {top + plot_height/2})">'
+        f'Pressure ({html.escape(pressure_unit)})</text>',
+        '<polyline class="curve" points="' + ' '.join(
+            f'{x_pixel(q):.2f},{y_pixel(p):.2f}' for q, p in curve_values) + '"/>',
+    ])
+    svg.extend(
+        f'<circle class="point" cx="{x_pixel(q):.2f}" '
+        f'cy="{y_pixel(p):.2f}" r="5"/>' for q, p in point_values
+    )
+    svg.append('</svg>')
+    path.write_text("\n".join(svg) + "\n", encoding="utf-8")
+
+
 def interactive_points() -> list[tuple[float, float]]:
     print("Enter fan points as FLOW,PRESSURE. Press Enter after the last point.")
     points: list[tuple[float, float]] = []
@@ -150,7 +231,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--rho-rated", type=float, default=1.2,
                         help="Datasheet air density in kg/m^3")
     parser.add_argument("--flow-unit", choices=FLOW_TO_M3S, default="cfm")
-    parser.add_argument("--pressure-unit", choices=PRESSURE_TO_PA, default="pa")
+    parser.add_argument("--pressure-unit", choices=PRESSURE_TO_PA, default="inh2o")
     parser.add_argument("--point", type=parse_point, action="append", default=[],
                         help="FLOW,PRESSURE; repeat for every datasheet point")
     parser.add_argument("--csv", type=Path,
@@ -164,6 +245,8 @@ def build_parser() -> argparse.ArgumentParser:
                         help="load at which to evaluate the RPM schedule")
     parser.add_argument("--reference-rpm", type=float,
                         help="RPM at which the supplied pressure-flow points were measured")
+    parser.add_argument("--plot", nargs="?", const="", metavar="PATH",
+                        help="write an SVG plot; default: <name>_fan_curve.svg")
     return parser
 
 
@@ -202,6 +285,7 @@ def main() -> None:
         for flow, pressure in points
     ]
     a, b, c = fit_curve(points_si)
+    plot_points_si = list(points_si)
     predictions = [a - b * flow - c * flow * flow for flow, _ in points_si]
     residuals = [prediction - pressure
                  for prediction, (_, pressure) in zip(predictions, points_si)]
@@ -218,6 +302,11 @@ def main() -> None:
                 "Combining RPM/load and pressure-flow data requires --reference-rpm.")
         a, b, c = scale_curve_for_rpm(
             a,b,c,args.reference_rpm,target_rpm)
+        speed_ratio = target_rpm / args.reference_rpm
+        plot_points_si = [
+            (flow * speed_ratio,pressure * speed_ratio * speed_ratio)
+            for flow,pressure in points_si
+        ]
         print(f"\nScaled pressure-flow curve from {args.reference_rpm:.6g} "
               f"to {target_rpm:.6g} RPM using fan affinity laws.")
 
@@ -235,6 +324,17 @@ def main() -> None:
     print(f"a = {a:.12g}")
     print(f"b = {b:.12g}")
     print(f"c = {c:.12g}")
+
+    if args.plot is not None:
+        safe_name = "".join(
+            character if character.isalnum() or character in "-_" else "_"
+            for character in args.name
+        ).strip("_") or "fitted_fan"
+        plot_path = Path(args.plot) if args.plot else Path(
+            f"{safe_name}_fan_curve.svg")
+        write_curve_plot(plot_path,plot_points_si,a,b,c,args.flow_unit,
+                         args.pressure_unit,args.name)
+        print(f"\nPlot written to {plot_path}")
 
 
 if __name__ == "__main__":
