@@ -154,3 +154,28 @@ Refine the local solid/interface and downstream thermal boundary layer beyond
 that gate. For production racks, use measured or calibrated component thermal
 characteristics when accurate case temperature is required; total rack heat
 removal remains independently validated here.
+
+## Production-profile benchmark (2026-08-07)
+
+The current generic production rack was exported into separate, non-overwriting
+case roots with the current screening and in-depth profiles. Screening contains
+167,232 cells; in-depth contains 288,757 cells (72.7% more). Both complete
+region preparation, but full `checkMesh` reports small determinants in thin
+generic component layers. These warnings do not invalidate the separate
+fan-rack bulk-temperature validation above, but they prevent claiming that the
+generic components' local solid temperatures are mesh-validated.
+
+At a 0.005 s startup checkpoint, the former fixed ramp required 50 in-depth
+steps at 0.0001 s. Peak Co was only 0.095 and end-to-end wall time was 443.47 s.
+The adaptive ramp used 10 steps seeded at 0.0005 s, retained OpenFOAM adaptive
+control, reached the exact same 0.005 s endpoint, and held peak Co to 0.454
+against the configured limit of 1. Wall time was 204.79 s, a 53.8% reduction.
+Because startup fan scaling is a numerical stabilization procedure, early-ramp
+velocity fields differ; acceptance remains based on the later converged airflow
+operating point, mass balance, device-flow stability, and thermal convergence.
+
+The benchmark also quantified mounted-filesystem overhead. A ten-step screening
+restart spent 89 s in the solver but 194 s end-to-end, so decomposition,
+reconstruction, process startup, and Windows-mounted case I/O consumed about
+105 s (54%). Avoid many tiny runner invocations. Complete airflow windows in a
+single invocation and use multirate thermal intervals between them.

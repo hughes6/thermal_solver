@@ -342,6 +342,14 @@ int main() {
         read_file(case_directory/"0/heated_block_0/T");
     const std::string run_parallel=
         read_file(case_directory/"run_parallel.sh");
+    const std::string prepare_regions=
+        read_file(case_directory/"prepare_regions.sh");
+    assert(prepare_regions.find("checkMesh.prepare.log") !=
+           std::string::npos);
+    assert(prepare_regions.find(
+        "Failed [1-9][0-9]* mesh checks") != std::string::npos);
+    assert(prepare_regions.find(
+        "before treating results as validated") != std::string::npos);
     const std::string run_serial=
         read_file(case_directory/"run_cht.sh");
     assert(control.find("endTime         10") != std::string::npos);
@@ -441,11 +449,16 @@ int main() {
     assert(run_parallel.find(
         "Live-flow Courant limit exceeded") != std::string::npos);
     assert(run_parallel.find(
-        "scale=(co<10?co/10:1)") != std::string::npos);
+        "scale=(co<2?co/2:1)") != std::string::npos);
     assert(run_parallel.find(
         "Startup has no established flow field") != std::string::npos);
     assert(run_parallel.find(
-        "-entry writeInterval -set \"$ramp_steps\"") !=
+        "-entry writeInterval -set \"$interval\"") !=
+           std::string::npos);
+    assert(run_parallel.find(
+        "-entry maxDeltaT -set \"$ramp_cap\"") != std::string::npos);
+    assert(run_parallel.find(
+        "-entry writeControl -set adjustableRunTime") !=
            std::string::npos);
     assert(run_parallel.find(
         "deltaT=$ramp_dt, steps=$ramp_steps") != std::string::npos);

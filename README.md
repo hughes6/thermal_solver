@@ -1556,19 +1556,29 @@ refinement_margin = 0.02
 The in-depth profile uses:
 
 ```toml
-fine_dx = 0.02
+fine_dx = 0.015
 coarse_dx = 0.10
 refinement_margin = 0.02
 ```
 
-The mesh is intentionally identical between screening and in-depth profiles.
-The former 200 mm/5 mm screening layout became 22% larger than the in-depth
-mesh after transition smoothing around required 5 mm enclosure cells
-(204,136 versus 167,232 cells). Using 100 mm/20 mm for both is faster and
-removes geometry as a confounding variable when comparing solver profiles.
-Screening is accelerated by writing less often, using larger implicit thermal
-steps, and refreshing airflow less often. Blindly increasing `fine_dx` can
-delete a thin air channel or strand a fan against solid cells.
+The profiles intentionally use different spatial resolutions. On the current
+generic production rack, screening exports 167,232 cells and in-depth exports
+288,757 cells, so in-depth is 72.7% larger. Screening is accelerated by that
+coarser local mesh, writing less often, using larger implicit thermal steps,
+and refreshing airflow less often. A separate same-mesh 30-step comparison is
+used when isolating solver-policy changes; do not cite that comparison as a
+mesh-convergence result. Blindly increasing `fine_dx` can delete a thin air
+channel or strand a fan against solid cells.
+
+Full `checkMesh -allRegions -allGeometry -allTopology` can report small cell
+determinants for generic component abstractions whose chassis walls, internal
+air clearances, or equivalent heat blocks are only one cell thick. The
+preparation script now saves `checkMesh.prepare.log` and prints an explicit
+warning when OpenFOAM reports failed checks; OpenFOAM itself can return status
+zero for that condition. A case with this warning may be useful for screening,
+but it is not a mesh-validated component-temperature model. Increase resolved
+internal thickness or use a geometry-specific component before making local
+temperature claims.
 
 When making a new component more accurate:
 
@@ -1651,6 +1661,18 @@ about 29% below the result obtained after a 0.30 s post-ramp minimum. Internal
 device flow also overshot and slowly reversed while adjacent changes were less
 than 1%. The supplied profiles therefore require at least 0.30 s of post-ramp
 airflow and retain a conservative 0.001 s coupled-flow timestep.
+
+During the fan ramp, the runner seeds `deltaT` below the configured Courant
+limit and enables OpenFOAM adaptive stepping with `maxCo` and
+`airflow_maximum_time_step` as hard caps. Each ramp stage uses
+`adjustableRunTime`, so its requested endpoint is still written exactly. The
+former fixed rule used `maxCo/10` of the airflow timestep cap: on the current
+288,757-cell production rack it forced 50 steps to reach 0.005 s even though
+peak Co was only 0.095. Adaptive startup reached the same endpoint in 10 steps,
+kept peak Co at 0.454 (below the in-depth limit of 1), and reduced end-to-end
+wall time from 443.47 s to 204.79 s (53.8%). The ramp is a numerical startup
+device, so transient velocity fields inside the ramp are not expected to match
+step-for-step; validate the fully established airflow operating point.
 
 ### 15.4 Adaptive airflow refresh
 
