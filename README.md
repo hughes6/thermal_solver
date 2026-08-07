@@ -1673,8 +1673,9 @@ default, validation, and in-depth profiles all use a 1% device-flow tolerance.
 In-depth and validation retain longer minimum refresh windows for
 higher-fidelity updates.
 
-The supplied profiles use
-`minimum_tracked_boundary_flow_fraction = 0.0001`. This prevents numerical
+The screening profile uses
+`minimum_tracked_boundary_flow_fraction = 0.0001`; the in-depth profile uses
+`0.001` to reject sign noise below 0.1% of rack throughput. This prevents numerical
 noise through an effectively stagnant passive opening from blocking the whole
 rack indefinitely. The floor is computed from half the sum of absolute
 exterior mass flows, so it scales with rack throughput. A boundary device that
@@ -1692,7 +1693,10 @@ python .\tools\openfoam_field_convergence.py CASE `
   --csv CASE\field_convergence.csv
 ```
 
-The report uses cell-volume weighting and prints RMS, maximum, and relative-RMS
+The report automatically reads reconstructed root times when every requested
+time is available there, even if newer processor directories also exist. Use
+`--case-type reconstructed` or `--case-type decomposed` only to override that
+selection. It uses cell-volume weighting and prints RMS, maximum, and relative-RMS
 differences for every region plus the full case. Boundary-flow stability alone
 is not sufficient evidence for shortening a high-fidelity refresh; confirm that
 the internal `U` field is also insensitive to the longer reference duration.
@@ -1720,6 +1724,12 @@ The state is persisted in hidden case files so a restarted run continues the
 convergence history. OpenFOAM may rotate function-object files after a restart
 (`volFieldValue_*.dat`); the generated parser reads both original and rotated
 files.
+
+These automatic criteria establish engineering convergence of peak and
+component-average temperatures plus device and ambient flows. They do not
+assert that every instantaneous turbulent velocity cell is stationary. For a
+final CFD validation, also compare reconstructed checkpoint fields with
+`openfoam_field_convergence.py` and state the accepted `U` and `T` RMS limits.
 
 ## 16. Exporting and running the OpenFOAM suite from TOML
 

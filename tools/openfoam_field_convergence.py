@@ -81,6 +81,38 @@ def exact_time(available, requested: float) -> float:
     return nearest
 
 
+def directory_times(directory: Path) -> list[float]:
+    """Return numeric OpenFOAM time-directory names without rounding them."""
+    values = []
+    if not directory.is_dir():
+        return values
+    for path in directory.iterdir():
+        if not path.is_dir():
+            continue
+        try:
+            values.append(float(path.name))
+        except ValueError:
+            continue
+    return sorted(values)
+
+
+def select_case_type(case: Path, requested, preference: str = "auto") -> str:
+    """Choose reconstructed data when it contains every requested time."""
+    if preference != "auto":
+        return preference
+    root_times = directory_times(case)
+    if root_times:
+        try:
+            for value in requested:
+                exact_time(root_times, value)
+            return "reconstructed"
+        except ValueError:
+            pass
+    if any(case.glob("processor[0-9]*")):
+        return "decomposed"
+    return "reconstructed"
+
+
 def read_snapshot(reader, time: float, fields):
     """Read internal-mesh cell arrays and volumes, copying reader-owned data."""
     import numpy as np
@@ -189,6 +221,12 @@ def main() -> None:
         "--reference", choices=("final", "previous"), default="final",
         help="compare each time with the final time or its predecessor",
     )
+    parser.add_argument(
+        "--case-type", choices=("auto", "reconstructed", "decomposed"),
+        default="auto",
+        help=("OpenFOAM data layout; auto prefers reconstructed data when it "
+              "contains every requested time"),
+    )
     parser.add_argument("--csv", type=Path, help="optional CSV output path")
     args = parser.parse_args()
     if len(args.times) < 2:
@@ -215,8 +253,9 @@ def main() -> None:
     marker = case / f"{case.name}.foam"
     marker.touch(exist_ok=True)
     reader = pv.POpenFOAMReader(str(marker))
-    if any(case.glob("processor[0-9]*")):
-        reader.case_type = "decomposed"
+    case_type = select_case_type(case, args.times, args.case_type)
+    reader.case_type = case_type
+    print(f"Reading {case_type} OpenFOAM data")
     for field in args.fields:
         if field not in reader.cell_array_names:
             raise SystemExit(

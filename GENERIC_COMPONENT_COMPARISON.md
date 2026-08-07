@@ -579,3 +579,35 @@ The byte-identical-mesh replay then converged after three `0.01 s` samples:
 worst smoothed internal-fan change `0.0965%`, worst boundary-flow change about
 `0.033%`, mass imbalance `0.00303%`, directions valid, and `Co_max=0.779`.
 The report now identifies the device responsible for the maximum change.
+
+### Repeated in-depth convergence checkpoints (2026-08-07)
+
+The smoothed internal-fan criterion was then exercised in the normal multirate
+sequence, not only in an isolated refresh. From the reconstructed `20400.16 s`
+state, the case advanced through two complete 1,200 s thermal holds:
+
+| Checkpoint | Peak change (K/300 s) | Worst component average (K/300 s) | Refresh | Result |
+|---:|---:|---:|---:|---|
+| 21600 | 0.08626 | 0.03713 | 0.03 s, `Co_max=0.780` | accepted 1/2 |
+| 22800 | 0.06470 | 0.02718 | 0.03 s, `Co_max=0.780` | accepted 2/2; auto-stop |
+
+At the final checkpoint, maximum tracked-flow change was `0.0322%`, ambient
+mass imbalance was `0.00270%`, and all fan directions were valid. The
+recirculation report found zero thermal re-ingestion, `1538.46 W` net sensible
+heat rejection, and a `99.5766%` heat-rejection fraction.
+
+The scalar/device auto-stop is not a claim that every instantaneous turbulent
+cell value is steady. Reconstructed field comparisons found `21600 -> 22800 s`
+temperature RMS drift of `0.1361 K` (`0.0453%`) with a localized `5.78 K`
+maximum, while velocity RMS drift remained `1.8736%`. Three consecutive live
+samples at 22800 s changed by `0.664-0.687% U RMS` per 0.01 s sample; samples
+two intervals apart still differed by `1.2408%`. Thus the detailed velocity
+field remains transient even though mean device flows and thermal engineering
+metrics have converged. Final CFD studies should report a chosen spatial-field
+tolerance separately using `openfoam_field_convergence.py`.
+
+That comparison tool now automatically selects reconstructed data when all
+requested root times exist, even if newer processor directories are present.
+The previous unconditional decomposed-mode selection made valid historical
+root checkpoints appear unavailable. Explicit `--case-type reconstructed` and
+`--case-type decomposed` overrides are available and were runtime-verified.

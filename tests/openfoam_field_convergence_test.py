@@ -1,11 +1,15 @@
 import unittest
+from pathlib import Path
+from tempfile import TemporaryDirectory
 
 import numpy as np
 
 from tools.openfoam_field_convergence import (
     compare_snapshots,
+    directory_times,
     exact_time,
     field_error,
+    select_case_type,
 )
 
 
@@ -48,6 +52,38 @@ class OpenFoamFieldConvergenceTest(unittest.TestCase):
         self.assertEqual(exact_time([0.0, 1.0], 1.0), 1.0)
         with self.assertRaisesRegex(ValueError, "nearest written time"):
             exact_time([0.0, 1.0], 0.5)
+
+    def test_auto_prefers_complete_reconstructed_history(self):
+        with TemporaryDirectory() as directory:
+            case = Path(directory)
+            (case / "20400.16").mkdir()
+            (case / "21600.049999999999").mkdir()
+            (case / "processor0").mkdir()
+            (case / "processor1").mkdir()
+            self.assertEqual(
+                directory_times(case), [20400.16, 21600.049999999999]
+            )
+            self.assertEqual(
+                select_case_type(case, [20400.16, 21600.05]),
+                "reconstructed",
+            )
+
+    def test_auto_uses_processors_when_root_history_is_incomplete(self):
+        with TemporaryDirectory() as directory:
+            case = Path(directory)
+            (case / "21600.05").mkdir()
+            (case / "processor0").mkdir()
+            self.assertEqual(
+                select_case_type(case, [20400.16, 21600.05]), "decomposed"
+            )
+
+    def test_explicit_case_type_overrides_auto_selection(self):
+        with TemporaryDirectory() as directory:
+            case = Path(directory)
+            (case / "1").mkdir()
+            self.assertEqual(
+                select_case_type(case, [1.0], "decomposed"), "decomposed"
+            )
 
 
 if __name__ == "__main__":
