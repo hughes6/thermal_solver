@@ -64,7 +64,9 @@ def latest_time(case: Path) -> tuple[float, Path]:
     return max(candidates, key=lambda item: item[0])
 
 
-def _list_payload(data: bytes, marker: bytes, width: int) -> list[float | int]:
+def _list_payload(
+    data: bytes, marker: bytes, width: int, *, is_binary: bool | None = None
+) -> list[float | int]:
     start = data.find(marker)
     if start < 0:
         raise ValueError(f"Could not find {marker!r}")
@@ -76,6 +78,18 @@ def _list_payload(data: bytes, marker: bytes, width: int) -> list[float | int]:
         raise ValueError(f"Could not parse list following {marker!r}")
     count = int(match.group(1))
     position = start + match.end()
+
+    # Binary OpenFOAM payload starts immediately after "(". Do not trim
+    # bytes by their value: a valid IEEE-754 scalar can begin with 0x20,
+    # 0x09, 0x0a, or 0x0d and would then be shifted/corrupted as if it were
+    # textual whitespace. Determine the representation from the FoamFile
+    # header instead of probing payload bytes.
+    if is_binary is None:
+        is_binary = re.search(rb"\bformat\s+binary\s*;", data[:start]) is not None
+    if is_binary:
+        format_code = "d" if width == 8 else "i"
+        return list(struct.unpack_from(f"<{count}{format_code}", data, position))
+
     while data[position : position + 1] in b"\r\n \t":
         position += 1
 
@@ -86,12 +100,12 @@ def _list_payload(data: bytes, marker: bytes, width: int) -> list[float | int]:
         values = data[position:end].decode("ascii").split()
         return [float(value) if width == 8 else int(value) for value in values]
 
-    format_code = "d" if width == 8 else "i"
-    return list(struct.unpack_from(f"<{count}{format_code}", data, position))
+    raise ValueError(f"ASCII list following {marker!r} has non-numeric data")
 
 
 def patch_values(field: Path, patch: str) -> list[float]:
     data = field.read_bytes()
+    is_binary = re.search(rb"\bformat\s+binary\s*;", data) is not None
     boundary = data.find(b"boundaryField")
     marker = patch.encode()
     start = data.find(marker, boundary)
@@ -104,7 +118,12 @@ def patch_values(field: Path, patch: str) -> list[float]:
     nonuniform = re.search(rb"\bvalue\s+nonuniform\b", patch_data)
     if uniform and (not nonuniform or uniform.start() < nonuniform.start()):
         return [float(uniform.group(1))]
-    return [float(value) for value in _list_payload(patch_data, b"value", 8)]
+    return [
+        float(value)
+        for value in _list_payload(
+            patch_data, b"value", 8, is_binary=is_binary
+        )
+    ]
 
 
 def internal_values(field: Path) -> list[float]:
@@ -123,9 +142,12 @@ def label_list(path: Path) -> list[int]:
         raise ValueError(f"Could not parse label list in {path}")
     count = int(match.group(1))
     position = match.end()
+    if re.search(rb"\bformat\s+binary\s*;", data[: match.start()]):
+        return list(struct.unpack_from(f"<{count}i", data, position))
     while data[position : position + 1] in b"\r\n \t":
         position += 1
-    return list(struct.unpack_from(f"<{count}i", data, position))
+    end = data.find(b")", position)
+    return [int(value) for value in data[position:end].decode("ascii").split()]
 
 
 def mesh_connectivity(poly_mesh: Path) -> tuple[int, int]:

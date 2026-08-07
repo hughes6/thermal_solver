@@ -514,9 +514,13 @@ public:
              component.get_rho(),
              component.get_cp()});
 
-        // Preserve the exact established stamping behavior, including its
-        // uniform/adaptive dispatch and internal-region ordering.
-        stamp_component(component);
+        // OpenFOAM metadata uses boundary-array lookups below. Stamp through
+        // the same geometry-aligned path even on a uniform mesh so a decimal
+        // coordinate such as 0.15 cannot be rounded below a cell boundary by
+        // floor(x/dx) while metadata snaps it to that boundary. Mixing those
+        // paths can silently omit an entire solid layer from the exported
+        // region. The native-only stamper retains its established dispatch.
+        stamp_component_adaptive(component);
 
         const auto origin = component.get_coords();
         const int i0 = std::max(0, index_x(origin[0]));

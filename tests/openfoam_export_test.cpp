@@ -10,6 +10,38 @@ int main(int argc, char** argv) {
     Environment env(30.0,0.0,20.0,1005.0,0.02587,
                     0.000018,0.71,1.225);
     Workload load(10000,1000000,100000,100);
+
+    // Decimal coordinates that are exact grid cuts mathematically can fall
+    // fractionally below the cut under direct floor(x/dx). OpenFOAM stamping
+    // must use the same snapped boundary lookup for material cells and export
+    // metadata, otherwise one complete layer disappears.
+    {
+        Rack aligned_rack=Rack::from_meters(0.5,1.0,0.3);
+        Mesh aligned_mesh=Mesh().build_mesh(
+            aligned_rack,0.0125,0.0125,0.0125,env,load);
+        Component aligned_component=Component::from_meters(
+            0.2,0.2,0.05,"decimal aligned block");
+        aligned_component.set_coords_m(0.15,0.2,0.0);
+        aligned_component.set_rho_solid(2700.0);
+        aligned_component.set_cp(900.0);
+        aligned_component.set_k_solid(205.0);
+        aligned_component.set_watts(50.0);
+        aligned_mesh.stamp_component_for_openfoam(aligned_component);
+
+        std::size_t solid_cells=0;
+        double solid_volume=0.0;
+        for(std::size_t cell=0;
+            cell<aligned_mesh.get_openfoam_cell_metadata().size();++cell) {
+            if(aligned_mesh.get_openfoam_cell_metadata()[cell].region_type !=
+               Mesh::OpenFoamCellMetadata::RegionType::Solid)
+                continue;
+            ++solid_cells;
+            solid_volume+=aligned_mesh.get_cells()[cell].volume();
+        }
+        assert(solid_cells==1024);
+        assert(std::abs(solid_volume-0.002)<1e-12);
+    }
+
     Rack rack=Rack::from_meters(0.3,0.2,0.2);
     rack.set_t(20.0);
     rack.set_cp(1005.0);
