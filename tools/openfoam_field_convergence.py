@@ -113,6 +113,7 @@ def read_snapshot(reader, time: float, fields):
         key = "/".join(path)
         snapshot[key] = {
             "volume": np.asarray(sized.cell_data["Volume"], dtype=float).copy(),
+            "center": np.asarray(block.cell_centers().points, dtype=float).copy(),
             **{
                 field: np.asarray(block.cell_data[field], dtype=float).copy()
                 for field in fields if field in block.cell_data

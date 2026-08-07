@@ -296,13 +296,22 @@ over the longer comparisons:
 | 0.10 -> 0.50 s | 0.7196 m/s | 43.29% | 5.674 m/s | 1.7166 K | 21.253 K |
 | 0.50 -> 1.00 s | 0.6431 m/s | 34.96% | 6.698 m/s | 1.5065 K | 13.735 K |
 | 1.00 -> 2.00 s | 0.5426 m/s | 29.21% | 7.004 m/s | 1.4530 K | 12.956 K |
+| 2.00 -> 5.00 s | 0.5076 m/s | 26.72% | 6.863 m/s | 1.4713 K | 25.853 K |
 
 The 2.00 s result proves that neither the screening profile's 0.01 s minimum
 nor a nominal 0.1-2.0 s window is sufficient to establish the internal
 hot-rack flow field. Relative velocity drift decreased from 34.96% over the
 0.5-1.0 s interval to 29.21% over 1.0-2.0 s, but remains much too large to call
 the field settled. The isolated study therefore continues to 5 s before
-profile refresh durations are tuned.
+profile refresh durations are tuned. Extending the same field from 2.00 s to
+one nominal air-exchange time at 5.00 s reduced relative velocity drift only
+to 26.72%. The field therefore remains materially transient after one nominal
+exchange and the 5 s state is not an acceptable converged-flow reference.
+The exact 1,001-step extension used `deltaT = 0.0029970036916897695 s`, took
+approximately 8,677 wall seconds (2.41 h), and passed its postflight gate with
+`max(Co) = 7.21949`. OpenFOAM named the accepted checkpoint
+`9604.9999963042137`; the 3.7 microsecond representation difference is within
+the scale-aware target tolerance.
 The nine exterior fans carried approximately `0.2578 kg/s` in total and the
 audited fluid volume was `1.0436 m3`. For a representative hot-rack density of
 1.0-1.2 kg/m3, one nominal air-volume exchange therefore takes roughly
@@ -319,6 +328,43 @@ against the configured limit. Startup ramps use a conservative fixed fallback.
 A two-rank runtime case verified 100 x 0.0001 s startup steps and then a
 preflight-approved 10 x 0.001 s restarted stage; its checkpoint metadata and
 postflight Courant audit agreed with the intended controls.
+
+## Screening versus in-depth Courant sensitivity (2026-08-06)
+
+An identical `t = 9600.02 s` hot checkpoint was advanced to `9600.10 s` with
+screening and validation-quality Courant controls. A third control retained
+the screening case's byte-identical processor partition while using the
+in-depth controls. All cases used the same 167,232-cell unsplit mesh, geometry,
+initial fields, material models, fan curves, and physical end time.
+
+| Run | Steps | Fixed deltaT (s) | Terminal max(Co) | Solver wall time |
+|---|---:|---:|---:|---:|
+| Screening | 81 | 0.0009876543 | 2.33820 | 712 s |
+| In-depth | 236 | 0.0003389831 | 0.807879 | 1,380 s |
+| In-depth, screening partition | 236 | 0.0003389831 | 0.807878 | 1,507 s |
+
+Reconstructed-root comparisons verify cell-centre alignment before comparing
+fields, so different Scotch processor orderings cannot corrupt the result.
+Changing only the valid Scotch partition changed velocity RMS by
+`5.18e-6 m/s` (`0.000370%`) and temperature RMS by `2.07e-5 K`. Partition
+sensitivity is therefore negligible for this interval. In contrast, screening
+versus the same-partition in-depth control differed by `0.07355 m/s` velocity
+RMS (`5.34%`) and `0.10740 K` temperature RMS (`0.0357%`). The largest local
+velocity difference was `18.75 m/s` immediately downstream of the Dell rear
+exhaust, where streamwise velocity reversed between the two integrations; the
+largest local temperature difference was `6.504 K`.
+
+The validation and in-depth profiles now retain `maxCo = 1` during multirate
+airflow refreshes instead of silently overriding their normal validation limit
+with `maxCo = 10`. Screening retains its faster `maxCo = 10` refresh ceiling
+and 1 ms hard step cap for ballpark heat allocation, fan-curve, vent, and
+layout work. On this case the validation-quality interval cost 1.94-2.12 times
+the screening wall time. Screening fields must not be treated as final local
+recirculation predictions when this fidelity difference matters.
+
+`tools/openfoam_cross_case_comparison.py` performs the reconstructed-root
+comparison, rejects cell-order/geometry mismatches, and reports the owning
+region, cell, coordinate, volume, and values at each maximum discrepancy.
 
 The `t = 9601 s` temperature audit also clarified an easy-to-misread solver
 diagnostic. The solver printed a fluid-region maximum near 575 K because its
