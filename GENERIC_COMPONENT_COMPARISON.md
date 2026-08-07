@@ -443,3 +443,11 @@ and `7.22601`, and there were no OpenFOAM fatal errors. Wall time was
 `8.28 s/step` in the earlier `3x2` study. The unchanged timestep and Courant
 behavior show that this slowdown was host memory pressure rather than a solver
 timestep collapse. The original complete checkpoint remained intact.
+
+A subsequent two-rank restart check found that `decomposePar -force` leaves
+surplus `processorN` directories when reducing the rank count. Reconstruction
+then tried to combine the new two-rank partition with stale ranks 2 and 3 and
+failed on a missing field. The generated runner now reconstructs any newer
+parallel checkpoint first, removes only its own `processor[0-9]*` directories,
+and then performs the requested repartition. This makes changing the process
+count restart-safe while preserving the reconstructed root checkpoint.

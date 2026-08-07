@@ -510,6 +510,17 @@ int main() {
     assert(run_parallel.find(
         "Reusing $processes valid processor partitions") !=
         std::string::npos);
+    const auto interrupted_reconstruction = run_parallel.find(
+        "Reconstructing interrupted parallel time");
+    const auto stale_partition_cleanup = run_parallel.find(
+        "rm -rf -- \"$processor_dir\"");
+    const auto redecomposition = run_parallel.find(
+        "decomposePar -case \"$case_dir\"");
+    assert(interrupted_reconstruction != std::string::npos);
+    assert(stale_partition_cleanup != std::string::npos);
+    assert(redecomposition != std::string::npos);
+    assert(interrupted_reconstruction < stale_partition_cleanup);
+    assert(stale_partition_cleanup < redecomposition);
     assert(run_parallel.find(
         "system/controlDict\" -entry deltaT -set") != std::string::npos);
     assert(run_parallel.find(
