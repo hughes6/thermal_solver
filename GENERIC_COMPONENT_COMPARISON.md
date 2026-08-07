@@ -399,3 +399,28 @@ component and equivalent curve with
 
 Only after those checks should generic-case rack intake temperatures and
 recirculation be treated as quantitative.
+
+## Screening PIMPLE-corrector study (2026-08-06)
+
+A controlled 30-step study restarted three cases from the identical
+`t = 9604.9999963042137 s` screening checkpoint at `Co_max ~= 7.23`. The
+existing `3 outer x 3 pressure` policy was compared with `2x2` and `3x2`.
+Each case used the same mesh, fields, four MPI ranks, and approximately
+`0.0029994 s` timestep.
+
+| Policy | Wall time (s) | Pressure solves/step | Pressure iterations/step | U RMS vs 3x3 | T RMS vs 3x3 |
+|---|---:|---:|---:|---:|---:|
+| 3x3 reference | 306.31 | 9 | 117.2 | - | - |
+| 2x2 | 191.02 | 4 | 83.9 | 0.032556 m/s (1.7146%) | 0.089128 K |
+| 3x2 | 248.52 | 6 | 99.23 | 0.006615 m/s (0.3484%) | 0.007713 K |
+
+The `2x2` case was rejected for the default screening profile because its
+largest local difference included a velocity-direction reversal and a
+`4.90 K` cell-temperature difference. The `3x2` case retained every outer
+fan/thermal coupling pass while reducing pressure work. Relative to `3x3`,
+its nine fan flows differed by at most `0.00448%`, main-intake flow by
+`0.00064%`, and reported fan temperatures were unchanged at report precision.
+Its ambient mass imbalance was `0.0881%` of throughput versus `0.0838%` for
+the reference, both well inside the configured 1% limit. Screening therefore
+uses `pimple_outer_correctors = 3` and `pimple_pressure_correctors = 2`;
+default, in-depth, and validation profiles retain `3x3`.

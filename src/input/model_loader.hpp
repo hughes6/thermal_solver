@@ -962,6 +962,12 @@ struct ModelLoader {
                         .value<bool>().value_or(true);
                 cfg.use_fan_curves=value("use_fan_curves")
                     .value<bool>().value_or(true);
+                cfg.pimple_outer_correctors=
+                    value("pimple_outer_correctors")
+                        .value<int>().value_or(0);
+                cfg.pimple_pressure_correctors=
+                    value("pimple_pressure_correctors")
+                        .value<int>().value_or(0);
                 cfg.fan_curve_extension_multiplier=
                     value("fan_curve_extension_multiplier")
                         .value<double>().value_or(2.0);
@@ -1516,6 +1522,9 @@ struct ModelLoader {
                 .sutherland_temperature=cfg.sutherland_temperature,
                 .use_vent_pressure_loss=cfg.use_vent_pressure_loss,
                 .use_fan_curves=cfg.use_fan_curves,
+                .pimple_outer_correctors=cfg.pimple_outer_correctors,
+                .pimple_pressure_correctors=
+                    cfg.pimple_pressure_correctors,
                 .fan_curve_extension_multiplier=
                     cfg.fan_curve_extension_multiplier,
                 .use_multirate_thermal=cfg.use_multirate_thermal,

@@ -86,7 +86,9 @@ int main(int argc, char** argv) {
          .use_k_omega_sst=true,
          .inlet_turbulence_intensity=0.05,
          .turbulence_length_scale=0.01,
-         .turbulent_prandtl_number=0.85});
+         .turbulent_prandtl_number=0.85,
+         .pimple_outer_correctors=3,
+         .pimple_pressure_correctors=2});
 
     for(const char* file :
         {"points","faces","owner","neighbour","boundary","cellZones"})
@@ -161,6 +163,18 @@ int main(int argc, char** argv) {
         case_path/"constant"/"test_heater_0"/"fvOptions"));
     assert(std::filesystem::is_regular_file(
         case_path/"system"/"fluid"/"fvSolution"));
+    {
+        std::ifstream stream(case_path/"system"/"fvSolution");
+        std::ostringstream text;
+        text << stream.rdbuf();
+        assert(text.str().find("nOuterCorrectors 3;") != std::string::npos);
+    }
+    {
+        std::ifstream stream(case_path/"system"/"fluid"/"fvSolution");
+        std::ostringstream text;
+        text << stream.rdbuf();
+        assert(text.str().find("nCorrectors 2;") != std::string::npos);
+    }
     assert(std::filesystem::is_regular_file(
         case_path/"system"/"test_heater_0"/"fvSchemes"));
     std::ifstream boundary_file(
@@ -171,6 +185,36 @@ int main(int argc, char** argv) {
     assert(boundary_text.str().find("rack_walls") != std::string::npos);
     assert(boundary_text.str().find("test_inlet") != std::string::npos);
     assert(boundary_text.str().find("test_outlet") != std::string::npos);
+
+    const auto invalid_outer_case=case_path.parent_path()/
+        "thermal_solver_invalid_outer_correctors";
+    bool rejected_invalid_outer=false;
+    try {
+        OpenFoamExporter::export_mesh(
+            mesh,
+            {.case_directory=invalid_outer_case,
+             .overwrite=true,
+             .pimple_outer_correctors=-1});
+    } catch(const std::invalid_argument&) {
+        rejected_invalid_outer=true;
+    }
+    assert(rejected_invalid_outer);
+    assert(!std::filesystem::exists(invalid_outer_case));
+
+    const auto invalid_pressure_case=case_path.parent_path()/
+        "thermal_solver_invalid_pressure_correctors";
+    bool rejected_invalid_pressure=false;
+    try {
+        OpenFoamExporter::export_mesh(
+            mesh,
+            {.case_directory=invalid_pressure_case,
+             .overwrite=true,
+             .pimple_pressure_correctors=-1});
+    } catch(const std::invalid_argument&) {
+        rejected_invalid_pressure=true;
+    }
+    assert(rejected_invalid_pressure);
+    assert(!std::filesystem::exists(invalid_pressure_case));
 
     std::cout << case_path.string() << '\n';
     if(!keep_case) std::filesystem::remove_all(case_path);

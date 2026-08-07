@@ -146,6 +146,10 @@ struct OpenFoamSolverInput {
     double sutherland_temperature = 110.4;
     bool use_vent_pressure_loss = true;
     bool use_fan_curves = true;
+    // Zero selects the established automatic policy: fan-curve cases use
+    // 3x3 PIMPLE correction and fixed-flow cases use 1x2.
+    int pimple_outer_correctors = 0;
+    int pimple_pressure_correctors = 0;
     double fan_curve_extension_multiplier = 2.0;
     bool use_multirate_thermal = true;
     double airflow_warmup_time = 5.0;

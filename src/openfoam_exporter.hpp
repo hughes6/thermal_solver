@@ -35,6 +35,9 @@ struct OpenFoamExportOptions {
     double sutherland_temperature = 110.4;
     bool use_vent_pressure_loss = false;
     bool use_fan_curves = false;
+    // Zero retains the legacy automatic choice based on use_fan_curves.
+    int pimple_outer_correctors = 0;
+    int pimple_pressure_correctors = 0;
     double fan_curve_extension_multiplier = 2.0;
     bool use_multirate_thermal = false;
     double airflow_warmup_time = 5.0;
@@ -77,6 +80,7 @@ public:
                 "OpenFoamExporter: mesh was not stamped with "
                 "stamp_component_for_openfoam().");
         validate_flow_device_connectivity(mesh,options);
+        validate_pimple_correctors(options);
 
         const std::filesystem::path poly_mesh =
             options.case_directory / "constant" / "polyMesh";
@@ -1152,6 +1156,32 @@ private:
                 " must be finite and positive.");
     }
 
+    static int effective_pimple_outer_correctors(
+        const OpenFoamExportOptions& options) {
+        return options.pimple_outer_correctors > 0
+            ? options.pimple_outer_correctors
+            : (options.use_fan_curves ? 3 : 1);
+    }
+
+    static int effective_pimple_pressure_correctors(
+        const OpenFoamExportOptions& options) {
+        return options.pimple_pressure_correctors > 0
+            ? options.pimple_pressure_correctors
+            : (options.use_fan_curves ? 3 : 2);
+    }
+
+    static void validate_pimple_correctors(
+        const OpenFoamExportOptions& options) {
+        if(options.pimple_outer_correctors < 0)
+            throw std::invalid_argument(
+                "OpenFoamExporter: pimple_outer_correctors must be zero "
+                "(automatic) or positive.");
+        if(options.pimple_pressure_correctors < 0)
+            throw std::invalid_argument(
+                "OpenFoamExporter: pimple_pressure_correctors must be zero "
+                "(automatic) or positive.");
+    }
+
     static void validate_time_controls(
         const OpenFoamExportOptions& options) {
         validate_positive_finite(options.end_time,"end_time");
@@ -1936,7 +1966,7 @@ private:
             options.temperature_dependent_air
                 ? mesh.get_env().get_ambient_pressure() : 101325.0;
         output << "PIMPLE\n{\n    nOuterCorrectors "
-               << (options.use_fan_curves ? 3 : 1) << ";\n"
+               << effective_pimple_outer_correctors(options) << ";\n"
                << "    pRefCell 0;\n"
                << "    pRefValue " << reference_pressure << ";\n}\n";
     }
@@ -2074,7 +2104,7 @@ private:
             " \"(U|h|k|omega)Final\" { $U; relTol 0; }\n"
             "}\n"
             "PIMPLE\n{\n momentumPredictor yes;\n nCorrectors "
-            << (options.use_fan_curves ? 3 : 2) << ";\n"
+            << effective_pimple_pressure_correctors(options) << ";\n"
             " nNonOrthogonalCorrectors 0;\n"
             " pRefCell 0;\n pRefValue "
             << (options.temperature_dependent_air
