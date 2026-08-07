@@ -160,6 +160,9 @@ struct OpenFoamSolverInput {
     double minimum_initial_airflow_duration = 0.02;
     double airflow_maximum_time_step = 0.001;
     double thermal_only_maximum_time_step = 1.0;
+    // Diagnostic maxCo written for frozen-flow energy stages. These stages
+    // use fixed, fully implicit timesteps; accuracy is controlled by
+    // thermal_only_maximum_time_step rather than an explicit CFL clamp.
     double thermal_only_maximum_courant_number = 1000.0;
     double airflow_refresh_interval = 300.0;
     double airflow_refresh_duration = 1.0;

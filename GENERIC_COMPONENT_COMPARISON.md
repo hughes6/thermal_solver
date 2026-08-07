@@ -474,3 +474,28 @@ the main-intake flow differed by `0.00057%`. Ambient mass imbalance was
 The screening profile therefore defaults to two ranks on this memory-limited
 workstation. In-depth and validation profiles retain four ranks; users with
 more RAM may override `parallel_processes` after benchmarking their own host.
+
+### Thermal-only timestep study (2026-08-07)
+
+Two cases restarted from the identical `t = 9605.1799603743166 s` checkpoint
+and advanced 100 s with frozen airflow. The screening `10 s` maximum timestep
+was compared with a `1 s` reference at the same final time.
+
+| Maximum thermal timestep | Steps | End-to-end wall time | T RMS vs 1 s | Maximum T difference |
+|---:|---:|---:|---:|---:|
+| 10 s | 10 | 154.32 s | 0.002738 K (0.000909%) | 0.1193 K |
+| 1 s reference | 100 | 334.73 s | - | - |
+
+The fully implicit frozen-flow energy solve remained accurate at 10 s while
+cutting total runtime by `53.9%`. Its reported Courant number can exceed the
+live-flow limit because velocity is held and momentum is not advanced; it is
+diagnostic, not the fixed-step controller. `thermal_only_maximum_time_step` is
+therefore the relevant accuracy control. Live-flow stages continue to enforce
+Courant limits with preflight and postflight checks.
+
+The long two-rank case then advanced from 9605.18 s to 14,401 s. At 14,400 s,
+thermal convergence was correctly rejected (`0.2879 K/300 s` peak change and
+`0.2160 K/300 s` maximum component-average change). Adaptive airflow refresh
+converged in two 0.01 s chunks with maximum tracked-flow change `0.2293%`,
+correct fan directions, and no solver failures. The case reconstructed cleanly
+at 14,401 s.

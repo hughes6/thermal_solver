@@ -453,6 +453,9 @@ int main() {
     assert(run_parallel.find(
         "stage_max_dt=$(awk") != std::string::npos);
     assert(run_parallel.find(
+        "Thermal-only maxCo=$max_co is diagnostic") !=
+        std::string::npos);
+    assert(run_parallel.find(
         "-v flow_max=\"0.001") != std::string::npos);
     assert(run_parallel.find(
         "adjust_time_step=false") != std::string::npos);
