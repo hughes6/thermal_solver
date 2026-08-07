@@ -499,3 +499,26 @@ thermal convergence was correctly rejected (`0.2879 K/300 s` peak change and
 converged in two 0.01 s chunks with maximum tracked-flow change `0.2293%`,
 correct fan directions, and no solver failures. The case reconstructed cleanly
 at 14,401 s.
+
+### Validated thermal convergence (2026-08-07)
+
+The same unique screening case continued through the 16,800 s and 19,200 s
+refresh checkpoints. At 16,800 s, thermal rates were `0.1341 K/300 s` peak and
+`0.09758 K/300 s` maximum component-average change. The refreshed flows changed
+by at most `0.0563%`, all directions were correct, and checkpoint 1/2 was
+accepted.
+
+A terminal one-second segment then exposed a state-machine defect: because it
+had no scheduled airflow refresh, the generic failure branch reset the already
+validated streak. The generated runner now resets a streak only when a new
+airflow-validated checkpoint fails thermal criteria. A terminal partial stage
+neither advances nor clears prior validated evidence.
+
+At 19,200 s, thermal rates had fallen to `0.07536 K/300 s` peak and
+`0.04085 K/300 s` maximum component-average change. The second airflow refresh
+changed tracked flows by at most `0.01346%`, retained correct directions, and
+checkpoint 2/2 was accepted. The solver stopped automatically at
+`t = 19200.020000000237 s`, before its requested 19,201 s endpoint, and
+reconstructed all fluid and solid fields successfully. This is the first full
+screening workflow run in this study to satisfy both thermal and refreshed-flow
+convergence criteria.

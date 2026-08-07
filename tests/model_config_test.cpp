@@ -506,6 +506,12 @@ int main() {
         "Thermal convergence checkpoint $streak/2 accepted") !=
         std::string::npos);
     assert(run_parallel.find(
+        "elif [[ \"$airflow_validated\" == 1 ]]") !=
+        std::string::npos);
+    assert(run_parallel.find(
+        "Preserving thermal convergence streak $streak") !=
+        std::string::npos);
+    assert(run_parallel.find(
         "\"$airflow_validated\" == 1") != std::string::npos);
     assert(run_parallel.find(
         "Thermal and airflow convergence criteria satisfied") !=

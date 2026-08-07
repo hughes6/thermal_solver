@@ -3699,8 +3699,14 @@ private:
                     "requested end time $requested_end s.\"\n"
                 "                break\n"
                 "            fi\n"
-                "        else\n"
+                "        elif [[ \"$airflow_validated\" == 1 ]]; then\n"
                 "            printf '0\\n' > \"$thermal_convergence_streak\"\n"
+                "        else\n"
+                "            streak=$(cat \"$thermal_convergence_streak\" "
+                    "2>/dev/null || echo 0)\n"
+                "            echo \"Preserving thermal convergence streak "
+                    "$streak: this terminal partial stage had no airflow "
+                    "validation.\"\n"
                 "        fi\n";
             }
             output <<
