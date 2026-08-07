@@ -7,7 +7,7 @@ import unittest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from tools.fan_curve_fitter import fit_curve
+from tools.fan_curve_fitter import fit_curve, rpm_at_load, scale_curve_for_rpm
 from tools.heat_load_estimator import estimate_methods
 from tools.generic_server_characterizer import component_toml
 
@@ -22,6 +22,16 @@ class EngineeringToolsTest(unittest.TestCase):
         self.assertTrue(math.isclose(a, 300.0, abs_tol=1e-8))
         self.assertTrue(math.isclose(b, 2170.0, abs_tol=1e-6))
         self.assertTrue(math.isclose(c, 8300.0, abs_tol=1e-5))
+
+    def test_rpm_load_interpolation_and_affinity_scaling(self) -> None:
+        rpm = rpm_at_load([(0.0, 1000.0), (50.0, 2000.0),
+                           (100.0, 3000.0)], 75.0)
+        self.assertEqual(rpm, 2500.0)
+        a, b, c = scale_curve_for_rpm(300.0, 2000.0, 8000.0,
+                                      3000.0, 1500.0)
+        self.assertEqual(a, 75.0)
+        self.assertEqual(b, 1000.0)
+        self.assertEqual(c, 8000.0)
 
     def test_heat_estimation_methods(self) -> None:
         args = Namespace(

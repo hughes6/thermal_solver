@@ -90,6 +90,47 @@ def read_csv_points(path: Path) -> list[tuple[float, float]]:
     return [(float(row["flow"]), float(row["pressure"])) for row in rows]
 
 
+def read_rpm_load_csv(path: Path) -> list[tuple[float, float]]:
+    with path.open(newline="", encoding="utf-8-sig") as stream:
+        rows = list(csv.DictReader(stream))
+    if not rows or "load_percent" not in rows[0] or "rpm" not in rows[0]:
+        raise ValueError("RPM CSV must contain load_percent and rpm columns.")
+    return [(float(row["load_percent"]), float(row["rpm"])) for row in rows]
+
+
+def rpm_at_load(points: list[tuple[float, float]], load_percent: float) -> float:
+    if not points:
+        raise ValueError("At least one RPM/load point is required.")
+    if not 0.0 <= load_percent <= 100.0:
+        raise ValueError("Target load percentage must be between 0 and 100.")
+    ordered = sorted(points)
+    if any(not 0.0 <= load <= 100.0 or rpm <= 0.0
+           for load, rpm in ordered):
+        raise ValueError("Loads must be 0-100 percent and RPM must be positive.")
+    if any(ordered[index][0] == ordered[index - 1][0]
+           for index in range(1, len(ordered))):
+        raise ValueError("RPM schedule load percentages must be distinct.")
+    if load_percent <= ordered[0][0]:
+        return ordered[0][1]
+    if load_percent >= ordered[-1][0]:
+        return ordered[-1][1]
+    for (load0, rpm0), (load1, rpm1) in zip(ordered, ordered[1:]):
+        if load_percent <= load1:
+            fraction = (load_percent - load0) / (load1 - load0)
+            return rpm0 + fraction * (rpm1 - rpm0)
+    raise AssertionError("unreachable RPM interpolation state")
+
+
+def scale_curve_for_rpm(a: float, b: float, c: float,
+                        reference_rpm: float,
+                        target_rpm: float) -> tuple[float, float, float]:
+    if reference_rpm <= 0.0 or target_rpm <= 0.0:
+        raise ValueError("Reference and target RPM must be positive.")
+    ratio = target_rpm / reference_rpm
+    # Fan affinity laws: flow scales with N and pressure with N^2.
+    return a * ratio * ratio, b * ratio, c
+
+
 def interactive_points() -> list[tuple[float, float]]:
     print("Enter fan points as FLOW,PRESSURE. Press Enter after the last point.")
     points: list[tuple[float, float]] = []
@@ -114,6 +155,15 @@ def build_parser() -> argparse.ArgumentParser:
                         help="FLOW,PRESSURE; repeat for every datasheet point")
     parser.add_argument("--csv", type=Path,
                         help="CSV containing flow and pressure columns")
+    parser.add_argument("--rpm-load-point", type=parse_point, action="append",
+                        default=[], metavar="LOAD_PERCENT,RPM",
+                        help="fan speed schedule point; repeat as needed")
+    parser.add_argument("--rpm-load-csv", type=Path,
+                        help="CSV containing load_percent and rpm columns")
+    parser.add_argument("--target-load-percent", type=float,
+                        help="load at which to evaluate the RPM schedule")
+    parser.add_argument("--reference-rpm", type=float,
+                        help="RPM at which the supplied pressure-flow points were measured")
     return parser
 
 
@@ -122,8 +172,29 @@ def main() -> None:
     points = list(args.point)
     if args.csv:
         points.extend(read_csv_points(args.csv))
-    if not points:
+    rpm_load_points = list(args.rpm_load_point)
+    if args.rpm_load_csv:
+        rpm_load_points.extend(read_rpm_load_csv(args.rpm_load_csv))
+
+    target_rpm = None
+    if rpm_load_points:
+        if args.target_load_percent is None:
+            raise SystemExit(
+                "RPM/load data requires --target-load-percent.")
+        target_rpm = rpm_at_load(rpm_load_points,args.target_load_percent)
+        print("\nRPM/load schedule:")
+        for load,rpm in sorted(rpm_load_points):
+            print(f"  {load:.6g}% load: {rpm:.6g} RPM")
+        print(f"  Selected at {args.target_load_percent:.6g}% load: "
+              f"{target_rpm:.6g} RPM")
+
+    if not points and not rpm_load_points:
         points = interactive_points()
+    if not points:
+        print("\nRPM versus load defines a controller schedule, not a pressure-flow "
+              "fan curve. Add pressure-flow --point/--csv data and "
+              "--reference-rpm to generate Thermal Sim a/b/c coefficients.")
+        return
 
     points_si = [
         (flow * FLOW_TO_M3S[args.flow_unit],
@@ -141,9 +212,18 @@ def main() -> None:
     residual_variation = sum(value * value for value in residuals)
     r_squared = 1.0 - residual_variation / total_variation if total_variation else 1.0
 
+    if target_rpm is not None:
+        if args.reference_rpm is None:
+            raise SystemExit(
+                "Combining RPM/load and pressure-flow data requires --reference-rpm.")
+        a, b, c = scale_curve_for_rpm(
+            a,b,c,args.reference_rpm,target_rpm)
+        print(f"\nScaled pressure-flow curve from {args.reference_rpm:.6g} "
+              f"to {target_rpm:.6g} RPM using fan affinity laws.")
+
     print("\nFit in Thermal Sim SI units:")
     print(f"  dP(Q) = {a:.9g} - ({b:.9g}) Q - ({c:.9g}) Q^2")
-    print(f"  RMSE = {rmse:.6g} Pa; R^2 = {r_squared:.6g}")
+    print(f"  source-data fit RMSE = {rmse:.6g} Pa; R^2 = {r_squared:.6g}")
     if b < 0 or c < 0:
         print("WARNING: The fitted curve is not monotonically decreasing over "
               "all Q; inspect the data and fitted operating range.")
