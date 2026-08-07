@@ -611,3 +611,37 @@ requested root times exist, even if newer processor directories are present.
 The previous unconditional decomposed-mode selection made valid historical
 root checkpoints appear unavailable. Explicit `--case-type reconstructed` and
 `--case-type decomposed` overrides are available and were runtime-verified.
+
+### In-depth mesh sensitivity and warm-start precision (2026-08-07)
+
+A unique 15 mm near-equipment mesh was generated from the same rack model and
+the converged 22,800 s fields were mapped into all five regions. The current
+20 mm mesh contains 167,232 cells; the 15 mm mesh contains 288,757 cells, a
+72.7% increase. The refined mesh remained orthogonal with negligible skewness.
+Strict-Co live steps took about 1.9 times as long as on the 20 mm mesh.
+
+After 0.07 s of fully coupled mapped-field relaxation, the final 0.02 s segment
+changed intake flow by only `0.254%`, within the 1% operating-point criterion.
+The comparison at the final fine checkpoint was:
+
+| Metric | 20 mm | 15 mm | Fine versus current |
+|---|---:|---:|---:|
+| Rack intake flow | 0.296736 kg/s | 0.291756 kg/s | -1.68% |
+| Exhaust temperature rise | 5.1587 K | 5.1438 K | -0.29% |
+| Sensible heat rejection | 1538.46 W | 1508.71 W | -1.93% |
+| Thermal re-ingestion index | 0 | 0 | unchanged |
+
+Component-average temperatures differed by no more than about `0.03 K` because
+the thermal state was mapped from the converged checkpoint. The approximately
+2% airflow/heat-rejection discretization shift is material for final design
+validation but does not justify paying the 1.9x live-flow cost during screening.
+The in-depth profile therefore now uses `fine_dx = 0.015 m`; screening retains
+`0.020 m`.
+
+This study also exposed two coupled warm-start defects. Absolute end times were
+written without sufficient precision, so `22800.06` became `22800.1`, and the
+write interval was calculated from a stale reconstructed root time before the
+newer processor checkpoint was selected. The runner now resolves the processor
+checkpoint first and writes dynamic times at 16-digit precision. Runtime replay
+from `22800.06` reached and reconstructed exactly `22800.080000000002` with the
+correct `0.02000000019 s` write interval.

@@ -177,10 +177,10 @@ int main() {
 
     const ModelInput indepth=load_fidelity_profile("indepth");
     assert(indepth.mesh.adaptive);
-    assert(indepth.mesh.fine_dx == 0.02);
+    assert(indepth.mesh.fine_dx == 0.015);
     assert(indepth.mesh.coarse_dx == 0.10);
     assert(indepth.mesh.refinement_margin == 0.02);
-    assert(screening.mesh.fine_dx == indepth.mesh.fine_dx);
+    assert(screening.mesh.fine_dx > indepth.mesh.fine_dx);
     assert(screening.mesh.coarse_dx == indepth.mesh.coarse_dx);
     assert(screening.mesh.refinement_margin == indepth.mesh.refinement_margin);
     assert(indepth.openfoam_solver.thermal_only_maximum_time_step == 5.0);
@@ -553,6 +553,17 @@ int main() {
     assert(warm_write_control_position != std::string::npos);
     assert(warm_interval_position != std::string::npos);
     assert(warm_write_control_position < warm_interval_position);
+    assert(run_parallel.find(
+        "foamDictionary -precision 16 \"$case_dir/system/controlDict\" "
+        "-entry endTime -set \"$requested_end\"") != std::string::npos);
+    assert(run_parallel.find(
+        "foamDictionary -precision 16 \"$case_dir/system/controlDict\" "
+        "-entry writeInterval -set \"$warm_interval\"") !=
+        std::string::npos);
+    assert(run_parallel.find(
+        "foamDictionary -precision 16 \"$case_dir/system/controlDict\" "
+        "-entry startTime -set \"$reconstruct_time\"") !=
+        std::string::npos);
     const auto restored_write_control_position = run_parallel.find(
         production_write_control,warm_interval_position);
     assert(restored_write_control_position != std::string::npos);

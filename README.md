@@ -1997,6 +1997,13 @@ than the latest saved time. It also updates the saved `uniform/time` timestep
 metadata so OpenFOAM does not inherit an inappropriate timestep from the
 previous mode.
 
+Warm-start timing is configured only after processor reuse or reconstruction
+has selected the authoritative checkpoint. This matters when processor data is
+newer than the last reconstructed root time. Absolute `startTime`, `endTime`,
+and fractional write intervals are written at 16-digit precision, so a request
+such as `--warm-start 22800.08` cannot be rounded to `22800.1` and is guaranteed
+to write the requested endpoint.
+
 These manual warm-start segments are fully coupled CHT runs. For long thermal
 transients, multirate mode is normally faster.
 

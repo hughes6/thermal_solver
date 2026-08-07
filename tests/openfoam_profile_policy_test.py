@@ -7,9 +7,12 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 class OpenFoamProfilePolicyTest(unittest.TestCase):
-    def profile(self, name):
+    def config(self, name):
         with (ROOT / "library" / "openfoam_cfg" / name).open("rb") as stream:
-            return tomllib.load(stream)["openfoam_solver"]
+            return tomllib.load(stream)
+
+    def profile(self, name):
+        return self.config(name)["openfoam_solver"]
 
     def test_screening_keeps_fast_refresh_limit(self):
         profile = self.profile("screening_foam_cfg.toml")
@@ -29,7 +32,10 @@ class OpenFoamProfilePolicyTest(unittest.TestCase):
                 self.assertEqual(profile["maximum_courant_number"], 1.0)
 
     def test_indepth_uses_validated_workstation_correctors(self):
-        profile = self.profile("indepth_foam_cfg.toml")
+        config = self.config("indepth_foam_cfg.toml")
+        profile = config["openfoam_solver"]
+        self.assertEqual(config["mesh"]["fine_dx"], 0.015)
+        self.assertEqual(config["mesh"]["coarse_dx"], 0.10)
         self.assertEqual(profile["parallel_processes"], 2)
         self.assertEqual(profile["pimple_outer_correctors"], 3)
         self.assertEqual(profile["pimple_pressure_correctors"], 2)
