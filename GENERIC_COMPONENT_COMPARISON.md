@@ -451,3 +451,26 @@ failed on a missing field. The generated runner now reconstructs any newer
 parallel checkpoint first, removes only its own `processor[0-9]*` directories,
 and then performs the requested repartition. This makes changing the process
 count restart-safe while preserving the reconstructed root checkpoint.
+
+### MPI-rank study on the 8 GB workstation (2026-08-06)
+
+Separate two-rank and four-rank cases were restarted from the identical
+`t = 9605.0899783743262 s` checkpoint and advanced exactly 30 fixed steps to
+`t = 9605.1799603743166 s`. Both final checkpoints reconstructed cleanly.
+
+| Ranks | Solver wall time/step | End-to-end wall time | Pressure iterations/step |
+|---:|---:|---:|---:|
+| 2 | 9.70 s | 404.78 s | 85.50 |
+| 4 | 17.57 s | 638.67 s | 99.47 |
+
+Two ranks were `44.8%` faster during the solve and `36.6%` faster including
+partitioning and reconstruction. Rank-2 versus rank-4 field differences were
+`0.2063%` RMS for velocity and `0.001065%` RMS for temperature; maximum local
+temperature difference was `0.348 K`. Nine fan mass flows differed by at most
+`0.00114%`, fan mass-weighted temperatures matched at report precision, and
+the main-intake flow differed by `0.00057%`. Ambient mass imbalance was
+`0.0854%` of intake throughput for two ranks and `0.0860%` for four ranks.
+
+The screening profile therefore defaults to two ranks on this memory-limited
+workstation. In-depth and validation profiles retain four ranks; users with
+more RAM may override `parallel_processes` after benchmarking their own host.
