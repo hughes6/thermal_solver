@@ -1522,6 +1522,13 @@ The three values have distinct jobs:
 - `refinement_margin` expands each fine band beyond the geometry surface. It
   changes where fine cells are used, not the physical component dimensions.
 
+A rectangular fan or vent that spans an entire rack-face direction has no
+interior edge in that tangential direction: both footprint edges already lie
+on rack boundaries. The adaptive planner therefore retains its exact cuts but
+does not mark that whole axis fine. Partial-face openings still refine around
+their tangential edges. This keeps full-face validation inlets/outlets from
+silently turning local component refinement into a global fine mesh.
+
 Exact geometry cuts are always inserted at important boundaries. Therefore,
 `fine_dx` and `coarse_dx` are targets rather than guaranteed minimum cell
 widths. A small clearance or two nearby exact cuts can create a cell narrower
@@ -2012,6 +2019,15 @@ and is guaranteed to write the requested endpoint.
 
 These manual warm-start segments are fully coupled CHT runs. For long thermal
 transients, multirate mode is normally faster.
+
+When mapping a solution onto a different mesh with `mapFields`, do not enter
+thermal-only mode directly. `mapFields` interpolates volume fields such as `U`
+and `T` but does not transfer the face-flux field `phi`. First run a short fully
+coupled `--warm-start` on the target mesh so OpenFOAM creates a consistent
+`phi`, pressure, and velocity state; then use `--multirate` for thermal
+equilibration. Also keep only one spelling of the mapped root time (for example,
+do not retain both `730000.1` and `730000.09999999998`) before decomposition,
+because equal numeric times with different directory names are ambiguous.
 
 #### Automatically use 300-second multirate segments
 

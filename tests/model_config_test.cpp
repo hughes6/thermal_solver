@@ -650,6 +650,30 @@ int main() {
     assert(maximum_adjacent_ratio(refinement.dys)<=4.0+1e-12);
     assert(maximum_adjacent_ratio(refinement.dzs)<=4.0+1e-12);
 
+    // Full-face openings have no interior tangential edges. They must retain
+    // fine cells near their normal boundary without forcing every x/z cell
+    // to fine_dx merely because the footprint spans the complete rack face.
+    Fan full_face_inlet(
+        "full face",15.0,0.0,{0.4,0.0,0.4},{0.2,0.0,0.2},
+        {0.0,1.0,0.0},FlowType::Intake,ShapeType::Rectangular);
+    const MeshRefinementPlan component_only=MeshRefinementPlanner::plan(
+        planner_rack,{nearly_aligned},{},{},0.02,0.10,0.02);
+    const MeshRefinementPlan full_face=MeshRefinementPlanner::plan(
+        planner_rack,{nearly_aligned},{full_face_inlet},{},
+        0.02,0.10,0.02);
+    assert(full_face.dxs==component_only.dxs);
+    assert(full_face.dzs==component_only.dzs);
+    assert(full_face.dys.size()>=component_only.dys.size());
+
+    Fan partial_face_inlet(
+        "partial face",15.0,0.0,{0.2,0.0,0.2},{0.2,0.0,0.2},
+        {0.0,1.0,0.0},FlowType::Intake,ShapeType::Rectangular);
+    const MeshRefinementPlan partial_face=MeshRefinementPlanner::plan(
+        planner_rack,{nearly_aligned},{partial_face_inlet},{},
+        0.02,0.10,0.02);
+    assert(partial_face.dxs.size()>component_only.dxs.size());
+    assert(partial_face.dzs.size()>component_only.dzs.size());
+
     // Refinement-band edges must never displace required component or
     // internal-region boundaries. Otherwise changing only margin/coarse_dx
     // changes the represented solid and air volumes.

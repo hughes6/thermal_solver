@@ -165,22 +165,42 @@ private:
 
         for (const auto& fan : fans) {
             double lo, hi;
-            footprint_extent(Footprint::from_fan(fan), axis, lo, hi);
-            bands.push_back({
-                std::max(0.0, lo - margin),
-                std::min(extent, hi + margin)
-            });
+            const Footprint footprint=Footprint::from_fan(fan);
+            footprint_extent(footprint, axis, lo, hi);
+            // A full-span opening has no interior tangential edge to resolve:
+            // its two edges already coincide with immutable rack boundaries.
+            // Refining that entire axis only because a full-face inlet/outlet
+            // covers it turns otherwise local refinement into a global mesh.
+            const double span_tolerance=
+                1e-9*std::max(1.0,std::abs(extent));
+            const bool redundant_full_span=
+                axis!=footprint.normal_axis &&
+                lo<=span_tolerance && hi>=extent-span_tolerance;
+            if(!redundant_full_span) {
+                bands.push_back({
+                    std::max(0.0, lo - margin),
+                    std::min(extent, hi + margin)
+                });
+            }
             add_cut(lo,feature_cut_priority);
             add_cut(hi,feature_cut_priority);
         }
 
         for (const auto& vent : vents) {
             double lo, hi;
-            footprint_extent(Footprint::from_vent(vent), axis, lo, hi);
-            bands.push_back({
-                std::max(0.0, lo - margin),
-                std::min(extent, hi + margin)
-            });
+            const Footprint footprint=Footprint::from_vent(vent);
+            footprint_extent(footprint, axis, lo, hi);
+            const double span_tolerance=
+                1e-9*std::max(1.0,std::abs(extent));
+            const bool redundant_full_span=
+                axis!=footprint.normal_axis &&
+                lo<=span_tolerance && hi>=extent-span_tolerance;
+            if(!redundant_full_span) {
+                bands.push_back({
+                    std::max(0.0, lo - margin),
+                    std::min(extent, hi + margin)
+                });
+            }
             add_cut(lo,feature_cut_priority);
             add_cut(hi,feature_cut_priority);
         }

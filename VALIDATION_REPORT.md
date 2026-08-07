@@ -38,6 +38,8 @@ thermal re-equilibration.
 | Fine | 4,736 | 64 | 0.00905767 | 298.6418 | 488.6605 | 0.289% | 0.017% |
 | Finer (12.5 mm) | 75,776 | 1,024 | 0.00899649 | 298.6702 | 428.7150 | 0.388% | 0.178% |
 | Finest (6.25 mm local) | 528,352 | 8,192 | 0.00899599 | 298.6702 | 391.1892 | 0.394% | 0.184% |
+| Targeted 6.25 mm | 116,296 | 8,192 | 0.00904508 | 298.6688 | 390.2029 | 0.151% | 0.335% |
+| Targeted 3.125 mm | 636,384 | 65,536 | 0.00908735 | 298.6688 | 377.4881 | 0.614% | 0.805% |
 
 Medium-to-fine outlet temperature changes by 0.0383 K (0.013%), so the global
 heat-removal result is mesh-independent. Solid average temperature changes by
@@ -51,6 +53,14 @@ faces; its solid average is another 37.53 K (8.75%) below the corrected 12.5 mm
 result. The two finest outlet temperatures agree to the shown precision. The
 component-temperature mesh criterion therefore still fails, while the bulk
 heat-removal result is mesh-independent.
+
+The final two rows use the same 0.05 m refinement envelope, so their comparison
+isolates halving local spacing from 6.25 to 3.125 mm. Solid average temperature
+changes by 12.715 K (3.26%), still above the 2% requirement. Combining the exact
+12.5 mm result with this matched pair gives an observed order of 1.60, a
+Richardson-extrapolated solid mean of 371.22 K, and a fine-grid GCI of 2.11%.
+These estimates support monotonic convergence but do not replace the stated 2%
+direct-grid criterion.
 
 ## Conservation and Fluent comparison
 
@@ -70,6 +80,11 @@ the same 298.6702 K outlet, 49.9081 W transported, 0.184% energy error, and
 0.394% mass error. Both outlets have about 46.1% reverse-flow share of gross
 traffic.
 
+The matched targeted grids also produce the same 298.6688 K outlet temperature.
+The 3.125 mm case transports 50.4024 W and remains within every acceptance
+criterion. Its larger 0.805% energy residual is below the 2% limit and does not
+explain the 3.26% solid-temperature grid change.
+
 ## Timestep study
 
 The converged fine case was advanced another 10,000 s after reducing the thermal
@@ -85,12 +100,20 @@ The thermal solution is timestep-independent at the tested equilibrium.
 
 ## Mesh quality
 
-OpenFOAM `checkMesh -region fluid -constant` reports `Mesh OK` on all five grids.
+OpenFOAM `checkMesh -region fluid -constant` reports `Mesh OK` on all seven grids.
 Every fluid mesh is one connected region with hexahedral cells, zero maximum
 non-orthogonality, negligible skewness, and maximum aspect ratio 4 or less. The
 12.5 mm grid is isotropic with unit aspect ratio. The 6.25 mm grid uses local
 refinement around and downstream of the block. The component-temperature
 failure is resolution, not malformed cells.
+
+Full-face inlet/outlet footprints previously marked their entire tangential
+axes as fine even though their edges already coincide with rack boundaries.
+Skipping only those redundant full-span bands reduces the matched 6.25 mm fluid
+mesh from 528,352 to 116,296 cells (78.0%) and total cells from 536,544 to
+124,488 (76.8%). Its solid mean changes only 0.252% from the broad-margin case.
+Partial-face openings still create fine tangential bands, and a regression test
+covers both behaviors.
 
 The first 12.5 mm export exposed a uniform-grid stamping defect: floating-point
 `floor(x/dx)` started a block at cell 11 while the OpenFOAM metadata snapped the
@@ -118,14 +141,16 @@ The machine-readable evidence is stored in `validation_coarse_results.json`,
 `validation_medium_results.json`, `validation_fine_results.json`, and
 `validation_fine_dt100_results.json`. Corrected 12.5 mm and locally refined
 6.25 mm evidence is stored in `validation_finer_results.json` and
-`validation_finest_results.json`. The auditor exits nonzero when an acceptance
-criterion fails.
+`validation_finest_results.json`. The matched targeted evidence is stored in
+`validation_targeted_6250_results.json` and
+`validation_targeted_3125_results.json`. The auditor exits nonzero when an
+acceptance criterion fails.
 
 ## Required follow-up for component temperatures
 
 Refine the local solid/interface and downstream thermal boundary layer beyond
-6.25 mm, then require the component average and maximum to change by less than
-2%. The current result is a stronger bound/trend, not a mesh-converged
-component-temperature prediction. For production racks, use measured or
-calibrated component thermal characteristics when accurate case temperature is
-required; total rack heat removal remains independently validated here.
+3.125 mm, then require the component average and maximum to change by less than
+2%. The observed 3.26% change and 2.11% fine-grid GCI are close but still fail
+that gate. For production racks, use measured or calibrated component thermal
+characteristics when accurate case temperature is required; total rack heat
+removal remains independently validated here.
