@@ -7,12 +7,23 @@ from plot.recirculation_report import (
     boundary_flow_floors,
     boundary_histories,
     combined_samples,
+    directional_patch_sample,
     exported_heat_watts,
     read_report,
 )
 
 
 class RecirculationReportTest(unittest.TestCase):
+    def test_face_resolved_bidirectional_patch(self):
+        sample = directional_patch_sample(
+            [-0.3, -0.2, 0.4], [293.0, 295.0, 305.0])
+        self.assertAlmostEqual(sample[0], -0.1)
+        self.assertAlmostEqual(sample[1], 0.5)
+        self.assertAlmostEqual(sample[2], 0.4)
+        self.assertAlmostEqual(sample[3], 293.8)
+        self.assertAlmostEqual(sample[4], 305.0)
+        self.assertAlmostEqual(sample[5], 0.4 / 0.9)
+
     def test_reingestion_and_net_sensible_heat(self):
         histories = {
             "intake": {

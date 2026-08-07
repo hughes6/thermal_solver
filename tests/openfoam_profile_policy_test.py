@@ -21,6 +21,9 @@ class OpenFoamProfilePolicyTest(unittest.TestCase):
         self.assertEqual(profile["airflow_maximum_time_step"], 0.001)
         self.assertEqual(profile["pimple_outer_correctors"], 3)
         self.assertEqual(profile["pimple_pressure_correctors"], 2)
+        self.assertEqual(
+            profile["minimum_tracked_boundary_flow_fraction"], 0.001
+        )
 
     def test_validation_profiles_use_courant_one_refreshes(self):
         for name in ("validation_foam_cfg.toml", "indepth_foam_cfg.toml"):

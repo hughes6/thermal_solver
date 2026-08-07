@@ -5,7 +5,54 @@ from __future__ import annotations
 import argparse
 import csv
 import re
+import sys
 from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+from tools.validate_openfoam_case import latest_time, patch_values
+
+
+def directional_patch_sample(fluxes, temperatures):
+    """Split a patch into face-resolved inflow and outflow traffic."""
+    if len(temperatures) == 1:
+        temperatures = temperatures * len(fluxes)
+    if len(fluxes) != len(temperatures):
+        raise ValueError("Patch temperature and flux arrays have different lengths")
+    inward = [(-flux, temperature) for flux, temperature
+              in zip(fluxes, temperatures) if flux < 0.0]
+    outward = [(flux, temperature) for flux, temperature
+               in zip(fluxes, temperatures) if flux > 0.0]
+    inward_mass = sum(mass for mass, _ in inward)
+    outward_mass = sum(mass for mass, _ in outward)
+    inward_temperature = (
+        sum(mass * temperature for mass, temperature in inward) / inward_mass
+        if inward_mass else float("nan")
+    )
+    outward_temperature = (
+        sum(mass * temperature for mass, temperature in outward) / outward_mass
+        if outward_mass else float("nan")
+    )
+    gross = inward_mass + outward_mass
+    return (sum(fluxes), inward_mass, outward_mass, inward_temperature,
+            outward_temperature,
+            min(inward_mass, outward_mass) / gross if gross else 0.0)
+
+
+def latest_face_resolved_samples(case: Path, patches):
+    """Read reconstructed boundary faces so bidirectional flow is not hidden."""
+    time_s, time_path = latest_time(case)
+    phi = time_path / "fluid" / "phi"
+    temperature = time_path / "fluid" / "T"
+    if not phi.is_file() or not temperature.is_file():
+        return time_s, {}
+    samples = {}
+    for patch in patches:
+        try:
+            samples[patch] = directional_patch_sample(
+                patch_values(phi, patch), patch_values(temperature, patch))
+        except ValueError:
+            continue
+    return time_s, samples
 
 
 def read_report(root: Path) -> dict[float, float]:
@@ -176,6 +223,18 @@ def main() -> None:
                         if expected_heat_watts is not None else float("nan"))
             writer.writerow((*row, fraction))
 
+    snapshot_time, face_samples = latest_face_resolved_samples(
+        case, histories.keys())
+    face_csv_path = args.output.with_name(
+        args.output.stem + "_latest_face_flow.csv")
+    with face_csv_path.open("w", newline="", encoding="utf-8") as stream:
+        writer = csv.writer(stream)
+        writer.writerow(("time_s", "patch", "net_out_kg_s", "inward_kg_s",
+                         "outward_kg_s", "inward_T_K", "outward_T_K",
+                         "bidirectional_share_of_gross"))
+        for patch, sample in sorted(face_samples.items()):
+            writer.writerow((snapshot_time, patch, *sample))
+
     fig, axes = plt.subplots(4, 1, figsize=(11, 13), sharex=True)
     flow_floors = boundary_flow_floors(
         histories, args.minimum_flow_fraction)
@@ -224,6 +283,7 @@ def main() -> None:
     else:
         plt.show()
     print(f"Saved: {csv_path}")
+    print(f"Saved: {face_csv_path}")
     print(f"Latest thermal re-ingestion index: {rows[-1][5]:.6g}")
     print(f"Latest net sensible heat rejection: {rows[-1][6]:.6g} W")
     print("Ignored undefined near-zero-flow boundary-temperature samples: "
