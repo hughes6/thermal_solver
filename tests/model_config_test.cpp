@@ -486,7 +486,7 @@ int main() {
     assert(run_parallel.find(
         "-entry startTime -set \"$current\"") != std::string::npos);
     assert(run_parallel.find(
-        "foamDictionary -precision 16") != std::string::npos);
+        "foamDictionary -precision 17") != std::string::npos);
     assert(run_parallel.find(
         "-allRegions -time \"$reconstruct_time\"") != std::string::npos);
     assert(run_parallel.find(
@@ -554,16 +554,25 @@ int main() {
     assert(warm_interval_position != std::string::npos);
     assert(warm_write_control_position < warm_interval_position);
     assert(run_parallel.find(
-        "foamDictionary -precision 16 \"$case_dir/system/controlDict\" "
+        "foamDictionary -precision 17 \"$case_dir/system/controlDict\" "
         "-entry endTime -set \"$requested_end\"") != std::string::npos);
     assert(run_parallel.find(
-        "foamDictionary -precision 16 \"$case_dir/system/controlDict\" "
+        "foamDictionary -precision 17 \"$case_dir/system/controlDict\" "
         "-entry writeInterval -set \"$warm_interval\"") !=
         std::string::npos);
     assert(run_parallel.find(
-        "foamDictionary -precision 16 \"$case_dir/system/controlDict\" "
+        "foamDictionary -precision 17 \"$case_dir/system/controlDict\" "
         "-entry startTime -set \"$reconstruct_time\"") !=
         std::string::npos);
+    assert(run_parallel.find(
+        "warm_restart_dt=$(awk -v interval=\"$warm_interval\"") !=
+        std::string::npos);
+    assert(run_parallel.find(
+        "-entry deltaT -set \"$warm_restart_dt\"") !=
+        std::string::npos);
+    assert(run_parallel.find(
+        "foamDictionary -precision 17 \"$case_dir/system/controlDict\" "
+        "-entry adjustTimeStep -set true") != std::string::npos);
     const auto restored_write_control_position = run_parallel.find(
         production_write_control,warm_interval_position);
     assert(restored_write_control_position != std::string::npos);
