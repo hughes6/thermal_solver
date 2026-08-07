@@ -522,3 +522,24 @@ checkpoint 2/2 was accepted. The solver stopped automatically at
 reconstructed all fluid and solid fields successfully. This is the first full
 screening workflow run in this study to satisfy both thermal and refreshed-flow
 convergence criteria.
+
+### Converged screening versus in-depth correctors (2026-08-07)
+
+Two clones of the fully converged `t = 19200.020000000237 s` checkpoint used
+the same mesh, fields, two MPI ranks, and fixed `0.0003 s` timestep
+(`Co_max ~= 0.723`). Screening `3 outer x 2 pressure` correction was compared
+with in-depth `3x3` for 30 solver steps. Their common reconstructed comparison
+checkpoint was `t = 19200.026000000231 s`.
+
+| Policy | Solve wall time | Pressure solves/step | Pressure iterations/step | U RMS difference | T RMS difference |
+|---|---:|---:|---:|---:|---:|
+| 3x2 | 318.32 s | 6 | 28.90 | reference | reference |
+| 3x3 | 384.55 s | 9 | 36.97 | 0.00181% | 0.000004% |
+
+The extra pressure corrector increased solve wall time by `20.8%`. Maximum
+local differences were only `0.00109 m/s` velocity and `0.00067 K`
+temperature. Because the in-depth profile already retains stricter `Co <= 1`,
+five-second thermal timesteps, 1,200 s refreshes, 60 s reporting, and tighter
+convergence thresholds, it now uses the validated `3x2` correction policy.
+It also defaults to two ranks on the 8 GB workstation. The strict validation
+profile remains at four ranks and `3x3` for independent reference studies.

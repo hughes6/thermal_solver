@@ -27,8 +27,18 @@ class OpenFoamProfilePolicyTest(unittest.TestCase):
                     profile["airflow_refresh_maximum_courant_number"], 1.0
                 )
                 self.assertEqual(profile["maximum_courant_number"], 1.0)
-                self.assertEqual(profile["pimple_outer_correctors"], 3)
-                self.assertEqual(profile["pimple_pressure_correctors"], 3)
+
+    def test_indepth_uses_validated_workstation_correctors(self):
+        profile = self.profile("indepth_foam_cfg.toml")
+        self.assertEqual(profile["parallel_processes"], 2)
+        self.assertEqual(profile["pimple_outer_correctors"], 3)
+        self.assertEqual(profile["pimple_pressure_correctors"], 2)
+
+    def test_strict_validation_retains_three_by_three(self):
+        profile = self.profile("validation_foam_cfg.toml")
+        self.assertEqual(profile["parallel_processes"], 4)
+        self.assertEqual(profile["pimple_outer_correctors"], 3)
+        self.assertEqual(profile["pimple_pressure_correctors"], 3)
 
 
 if __name__ == "__main__":
