@@ -57,8 +57,9 @@ calibrated and the coupled airflow stage reaches mass and device-flow
 convergence.
 
 The first comparison also incorrectly assigned an equivalent fan to the KVM.
-The physical KVM is fanless. Its generic file now uses passive front and rear
-vents, and the selective production experiment retains the original KVM
+The physical KVM is fanless. Its generic file now uses only its passive front
+vent; the unverified rear exhaust opening was removed to avoid inventing a
+through-flow path. The selective production experiment retains the original KVM
 component. Results above are preserved as failure evidence and must not be
 used as the corrected KVM result.
 

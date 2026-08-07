@@ -81,7 +81,7 @@ class EngineeringToolsTest(unittest.TestCase):
         self.assertEqual(fan["size"]["width"], air["size"]["width"])
         self.assertEqual(fan["size"]["height"], air["size"]["height"])
 
-    def test_kvm_component_is_fanless(self) -> None:
+    def test_kvm_component_has_no_forced_or_rear_exhaust(self) -> None:
         root = Path(__file__).resolve().parents[1]
         for filename in (
                 "eaton_KVM.toml",
@@ -91,6 +91,12 @@ class EngineeringToolsTest(unittest.TestCase):
                 document = tomllib.load(stream)
             region_states = [region["state"] for region in document["internal_regions"]]
             self.assertNotIn("fan", region_states, filename)
+            rear_exhausts = [
+                region for region in document["internal_regions"]
+                if "rear" in region["name"].lower()
+                and "exhaust" in region["name"].lower()
+            ]
+            self.assertEqual([], rear_exhausts, filename)
 
     def test_generic_kvm_enclosure_is_resolved_by_standard_mesh(self) -> None:
         root = Path(__file__).resolve().parents[1]
