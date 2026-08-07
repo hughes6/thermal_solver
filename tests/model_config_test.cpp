@@ -369,6 +369,21 @@ int main() {
     assert(run_parallel.find("command -v flock") != std::string::npos);
     assert(run_parallel.find("Another thermal solver is already writing") !=
            std::string::npos);
+    assert(run_parallel.find(
+        "Ambiguous duplicate OpenFOAM root times") != std::string::npos);
+    assert(run_parallel.find("root_time_dirs") != std::string::npos);
+    assert(run_parallel.find("d<=1e-12*s") != std::string::npos);
+    assert(run_parallel.find("mapped_phi_present=false") !=
+           std::string::npos);
+    assert(run_parallel.find(
+        "has no face-flux field fluid/phi") != std::string::npos);
+    assert(run_parallel.find(
+        "before --multirate") != std::string::npos);
+    const std::size_t duplicate_time_check=run_parallel.find(
+        "Ambiguous duplicate OpenFOAM root times");
+    const std::size_t decomposition_setup=run_parallel.find(
+        "reuse_decomposition=false");
+    assert(duplicate_time_check<decomposition_setup);
     assert(run_serial.find("flock -n 9") != std::string::npos);
     assert(run_parallel.find("Fan ramp stage") != std::string::npos);
     assert(run_parallel.find("adaptive_initial_airflow") !=

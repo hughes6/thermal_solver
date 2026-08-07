@@ -2027,7 +2027,11 @@ coupled `--warm-start` on the target mesh so OpenFOAM creates a consistent
 `phi`, pressure, and velocity state; then use `--multirate` for thermal
 equilibration. Also keep only one spelling of the mapped root time (for example,
 do not retain both `730000.1` and `730000.09999999998`) before decomposition,
-because equal numeric times with different directory names are ambiguous.
+because equal numeric times with different directory names are ambiguous. The
+generated runner rejects both unsafe conditions before decomposition: duplicate
+numeric root times exit with an explicit directory pair, and a nonzero
+`--multirate` restart without reconstructed or processor `phi` exits with the
+required `--warm-start` instruction.
 
 #### Automatically use 300-second multirate segments
 
