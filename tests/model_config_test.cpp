@@ -437,6 +437,15 @@ int main() {
     assert(run_parallel.find(
         "pending refresh will resume before the next thermal-only stage") !=
            std::string::npos);
+    const std::size_t pending_refresh_message=run_parallel.find(
+        "pending refresh will resume before the next thermal-only stage");
+    const std::size_t endpoint_refresh_condition=run_parallel.rfind(
+        "if ! awk -v a=\"$current\"",pending_refresh_message);
+    assert(endpoint_refresh_condition != std::string::npos);
+    assert(run_parallel.substr(
+        endpoint_refresh_condition,
+        pending_refresh_message-endpoint_refresh_condition).find(
+            "rm -f \"$refresh_pending_marker\"") == std::string::npos);
     assert(run_parallel.find(
         "airflow_validated=\"$airflow_refresh_validated\"") !=
            std::string::npos);
