@@ -4,6 +4,7 @@
 
 - Screening: `C:\OpenFOAM\thermal_sim_v2\profile_screening_connected_components_20260807\model_generic_components`
 - In-depth: `C:\OpenFOAM\thermal_sim_v2\profile_indepth_connected_components_20260807\model_generic_components`
+- In-depth dt=20 study: `C:\OpenFOAM\thermal_sim_v2\profile_indepth_dt20_20260808\model_generic_components`
 
 The cases have separate directories. No prior result directory was reused or
 overwritten. The screening mesh has 208,772 total cells and the in-depth mesh
@@ -180,7 +181,36 @@ by `/usr/bin/time` (1,702 s including the Windows launcher), compared with
 2,229 s for the representative 5 s reference: a 24.6% solver-timed or 23.6%
 launcher-timed reduction. The thermal-only portion completed in about 739 s;
 the strict coupled refresh is unaffected by this setting and therefore limits
-the total speedup. The tested 10 s cap is now the in-depth profile default.
+the total speedup.
+
+The original dt=10 evidence runner stopped at its requested 50,400.02 s
+endpoint after two coupled samples even though an internal fan's unsmoothed
+period-two change was 4.25%. The later pending-refresh and persisted-baseline
+fixes prevent production runners from treating that endpoint as airflow
+validated. This does not affect the timestep comparison: both candidates use
+the same starting fields, mesh, controls, and exact 50,400.02 s comparison
+endpoint, so it is an accuracy study of the implicit thermal step rather than
+an airflow-convergence claim.
+
+An additional matched run increased only the implicit thermal timestep from
+10 s to 20 s. The 20 s thermal-only phase completed in 442 s, 40.2% faster
+than the approximately 739 s 10 s phase. Its complete legacy two-sample run
+and reconstruction took 1,581 s; strict coupled refreshes dominate that total
+and are not accelerated by the thermal timestep.
+
+| Metric | 20 s minus 10 s result |
+|---|---:|
+| Temperature RMS difference | 0.000114 K (0.000038%) |
+| Temperature maximum absolute difference | 0.001831 K |
+| Velocity RMS difference | 2.39e-7 m/s (0.000013%) |
+| Velocity maximum absolute difference | 1.85e-5 m/s |
+| Pressure RMS difference | 0.000275 Pa |
+| Pressure maximum absolute difference | 0.007813 Pa |
+
+The tested 20 s cap is now the in-depth profile default. With a valid
+persisted airflow baseline, a normal interval can avoid the legacy baseline-
+acquisition refresh sample, making the 297 s thermal-phase saving a larger
+fraction of end-to-end runtime.
 
 ## Coupled-refresh outer-corrector study
 
