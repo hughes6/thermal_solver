@@ -496,3 +496,35 @@ re-ingestion. The extreme Dell, Eaton, and Trenton maxima show that the current
 uncalibrated equivalent heat blocks should be tuned before an 18,000 or
 100,000 s final run. Extending this exact load case would measure its continuing
 thermal rise, not validate realistic equipment temperatures.
+
+### Effective-conductivity sensitivity
+
+An isolated, identical-mesh in-depth case tested whether the extreme generic
+block maxima were primarily caused by the assumed effective conductivity. All
+four generic solid regions were changed from 10 to 100 W/(m K); geometry,
+watts, density, heat capacity, accepted 10.11 s airflow fields, mesh, and solver
+policy were held fixed. The case ran through the same 3600 s multirate endpoint
+without overwriting the baseline.
+
+The airflow comparison remained controlled. At 1200 s, refresh convergence was
+essentially identical to baseline. At 2400 s, the k=100 case converged in one
+0.01 s window with 0.152% imbalance and 0.925% worst flow change. Its final
+heat rejection was 1384 W (89.57%), versus 1381 W (89.40%) for k=10.
+
+| Region | k=10 mean (C) | k=100 mean (C) | k=10 max (C) | k=100 max (C) |
+|---|---:|---:|---:|---:|
+| Fluid | 24.6 | 24.5 | 71.2 | 70.0 |
+| Generic Dell R470 1U | 52.9 | 53.2 | 172 | 159 |
+| Generic Eaton 2U UPS | 38.4 | 38.4 | 106 | 102 |
+| Generic KVM 1U | 28.8 | 28.5 | 43.1 | 41.3 |
+| Generic Trenton 3U | 72.4 | 72.1 | 243 | 236 |
+
+Thermal convergence rates also changed little: worst internal-cell change was
+10.19 K/300 s and worst component-average change was 2.60 K/300 s, compared
+with 10.70 and 2.65 K/300 s for k=10. A tenfold conductivity increase therefore
+does not solve the over-temperature behavior and should not be adopted as a
+default. The dominant uncertainty is effective convective coupling: one compact
+block has much less wetted area and more bypass than distributed boards, heat
+sinks, and guided airflow in real equipment. The next calibration study should
+hold watts and fan curves fixed while increasing effective heat-transfer area
+or using a calibrated air-side source/resistance representation.
