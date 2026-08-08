@@ -449,3 +449,50 @@ intended workflow: cold-start live airflow is expensive but performed once,
 while subsequent thermal evolution is much faster and reuses the validated
 operating point. The full C++ and Python regression suite passed after the
 baseline-preservation correction.
+
+## Fresh screening-to-in-depth mapped workflow (2026-08-08)
+
+The accepted fresh screening solution at 10 s was mapped region by region onto
+the untouched fresh in-depth mesh with OpenFOAM 2606 `mapFields` using the
+supported `interpolate` method. The fluid mapping increased the fluid mesh from
+177,064 to 284,396 cells; all four solid regions mapped successfully. Because
+`phi` is not transferred by `mapFields`, the target then ran a fully coupled
+Co <= 1 warm start from 10 to 10.11 s.
+
+At 10.11 s, the worst top-fan change was 0.774%, exterior mass imbalance was
+0.226%, and every fan direction was correct. In-depth intake and exhaust were
+0.282315 and 0.281677 kg/s. The accepted screening values were 0.242704 and
+0.242086 kg/s, so the finer mesh predicts approximately 16.3% more throughput.
+This sensitivity is too large to treat screening airflow magnitudes as final.
+
+Strict 0.01 s fine-mesh segments took roughly 6-9 minutes each with about
+484-489 MB peak resident memory and no swaps. A continuous 0.04 s segment took
+21.6 minutes. Strict airflow, not implicit thermal evolution, dominates runtime.
+
+The isolated evidence case then advanced to 3600 s in multirate mode. The first
+1190 s thermal-only leg took under three minutes. The 1200 s airflow refresh
+converged after 0.03 s with 0.451% imbalance and 0.584% worst-device change. At
+2400 s, the first refresh found a real 3.85% internal component-fan change from
+the hotter air; the next window converged with 0.086% imbalance and 0.521% worst
+fan change. Sparse periodic airflow updates are therefore necessary, while
+continuous strict airflow is prohibitively expensive.
+
+The complete continuation took 50:07 wall time, used 489 MB peak resident
+memory, and incurred no swaps. It was not thermally converged: worst internal
+cell change was 10.70 K/300 s and worst component-average change was
+2.65 K/300 s. Final temperatures were:
+
+| Region | Mean (C) | Maximum (C) |
+|---|---:|---:|
+| Fluid | 24.6 | 71.2 |
+| Generic Dell R470 1U | 52.9 | 172 |
+| Generic Eaton 2U UPS | 38.4 | 106 |
+| Generic KVM 1U | 28.8 | 43.1 |
+| Generic Trenton 3U | 72.4 | 243 |
+
+At 3600 s the rack rejected 1381 W, or 89.40% of configured heat, with
+0.290292 kg/s intake, 0.290041 kg/s exhaust, and no detected hot-air
+re-ingestion. The extreme Dell, Eaton, and Trenton maxima show that the current
+uncalibrated equivalent heat blocks should be tuned before an 18,000 or
+100,000 s final run. Extending this exact load case would measure its continuing
+thermal rise, not validate realistic equipment temperatures.
