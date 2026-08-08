@@ -425,3 +425,27 @@ passed Courant preflight, and advanced to 0.10 s. A second invocation advanced
 to 0.11 s. Both printed `Resuming initial airflow observation window from
 t=0.05 s`; the marker stayed at 0.05 s and no false convergence marker was
 created. The complete C++ and Python added-feature regression suite passed.
+
+Continuing the same clean case established the first physically eligible
+airflow baseline at 0.35 s (0.30 s beyond the 0.05 s fan ramp). At that point
+exterior mass imbalance was 0.2815%, all directions were valid, and the
+estimated rack air-exchange time was 5.35 s. A segmented 0.36 s invocation
+restored the saved convergence state but exposed a third defect: the initial
+airflow function immediately cleared the restored flow arrays, so every
+invocation could establish a baseline without ever comparing against it.
+
+The reset now occurs only when a new `.initial_airflow_pending` window is
+created. On a resumed window, the persisted flow arrays remain authoritative.
+Runtime proof at 0.37 s restored the 0.36 s baseline, identified `Fan_5` as the
+worst device, measured a real 0.8406% flow change, and accepted initial airflow
+after 0.32 s beyond the ramp. Exterior mass imbalance was 0.2550% and all flow
+directions remained valid. The pending marker was removed and the accepted
+marker was written.
+
+The accepted case then advanced from 0.37 to 10 s in one 9.63 s implicit
+thermal step. The solver portion took about 15 s and the complete invocation,
+including Windows/WSL launch and reconstruction, took 1:59. This confirms the
+intended workflow: cold-start live airflow is expensive but performed once,
+while subsequent thermal evolution is much faster and reuses the validated
+operating point. The full C++ and Python regression suite passed after the
+baseline-preservation correction.

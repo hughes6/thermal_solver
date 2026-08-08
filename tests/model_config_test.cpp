@@ -434,6 +434,15 @@ int main() {
            std::string::npos);
     assert(run_parallel.find("previous_flows=()", adaptive_initial_start) !=
            std::string::npos);
+    const std::size_t new_initial_window=run_parallel.find(
+        "if [[ ! -f \"$initial_pending_marker\" ]]",
+        adaptive_initial_start);
+    const std::size_t initial_flow_reset=run_parallel.find(
+        "previous_flows=()", adaptive_initial_start);
+    const std::size_t initial_limit_assignment=run_parallel.find(
+        "initial_limit=$(awk", adaptive_initial_start);
+    assert(new_initial_window<initial_flow_reset);
+    assert(initial_flow_reset<initial_limit_assignment);
     assert(run_parallel.find(".initial_airflow_pending") !=
            std::string::npos);
     assert(run_parallel.find(
