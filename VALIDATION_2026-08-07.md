@@ -355,3 +355,34 @@ aggregate exhaust temperature by +0.000322 K. Heat rejection was 1539.35 W
 (99.6346% of applied heat) versus 1539.27 W (99.6291%) in the reference.
 This confirms that the selected screening ceiling preserves the engineering
 recirculation and energy-balance conclusions, not only global field norms.
+
+## Screening airflow-refresh cadence check
+
+Two isolated copies of the converged 28,800.02 s screening checkpoint were
+advanced to the same 31,200 s endpoint. The held-flow branch used the normal
+2,400 s screening interval. The comparison branch used a 1,200 s interval,
+performed one adaptive refresh at 30,000 s with the current Co=2 ceiling, and
+then advanced the accepted flow field through the remaining 1,200 s. The
+refresh needed four 0.01 s samples: its third sample still had a 5.61%
+internal-fan change, while the fourth reduced the worst change to 0.128%,
+with 0.0335% exterior mass imbalance and all directions valid.
+
+At 31,200 s, the refreshed branch changed exterior fan flows by at most
+0.195% and main-vent flow by 0.142%. Thermal re-ingestion remained zero.
+Aggregate exhaust temperature changed by -0.00786 K and net sensible heat
+rejection by -0.0386%. Volume-weighted fluid temperature changed by +0.0307 K.
+Component mean-temperature changes were -0.0302 K Eaton, +0.2587 K Dell,
+-0.0178 K Trenton, and +0.0444 K KVM. Local turbulent structure was more
+sensitive: velocity RMS changed by 3.88% and the largest local fluid
+temperature difference was 6.47 K.
+
+The held-flow branch took 13:26 wall time. The current-policy refreshed
+workflow took 22:32 to reach and validate the intermediate checkpoint plus
+5:46 to resume to the matched endpoint, 2.10 times the measured wall time.
+The source checkpoint predated the Co=2 default, so this is deliberately
+treated as a conservative combined bound on refresh cadence plus the stricter
+Courant correction, not as a pure cadence-only delta. Even that upper bound
+left rack throughput, heat rejection, and recirculation conclusions nearly
+unchanged. The 2,400 s screening refresh interval is therefore retained;
+1,200 s remains appropriate when sub-kelvin component detail during a thermal
+transient matters more than screening runtime.
