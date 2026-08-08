@@ -31,12 +31,14 @@ Write-Host "Checking Python plotting scripts"
     "tools/heat_load_estimator.py" `
     "tools/openfoam_field_convergence.py" `
     "tools/openfoam_cross_case_comparison.py" `
+    "tools/openfoam_mesh_comparison.py" `
     "tests/coarse_heat_io_test.py" `
     "tests/engineering_tools_test.py" `
     "tests/plot_geometry_test.py" `
     "tests/openfoam_animation_test.py" `
     "tests/openfoam_field_convergence_test.py" `
     "tests/openfoam_cross_case_comparison_test.py" `
+    "tests/openfoam_mesh_comparison_test.py" `
     "tests/openfoam_profile_policy_test.py" `
     "tools/validate_openfoam_case.py" `
     "plot_outlet_flow.py" `
@@ -80,6 +82,11 @@ if ($LASTEXITCODE -ne 0) {
 & python -m unittest "tests.openfoam_cross_case_comparison_test"
 if ($LASTEXITCODE -ne 0) {
     throw "OpenFOAM cross-case comparison tests failed"
+}
+
+& python -m unittest "tests.openfoam_mesh_comparison_test"
+if ($LASTEXITCODE -ne 0) {
+    throw "OpenFOAM mesh comparison tests failed"
 }
 
 & python -m unittest "tests.openfoam_profile_policy_test"

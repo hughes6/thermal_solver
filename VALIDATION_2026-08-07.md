@@ -5,6 +5,8 @@
 - Screening: `C:\OpenFOAM\thermal_sim_v2\profile_screening_connected_components_20260807\model_generic_components`
 - In-depth: `C:\OpenFOAM\thermal_sim_v2\profile_indepth_connected_components_20260807\model_generic_components`
 - In-depth dt=20 study: `C:\OpenFOAM\thermal_sim_v2\profile_indepth_dt20_20260808\model_generic_components`
+- Matched-policy 20 mm mesh: `C:\OpenFOAM\thermal_sim_v2\profile_mesh20_matched_20260808\mesh20_matched_model`
+- Matched-policy 12.5 mm mesh: `C:\OpenFOAM\thermal_sim_v2\profile_mesh125_matched_20260808\mesh125_matched_model`
 
 The cases have separate directories. No prior result directory was reused or
 overwritten. The screening mesh has 208,772 total cells and the in-depth mesh
@@ -253,3 +255,60 @@ The measured solver clock time was approximately 263 s for both ceilings on
 this workstation, so the modestly larger timestep produced no repeatable
 runtime benefit while increasing local field differences. The in-depth
 profile retains `airflow_refresh_maximum_courant_number = 1.0`.
+
+## Three-level matched-policy mesh study
+
+Fresh 20 mm and 12.5 mm adaptive meshes were generated with the same model,
+geometry, and in-depth solver policy as the production 15 mm case. The
+validated 15 mm fields at 50,400.02 s were mapped region by region. Because
+`mapFields` cannot map the face-flux field `phi`, each target first ran the
+required 0.01 s coupled warm start and then exact-endpoint adaptive refresh
+samples. No old case directory was overwritten.
+
+All three meshes passed full multi-region `checkMesh`:
+
+| Fine spacing | Total cells | Fluid cells |
+|---:|---:|---:|
+| 20 mm | 208,772 | 177,064 |
+| 15 mm | 335,580 | 284,396 |
+| 12.5 mm | 477,456 | 405,414 |
+
+The 20 mm mapped flow converged after three 0.01 s adaptive samples with
+0.163% mass imbalance and 0.442% worst device-flow change. The 12.5 mm case
+used four exact-endpoint samples: the second exterior sample was still 1.071%
+different and the third sample established the first complete internal-fan
+period average. The fourth passed with 0.142% imbalance and 0.272% worst
+smoothed device-flow change. Segmented state restoration was exercised at
+every fine-mesh endpoint and retained the pending marker until convergence.
+
+Relative to the converged 15 mm operating point:
+
+| Metric | 20 mm minus 15 mm | 12.5 mm minus 15 mm |
+|---|---:|---:|
+| Fluid volume-mean temperature | +0.0132 K | +0.00277 K |
+| Fluid internal maximum temperature | -4.682 K | -1.101 K |
+| Fluid volume-mean speed | -0.740% | -0.495% |
+| Worst exterior fan-flow magnitude | -2.544% | -1.603% |
+| Main vent-flow magnitude | -1.937% | -1.230% |
+| Worst smoothed internal-fan flow | 4.09% | 1.35% |
+| Largest component mean-temperature difference | -0.0441 K | +0.00950 K |
+
+The finer 12.5 mm solution consistently moves the integrated temperatures
+and device flows toward the 15 mm values compared with the 20 mm screening
+mesh. The 15 mm in-depth spacing is therefore retained: its remaining
+integrated-flow uncertainty is about 1-2%, while 20 mm remains appropriate
+only for screening and under-resolves the local fluid hotspot by several
+kelvin in this rack.
+
+Pointwise turbulent velocity RMS differences remain 7-12% between unequal
+meshes even though volume-mean speed and all boundary flows are much closer.
+Those cell-scale comparisons are sensitive to eddy location and piecewise
+cell sampling, so they are reported diagnostically rather than used alone as
+a mesh-acceptance criterion.
+
+`tools/openfoam_mesh_comparison.py` was added for unequal-mesh studies. It
+reports independent volume-weighted means/maxima and samples the reference
+cell containing each target cell centre. An identity test proves that the
+method returns zero error for an unchanged mesh; an earlier point-data
+interpolation approach was rejected because it produced artificial error even
+for identical fields.
