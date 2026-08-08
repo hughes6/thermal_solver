@@ -1,0 +1,103 @@
+# Screening and in-depth rack validation - 2026-08-07
+
+## Cases preserved
+
+- Screening: `C:\OpenFOAM\thermal_sim_v2\profile_screening_connected_components_20260807\model_generic_components`
+- In-depth: `C:\OpenFOAM\thermal_sim_v2\profile_indepth_connected_components_20260807\model_generic_components`
+
+The cases have separate directories. No prior result directory was reused or
+overwritten. The screening mesh has 208,772 total cells and the in-depth mesh
+has 335,580 total cells. Both pass full `checkMesh` in the fluid and all four
+solid regions.
+
+## Screening result
+
+The corrected screening mesh was mapped from an earlier 19,200 s solution,
+re-equilibrated, and advanced with 2,400 s implicit thermal intervals. Two
+consecutive thermal and airflow checkpoints passed at 26,400.02 and
+28,800.02 s.
+
+- worst internal-cell temperature rate: Trenton, 0.0572 K per 300 s
+- screening limit: 0.25 K per 300 s
+- final exterior mass imbalance: 0.0041%
+- final maximum tracked device-flow change: 0.0444%
+- representative final 2,400 s interval plus refresh: 794 s wall time
+
+## Screening-to-in-depth mapping
+
+The converged 28,800.02 s screening fields were interpolated into the clean
+in-depth mesh. All five region names matched. After 0.04 s of strict coupled
+equilibration, exterior mass imbalance was 0.19%, every exterior fan changed
+by at most 0.56%, and every internal fan changed by at most 0.59%.
+
+At the mapped operating point, screening and in-depth volume-weighted solid
+means agreed within 0.028 K. Initial hotspot differences were 0.007-0.390 K
+for the four solids and 0.398 K for the internal fluid cells. Arithmetic cell
+averages must not be used for this comparison because the adaptive cell
+volumes differ.
+
+## In-depth convergence
+
+The in-depth mesh required continued thermal evolution through 50,400 s.
+Checking only a global/boundary maximum would have stopped early. Convergence
+was evaluated from internal-cell maxima and volume-weighted means for the
+fluid and every component.
+
+The final two 2,400 s intervals, ending at 48,000.02 and 50,400.02 s, both
+passed the 0.10 K per 300 s in-depth limit. Final rates at 50,400.02 s were:
+
+| Region | Volume-average rate (K/300 s) | Internal-maximum rate (K/300 s) | Final internal maximum (K) |
+|---|---:|---:|---:|
+| Fluid | 0.00126 | 0.01218 | 351.304 |
+| Eaton | 0.00008 | 0.01197 | 387.581 |
+| Dell | 0.00981 | 0.01717 | 433.131 |
+| Trenton | 0.02466 | 0.08606 | 567.421 |
+| KVM | 0.00490 | 0.00627 | 325.585 |
+
+One final coupled sample reduced exterior mass imbalance to 0.00143%. The
+largest exterior-fan change was 0.0526%. Internal-fan changes were 0.176%,
+0.168%, and 0.335%, all below the 1% criterion. A representative final
+in-depth 2,400 s interval plus strict refresh required 2,229 s wall time,
+2.81 times the representative screening interval.
+
+## Converged profile differences
+
+Comparing each profile at its independently converged endpoint gives the
+following in-depth-minus-screening internal-maximum differences:
+
+| Region | Difference (K) |
+|---|---:|
+| Fluid | +10.212 |
+| Eaton | +0.361 |
+| Dell | +3.440 |
+| Trenton | +2.228 |
+| KVM | -0.463 |
+
+These differences include both spatial-resolution and profile-policy effects;
+they are not a pure mesh-convergence order estimate. They show that screening
+is suitable for workflow iteration and rack-flow diagnosis, but its local
+fluid and Dell hotspots should not be treated as in-depth values.
+
+## Defects found and corrected
+
+1. A nonzero mapped restart compared its time against an absolute five-second
+   airflow limit. The limit is now measured from the restart checkpoint.
+2. Signed mass-weighted temperature on a bidirectional passive opening could
+   be nonphysical. The recirculation report now emits face-resolved inward and
+   outward flow and temperature data.
+3. Small cancellation-dominated passive-opening net flow could block the
+   screening convergence test. The screening negligible-flow floor is now
+   0.1% of rack throughput.
+4. Component hotspot evolution could be hidden by a hotter stable component.
+   Every component maximum is now tracked independently.
+5. `fieldMinMax` included coupled boundary values, allowing a hot solid
+   interface to hide a changing internal fluid-cell maximum. Convergence now
+   uses `volFieldValue max` for internal cells; `fieldMinMax` remains available
+   for location diagnostics.
+6. Reaching a requested endpoint without passing airflow metrics was
+   unconditionally counted as airflow validation. The refresh routine now
+   propagates an explicit validation flag, and an endpoint-exhausted refresh
+   cannot increment the convergence streak.
+
+The full C++ and Python added-feature regression suite passed after these
+changes.
