@@ -124,3 +124,24 @@ by `/usr/bin/time` (1,702 s including the Windows launcher), compared with
 launcher-timed reduction. The thermal-only portion completed in about 739 s;
 the strict coupled refresh is unaffected by this setting and therefore limits
 the total speedup. The tested 10 s cap is now the in-depth profile default.
+
+## Coupled-refresh outer-corrector study
+
+A second isolated case restarted from the validated 50,400.02 s endpoint and
+advanced by 0.01 s with two PIMPLE outer correctors and two pressure
+correctors. It was compared against the existing three-outer/two-pressure
+reference at 50,400.03 s.
+
+| Metric | 2x2 minus 3x2 result |
+|---|---:|
+| Temperature RMS difference | 0.01596 K |
+| Temperature maximum absolute difference | 1.24768 K |
+| Velocity RMS difference | 0.03595 m/s (1.8978%) |
+| Velocity maximum absolute difference | 1.22583 m/s |
+| Pressure RMS difference | 1.07193 Pa |
+| Pressure maximum absolute difference | 26.3203 Pa |
+
+The 2x2 run took 315 s versus approximately 332 s for the 3x2 reference, only
+about a 5% reduction. That saving does not justify the large local velocity
+and temperature deviations. The in-depth profile therefore retains three
+outer correctors and two pressure correctors.
