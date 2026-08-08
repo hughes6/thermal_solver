@@ -124,9 +124,40 @@ fluid and Dell hotspots should not be treated as in-depth values.
     that later left reconstruction with no selected time. Export now requires
     at least two ranks before writing the case, and the runner rejects both
     fewer than two ranks and nonpositive requested endpoints immediately.
+12. An adaptive refresh compared its reconstructed time to the requested
+    endpoint without tolerance. A value such as `50400.029999999868` was
+    treated as earlier than `50400.03`, causing a no-op stage and a second
+    airflow evaluation at the same checkpoint. The endpoint decision now uses
+    the same scale-aware tolerance as the main multirate loop.
 
 The full C++ and Python added-feature regression suite passed after these
 changes.
+
+## Persisted airflow-baseline restart validation
+
+The 335,580-cell in-depth case was restarted from 50,400.03 s with a valid
+persisted two-sample airflow baseline and advanced through one strict coupled
+refresh window to 50,400.04 s. The generated runner restored the baseline,
+evaluated the endpoint exactly once, and accepted convergence after 0.01 s.
+
+| Refresh metric | Result |
+|---|---:|
+| Maximum boundary-flow change | 0.0422635% (`Fan_3`) |
+| Net boundary-flow imbalance | 0.00709008% |
+| Actual maximum Courant number | 0.788938 |
+| Direction checks | Passed |
+| Solver clock time | 461 s |
+| Full runner/reconstruction time | 566 s |
+
+The pending-refresh marker was removed and the state file advanced atomically
+to the reconstructed `50400.039999999877` checkpoint. Compared with the
+independently generated three-outer/two-pressure reference at 50,400.03 s,
+the new endpoint differed by 0.02296 K temperature RMS (0.007637%),
+0.01461 m/s velocity RMS (0.7710%), and 0.12487 Pa pressure RMS (0.000150%).
+These are consecutive coupled-flow samples rather than identical-time
+solutions; the small global differences and passing flow metrics confirm that
+the restored baseline avoids an otherwise required extra refresh window
+without falsely declaring an unstable boundary-flow state converged.
 
 ## In-depth implicit timestep study
 

@@ -467,6 +467,10 @@ int main() {
         endpoint_refresh_condition,
         pending_refresh_message-endpoint_refresh_condition).find(
             "rm -f \"$refresh_pending_marker\"") == std::string::npos);
+    assert(run_parallel.substr(
+        endpoint_refresh_condition,
+        pending_refresh_message-endpoint_refresh_condition).find(
+            "tol=1e-9*s") != std::string::npos);
     assert(run_parallel.find(
         "airflow_validated=\"$airflow_refresh_validated\"") !=
            std::string::npos);
