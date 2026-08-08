@@ -101,3 +101,26 @@ fluid and Dell hotspots should not be treated as in-depth values.
 
 The full C++ and Python added-feature regression suite passed after these
 changes.
+
+## In-depth implicit timestep study
+
+An isolated copy of the 335,580-cell in-depth case was restarted from the
+48,000.02 s checkpoint and advanced to 50,400.02 s with a 10 s implicit
+thermal-only timestep. The reference endpoint used the prior 5 s timestep.
+Both runs used the same 0.02 s strict-Co coupled airflow refresh.
+
+| Metric | 10 s minus 5 s result |
+|---|---:|
+| Temperature RMS difference | 0.000992 K |
+| Temperature maximum absolute difference | 0.017517 K |
+| Velocity RMS difference | 8.45e-7 m/s |
+| Velocity maximum absolute difference | 8.64e-5 m/s |
+| Pressure RMS difference | 0.000635 Pa |
+| Pressure maximum absolute difference | 0.007813 Pa |
+
+The complete 10 s interval, coupled refresh, and reconstruction took 1,681 s
+by `/usr/bin/time` (1,702 s including the Windows launcher), compared with
+2,229 s for the representative 5 s reference: a 24.6% solver-timed or 23.6%
+launcher-timed reduction. The thermal-only portion completed in about 739 s;
+the strict coupled refresh is unaffected by this setting and therefore limits
+the total speedup. The tested 10 s cap is now the in-depth profile default.

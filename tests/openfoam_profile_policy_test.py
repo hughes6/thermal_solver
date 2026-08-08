@@ -45,6 +45,7 @@ class OpenFoamProfilePolicyTest(unittest.TestCase):
         self.assertEqual(profile["airflow_refresh_duration"], 0.01)
         self.assertEqual(profile["airflow_refresh_check_interval"], 0.01)
         self.assertEqual(profile["maximum_airflow_refresh_duration"], 0.10)
+        self.assertEqual(profile["thermal_only_maximum_time_step"], 10.0)
         self.assertEqual(profile["minimum_tracked_boundary_flow_fraction"], 0.001)
 
     def test_strict_validation_retains_three_by_three(self):
