@@ -98,6 +98,11 @@ fluid and Dell hotspots should not be treated as in-depth values.
    unconditionally counted as airflow validation. The refresh routine now
    propagates an explicit validation flag, and an endpoint-exhausted refresh
    cannot increment the convergence streak.
+7. Component maximum and average reports independently selected their latest
+   value without proving it was written at the fluid checkpoint time. A
+   partially written function-object cycle could therefore mix current fluid
+   data with stale component data. Every component maximum and average must
+   now match the fluid checkpoint timestamp before convergence is evaluated.
 
 The full C++ and Python added-feature regression suite passed after these
 changes.

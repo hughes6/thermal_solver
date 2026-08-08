@@ -169,7 +169,7 @@ int main() {
         screening.openfoam_solver.maximum_device_flow_change_fraction == 0.01);
     assert(
         screening.openfoam_solver.minimum_tracked_boundary_flow_fraction ==
-        0.0001);
+        0.001);
     // Inline test-model values remain authoritative over profile defaults.
     assert(screening.openfoam_solver.airflow_refresh_interval == 5.0);
     assert(screening.openfoam_solver.report_interval == 1.0);
@@ -409,6 +409,11 @@ int main() {
            std::string::npos);
     assert(run_parallel.find("previous_flows=()", adaptive_initial_start) !=
            std::string::npos);
+    assert(run_parallel.find(
+        "initial_limit=$(awk -v start=\"$initial_start\"",
+        adaptive_initial_start) != std::string::npos);
+    assert(run_parallel.find("limit=start+maximum", adaptive_initial_start) !=
+           std::string::npos);
     assert(run_parallel.find("internal_fan_names") != std::string::npos);
     assert(run_parallel.find("previous_smoothed_internal_flows") !=
            std::string::npos);
@@ -420,6 +425,30 @@ int main() {
         "floor>0 && aa<floor && bb<floor") != std::string::npos);
     assert(run_parallel.find("boundaryFlowFloor=") != std::string::npos);
     assert(run_parallel.find("estimatedAirExchangeTime=") !=
+           std::string::npos);
+    assert(run_parallel.find("maxima+=(\"$value\")") != std::string::npos);
+    assert(run_parallel.find("maximum_peak_delta") != std::string::npos);
+    assert(run_parallel.find("airflow_refresh_validated=0") !=
+           std::string::npos);
+    assert(run_parallel.find("airflow_refresh_validated=1") !=
+           std::string::npos);
+    assert(run_parallel.find(
+        "checkpoint remains unvalidated") != std::string::npos);
+    assert(run_parallel.find(
+        "airflow_validated=\"$airflow_refresh_validated\"") !=
+           std::string::npos);
+    assert(control.find("fluid_temperature_internal_maximum") !=
+           std::string::npos);
+    assert(control.find("operation max;") != std::string::npos);
+    assert(run_parallel.find("maxInternalCellChange=") != std::string::npos);
+    assert(run_parallel.find(
+        "maximum for component region $region is stale") !=
+           std::string::npos);
+    assert(run_parallel.find(
+        "average for component region $region is stale") !=
+           std::string::npos);
+    assert(run_parallel.find("delta<=1e-9*scale") != std::string::npos);
+    assert(run_parallel.find("new per-component peak baseline") !=
            std::string::npos);
     assert(run_parallel.find("volume*rho/one_way") != std::string::npos);
     assert(run_parallel.find("${#boundary_flow_names[@]} -eq 0") !=
@@ -533,7 +562,7 @@ int main() {
     assert(run_parallel.find(
         "sort -g -k1,1 | tail -1") != std::string::npos);
     assert(run_parallel.find(
-        "peakChange=$scaled_delta K/300s") != std::string::npos);
+        "maxInternalCellChange=$scaled_delta K/300s") != std::string::npos);
     assert(run_parallel.find(
         "Thermal convergence checkpoint $streak/2 accepted") !=
         std::string::npos);
