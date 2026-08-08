@@ -112,6 +112,13 @@ fluid and Dell hotspots should not be treated as in-depth values.
    new frozen thermal interval before repairing the unvalidated airflow.
    Endpoint exhaustion now retains the marker so the next multirate invocation
    resumes coupled airflow before any thermal-only advancement.
+10. Airflow stability baselines previously existed only in the runner process.
+    Every segmented or resumed multirate command therefore needed an extra
+    coupled check window to reacquire the same flow vector. The runner now
+    atomically persists ordered raw and smoothed device flows with their solver
+    time. It restores them only when the device topology matches exactly and
+    the state is not from a future checkpoint; otherwise it conservatively
+    reacquires the baseline.
 
 The full C++ and Python added-feature regression suite passed after these
 changes.

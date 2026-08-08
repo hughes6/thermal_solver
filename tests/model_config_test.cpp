@@ -226,6 +226,9 @@ int main() {
         std::ofstream stale_refresh(
             case_directory/".airflow_refresh_pending");
         stale_refresh << "stale\n";
+        std::ofstream stale_airflow_state(
+            case_directory/".airflow_convergence_state");
+        stale_airflow_state << "0 0\n";
     }
     std::filesystem::create_directories(case_directory/"0.25");
     std::filesystem::create_directories(case_directory/"processor0");
@@ -316,6 +319,8 @@ int main() {
         case_directory/".initial_airflow_converged"));
     assert(!std::filesystem::exists(
         case_directory/".airflow_refresh_pending"));
+    assert(!std::filesystem::exists(
+        case_directory/".airflow_convergence_state"));
     assert(!std::filesystem::exists(case_directory/"0.25"));
     assert(!std::filesystem::exists(case_directory/"processor0"));
     assert(!std::filesystem::exists(case_directory/"postProcessing"));
@@ -416,6 +421,17 @@ int main() {
            std::string::npos);
     assert(run_parallel.find("internal_fan_names") != std::string::npos);
     assert(run_parallel.find("previous_smoothed_internal_flows") !=
+           std::string::npos);
+    assert(run_parallel.find(".airflow_convergence_state") !=
+           std::string::npos);
+    assert(run_parallel.find(
+        "Restored airflow convergence baseline from t=$state_time") !=
+           std::string::npos);
+    assert(run_parallel.find(
+        "Ignoring incompatible, malformed, or future airflow convergence state") !=
+           std::string::npos);
+    assert(run_parallel.find(
+        "mv -f \"$airflow_state_tmp\" \"$airflow_convergence_state\"") !=
            std::string::npos);
     assert(run_parallel.find("0.5*(a+b)") != std::string::npos);
     assert(run_parallel.find("maxFlowDevice=") != std::string::npos);
