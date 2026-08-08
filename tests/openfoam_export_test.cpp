@@ -248,6 +248,21 @@ int main(int argc, char** argv) {
     assert(rejected_invalid_pressure);
     assert(!std::filesystem::exists(invalid_pressure_case));
 
+    const auto invalid_parallel_case=case_path.parent_path()/
+        "thermal_solver_invalid_parallel_processes";
+    bool rejected_invalid_parallel=false;
+    try {
+        OpenFoamExporter::export_mesh(
+            mesh,
+            {.case_directory=invalid_parallel_case,
+             .overwrite=true,
+             .parallel_processes=1});
+    } catch(const std::invalid_argument&) {
+        rejected_invalid_parallel=true;
+    }
+    assert(rejected_invalid_parallel);
+    assert(!std::filesystem::exists(invalid_parallel_case));
+
     std::cout << case_path.string() << '\n';
     if(!keep_case) std::filesystem::remove_all(case_path);
     std::cout << "openfoam_export_test PASSED\n";

@@ -357,6 +357,11 @@ int main() {
         "before treating results as validated") != std::string::npos);
     const std::string run_serial=
         read_file(case_directory/"run_cht.sh");
+    assert(run_parallel.find(
+        "Process count must be an integer of at least two") !=
+           std::string::npos);
+    assert(run_parallel.find(
+        "awk -v v=\"$requested_end\"") != std::string::npos);
     assert(control.find("endTime         10") != std::string::npos);
     assert(control.find("deltaT          0.01") != std::string::npos);
     assert(control.find("purgeWrite      3") != std::string::npos);

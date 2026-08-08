@@ -119,6 +119,11 @@ fluid and Dell hotspots should not be treated as in-depth values.
     time. It restores them only when the device topology matches exactly and
     the state is not from a future checkpoint; otherwise it conservatively
     reacquires the baseline.
+11. The generated runner accepted one MPI rank even though OpenFOAM aborts
+    when invoked with `-parallel -np 1`, and accepted a zero multirate endpoint
+    that later left reconstruction with no selected time. Export now requires
+    at least two ranks before writing the case, and the runner rejects both
+    fewer than two ranks and nonpositive requested endpoints immediately.
 
 The full C++ and Python added-feature regression suite passed after these
 changes.

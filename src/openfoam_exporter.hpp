@@ -81,6 +81,10 @@ public:
                 "stamp_component_for_openfoam().");
         validate_flow_device_connectivity(mesh,options);
         validate_pimple_correctors(options);
+        if(options.parallel_processes < 2)
+            throw std::invalid_argument(
+                "OpenFoamExporter: parallel_processes must be at least two "
+                "because the generated runner uses OpenFOAM parallel mode.");
 
         const std::filesystem::path poly_mesh =
             options.case_directory / "constant" / "polyMesh";
@@ -134,9 +138,6 @@ public:
         write_region_properties(
             mesh, options.case_directory/"constant"/"regionProperties");
         write_cht_case_files(mesh, options, options.case_directory);
-        if(options.parallel_processes < 1)
-            throw std::invalid_argument(
-                "OpenFoamExporter: parallel_processes must be positive.");
         validate_time_controls(options);
         if(options.use_vent_pressure_loss) {
             for(const auto& patch : mesh.get_openfoam_boundary_patches()) {
@@ -2641,8 +2642,10 @@ private:
                     ? options.end_time : 10.0) << "}\"\n\n"
             "airflow_refresh_interval=\"${4:-"
             << options.airflow_refresh_interval << "}\"\n\n"
-            "if ! [[ \"$processes\" =~ ^[1-9][0-9]*$ ]]; then\n"
-            "    echo \"Process count must be a positive integer.\" >&2\n"
+            "if ! [[ \"$processes\" =~ ^[1-9][0-9]*$ ]] || "
+                "(( processes < 2 )); then\n"
+            "    echo \"Process count must be an integer of at least two "
+                "for OpenFOAM parallel mode.\" >&2\n"
             "    exit 2\n"
             "fi\n"
             "if [[ \"$mode\" != \"run\" && \"$mode\" != \"--warm-start\" "
@@ -2652,8 +2655,10 @@ private:
                 "[airflow-refresh-interval]]\" >&2\n"
             "    exit 2\n"
             "fi\n"
-            "if [[ \"$mode\" != \"run\" ]] && "
-                "! [[ \"$requested_end\" =~ ^[0-9]+([.][0-9]+)?$ ]]; then\n"
+            "if [[ \"$mode\" != \"run\" ]] && { "
+                "! [[ \"$requested_end\" =~ ^[0-9]+([.][0-9]+)?$ ]] || "
+                "! awk -v v=\"$requested_end\" "
+                "'BEGIN { exit !(v>0) }'; }; then\n"
             "    echo \"Requested end time must be a positive number.\" >&2\n"
             "    exit 2\n"
             "fi\n\n"
