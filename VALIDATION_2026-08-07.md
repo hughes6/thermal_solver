@@ -386,3 +386,42 @@ left rack throughput, heat rejection, and recirculation conclusions nearly
 unchanged. The 2,400 s screening refresh interval is therefore retained;
 1,200 s remains appropriate when sub-kelvin component detail during a thermal
 transient matters more than screening runtime.
+
+## Fresh-export cold-start and interrupted-restart validation
+
+Fresh screening and in-depth cases were exported from a newly compiled v2.2
+runner rather than copied from older evidence directories:
+
+- `C:\OpenFOAM\thermal_sim_v2\fresh_screening_current_20260808`
+- `C:\OpenFOAM\thermal_sim_v2\fresh_indepth_current_20260808`
+
+The generated screening runner contains the current 2,400 s / Co=2 / 10 s
+policy, while the in-depth runner contains 1,200 s / Co=1 / 20 s. Both fresh
+meshes completed region preparation and full `checkMesh`. Screening used
+208,772 cells, completed preparation in 1:45, and peaked at 394 MB. In-depth
+used 335,580 cells, completed in 1:37, and peaked at 606 MB. Neither swapped.
+
+The clean screening cold start also showed why its 0.30 s minimum airflow
+observation must not simply be shortened for speed: velocity RMS still changed
+by 12.61% from 0.06 to 0.07 s and 10.61% from 0.07 to 0.08 s. The expensive
+startup is live-flow physics, not the thermal-only tiny-timestep defect.
+
+Two restart defects were found by interrupting that cold start. First, the
+minimum observation start was local to one runner invocation, so restarting
+would repeat already completed live-flow time. The generated runner now stores
+the start in `.initial_airflow_pending`, restores it only when it is numeric,
+not from the future, and still inside the configured warmup window, and removes
+it only after initial airflow is accepted.
+
+Second, an interrupted 0.09 s directory lacked `fluid/phi` and `rho`, but the
+runner previously called it a valid processor partition because only directory
+timestamps were compared. Restart selection now requires all fluid restart
+fields plus every solid-region `T` field on every rank. Numeric processor times
+newer than the newest complete common checkpoint are removed as incomplete.
+
+Runtime validation deliberately retained the incomplete 0.09 s checkpoint.
+The fixed runner removed it from both ranks, fell back to complete 0.08 s,
+passed Courant preflight, and advanced to 0.10 s. A second invocation advanced
+to 0.11 s. Both printed `Resuming initial airflow observation window from
+t=0.05 s`; the marker stayed at 0.05 s and no false convergence marker was
+created. The complete C++ and Python added-feature regression suite passed.

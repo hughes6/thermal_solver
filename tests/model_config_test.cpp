@@ -394,6 +394,18 @@ int main() {
         "Ambiguous duplicate OpenFOAM root times") != std::string::npos);
     assert(run_parallel.find("root_time_dirs") != std::string::npos);
     assert(run_parallel.find("d<=1e-12*s") != std::string::npos);
+    assert(run_parallel.find("processor_time_complete()") !=
+           std::string::npos);
+    assert(run_parallel.find(
+        "for field in T U p p_rgh phi rho k omega nut alphat") !=
+           std::string::npos);
+    assert(run_parallel.find("latest_complete_processor_time()") !=
+           std::string::npos);
+    assert(run_parallel.find("discard_incomplete_processor_tail()") !=
+           std::string::npos);
+    assert(run_parallel.find(
+        "Discarded incomplete processor${rank} checkpoint") !=
+           std::string::npos);
     assert(run_parallel.find("mapped_phi_present=false") !=
            std::string::npos);
     assert(run_parallel.find(
@@ -422,6 +434,17 @@ int main() {
            std::string::npos);
     assert(run_parallel.find("previous_flows=()", adaptive_initial_start) !=
            std::string::npos);
+    assert(run_parallel.find(".initial_airflow_pending") !=
+           std::string::npos);
+    assert(run_parallel.find(
+        "Resuming initial airflow observation window",
+        adaptive_initial_start) != std::string::npos);
+    assert(run_parallel.find(
+        "Discarding incompatible initial-airflow pending state",
+        adaptive_initial_start) != std::string::npos);
+    assert(run_parallel.find(
+        "rm -f \"$initial_pending_marker\"",
+        adaptive_initial_start) != std::string::npos);
     assert(run_parallel.find(
         "initial_limit=$(awk -v start=\"$initial_start\"",
         adaptive_initial_start) != std::string::npos);
