@@ -133,6 +133,12 @@ fluid and Dell hotspots should not be treated as in-depth values.
     treated as earlier than `50400.03`, causing a no-op stage and a second
     airflow evaluation at the same checkpoint. The endpoint decision now uses
     the same scale-aware tolerance as the main multirate loop.
+13. The recirculation tool told users to re-export whenever paired boundary
+    reports were absent. A valid short endpoint can simply precede the
+    function objects' scheduled write. The diagnostic now provides a
+    copyable solver-backed `-postProcess -latestTime` command that loads `T`
+    and `phi`; generic `postProcess` was runtime-proven to abort on the
+    mass-weighted reports because those fields were not loaded.
 
 The full C++ and Python added-feature regression suite passed after these
 changes.
@@ -336,3 +342,16 @@ approximately 200 s Co=2 increment is about 25%; periodic refreshes also run
 far less often than thermal steps. The screening periodic-refresh ceiling is
 therefore reduced from 10 to 2. Initial fan ramp/warmup policy is unchanged,
 and in-depth/validation profiles continue to use Co=1.
+
+Solver-backed endpoint reports were also generated for all four cases and
+processed through the face-resolved recirculation workflow. Every case found
+zero thermal re-ingestion. The KVM opening was bidirectional but its incoming
+air remained exactly at 293.15 K, so the near-zero signed net flow was
+correctly excluded from the misleading mass-weighted-temperature report.
+
+Relative to the strict reference, Co=2 changed KVM inward traffic by -0.421%,
+outward traffic by -0.346%, net sensible heat rejection by +0.00551%, and
+aggregate exhaust temperature by +0.000322 K. Heat rejection was 1539.35 W
+(99.6346% of applied heat) versus 1539.27 W (99.6291%) in the reference.
+This confirms that the selected screening ceiling preserves the engineering
+recirculation and energy-balance conclusions, not only global field norms.

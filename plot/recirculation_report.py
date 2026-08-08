@@ -12,6 +12,22 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from tools.validate_openfoam_case import latest_time, patch_values
 
 
+def solver_postprocess_command(case: Path) -> str:
+    """Return a copyable command that loads T and phi before reporting."""
+    resolved = case.expanduser().resolve()
+    text = resolved.as_posix()
+    if resolved.drive:
+        drive = resolved.drive.rstrip(":").lower()
+        text = f"/mnt/{drive}/{text.split(':', 1)[1].lstrip('/')}"
+        prefix = "wsl "
+    else:
+        prefix = ""
+    return (
+        f"{prefix}openfoam2606 semiFrozenChtMultiRegionFoam -postProcess "
+        f"-case '{text}' -latestTime"
+    )
+
+
 def directional_patch_sample(fluxes, temperatures):
     """Split a patch into face-resolved inflow and outflow traffic."""
     if len(temperatures) == 1:
@@ -196,7 +212,10 @@ def main() -> None:
     if not histories:
         raise SystemExit(
             "No paired *_mass_flow and *_mass_weighted_temperature reports found. "
-            "Re-export and run the case with the current v2.2 exporter."
+            "If this is a short or manually controlled endpoint, generate the "
+            "configured reports with solver-backed post-processing (generic "
+            "postProcess does not load T and phi), then retry:\n  "
+            + solver_postprocess_command(case)
         )
     if args.cp_air <= 0.0:
         raise SystemExit("--cp-air must be positive")

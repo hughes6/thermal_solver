@@ -10,10 +10,17 @@ from plot.recirculation_report import (
     directional_patch_sample,
     exported_heat_watts,
     read_report,
+    solver_postprocess_command,
 )
 
 
 class RecirculationReportTest(unittest.TestCase):
+    def test_solver_postprocess_command_loads_endpoint_fields(self):
+        command = solver_postprocess_command(Path("example_case"))
+        self.assertIn("semiFrozenChtMultiRegionFoam -postProcess", command)
+        self.assertIn("-latestTime", command)
+        self.assertIn("-case '", command)
+
     def test_face_resolved_bidirectional_patch(self):
         sample = directional_patch_sample(
             [-0.3, -0.2, 0.4], [293.0, 295.0, 305.0])
