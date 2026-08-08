@@ -103,6 +103,10 @@ fluid and Dell hotspots should not be treated as in-depth values.
    partially written function-object cycle could therefore mix current fluid
    data with stale component data. Every component maximum and average must
    now match the fluid checkpoint timestamp before convergence is evaluated.
+8. Rolling back to an older solver checkpoint could leave newer abandoned
+   samples under `postProcessing`. The fluid report timestamp must now match
+   the authoritative current processor checkpoint, preventing future data
+   from being reused after a rollback.
 
 The full C++ and Python added-feature regression suite passed after these
 changes.

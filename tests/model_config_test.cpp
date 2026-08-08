@@ -442,6 +442,9 @@ int main() {
     assert(control.find("operation max;") != std::string::npos);
     assert(run_parallel.find("maxInternalCellChange=") != std::string::npos);
     assert(run_parallel.find(
+        "fluid report does not match the current solver checkpoint") !=
+           std::string::npos);
+    assert(run_parallel.find(
         "maximum for component region $region is stale") !=
            std::string::npos);
     assert(run_parallel.find(
