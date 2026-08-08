@@ -183,7 +183,7 @@ int main() {
     assert(screening.mesh.fine_dx > indepth.mesh.fine_dx);
     assert(screening.mesh.coarse_dx == indepth.mesh.coarse_dx);
     assert(screening.mesh.refinement_margin == indepth.mesh.refinement_margin);
-    assert(indepth.openfoam_solver.thermal_only_maximum_time_step == 5.0);
+    assert(indepth.openfoam_solver.thermal_only_maximum_time_step == 10.0);
     assert(indepth.openfoam_solver.minimum_initial_airflow_duration == 0.30);
     assert(
         indepth.openfoam_solver.maximum_device_flow_change_fraction == 0.01);
