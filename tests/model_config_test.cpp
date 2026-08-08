@@ -435,6 +435,9 @@ int main() {
     assert(run_parallel.find(
         "checkpoint remains unvalidated") != std::string::npos);
     assert(run_parallel.find(
+        "pending refresh will resume before the next thermal-only stage") !=
+           std::string::npos);
+    assert(run_parallel.find(
         "airflow_validated=\"$airflow_refresh_validated\"") !=
            std::string::npos);
     assert(control.find("fluid_temperature_internal_maximum") !=

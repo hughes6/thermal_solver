@@ -107,6 +107,11 @@ fluid and Dell hotspots should not be treated as in-depth values.
    samples under `postProcessing`. The fluid report timestamp must now match
    the authoritative current processor checkpoint, preventing future data
    from being reused after a rollback.
+9. An adaptive refresh that reached the requested endpoint without converging
+   removed its pending marker. Extending that case could therefore begin a
+   new frozen thermal interval before repairing the unvalidated airflow.
+   Endpoint exhaustion now retains the marker so the next multirate invocation
+   resumes coupled airflow before any thermal-only advancement.
 
 The full C++ and Python added-feature regression suite passed after these
 changes.
