@@ -145,3 +145,24 @@ The 2x2 run took 315 s versus approximately 332 s for the 3x2 reference, only
 about a 5% reduction. That saving does not justify the large local velocity
 and temperature deviations. The in-depth profile therefore retains three
 outer correctors and two pressure correctors.
+
+## Coupled-refresh Courant sensitivity
+
+An isolated three-outer/two-pressure case was restarted from 50,400.02 s and
+advanced to 50,400.03 s with the coupled-refresh Courant ceiling increased
+from 1.0 to 1.25. This preserved the validated corrector structure and changed
+only the adaptive live-flow timestep limit.
+
+| Metric | Co 1.25 minus Co 1 result |
+|---|---:|
+| Temperature RMS difference | 0.00204 K |
+| Temperature maximum absolute difference | 0.25269 K |
+| Velocity RMS difference | 0.00694 m/s (0.3664%) |
+| Velocity maximum absolute difference | 0.58539 m/s |
+| Pressure RMS difference | 0.79507 Pa |
+| Pressure maximum absolute difference | 18.2422 Pa |
+
+The measured solver clock time was approximately 263 s for both ceilings on
+this workstation, so the modestly larger timestep produced no repeatable
+runtime benefit while increasing local field differences. The in-depth
+profile retains `airflow_refresh_maximum_courant_number = 1.0`.
