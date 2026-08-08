@@ -356,12 +356,23 @@ exhaust, where streamwise velocity reversed between the two integrations; the
 largest local temperature difference was `6.504 K`.
 
 The validation and in-depth profiles now retain `maxCo = 1` during multirate
-airflow refreshes instead of silently overriding their normal validation limit
-with `maxCo = 10`. Screening retains its faster `maxCo = 10` refresh ceiling
-and 1 ms hard step cap for ballpark heat allocation, fan-curve, vent, and
-layout work. On this case the validation-quality interval cost 1.94-2.12 times
-the screening wall time. Screening fields must not be treated as final local
-recirculation predictions when this fidelity difference matters.
+airflow refreshes instead of silently overriding their normal validation
+limit. The initial screening study retained a faster `maxCo = 10` refresh
+ceiling and 1 ms hard step cap for ballpark heat allocation, fan-curve, vent,
+and layout work. On this case the validation-quality interval cost 1.94-2.12
+times the screening wall time. Screening fields must not be treated as final
+local recirculation predictions when this fidelity difference matters.
+
+A later matched study on the current 208,772-cell connected-component mesh
+found that the nominal screening ceilings of 10 and 5 reached actual maxima
+of 4.82 and 2.41. Against an actual-Co=0.48 reference, their velocity RMS
+errors were 4.08% and 3.10%. A ceiling of 2 reached actual Co=0.96 and reduced
+velocity RMS error to 1.50%, pressure RMS error to 0.00052%, and temperature
+RMS error to 0.00510%. Its 236 s solver time lay between 50 s at Co=10 and
+424 s for the conservative reference. Because a refresh is only part of a
+2,400 s screening interval, the approximately 200 s end-to-end increment is
+about 25% of the representative workflow rather than a 4.8x total penalty.
+The screening profile therefore now uses `maxCo = 2` for periodic refreshes.
 
 `tools/openfoam_cross_case_comparison.py` performs the reconstructed-root
 comparison, rejects cell-order/geometry mismatches, and reports the owning

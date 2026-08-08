@@ -14,10 +14,10 @@ class OpenFoamProfilePolicyTest(unittest.TestCase):
     def profile(self, name):
         return self.config(name)["openfoam_solver"]
 
-    def test_screening_keeps_fast_refresh_limit(self):
+    def test_screening_uses_validated_balanced_refresh_limit(self):
         profile = self.profile("screening_foam_cfg.toml")
         self.assertEqual(profile["parallel_processes"], 2)
-        self.assertEqual(profile["airflow_refresh_maximum_courant_number"], 10.0)
+        self.assertEqual(profile["airflow_refresh_maximum_courant_number"], 2.0)
         self.assertEqual(profile["airflow_maximum_time_step"], 0.001)
         self.assertEqual(profile["pimple_outer_correctors"], 3)
         self.assertEqual(profile["pimple_pressure_correctors"], 2)

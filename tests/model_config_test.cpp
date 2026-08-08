@@ -166,6 +166,9 @@ int main() {
     assert(screening.openfoam_solver.airflow_refresh_duration == 0.02);
     assert(screening.openfoam_solver.airflow_maximum_time_step == 0.001);
     assert(
+        screening.openfoam_solver.airflow_refresh_maximum_courant_number ==
+        2.0);
+    assert(
         screening.openfoam_solver.maximum_device_flow_change_fraction == 0.01);
     assert(
         screening.openfoam_solver.minimum_tracked_boundary_flow_fraction ==

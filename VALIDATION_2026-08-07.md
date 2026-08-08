@@ -7,6 +7,7 @@
 - In-depth dt=20 study: `C:\OpenFOAM\thermal_sim_v2\profile_indepth_dt20_20260808\model_generic_components`
 - Matched-policy 20 mm mesh: `C:\OpenFOAM\thermal_sim_v2\profile_mesh20_matched_20260808\mesh20_matched_model`
 - Matched-policy 12.5 mm mesh: `C:\OpenFOAM\thermal_sim_v2\profile_mesh125_matched_20260808\mesh125_matched_model`
+- Screening Courant cases: `C:\OpenFOAM\thermal_sim_v2\screening_co_sensitivity_co{10,5,2,1}_20260808`
 
 The cases have separate directories. No prior result directory was reused or
 overwritten. The screening mesh has 208,772 total cells and the in-depth mesh
@@ -312,3 +313,26 @@ cell containing each target cell centre. An identity test proves that the
 method returns zero error for an unchanged mesh; an earlier point-data
 interpolation approach was rejected because it produced artificial error even
 for identical fields.
+
+## Current-screening Courant compromise
+
+Four byte-identical two-rank cases restarted from the connected-component
+20 mm mesh at 28,800.02 s and advanced exactly 0.01 s with only the fixed
+coupled timestep changed. Every endpoint was reconstructed and compared with
+the conservative 0.0001 s reference.
+
+| Configured ceiling | Fixed step | Actual max(Co) | Solver time | U RMS vs reference | T RMS vs reference | p RMS vs reference |
+|---:|---:|---:|---:|---:|---:|---:|
+| 10 | 0.0010 s | 4.820 | 49.7 s | 4.076% | 0.01103% | 0.001491% |
+| 5 | 0.0005 s | 2.406 | 83.9 s | 3.102% | 0.00876% | 0.001079% |
+| 2 | 0.0002 s | 0.959 | 236.4 s | 1.496% | 0.00510% | 0.000520% |
+| 1 reference | 0.0001 s | 0.479 | 423.6 s | - | - | - |
+
+Co=5 bought only a modest field improvement. Co=2 reduced velocity RMS error
+by 63.3% relative to Co=10 and reduced the worst local velocity difference
+from 6.49 to 2.41 m/s. Reconstructing the sample adds similar fixed overhead
+to every row. Relative to the representative 794 s screening interval, the
+approximately 200 s Co=2 increment is about 25%; periodic refreshes also run
+far less often than thermal steps. The screening periodic-refresh ceiling is
+therefore reduced from 10 to 2. Initial fan ramp/warmup policy is unchanged,
+and in-depth/validation profiles continue to use Co=1.
