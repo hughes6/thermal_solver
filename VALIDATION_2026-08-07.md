@@ -667,3 +667,29 @@ are not sufficient for mesh or recirculation validation after mapping. The
 17.5 mm candidate is rejected as a default, and future mapped-field validation
 must include a minimum physical live-flow horizon tied to air-exchange time or
 an explicit same-mesh U-field convergence check.
+
+### Air-exchange-aware initial-flow acceptance
+
+The generated controller now implements the physical-horizon requirement with
+`minimum_initial_air_exchange_fraction`. After mass balance, directions, and
+tracked device-flow changes pass, initial airflow remains live until elapsed
+post-ramp time also reaches:
+
+```text
+measured air-exchange time * minimum_initial_air_exchange_fraction
+```
+
+The default, screening, validation, and in-depth profiles set the fraction to
+1.0. Their existing 0.30 s fixed minimum remains a lower bound, while the
+existing 5 s `airflow_warmup_time` remains the safety limit. A weakly
+ventilated model whose required exchange horizon exceeds that limit now fails
+explicitly instead of being certified prematurely; the user must increase the
+safety limit. A truly sealed model uses the existing undefined-exchange
+sentinel and bypasses only this new horizon, retaining its other checks.
+
+Replaying the preserved 17.5 mm evidence gives a 4.2958 s required horizon.
+Both the old 0.30 s acceptance and the extended 1.49 s live-flow state are
+therefore rejected, consistent with the measured 35.7% same-mesh U RMS change
+between 0.96 and 1.59 s. The generated nonzero and sealed-sentinel branches are
+covered by the exporter regression test, and the complete C++ and Python suite
+passes.

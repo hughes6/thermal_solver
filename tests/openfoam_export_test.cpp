@@ -152,6 +152,7 @@ int main(int argc, char** argv) {
          .pimple_outer_correctors=3,
          .pimple_pressure_correctors=2,
          .use_multirate_thermal=true,
+         .minimum_initial_air_exchange_fraction=1.0,
          .airflow_refresh_duration=0.1,
          .stop_when_thermally_converged=true});
 
@@ -271,6 +272,14 @@ int main(int argc, char** argv) {
             "Detected mapped nonuniform velocity fields; retaining full heat sources and skipping the cold fan ramp.") !=
                std::string::npos);
         assert(text.str().find("mapped_state_marker=") !=
+               std::string::npos);
+        assert(text.str().find(
+            "spatial settling requires $exchange_horizon s") !=
+               std::string::npos);
+        assert(text.str().find(
+            "-v fraction=\"1\"") != std::string::npos);
+        assert(text.str().find(
+            "exchange<1e29?exchange*fraction:0") !=
                std::string::npos);
         assert(text.str().find(
             "Refreshing airflow at terminal thermal checkpoint") !=

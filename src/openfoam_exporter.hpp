@@ -46,6 +46,7 @@ struct OpenFoamExportOptions {
     int fan_startup_ramp_steps = 5;
     double initial_airflow_check_interval = 0.01;
     double minimum_initial_airflow_duration = 0.02;
+    double minimum_initial_air_exchange_fraction = 0.0;
     double airflow_maximum_time_step = 0.001;
     // Retain these names until the TOML schema is finalized. They control the
     // thermal-only stage, not OpenFOAM's native frozenFlow implementation.
@@ -1236,6 +1237,11 @@ private:
             validate_positive_finite(
                 options.minimum_initial_airflow_duration,
                 "minimum_initial_airflow_duration");
+            if(!std::isfinite(options.minimum_initial_air_exchange_fraction) ||
+               options.minimum_initial_air_exchange_fraction < 0.0)
+                throw std::invalid_argument(
+                    "OpenFoamExporter: minimum_initial_air_exchange_fraction "
+                    "must be finite and nonnegative.");
             validate_positive_finite(
                 options.airflow_maximum_time_step,
                 "airflow_maximum_time_step");
@@ -3209,6 +3215,7 @@ private:
                 "            echo \"Ignoring incompatible, malformed, or future airflow convergence state.\"\n"
                 "        fi\n"
                 "    fi\n"
+                "    latest_air_exchange_time=\"\"\n"
                 "    airflow_metrics_converged()\n"
                 "    {\n"
                 "        local report name value rule expected net=0 "
@@ -3322,6 +3329,7 @@ private:
                 << mesh.get_env().get_rho()
                 << "\" -v s=\"$sum_abs\" 'BEGIN { one_way=0.5*s; "
                     "print (one_way>1e-12?volume*rho/one_way:1e30) }')\n"
+                "        latest_air_exchange_time=\"$air_exchange_time\"\n"
                 "        for rule in \"${fan_direction_rules[@]}\"; do\n"
                 "            name=\"${rule%%:*}\"\n"
                 "            expected=\"${rule##*:}\"\n"
@@ -3908,7 +3916,7 @@ private:
                     "    {\n"
                     "        local initial_start=\"$current\" "
                         "initial_elapsed=0 initial_target initial_limit "
-                        "pending_initial_start\n"
+                        "pending_initial_start exchange_horizon\n"
                     "        if [[ -s \"$initial_pending_marker\" ]]; then\n"
                     "            pending_initial_start=$(awk 'NF { print $1; exit }' "
                         "\"$initial_pending_marker\")\n"
@@ -3958,6 +3966,13 @@ private:
                     << options.minimum_initial_airflow_duration
                     << "\" 'BEGIN { exit !(a>=b) }'; then\n"
                     "                if airflow_metrics_converged; then\n"
+                    "                    exchange_horizon=$(awk -v exchange=\"$latest_air_exchange_time\" -v fraction=\""
+                    << options.minimum_initial_air_exchange_fraction
+                    << "\" 'BEGIN { print (exchange<1e29?exchange*fraction:0) }')\n"
+                    "                    if ! awk -v elapsed=\"$initial_elapsed\" -v required=\"$exchange_horizon\" 'BEGIN { exit !(elapsed>=required) }'; then\n"
+                    "                        echo \"Initial airflow device flows pass, but spatial settling requires $exchange_horizon s ($initial_elapsed s completed; air-exchange time $latest_air_exchange_time s).\"\n"
+                    "                        continue\n"
+                    "                    fi\n"
                     "                    echo \"Initial airflow converged "
                         "after $initial_elapsed s beyond the fan ramp; "
                         "switching to thermal-only mode.\"\n"
