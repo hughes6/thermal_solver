@@ -3950,7 +3950,8 @@ private:
                         "'BEGIN { limit=start+maximum; print (limit<end?limit:end) }')\n"
                     "        while awk -v a=\"$current\" "
                         "-v b=\"$initial_limit\" "
-                        "'BEGIN { exit !(a<b) }'; do\n"
+                        "'BEGIN { s=(b<0?-b:b); if(s<1)s=1; "
+                        "tol=1e-9*s; exit !(a<b-tol) }'; do\n"
                     "            initial_target=$(awk -v a=\"$current\" -v d=\""
                     << options.initial_airflow_check_interval
                     << "\" -v limit=\"$initial_limit\" "

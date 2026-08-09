@@ -282,6 +282,9 @@ int main(int argc, char** argv) {
             "exchange<1e29?exchange*fraction:0") !=
                std::string::npos);
         assert(text.str().find(
+            "tol=1e-9*s; exit !(a<b-tol) }'; do") !=
+               std::string::npos);
+        assert(text.str().find(
             "Refreshing airflow at terminal thermal checkpoint") !=
                std::string::npos);
     }
