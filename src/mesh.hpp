@@ -570,9 +570,9 @@ public:
         }
 
         for(const InternalRegion& region : component.get_regions()) {
-            if(region.get_region_type() != RegionType::HeatSource &&
-               !(region.get_region_type() == RegionType::Air &&
-                 std::abs(region.get_watts()) > 1e-12))
+            if((region.get_region_type() != RegionType::HeatSource &&
+                region.get_region_type() != RegionType::Air) ||
+               std::abs(region.get_watts()) <= 1e-12)
                 continue;
             const int source_id =
                 static_cast<int>(openfoam_heat_source_regions.size());

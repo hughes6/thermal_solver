@@ -545,3 +545,55 @@ added-feature suite passed. This capability enables the next controlled rack
 comparison: measured `mass flow * cp * (exhaust - intake)` can be applied to
 the internal air tunnel without interpreting an uncalibrated compact block
 maximum as an equipment temperature.
+
+### Controlled solid-versus-air heat-placement study (2026-08-08)
+
+The same in-depth 335,580-cell rack was rerun with all geometry, solid
+properties, vents, fan curves, and the 1545 W total load held fixed. Strict
+TOML comparisons confirmed that only source placement changed: the 150, 950,
+425, and 20 W loads moved from the four equivalent solid blocks into their
+resolved interior-air tunnels. SHA-256 comparisons confirmed identical
+`points`, `faces`, `owner`, `neighbour`, and `boundary` files for all five
+solver regions. The accepted 10.11 s airflow state was therefore reusable.
+
+The fluid source zones contained 8418, 12004, 8464, and 9512 cells. OpenFOAM
+selected every source with the exact absolute load. The first 1200 s airflow
+refresh converged after 0.03 s, matching the solid-source baseline; the 2400 s
+refresh converged after one 0.01 s window. The run reached 3600 s in 54:50.
+
+| Metric at 3600 s | Solid k=10 | Solid k=100 | Air-side |
+|---|---:|---:|---:|
+| Worst cell change (K/300 s) | 10.70 | 10.19 | 0.410 |
+| Worst component-mean change (K/300 s) | 2.65 | 2.60 | 0.398 |
+| Heat rejection fraction | 89.40% | 89.57% | 97.28% |
+| Net sensible rejection | 1381 W | 1384 W | 1503 W |
+| Fluid maximum | 71.2 C | 70.0 C | 47.7 C |
+| Largest component maximum | 243 C | 236 C | 42.6 C |
+
+The air-side case was continued with live airflow refreshes every 3600 s.
+The 7200 and 10800 s refreshes each converged in one 0.01 s window. At
+10000 s the case rejected 99.15% of its heat but was just outside the strict
+thermal limits. By 14400 s it satisfied them over both relevant intervals:
+
+| Interval | Worst cell (K/300 s) | Worst component mean (K/300 s) |
+|---|---:|---:|
+| 7200 to 14400 s | 0.08195 | 0.04731 |
+| 10800 to 14400 s | 0.05399 | 0.02839 |
+
+Final rack intake/exhaust were 0.291207/0.290822 kg/s (0.132% imbalance),
+mass-weighted exhaust temperature was 298.396 K, net sensible rejection was
+1533.36 W (99.25%), and the main-intake thermal re-ingestion index was zero.
+The air-side representation therefore converged by 14400 s and does not need
+a 100000 s continuation for this validation target. It is appropriate for
+rack airflow, intake/exhaust temperature, and heat-rejection predictions; its
+solid temperatures remain chassis thermal responses, not electronics limits.
+
+This runtime also exposed two export/controller cleanup issues. Zero-watt
+solid regions were incorrectly emitted as active zero-valued OpenFOAM sources;
+they are now omitted from source masks, zones, and `fvOptions` while remaining
+as geometry. Also, convergence checks at arbitrary end times could see the
+last 60 s function-object sample instead of the exact solver checkpoint. The
+generated controller now invokes the multi-region solver's non-advancing
+`-postProcess -latestTime` mode only when a report is missing or stale. A
+runtime replay at 10000 s produced exact fluid and all-solid reports without
+advancing time; focused exporter tests cover both fixes.

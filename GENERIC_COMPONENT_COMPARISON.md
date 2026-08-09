@@ -695,3 +695,31 @@ Do not assign the same power to both an air region and a solid block. The
 air-side option intentionally predicts rack intake/exhaust behavior without
 claiming chip, heat-sink, or chassis surface temperatures. Keep a calibrated
 solid/resistance model when those temperatures are validation targets.
+
+#### Validated air-side rack variant
+
+`library/models/model_generic_airside.toml` is the controlled in-depth model.
+It references the `_airside.toml` Eaton, Dell, Trenton, and passive KVM
+templates. Their geometry and airflow definitions are identical to the
+solid-source templates, and each template conserves the original watts while
+setting its equivalent block to zero watts.
+
+The characterizer supports this explicitly:
+
+```powershell
+python tools/generic_server_characterizer.py `
+  --name "Measured server" --rack-units 1 --depth-mm 700 `
+  --mass-flow-kg-s 0.05 --intake-temp 293.15 --exhaust-temp 303.15 `
+  --heat-placement air --output measured_server_airside.toml
+```
+
+The in-depth rack converged by 14400 s with 1533.36 W of 1545 W rejected,
+0.132% intake/exhaust mass imbalance, zero main-intake thermal re-ingestion,
+and strict temperature changes below 0.10 K/300 s for every tracked maximum
+and below 0.05 K/300 s for every component mean. Live airflow checks at 7200
+and 10800 s each passed in one 0.01 s window. For this semi-steady rack,
+3600 s airflow refreshes were accurate and much cheaper than 1200 s refreshes.
+
+Use the air-side variant when measured mass flow and intake/exhaust
+temperatures are the calibration evidence. Use a solid/resistance model only
+when calibrated component surface or hotspot temperatures are required.

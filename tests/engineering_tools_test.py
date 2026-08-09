@@ -105,6 +105,23 @@ class EngineeringToolsTest(unittest.TestCase):
         self.assertEqual(fan["size"]["width"], air["size"]["width"])
         self.assertEqual(fan["size"]["height"], air["size"]["height"])
 
+    def test_generic_component_heat_placement_is_conservative(self) -> None:
+        for placement in ("solid", "air"):
+            document = tomllib.loads(component_toml(
+                "Test server", 1, 482.0, 700.0, 500.0, 0.05,
+                "test_curve", placement))
+            regions = {region["name"]: region for region in document["internal_regions"]}
+            air_watts = regions["Interior air"].get("watts", 0.0)
+            solid_watts = regions["Equivalent heat block"].get("watts", 0.0)
+            self.assertAlmostEqual(air_watts + solid_watts, 500.0)
+            self.assertEqual(air_watts, 500.0 if placement == "air" else 0.0)
+            self.assertEqual(solid_watts, 500.0 if placement == "solid" else 0.0)
+
+    def test_generic_component_rejects_unknown_heat_placement(self) -> None:
+        with self.assertRaisesRegex(ValueError, "heat_placement"):
+            component_toml("Test", 1, 482.0, 700.0, 10.0, 0.01,
+                           "curve", "surface")
+
     def test_kvm_component_has_no_forced_or_rear_exhaust(self) -> None:
         root = Path(__file__).resolve().parents[1]
         for filename in (

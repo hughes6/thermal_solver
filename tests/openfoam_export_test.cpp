@@ -86,6 +86,10 @@ int main(int argc, char** argv) {
         "heated internal air",{0.1,0.1,0.1},{0.0,0.0,0.0});
     heated_air.set_watts(5.0);
     air_heater.add_region(heated_air);
+    InternalRegion zero_watt_block(
+        "zero watt geometry",{0.1,0.1,0.1},{0.1,0.0,0.0},
+        800.0,1200.0,10.0,0.0);
+    air_heater.add_region(zero_watt_block);
     air_heater.order_internal_regions();
     mesh.stamp_component_for_openfoam(air_heater);
 
@@ -106,6 +110,10 @@ int main(int argc, char** argv) {
     assert(mesh.get_openfoam_heat_source_regions()[1].watts==7.0);
     assert(mesh.get_openfoam_heat_source_regions()[2].watts==5.0);
     assert(mesh.get_openfoam_heat_source_regions()[2].fluid);
+    // A zero-watt solid remains stamped geometry, but must not create a
+    // misleading active OpenFOAM source, mask, set, or fvOptions entry.
+    for(const auto& source : mesh.get_openfoam_heat_source_regions())
+        assert(source.name!="zero watt geometry");
     assert(mesh.get_openfoam_cell_metadata()[mesh.idx(3,0,0)]
                .heat_source_id==2);
     assert(!mesh.get_cells()[mesh.idx(3,0,0)].is_solid());
@@ -142,7 +150,10 @@ int main(int argc, char** argv) {
          .turbulence_length_scale=0.01,
          .turbulent_prandtl_number=0.85,
          .pimple_outer_correctors=3,
-         .pimple_pressure_correctors=2});
+         .pimple_pressure_correctors=2,
+         .use_multirate_thermal=true,
+         .airflow_refresh_duration=0.1,
+         .stop_when_thermally_converged=true});
 
     for(const char* file :
         {"points","faces","owner","neighbour","boundary","cellZones"})
@@ -187,6 +198,14 @@ int main(int argc, char** argv) {
         case_path/"prepare_regions.sh"));
     assert(std::filesystem::is_regular_file(case_path/"run_cht.sh"));
     assert(std::filesystem::is_regular_file(case_path/"run_parallel.sh"));
+    {
+        std::ifstream stream(case_path/"run_parallel.sh");
+        std::ostringstream text;
+        text << stream.rdbuf();
+        assert(text.str().find(
+            "semiFrozenChtMultiRegionFoam -case \"$case_dir\" -parallel "
+            "-postProcess -latestTime") != std::string::npos);
+    }
     assert(std::filesystem::is_regular_file(
         case_path/"system"/"decomposeParDict"));
     assert(std::filesystem::is_regular_file(
