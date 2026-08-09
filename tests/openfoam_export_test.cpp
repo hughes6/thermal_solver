@@ -290,7 +290,24 @@ int main(int argc, char** argv) {
         assert(text.str().find(
             "Refreshing airflow at terminal thermal checkpoint") !=
                std::string::npos);
+        assert(text.str().find(
+            "Spatial velocity change: rmsDelta=") !=
+               std::string::npos);
+        assert(text.str().find(
+            "velocityRelativeRms=${latest_velocity_relative_rms:-unavailable}") !=
+               std::string::npos);
+        assert(text.str().find(
+            "-dict system/spatialConvergenceDict") !=
+               std::string::npos);
+        assert(text.str().find(
+            "for field in UPrevious velocityDelta velocityDeltaSquared velocitySquared") !=
+               std::string::npos);
+        assert(text.str().find(
+            "-v v=\"$latest_velocity_relative_rms\" -v limit=\"0.01\"") !=
+               std::string::npos);
     }
+    assert(std::filesystem::is_regular_file(
+        case_path/"system"/"spatialConvergenceDict"));
     assert(std::filesystem::is_regular_file(
         case_path/"system"/"fluid"/"fvSolution"));
     {

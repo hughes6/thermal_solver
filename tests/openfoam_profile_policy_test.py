@@ -34,6 +34,19 @@ class OpenFoamProfilePolicyTest(unittest.TestCase):
                 )
                 self.assertEqual(profile["maximum_courant_number"], 1.0)
 
+    def test_all_profiles_require_spatial_velocity_convergence(self):
+        for name in (
+            "default_foam_cfg.toml",
+            "screening_foam_cfg.toml",
+            "validation_foam_cfg.toml",
+            "indepth_foam_cfg.toml",
+        ):
+            with self.subTest(name=name):
+                self.assertEqual(
+                    self.profile(name)["maximum_velocity_rms_change_fraction"],
+                    0.01,
+                )
+
     def test_indepth_uses_validated_workstation_correctors(self):
         config = self.config("indepth_foam_cfg.toml")
         profile = config["openfoam_solver"]

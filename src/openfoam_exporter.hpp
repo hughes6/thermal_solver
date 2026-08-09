@@ -60,6 +60,7 @@ struct OpenFoamExportOptions {
     double maximum_airflow_refresh_duration = 0.2;
     double maximum_mass_imbalance_fraction = 0.01;
     double maximum_device_flow_change_fraction = 0.02;
+    double maximum_velocity_rms_change_fraction = 0.01;
     double minimum_tracked_boundary_flow_fraction = 1e-4;
     bool stop_when_thermally_converged = false;
     double minimum_thermal_convergence_time = 3600.0;
@@ -196,6 +197,8 @@ public:
         write_control_dict(
             mesh, options,
             options.case_directory / "system" / "controlDict");
+        write_spatial_convergence_dict(
+            options.case_directory / "system" / "spatialConvergenceDict");
         write_decompose_par_dict(
             mesh, options.parallel_processes,
             options.case_directory / "system" / "decomposeParDict");
@@ -1297,6 +1300,9 @@ private:
                 options.maximum_device_flow_change_fraction,
                 "maximum_device_flow_change_fraction");
             validate_positive_finite(
+                options.maximum_velocity_rms_change_fraction,
+                "maximum_velocity_rms_change_fraction");
+            validate_positive_finite(
                 options.minimum_tracked_boundary_flow_fraction,
                 "minimum_tracked_boundary_flow_fraction");
             if(options.minimum_tracked_boundary_flow_fraction >= 1.0)
@@ -1529,6 +1535,60 @@ private:
                 "    }\n";
         }
         output << "}\n";
+    }
+
+    static void write_spatial_convergence_dict(
+        const std::filesystem::path& path) {
+        std::ofstream output(path);
+        require_stream(output,path);
+        write_header(output,"dictionary","spatialConvergenceDict","system");
+        output << R"(
+functions
+{
+    readVelocityFields
+    {
+        type        readFields;
+        libs        (fieldFunctionObjects);
+        region      fluid;
+        fields      (U UPrevious);
+    }
+    velocityDelta
+    {
+        type        subtract;
+        libs        (fieldFunctionObjects);
+        region      fluid;
+        fields      (U UPrevious);
+        result      velocityDelta;
+    }
+    velocityDeltaSquared
+    {
+        type        magSqr;
+        libs        (fieldFunctionObjects);
+        region      fluid;
+        field       velocityDelta;
+        result      velocityDeltaSquared;
+    }
+    velocitySquared
+    {
+        type        magSqr;
+        libs        (fieldFunctionObjects);
+        region      fluid;
+        field       U;
+        result      velocitySquared;
+    }
+    velocityRmsValues
+    {
+        type            volFieldValue;
+        libs            (fieldFunctionObjects);
+        region          fluid;
+        regionType      all;
+        operation       volAverage;
+        postOperation   sqrt;
+        writeFields     false;
+        fields          (velocityDeltaSquared velocitySquared);
+    }
+}
+)";
     }
 
     static void write_decompose_par_dict(
@@ -3216,6 +3276,7 @@ private:
                 "        fi\n"
                 "    fi\n"
                 "    latest_air_exchange_time=\"\"\n"
+                "    latest_velocity_relative_rms=\"\"\n"
                 "    airflow_metrics_converged()\n"
                 "    {\n"
                 "        local report name value rule expected net=0 "
@@ -3364,11 +3425,16 @@ private:
                 "        if ! awk -v v=\"$maximum_change\" -v limit=\""
                 << options.maximum_device_flow_change_fraction
                 << "\" 'BEGIN { exit !(v<=limit) }'; then stable=0; fi\n"
+                "        if [[ -z \"$latest_velocity_relative_rms\" ]] || "
+                    "! awk -v v=\"$latest_velocity_relative_rms\" -v limit=\""
+                << options.maximum_velocity_rms_change_fraction
+                << "\" 'BEGIN { exit !(v<=limit) }'; then stable=0; fi\n"
                 "        echo \"Airflow refresh metrics: imbalance=$imbalance, "
                     "maxFlowChange=$maximum_change, maxFlowDevice="
                     "$maximum_change_name, boundaryFlowFloor="
                     "$boundary_flow_floor, directionsOK="
-                    "$directions_ok, estimatedAirExchangeTime="
+                    "$directions_ok, velocityRelativeRms="
+                    "${latest_velocity_relative_rms:-unavailable}, estimatedAirExchangeTime="
                     "$air_exchange_time s\"\n"
                 "        [[ \"$stable\" == 1 && \"$directions_ok\" == 1 ]]\n"
                 "    }\n";
@@ -3604,7 +3670,8 @@ private:
                     "stage_write_control stage_write_interval field "
                     "source_field target_field courant_output observed_co "
                     "courant_safe_dt airflow_hard_cap postflight_output "
-                    "postflight_co\n"
+                    "postflight_co spatial_output spatial_status velocity_rms_delta "
+                    "velocity_rms_reference\n"
                 "        interval=$(awk -v end=\"$target\" -v start=\"$current\" "
                     "'BEGIN { printf \"%.17g\", end-start }')\n"
                 "        if awk -v d=\"$interval\" -v target=\"$target\" "
@@ -3831,6 +3898,49 @@ private:
                 "            echo \"Solver stage failed to reach target time: "
                     "target=$target actual=$actual_time.\" >&2\n"
                 "            return 5\n"
+                "        fi\n"
+                "        if [[ \"$thermal_only\" == \"false\" && "
+                    "-n \"$saved_time\" && \"$saved_time\" != \"$actual_time\" ]]; then\n"
+                "            for ((rank=0; rank<processes; ++rank)); do\n"
+                "                source_field=\"$case_dir/processor${rank}/"
+                    "${saved_time}/fluid/U\"\n"
+                "                target_field=\"$case_dir/processor${rank}/"
+                    "${actual_time}/fluid/UPrevious\"\n"
+                "                if [[ ! -f \"$source_field\" ]]; then\n"
+                "                    echo \"Previous velocity field is missing: $source_field\" >&2\n"
+                "                    return 8\n"
+                "                fi\n"
+                "                cp -p \"$source_field\" \"$target_field\"\n"
+                "                \"$foam_launcher\" foamDictionary -precision 17 "
+                    "\"$target_field\" -entry FoamFile/object -set UPrevious >/dev/null 2>&1\n"
+                "            done\n"
+                "            spatial_status=0\n"
+                "            if ! spatial_output=$(\"$foam_launcher\" mpirun -np \"$processes\" "
+                    "semiFrozenChtMultiRegionFoam -case \"$case_dir\" -parallel "
+                    "-postProcess -latestTime -dict system/spatialConvergenceDict 2>&1); then\n"
+                "                spatial_status=1\n"
+                "            fi\n"
+                "            velocity_rms_delta=$(printf '%s\\n' \"$spatial_output\" | "
+                    "awk '/velocityDeltaSquared =/{value=$NF} END{print value}')\n"
+                "            velocity_rms_reference=$(printf '%s\\n' \"$spatial_output\" | "
+                    "awk '/velocitySquared =/{value=$NF} END{print value}')\n"
+                "            for ((rank=0; rank<processes; ++rank)); do\n"
+                "                for field in UPrevious velocityDelta velocityDeltaSquared velocitySquared; do\n"
+                "                    rm -f -- \"$case_dir/processor${rank}/${actual_time}/fluid/${field}\"\n"
+                "                done\n"
+                "            done\n"
+                "            if [[ \"$spatial_status\" != 0 || -z \"$velocity_rms_delta\" || "
+                    "-z \"$velocity_rms_reference\" ]]; then\n"
+                "                printf '%s\\n' \"$spatial_output\" >&2\n"
+                "                echo \"Spatial velocity convergence calculation failed at t=$actual_time.\" >&2\n"
+                "                return 8\n"
+                "            fi\n"
+                "            latest_velocity_relative_rms=$(awk -v delta=\"$velocity_rms_delta\" "
+                    "-v reference=\"$velocity_rms_reference\" 'BEGIN { "
+                    "print (reference>1e-12?delta/reference:(delta<=1e-12?0:1e30)) }')\n"
+                "            echo \"Spatial velocity change: rmsDelta=$velocity_rms_delta m/s, "
+                    "rmsVelocity=$velocity_rms_reference m/s, "
+                    "relativeRms=$latest_velocity_relative_rms\"\n"
                 "        fi\n"
                 "        if [[ \"$thermal_only\" == \"true\" && "
                     "-n \"$saved_time\" && \"$saved_time\" != \"$actual_time\" ]]; then\n"

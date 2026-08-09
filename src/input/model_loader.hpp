@@ -1030,6 +1030,9 @@ struct ModelLoader {
                 cfg.maximum_device_flow_change_fraction=
                     value("maximum_device_flow_change_fraction")
                         .value<double>().value_or(0.02);
+                cfg.maximum_velocity_rms_change_fraction=
+                    value("maximum_velocity_rms_change_fraction")
+                        .value<double>().value_or(0.01);
                 cfg.minimum_tracked_boundary_flow_fraction=
                     value("minimum_tracked_boundary_flow_fraction")
                         .value<double>().value_or(1e-4);
@@ -1567,6 +1570,8 @@ struct ModelLoader {
                     cfg.maximum_mass_imbalance_fraction,
                 .maximum_device_flow_change_fraction=
                     cfg.maximum_device_flow_change_fraction,
+                .maximum_velocity_rms_change_fraction=
+                    cfg.maximum_velocity_rms_change_fraction,
                 .minimum_tracked_boundary_flow_fraction=
                     cfg.minimum_tracked_boundary_flow_fraction,
                 .stop_when_thermally_converged=

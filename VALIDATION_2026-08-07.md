@@ -693,3 +693,45 @@ therefore rejected, consistent with the measured 35.7% same-mesh U RMS change
 between 0.96 and 1.59 s. The generated nonzero and sealed-sentinel branches are
 covered by the exporter regression test, and the complete C++ and Python suite
 passes.
+
+### Native spatial-velocity acceptance gate
+
+A subsequent same-checkpoint screening benchmark showed why the physical
+horizon is necessary but not sufficient on its own. The original 0.01 s live
+windows reported approximately 0.1% tracked-flow change while consecutive
+decomposed fields still changed by 1.65% RMS in velocity. Over two windows the
+velocity difference grew to 3.12% RMS, so this was spatial evolution rather
+than harmless cancellation. Two internal `fanMomentumSource` operating-point
+reports also showed a stage-end two-cycle that the previous two-sample flow
+average could hide.
+
+The generated runner now calculates a native, volume-weighted velocity-field
+metric after every live-flow stage:
+
+```text
+sqrt(volAverage(|U - U_previous|^2)) / sqrt(volAverage(|U|^2))
+```
+
+It uses OpenFOAM's `subtract`, `magSqr`, and `volFieldValue` function objects on
+the decomposed fields, so acceptance does not depend on Python, PyVista, or
+reconstruction. `maximum_velocity_rms_change_fraction` controls the limit and
+is 0.01 in the default, screening, validation, and in-depth profiles. Mass
+balance, device-flow stability, direction checks, the air-exchange horizon,
+and spatial RMS must all pass. Temporary `UPrevious`, delta, and squared fields
+are deleted immediately after evaluation.
+
+The end-to-end generated-runner test measured 0.0280251 m/s RMS delta against
+1.81008 m/s RMS velocity, or 1.54828%. The new 1% gate therefore rejected the
+spatially unsettled field even though the native calculation completed. No
+temporary processor fields remained afterward. An independent Python field
+comparison previously matched the same native method to the displayed
+precision (5.318468% versus 5.318% on the damping benchmark).
+
+Runtime tuning remains provisional. Increasing the live-flow limit to Co=10
+and checking every 0.05 s reduced a 0.10 s benchmark from 865.24 s to 410.00 s
+(2.11x), but the resulting field was not spatially settled. Reducing U equation
+relaxation from 0.7 to 0.3 reduced second-window velocity drift from 7.77% to
+5.32% while preserving bulk imbalance and exchange time, but produced a 7.24%
+cross-case velocity difference and an 8.13 K worst local temperature
+difference at 0.6 s. Neither tuning is promoted to a production profile until
+the new spatial gate certifies a complete air-exchange run.
