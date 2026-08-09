@@ -597,3 +597,46 @@ generated controller now invokes the multi-region solver's non-advancing
 `-postProcess -latestTime` mode only when a report is missing or stale. A
 runtime replay at 10000 s produced exact fluid and all-solid reports without
 advancing time; focused exporter tests cover both fixes.
+
+## Intermediate 17.5 mm mapped-start study (2026-08-09)
+
+An isolated 17.5 mm candidate was generated between the accepted 20 mm
+screening mesh and the 15 mm in-depth mesh. All five regions passed
+`checkMesh`, retained exactly the same region volumes, and contained 255225
+cells (217013 fluid). This is 22.25% more cells than 20 mm and 23.94% fewer
+than 15 mm.
+
+The converged 20 mm fields at 14401 s were mapped into the candidate. The
+existing runner incorrectly treated those hot, nonuniform mapped fields as a
+cold start: it applied the cold fan ramp and then disabled all 1545 W of fluid
+heat sources during adaptive initialization. Device-flow change fell below
+0.1%, but exterior mass imbalance rose monotonically from 1.612% to 1.627%
+and could not satisfy the 1% acceptance limit. This was not a mesh failure.
+
+After restoring the full mapped heat sources and using the normal Co <= 2
+accepted-flow refresh, imbalance immediately fell to 0.190%. The refresh
+converged after 0.03 s at 0.49 s with 0.181% imbalance and 0.440% worst flow
+change. A held-flow thermal step and mandatory terminal refresh then produced
+a synchronized 0.96 s endpoint with 0.0256% imbalance, 0.749% worst flow
+change, correct directions, and a 4.349 s air-exchange time.
+
+At that endpoint the candidate predicted 0.293265 kg/s intake, 0.293322 kg/s
+exhaust, 298.251 K mass-weighted exhaust temperature, zero thermal
+re-ingestion, and 1503.65 W net sensible rejection (97.32% of 1545 W). Versus
+the converged 15 mm reference, intake differed by +0.707%, exhaust by +0.860%,
+exhaust temperature by -0.146 K, and heat rejection by -1.94%. Versus 20 mm,
+intake/exhaust were +6.71%/+6.97%.
+
+The full field is not yet mesh-settled despite the close bulk throughput.
+Sampling the 15 mm reference onto the 17.5 mm mesh gave 100% coverage, fluid
+temperature RMS difference 2.083 K (0.698% of reference RMS), and velocity RMS
+difference 0.836 m/s (58.1% of reference RMS). The 17.5 mm profile therefore
+remains a candidate, not a replacement default, until longer live-flow
+relaxation demonstrates field convergence.
+
+The generated runner now detects a nonuniform mapped velocity field at time
+zero during `--warm-start`, records a mapped-state marker, retains the full
+fluid heat-source dictionary, and skips the cold fan ramp. Subsequent
+`--multirate` initialization keeps the full sources but still requires the
+normal adaptive mass-balance, direction, and flow-change checks. The complete
+C++ and Python regression suite passed after this correction.

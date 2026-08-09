@@ -265,6 +265,14 @@ int main(int argc, char** argv) {
             "Restored full fluid heat sources for thermal evolution.") !=
                std::string::npos);
         assert(text.str().find(
+            "Mapped initial airflow retains full fluid heat sources.") !=
+               std::string::npos);
+        assert(text.str().find(
+            "Detected mapped nonuniform velocity fields; retaining full heat sources and skipping the cold fan ramp.") !=
+               std::string::npos);
+        assert(text.str().find("mapped_state_marker=") !=
+               std::string::npos);
+        assert(text.str().find(
             "Refreshing airflow at terminal thermal checkpoint") !=
                std::string::npos);
     }
