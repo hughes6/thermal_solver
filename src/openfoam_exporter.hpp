@@ -3276,6 +3276,7 @@ functions
                 "        fi\n"
                 "    fi\n"
                 "    latest_air_exchange_time=\"\"\n"
+                "    previous_velocity_relative_rms=\"\"\n"
                 "    latest_velocity_relative_rms=\"\"\n"
                 "    airflow_metrics_converged()\n"
                 "    {\n"
@@ -3425,8 +3426,12 @@ functions
                 "        if ! awk -v v=\"$maximum_change\" -v limit=\""
                 << options.maximum_device_flow_change_fraction
                 << "\" 'BEGIN { exit !(v<=limit) }'; then stable=0; fi\n"
-                "        if [[ -z \"$latest_velocity_relative_rms\" ]] || "
+                "        if [[ -z \"$latest_velocity_relative_rms\" || "
+                    "-z \"$previous_velocity_relative_rms\" ]] || "
                     "! awk -v v=\"$latest_velocity_relative_rms\" -v limit=\""
+                << options.maximum_velocity_rms_change_fraction
+                << "\" 'BEGIN { exit !(v<=limit) }' || "
+                    "! awk -v v=\"$previous_velocity_relative_rms\" -v limit=\""
                 << options.maximum_velocity_rms_change_fraction
                 << "\" 'BEGIN { exit !(v<=limit) }'; then stable=0; fi\n"
                 "        echo \"Airflow refresh metrics: imbalance=$imbalance, "
@@ -3434,7 +3439,9 @@ functions
                     "$maximum_change_name, boundaryFlowFloor="
                     "$boundary_flow_floor, directionsOK="
                     "$directions_ok, velocityRelativeRms="
-                    "${latest_velocity_relative_rms:-unavailable}, estimatedAirExchangeTime="
+                    "${latest_velocity_relative_rms:-unavailable}, "
+                    "previousVelocityRelativeRms="
+                    "${previous_velocity_relative_rms:-unavailable}, estimatedAirExchangeTime="
                     "$air_exchange_time s\"\n"
                 "        [[ \"$stable\" == 1 && \"$directions_ok\" == 1 ]]\n"
                 "    }\n";
@@ -3935,6 +3942,7 @@ functions
                 "                echo \"Spatial velocity convergence calculation failed at t=$actual_time.\" >&2\n"
                 "                return 8\n"
                 "            fi\n"
+                "            previous_velocity_relative_rms=\"$latest_velocity_relative_rms\"\n"
                 "            latest_velocity_relative_rms=$(awk -v delta=\"$velocity_rms_delta\" "
                     "-v reference=\"$velocity_rms_reference\" 'BEGIN { "
                     "print (reference>1e-12?delta/reference:(delta<=1e-12?0:1e30)) }')\n"

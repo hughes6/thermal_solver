@@ -727,6 +727,12 @@ temporary processor fields remained afterward. An independent Python field
 comparison previously matched the same native method to the displayed
 precision (5.318468% versus 5.318% on the damping benchmark).
 
+The reference trajectory later crossed the 1% limit for one 0.01 s window
+(0.9956%) and immediately rebounded to 1.0354%. To avoid phase-sensitive
+acceptance of an oscillation band that straddles the limit, both the current
+and immediately previous spatial RMS windows must now pass. A restarted runner
+conservatively reacquires these two live windows.
+
 Runtime tuning remains provisional. Increasing the live-flow limit to Co=10
 and checking every 0.05 s reduced a 0.10 s benchmark from 865.24 s to 410.00 s
 (2.11x), but the resulting field was not spatially settled. Reducing U equation

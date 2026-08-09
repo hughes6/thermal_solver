@@ -297,6 +297,12 @@ int main(int argc, char** argv) {
             "velocityRelativeRms=${latest_velocity_relative_rms:-unavailable}") !=
                std::string::npos);
         assert(text.str().find(
+            "previousVelocityRelativeRms=${previous_velocity_relative_rms:-unavailable}") !=
+               std::string::npos);
+        assert(text.str().find(
+            "previous_velocity_relative_rms=\"$latest_velocity_relative_rms\"") !=
+               std::string::npos);
+        assert(text.str().find(
             "-dict system/spatialConvergenceDict") !=
                std::string::npos);
         assert(text.str().find(
