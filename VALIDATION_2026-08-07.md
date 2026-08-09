@@ -640,3 +640,30 @@ fluid heat-source dictionary, and skips the cold fan ramp. Subsequent
 `--multirate` initialization keeps the full sources but still requires the
 normal adaptive mass-balance, direction, and flow-change checks. The complete
 C++ and Python regression suite passed after this correction.
+
+### Extended 17.5 mm live-flow check
+
+The accepted 0.96 s candidate was advanced for another 0.50 s with fully
+coupled, full-heat flow at Co approximately 5, then synchronized with Co <= 2
+refreshes. The final 1.59 s refresh passed with 0.283% exterior imbalance,
+0.0903% worst tracked flow change, and correct directions. Nevertheless, the
+spatial field was still moving: direct same-mesh comparison from 0.96 to 1.59 s
+gave U RMS change 0.667 m/s (35.7% relative) and T RMS change 0.927 K (0.311%
+relative).
+
+The longer endpoint predicted 0.296474 kg/s intake, 0.297417 kg/s exhaust,
+297.598 K exhaust temperature, and 1329.46 W instantaneous sensible rejection.
+Against the 15 mm reference, fluid U RMS difference increased from 0.836 m/s
+(58.1% relative) at 0.96 s to 1.099 m/s (76.4% relative) at 1.59 s. This does
+not demonstrate that 17.5 mm is intrinsically worse; it demonstrates that the
+initial apparent throughput match was premature. Only 0.63 s of additional
+live-flow evolution had elapsed versus a measured rack air-exchange time of
+approximately 4.30 s.
+
+The existing adaptive acceptance criteria can therefore certify stable device
+flows while a recirculation-sensitive spatial velocity field is still far from
+settled. Bulk mass balance and fan-flow stability remain necessary, but they
+are not sufficient for mesh or recirculation validation after mapping. The
+17.5 mm candidate is rejected as a default, and future mapped-field validation
+must include a minimum physical live-flow horizon tied to air-exchange time or
+an explicit same-mesh U-field convergence check.
