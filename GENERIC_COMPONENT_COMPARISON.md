@@ -794,3 +794,26 @@ loaded airflow refresh. The generated adaptive controller now extends only its
 internal airflow-validation allowance, refreshes the terminal thermal state,
 then restores the user's requested end for convergence logic. Final reports no
 longer silently combine current temperatures with stale flow fields.
+
+### Screening pressure-corrector sensitivity
+
+The 5.6% screening throughput deficit was tested separately from mesh
+resolution. Two byte-size-verified clones started from the same converged
+`14401 s` processor checkpoint and advanced through the same 30-step,
+0.01 s loaded airflow interval. The control retained two PIMPLE pressure
+correctors; the candidate changed only `nCorrectors` to three.
+
+| Metric | Two correctors | Three correctors | Difference |
+|---|---:|---:|---:|
+| Solver clock time | 264 s | 360 s | +36.4% |
+| Exterior mass imbalance | 0.218659% | 0.217934% | -0.000725 percentage point |
+| Worst device-flow change | 0.656919% | 0.656919% | none at report precision |
+| Estimated air-exchange time | 4.61798 s | 4.61796 s | -0.00002 s |
+
+Same-mesh, same-time field comparison found only `3.11e-5 m/s` velocity RMS
+difference (0.002285%), `1.69e-5 K` temperature RMS difference (0.000006%),
+and `0.00239 Pa` pressure RMS difference. The third pressure corrector is
+therefore rejected: it adds substantial cost without materially changing the
+operating point or field. Screening retains two pressure correctors. The
+remaining screening-versus-in-depth airflow difference is a mesh-resolution
+effect, not evidence of insufficient pressure correction.
