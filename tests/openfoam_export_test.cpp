@@ -244,6 +244,30 @@ int main(int argc, char** argv) {
                std::string::npos);
         assert(text.str().find("sources { h (5") != std::string::npos);
     }
+    {
+        std::ifstream flow_only(
+            case_path/"constant"/"fluid"/"fvOptions.flowOnly");
+        std::ostringstream text;
+        text << flow_only.rdbuf();
+        assert(text.str().find("heated_internal_air_2_energy") ==
+               std::string::npos);
+        assert(text.str().find("object      fvOptions;") !=
+               std::string::npos);
+    }
+    {
+        std::ifstream stream(case_path/"run_parallel.sh");
+        std::ostringstream text;
+        text << stream.rdbuf();
+        assert(text.str().find(
+            "Initial airflow uses fans and vents with fluid heat sources disabled.") !=
+               std::string::npos);
+        assert(text.str().find(
+            "Restored full fluid heat sources for thermal evolution.") !=
+               std::string::npos);
+        assert(text.str().find(
+            "Refreshing airflow at terminal thermal checkpoint") !=
+               std::string::npos);
+    }
     assert(std::filesystem::is_regular_file(
         case_path/"system"/"fluid"/"fvSolution"));
     {

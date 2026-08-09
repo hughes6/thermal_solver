@@ -723,3 +723,74 @@ and 10800 s each passed in one 0.01 s window. For this semi-steady rack,
 Use the air-side variant when measured mass flow and intake/exhaust
 temperatures are the calibration evidence. Use a solid/resistance model only
 when calibrated component surface or hotspot temperatures are required.
+
+## Air-side screening validation (2026-08-09)
+
+`library/models/model_generic_airside_screening.toml` holds the calibrated
+air-side geometry, loads, fan curves, and rack placement fixed while selecting
+`screening_foam_cfg.toml`. Its 208,772-cell mesh is 37.79% smaller than the
+335,580-cell in-depth reference.
+
+### Cold-start source isolation
+
+The first fresh screening run exposed an air-side-specific startup defect.
+Fluid heat sources were active while the controller was still establishing
+the cold fan operating point. At `t = 0.37 s`, localized fluid had reached
+approximately 308.6 K. Device-flow change was already below 1%, but continuing
+compressible mass accumulation held exterior imbalance at 1.468%; its decline
+was too slow to justify hours of additional fully coupled startup.
+
+Generated cases now include a separate `fvOptions.flowOnly` dictionary. It
+contains every fan and porosity source but omits fluid energy sources. A cold
+or resumed pending multirate initialization installs this dictionary before
+the fan ramp. Once airflow passes, the pristine full dictionary is restored
+before thermal evolution. Normal coupled warm starts and every later loaded
+airflow refresh retain full heat.
+
+The fresh corrected case remained within 293.079-293.154 K during startup and
+accepted at `t = 0.37 s`:
+
+| Metric | Heated startup | Corrected flow-only startup |
+|---|---:|---:|
+| Exterior mass imbalance | 1.468% | 0.257% |
+| Worst device-flow change | 0.822% | 0.841% |
+| Directions valid | yes | yes |
+| Approximate fluid maximum | 308.6 K | 293.15 K |
+
+All four fluid energy sources, totaling 1545 W, were runtime-verified as
+restored before the first implicit thermal stage. The first loaded refresh at
+3600 s then detected the real temperature-dependent operating-point change
+and required 0.07 s to converge. Refresh duration fell to 0.02 s at 7200 s
+and 0.01 s at both 10800 and 14400 s.
+
+### Long-run result and mesh comparison
+
+The corrected cold run reached 14400 s in 2 h 54 min wall time, including
+fresh preparation and startup. It met strict validation-profile temperature
+limits over the final 3600 s interval, not merely the looser screening limits:
+
+| Endpoint metric | Screening | In-depth | Screening difference |
+|---|---:|---:|---:|
+| Worst cell change (K/300 s) | 0.05424 | 0.05399 | +0.00025 |
+| Worst component-mean change (K/300 s) | 0.02870 | 0.02839 | +0.00031 |
+| Rack intake (kg/s) | 0.274820 | 0.291207 | -5.63% |
+| Rack exhaust (kg/s) | 0.274207 | 0.290822 | -5.71% |
+| Exhaust mass-weighted T (K) | 298.736 | 298.396 | +0.340 |
+| Net sensible rejection (W) | 1539.46 | 1533.36 | +0.40% |
+| Heat-rejection fraction | 99.64% | 99.25% | +0.39 percentage point |
+| Thermal re-ingestion index | 0 | 0 | unchanged |
+
+Different-mesh cell-centre sampling covered 100% of screening cells. Regional
+mean temperature differences ranged from +0.13 to -1.32 K. Fluid temperature
+RMS difference was 1.25 K, but fluid velocity RMS difference was 17.74% and
+screening rack throughput was 5.6% lower. Screening is therefore validated for
+load, layout, energy-rejection, and approximate temperature iteration. Final
+airflow magnitude, recirculation topology, and acceptance claims must still
+use the 15 mm in-depth profile.
+
+The run also exposed a terminal-checkpoint defect: a requested end time exactly
+on a refresh boundary previously reconstructed thermal results without a
+loaded airflow refresh. The generated adaptive controller now extends only its
+internal airflow-validation allowance, refreshes the terminal thermal state,
+then restores the user's requested end for convergence logic. Final reports no
+longer silently combine current temperatures with stale flow fields.

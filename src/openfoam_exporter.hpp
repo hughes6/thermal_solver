@@ -2209,7 +2209,8 @@ private:
 
     static void write_fluid_fv_options(
         const Mesh& mesh, const OpenFoamExportOptions& options,
-        const std::filesystem::path& path) {
+        const std::filesystem::path& path,
+        const bool include_heat_sources=true) {
         std::ofstream output(path);
         require_stream(output,path);
         write_header(output,"dictionary","fvOptions","constant/fluid");
@@ -2221,17 +2222,19 @@ private:
                 (8314.46261815324*
                  (mesh.get_env().get_T_ambient()+273.15))
             : mesh.get_env().get_rho();
-        for(const auto& source : mesh.get_openfoam_heat_source_regions()) {
-            if(!source.fluid) continue;
-            const std::string set_name = heat_source_set_name(source);
-            output << set_name << "_energy\n{\n"
-                   << " type scalarSemiImplicitSource;\n"
-                   << " active true;\n"
-                   << " selectionMode cellZone;\n"
-                   << " cellZone " << set_name << ";\n"
-                   << " volumeMode absolute;\n"
-                   << " sources { h (" << source.watts << " 0); }\n"
-                   << "}\n";
+        if(include_heat_sources) {
+            for(const auto& source : mesh.get_openfoam_heat_source_regions()) {
+                if(!source.fluid) continue;
+                const std::string set_name = heat_source_set_name(source);
+                output << set_name << "_energy\n{\n"
+                       << " type scalarSemiImplicitSource;\n"
+                       << " active true;\n"
+                       << " selectionMode cellZone;\n"
+                       << " cellZone " << set_name << ";\n"
+                       << " volumeMode absolute;\n"
+                       << " sources { h (" << source.watts << " 0); }\n"
+                       << "}\n";
+            }
         }
         for(const auto& device :
             mesh.get_openfoam_internal_flow_devices()) {
@@ -2405,6 +2408,10 @@ private:
             case_directory/"constant"/"fluid"/"fvOptions",
             case_directory/"constant"/"fluid"/"fvOptions.fullFan",
             std::filesystem::copy_options::overwrite_existing);
+        write_fluid_fv_options(
+            mesh,options,
+            case_directory/"constant"/"fluid"/"fvOptions.flowOnly",
+            false);
         {
             const auto path =
                 case_directory/"constant"/"fluid"/"turbulenceProperties";
@@ -2878,18 +2885,27 @@ private:
             "fi\n\n"
             "full_fan_options=\"$case_dir/constant/fluid/"
                 "fvOptions.fullFan\"\n"
+            "flow_only_options=\"$case_dir/constant/fluid/"
+                "fvOptions.flowOnly\"\n"
+            "fan_options_source=\"$full_fan_options\"\n"
+            "install_fluid_options()\n"
+            "{\n"
+            "    local source=\"$1\" processor_dir\n"
+            "    if [[ ! -f \"$source\" ]]; then\n"
+            "        echo \"Missing fluid options dictionary: $source\" >&2\n"
+            "        return 2\n"
+            "    fi\n"
+            "    cp \"$source\" \"$case_dir/constant/fluid/fvOptions\"\n"
+            "    for processor_dir in \"$case_dir\"/processor[0-9]*; do\n"
+            "        [[ -d \"$processor_dir\" ]] || continue\n"
+            "        mkdir -p \"$processor_dir/constant/fluid\"\n"
+            "        cp \"$source\" \"$processor_dir/constant/fluid/fvOptions\"\n"
+            "    done\n"
+            "}\n"
             "restore_full_fan_options()\n"
             "{\n"
-            "    local processor_dir\n"
             "    if [[ -f \"$full_fan_options\" ]]; then\n"
-            "        cp \"$full_fan_options\" "
-                "\"$case_dir/constant/fluid/fvOptions\"\n"
-            "        for processor_dir in \"$case_dir\"/processor[0-9]*; do\n"
-            "            [[ -d \"$processor_dir\" ]] || continue\n"
-            "            mkdir -p \"$processor_dir/constant/fluid\"\n"
-            "            cp \"$full_fan_options\" "
-                "\"$processor_dir/constant/fluid/fvOptions\"\n"
-            "        done\n"
+            "        install_fluid_options \"$full_fan_options\"\n"
             "    fi\n"
             "}\n"
             "trap restore_full_fan_options EXIT INT TERM\n"
@@ -2905,11 +2921,11 @@ private:
             "            printf \"   (%s %.17g)\\n\", q, dp*scale; next\n"
             "        }\n"
             "        { print }\n"
-            "    ' \"$full_fan_options\" > "
+            "    ' \"$fan_options_source\" > "
                 "\"$case_dir/constant/fluid/fvOptions\"\n"
             "    full_pressure=$(awk '$1==\"(0\" "
                 "{ gsub(/[()]/,\"\",$2); print $2; exit }' "
-                "\"$full_fan_options\")\n"
+                "\"$fan_options_source\")\n"
             "    scaled_pressure=$(awk '$1==\"(0\" "
                 "{ gsub(/[()]/,\"\",$2); print $2; exit }' "
                 "\"$case_dir/constant/fluid/fvOptions\")\n"
@@ -3069,7 +3085,19 @@ private:
                     "-case \"$case_dir\" -processor -latestTime "
                     "2>/dev/null || echo 0)\n"
                 "    current=\"${current##*$'\\n'}\"\n"
-                "    current=\"${current:-0}\"\n";
+                "    current=\"${current:-0}\"\n"
+                "    initial_convergence_marker="
+                    "\"$case_dir/.initial_airflow_converged\"\n"
+                "    initial_pending_marker="
+                    "\"$case_dir/.initial_airflow_pending\"\n"
+                "    refresh_pending_marker="
+                    "\"$case_dir/.airflow_refresh_pending\"\n"
+                "    if [[ ! -f \"$initial_convergence_marker\" ]]; then\n"
+                "        fan_options_source=\"$flow_only_options\"\n"
+                "        install_fluid_options \"$flow_only_options\"\n"
+                "        echo \"Initial airflow uses fans and vents with fluid "
+                    "heat sources disabled.\"\n"
+                "    fi\n";
             if(options.use_fan_startup_ramp) {
                 output <<
                     "    if awk -v a=\"$current\" -v end=\""
@@ -3928,6 +3956,11 @@ private:
                     "                    touch "
                         "\"$initial_convergence_marker\"\n"
                     "                    rm -f \"$initial_pending_marker\"\n"
+                    "                    fan_options_source="
+                        "\"$full_fan_options\"\n"
+                    "                    restore_full_fan_options\n"
+                    "                    echo \"Restored full fluid heat sources "
+                        "for thermal evolution.\"\n"
                     "                    return 0\n"
                     "                fi\n"
                     "            fi\n"
@@ -3944,12 +3977,6 @@ private:
             }
             if(options.use_adaptive_airflow_refresh) {
                 output <<
-                    "    initial_convergence_marker="
-                        "\"$case_dir/.initial_airflow_converged\"\n"
-                    "    initial_pending_marker="
-                        "\"$case_dir/.initial_airflow_pending\"\n"
-                    "    refresh_pending_marker="
-                        "\"$case_dir/.airflow_refresh_pending\"\n"
                     "    if [[ ! -f \"$initial_convergence_marker\" ]] && "
                         "awk -v a=\"$current\" -v b=\"$requested_end\" "
                         "'BEGIN { exit !(a<b) }'; then\n"
@@ -4000,17 +4027,33 @@ private:
                 "            thermal_candidate=1\n"
                 "        fi\n";
             }
-            output <<
-                "        if awk -v a=\"$current\" -v b=\"$requested_end\" "
-                    "'BEGIN { s=(b<0?-b:b); if(s<1)s=1; "
-                    "tol=1e-9*s; exit !(a<b-tol) }'; then\n";
             if(options.use_adaptive_airflow_refresh) {
                 output <<
-                    "            adaptive_airflow_refresh\n";
+                    "        terminal_requested_end=\"\"\n"
+                    "        if ! awk -v a=\"$current\" "
+                        "-v b=\"$requested_end\" "
+                        "'BEGIN { s=(b<0?-b:b); if(s<1)s=1; "
+                        "tol=1e-9*s; exit !(a<b-tol) }'; then\n"
+                    "            terminal_requested_end=\"$requested_end\"\n"
+                    "            requested_end=$(awk -v a=\"$current\" -v d=\""
+                    << options.maximum_airflow_refresh_duration
+                    << "\" 'BEGIN { printf \"%.17g\", a+d }')\n"
+                    "            echo \"Refreshing airflow at terminal thermal "
+                        "checkpoint t=$current s before final reconstruction.\"\n"
+                    "        fi\n"
+                    "        adaptive_airflow_refresh\n";
                 if(options.stop_when_thermally_converged)
-                    output << "            airflow_validated=\"$airflow_refresh_validated\"\n";
+                    output << "        airflow_validated=\"$airflow_refresh_validated\"\n";
+                output <<
+                    "        if [[ -n \"$terminal_requested_end\" ]]; then\n"
+                    "            requested_end=\"$terminal_requested_end\"\n"
+                    "        fi\n";
             } else {
                 output <<
+                    "        if awk -v a=\"$current\" "
+                        "-v b=\"$requested_end\" "
+                        "'BEGIN { s=(b<0?-b:b); if(s<1)s=1; "
+                        "tol=1e-9*s; exit !(a<b-tol) }'; then\n"
                     "            refresh_target=$(awk -v a=\"$current\" -v d=\""
                     << options.airflow_refresh_duration
                     << "\" -v b=\"$requested_end\" "
@@ -4019,9 +4062,9 @@ private:
                     "            stage false \"$refresh_target\" "
                     << options.maximum_courant_number << ' '
                     << options.maximum_time_step
-                    << " \"Airflow refresh\"\n";
+                    << " \"Airflow refresh\"\n"
+                    "        fi\n";
             }
-            output << "        fi\n";
             if(options.stop_when_thermally_converged) {
                 output <<
                 "        if [[ \"$thermal_candidate\" == 1 && "
