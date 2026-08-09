@@ -176,7 +176,12 @@ namespace {
         internal_region.local_position = parse_position(require_table(table["position"], context + ".position"), context + ".position");
         internal_region.name = require_value<std::string>(table["name"], context + ".name");
 
-        if(internal_region.state == RegionState::Air) return internal_region;
+        if(internal_region.state == RegionState::Air) {
+            internal_region.watts = table["watts"].value_or(0.0);
+            if(internal_region.watts < 0.0)
+                throw std::runtime_error(context + ".watts must be non-negative");
+            return internal_region;
+        }
 
         if(internal_region.state == RegionState::Solid) {
             internal_region.material = parse_material(
@@ -461,6 +466,7 @@ namespace {
             region.set_watts(input.watts);
         } else if(input.state == RegionState::Air) {
             region.set_region_type(RegionType::Air);
+            region.set_watts(input.watts);
         } else {
             throw std::runtime_error("Unsupported internal region state.");
         }

@@ -528,3 +528,20 @@ block has much less wetted area and more bypass than distributed boards, heat
 sinks, and guided airflow in real equipment. The next calibration study should
 hold watts and fan curves fixed while increasing effective heat-transfer area
 or using a calibrated air-side source/resistance representation.
+
+### Air-side heat-source runtime proof
+
+The architecture previously discarded `watts` on `state = "air"` during TOML
+parsing and could export heat only into component solids. Air-region watts are
+now explicit, non-negative, and energy-conservative in both the native mesh and
+OpenFOAM export. Each source receives a fluid cell zone and an absolute
+enthalpy source; solid heat-source behavior is unchanged.
+
+A generated 5 W runtime case selected one 0.001 m3 fluid cell, loaded the
+source as active in OpenFOAM 2606, and completed a coupled solve. Fluid maximum
+temperature rose from 293.15 K while unheated solid regions remained at their
+initial temperatures. Focused parser/export tests and the complete C++/Python
+added-feature suite passed. This capability enables the next controlled rack
+comparison: measured `mass flow * cp * (exhaust - intake)` can be applied to
+the internal air tunnel without interpreting an uncalibrated compact block
+maximum as an equipment temperature.

@@ -656,3 +656,42 @@ newer processor checkpoint was selected. The runner now resolves the processor
 checkpoint first and writes dynamic times at 16-digit precision. Runtime replay
 from `22800.06` reached and reconstructed exactly `22800.080000000002` with the
 correct `0.02000000019 s` write interval.
+
+### Calibrated air-side heat sources
+
+Validation of the compact equivalent blocks showed that increasing their
+effective conductivity by 10x changed mean temperatures negligibly and left
+extreme local maxima. For equipment where only intake temperature, exhaust
+temperature, and mass flow are known, the measured air-side heat is better
+represented directly in the internal air tunnel:
+
+```toml
+[[internal_regions]]
+name = "Interior air"
+state = "air"
+watts = 950.0
+
+[internal_regions.position]
+units = "mm"
+x = 39.1726
+y = 0.0
+z = 8.22325
+
+[internal_regions.size]
+units = "mm"
+width = 403.6548
+depth = 817
+height = 28.0035
+```
+
+Air-region `watts` default to zero and must be non-negative. The mesh divides
+the requested power over the final stamped fluid volume, so the native source
+integral remains exactly equal to the requested watts. OpenFOAM exports a
+dedicated fluid cell zone and an absolute `scalarSemiImplicitSource` on `h`.
+The power is also included in `openfoamExportProperties`, so heat-rejection
+fractions retain the correct denominator.
+
+Do not assign the same power to both an air region and a solid block. The
+air-side option intentionally predicts rack intake/exhaust behavior without
+claiming chip, heat-sink, or chassis surface temperatures. Keep a calibrated
+solid/resistance model when those temperatures are validation targets.

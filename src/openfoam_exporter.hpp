@@ -818,7 +818,7 @@ private:
             if(labels.empty() || selected_volume <= 0.0)
                 throw std::runtime_error(
                     "OpenFoamExporter: heat source '" + source.name +
-                    "' contains no solid cells.");
+                    "' contains no selected cells.");
             if(source.component_id < 0 ||
                static_cast<std::size_t>(source.component_id) >=
                    components.size())
@@ -846,6 +846,8 @@ private:
                 << foam_word(components[
                        static_cast<std::size_t>(source.component_id)].name)
                 << '_' << source.component_id << ";\n"
+                << "    solverRegion     "
+                << (source.fluid ? "fluid" : "solid") << ";\n"
                 << "    watts            " << source.watts << ";\n"
                 << "    selectedVolume   " << selected_volume << ";\n"
                 << "    volumetricPower  "
@@ -2190,7 +2192,7 @@ private:
             output,"dictionary","fvOptions",("constant/"+region).c_str());
         bool wrote_source = false;
         for(const auto& source : mesh.get_openfoam_heat_source_regions()) {
-            if(source.component_id != component.id) continue;
+            if(source.fluid || source.component_id != component.id) continue;
             wrote_source = true;
             const std::string set_name = heat_source_set_name(source);
             output << set_name << "_energy\n{\n"
@@ -2219,6 +2221,18 @@ private:
                 (8314.46261815324*
                  (mesh.get_env().get_T_ambient()+273.15))
             : mesh.get_env().get_rho();
+        for(const auto& source : mesh.get_openfoam_heat_source_regions()) {
+            if(!source.fluid) continue;
+            const std::string set_name = heat_source_set_name(source);
+            output << set_name << "_energy\n{\n"
+                   << " type scalarSemiImplicitSource;\n"
+                   << " active true;\n"
+                   << " selectionMode cellZone;\n"
+                   << " cellZone " << set_name << ";\n"
+                   << " volumeMode absolute;\n"
+                   << " sources { h (" << source.watts << " 0); }\n"
+                   << "}\n";
+        }
         for(const auto& device :
             mesh.get_openfoam_internal_flow_devices()) {
             const std::string name = internal_device_name(device);
@@ -2541,10 +2555,11 @@ private:
                    components.size())
                 throw std::runtime_error(
                     "OpenFoamExporter: heat source has no component region.");
-            const std::string region =
-                foam_word(components[
+            const std::string region = source.fluid
+                ? std::string("fluid")
+                : foam_word(components[
                     static_cast<std::size_t>(source.component_id)].name)
-                +"_"+std::to_string(source.component_id);
+                    +"_"+std::to_string(source.component_id);
             output <<
                 "\"$foam_launcher\" topoSet "
                     "-case \"$case_dir\" -region " << region << " -time 0 "

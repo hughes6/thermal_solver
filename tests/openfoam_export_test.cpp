@@ -42,7 +42,7 @@ int main(int argc, char** argv) {
         assert(std::abs(solid_volume-0.002)<1e-12);
     }
 
-    Rack rack=Rack::from_meters(0.3,0.2,0.2);
+    Rack rack=Rack::from_meters(0.5,0.2,0.2);
     rack.set_t(20.0);
     rack.set_cp(1005.0);
     rack.set_k(0.02587);
@@ -74,6 +74,21 @@ int main(int argc, char** argv) {
     homogeneous.set_watts(7.0);
     mesh.stamp_component_for_openfoam(homogeneous);
 
+    Component air_heater =
+        Component::from_meters(0.2,0.1,0.1,"air-side heater");
+    air_heater.set_coords_m(0.3,0.0,0.0);
+    air_heater.set_t(20.0);
+    air_heater.set_rho_solid(1200.0);
+    air_heater.set_cp(800.0);
+    air_heater.set_k_solid(10.0);
+    air_heater.set_watts(0.0);
+    InternalRegion heated_air(
+        "heated internal air",{0.1,0.1,0.1},{0.0,0.0,0.0});
+    heated_air.set_watts(5.0);
+    air_heater.add_region(heated_air);
+    air_heater.order_internal_regions();
+    mesh.stamp_component_for_openfoam(air_heater);
+
     Fan inlet(
         "test_inlet",10.0,0.0,{0.1,0.0,0.1},
         {0.05,0.0,0.05},{0.0,1.0,0.0},
@@ -86,9 +101,16 @@ int main(int argc, char** argv) {
     mesh.stamp_vent_for_openfoam(outlet);
 
     assert(mesh.has_openfoam_export_metadata());
-    assert(mesh.get_openfoam_component_regions().size()==2);
-    assert(mesh.get_openfoam_heat_source_regions().size()==2);
+    assert(mesh.get_openfoam_component_regions().size()==3);
+    assert(mesh.get_openfoam_heat_source_regions().size()==3);
     assert(mesh.get_openfoam_heat_source_regions()[1].watts==7.0);
+    assert(mesh.get_openfoam_heat_source_regions()[2].watts==5.0);
+    assert(mesh.get_openfoam_heat_source_regions()[2].fluid);
+    assert(mesh.get_openfoam_cell_metadata()[mesh.idx(3,0,0)]
+               .heat_source_id==2);
+    assert(!mesh.get_cells()[mesh.idx(3,0,0)].is_solid());
+    assert(std::abs(mesh.get_cells()[mesh.idx(3,0,0)].get_qdot()*
+                    mesh.get_cells()[mesh.idx(3,0,0)].volume()-5.0)<1e-12);
     assert(mesh.get_openfoam_cell_metadata()[mesh.idx(2,0,0)]
                .heat_source_id==1);
     assert(mesh.get_openfoam_cell_metadata()[mesh.idx(1,0,0)]
@@ -160,6 +182,8 @@ int main(int argc, char** argv) {
     assert(std::filesystem::is_regular_file(
         case_path/"system"/"topoSetDict_test_heat_source_0"));
     assert(std::filesystem::is_regular_file(
+        case_path/"system"/"topoSetDict_heated_internal_air_2"));
+    assert(std::filesystem::is_regular_file(
         case_path/"prepare_regions.sh"));
     assert(std::filesystem::is_regular_file(case_path/"run_cht.sh"));
     assert(std::filesystem::is_regular_file(case_path/"run_parallel.sh"));
@@ -193,6 +217,14 @@ int main(int argc, char** argv) {
         case_path/"constant"/"test_heater_0"/"thermophysicalProperties"));
     assert(std::filesystem::is_regular_file(
         case_path/"constant"/"test_heater_0"/"fvOptions"));
+    {
+        std::ifstream fluid_options(case_path/"constant"/"fluid"/"fvOptions");
+        std::ostringstream text;
+        text << fluid_options.rdbuf();
+        assert(text.str().find("heated_internal_air_2_energy") !=
+               std::string::npos);
+        assert(text.str().find("sources { h (5") != std::string::npos);
+    }
     assert(std::filesystem::is_regular_file(
         case_path/"system"/"fluid"/"fvSolution"));
     {

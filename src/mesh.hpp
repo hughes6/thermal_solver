@@ -47,6 +47,7 @@ public:
         int component_id = -1;
         std::string name;
         double watts = 0.0;
+        bool fluid = false;
     };
 
     struct OpenFoamBoundaryPatch {
@@ -556,7 +557,7 @@ public:
                 static_cast<int>(openfoam_heat_source_regions.size());
             openfoam_heat_source_regions.push_back(
                 {source_id, component_id, component.get_name()+" load",
-                 component.get_watts()});
+                 component.get_watts(), false});
             for(int i = i0; i < i1; ++i) {
                 for(int j = j0; j < j1; ++j) {
                     for(int k = k0; k < k1; ++k) {
@@ -569,12 +570,16 @@ public:
         }
 
         for(const InternalRegion& region : component.get_regions()) {
-            if(region.get_region_type() != RegionType::HeatSource) continue;
+            if(region.get_region_type() != RegionType::HeatSource &&
+               !(region.get_region_type() == RegionType::Air &&
+                 std::abs(region.get_watts()) > 1e-12))
+                continue;
             const int source_id =
                 static_cast<int>(openfoam_heat_source_regions.size());
             openfoam_heat_source_regions.push_back(
                 {source_id, component_id, region.get_name(),
-                 region.get_watts()});
+                 region.get_watts(),
+                 region.get_region_type() == RegionType::Air});
 
             const auto position = region.get_global_position();
             const auto size = region.get_size_m();
@@ -587,7 +592,8 @@ public:
             for(int i = si0; i < si1; ++i) {
                 for(int j = sj0; j < sj1; ++j) {
                     for(int k = sk0; k < sk1; ++k) {
-                        if(at(i,j,k).is_solid())
+                        if(at(i,j,k).is_solid() !=
+                           (region.get_region_type() == RegionType::Air))
                             openfoam_cell_metadata[idx(i,j,k)]
                                 .heat_source_id = source_id;
                     }
@@ -1539,7 +1545,9 @@ public:
 
     void conserve_internal_heat_source_power(const Component& component) {
         for(const InternalRegion& region : component.get_regions()) {
-            if(region.get_region_type() != RegionType::HeatSource) continue;
+            if(region.get_region_type() != RegionType::HeatSource &&
+               region.get_region_type() != RegionType::Air)
+                continue;
             const auto position=region.get_global_position();
             const auto size=region.get_size_m();
             const int i0=index_x(position[0]);
@@ -1548,21 +1556,26 @@ public:
             const int i1=end_index_x(position[0]+size[0]);
             const int j1=end_index_y(position[1]+size[1]);
             const int k1=end_index_z(position[2]+size[2]);
-            double solid_volume=0.0;
+            double selected_volume=0.0;
             for(int i=i0;i<i1;++i) for(int j=j0;j<j1;++j)
                 for(int k=k0;k<k1;++k)
-                    if(at(i,j,k).is_solid())
-                        solid_volume += at(i,j,k).volume();
-            if(region.get_watts()>0.0 && solid_volume<=0.0) {
+                    if(at(i,j,k).is_solid() ==
+                       (region.get_region_type()==RegionType::HeatSource))
+                        selected_volume += at(i,j,k).volume();
+            if(region.get_watts()>0.0 && selected_volume<=0.0) {
                 throw std::runtime_error(
                     "Internal heat source '" + region.get_name() +
-                    "' has no remaining solid cells after fan/vent stamping.");
+                    "' has no remaining " +
+                    (region.get_region_type()==RegionType::HeatSource
+                         ? std::string("solid") : std::string("fluid")) +
+                    " cells after fan/vent stamping.");
             }
-            const double qdot=solid_volume>0.0
-                ? region.get_watts()/solid_volume : 0.0;
+            const double qdot=selected_volume>0.0
+                ? region.get_watts()/selected_volume : 0.0;
             for(int i=i0;i<i1;++i) for(int j=j0;j<j1;++j)
                 for(int k=k0;k<k1;++k)
-                    if(at(i,j,k).is_solid())
+                    if(at(i,j,k).is_solid() ==
+                       (region.get_region_type()==RegionType::HeatSource))
                         at(i,j,k).set_qdot(qdot);
         }
     }
