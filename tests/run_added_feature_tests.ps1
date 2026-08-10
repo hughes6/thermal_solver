@@ -45,6 +45,16 @@ finally {
     }
 }
 
+$pythonCacheDir = [IO.Path]::GetFullPath(
+    (Join-Path $tempBase ("thermal_solver_python_cache_" + [guid]::NewGuid().ToString("N"))))
+if (-not $pythonCacheDir.StartsWith($tempBase, [StringComparison]::OrdinalIgnoreCase)) {
+    throw "Unsafe Python cache directory: $pythonCacheDir"
+}
+$previousPythonCachePrefix = $env:PYTHONPYCACHEPREFIX
+[void](New-Item -ItemType Directory -Path $pythonCacheDir)
+$env:PYTHONPYCACHEPREFIX = $pythonCacheDir
+
+try {
 Write-Host "Checking Python plotting scripts"
 & python -m py_compile `
     "plot/heat_animation.py" `
@@ -108,9 +118,19 @@ if ($LASTEXITCODE -ne 0) {
     throw "OpenFOAM cross-case comparison tests failed"
 }
 
-& python -m unittest "tests.openfoam_mesh_comparison_test"
+$meshComparisonDeps = & python -c `
+    "import importlib.util; print('available' if all(importlib.util.find_spec(name) for name in ('numpy', 'pyvista')) else 'missing')"
 if ($LASTEXITCODE -ne 0) {
-    throw "OpenFOAM mesh comparison tests failed"
+    throw "OpenFOAM mesh comparison dependency probe failed"
+}
+if ($meshComparisonDeps -eq "available") {
+    & python -m unittest "tests.openfoam_mesh_comparison_test"
+    if ($LASTEXITCODE -ne 0) {
+        throw "OpenFOAM mesh comparison tests failed"
+    }
+}
+else {
+    Write-Host "Skipping OpenFOAM mesh comparison tests: optional NumPy/PyVista dependencies are unavailable."
 }
 
 & python -m unittest "tests.openfoam_profile_policy_test"
@@ -121,6 +141,24 @@ if ($LASTEXITCODE -ne 0) {
 & python -m unittest "tests.openfoam_validation_test"
 if ($LASTEXITCODE -ne 0) {
     throw "OpenFOAM numerical validation tests failed"
+}
+}
+finally {
+    if ($null -eq $previousPythonCachePrefix) {
+        Remove-Item Env:PYTHONPYCACHEPREFIX -ErrorAction SilentlyContinue
+    }
+    else {
+        $env:PYTHONPYCACHEPREFIX = $previousPythonCachePrefix
+    }
+    if (Test-Path -LiteralPath $pythonCacheDir) {
+        $cleanupTarget = [IO.Path]::GetFullPath($pythonCacheDir)
+        if (-not $cleanupTarget.StartsWith($tempBase, [StringComparison]::OrdinalIgnoreCase) -or
+            -not ([IO.Path]::GetFileName($cleanupTarget)).StartsWith(
+                "thermal_solver_python_cache_", [StringComparison]::Ordinal)) {
+            throw "Refusing unsafe Python cache cleanup: $cleanupTarget"
+        }
+        Remove-Item -LiteralPath $cleanupTarget -Recurse -Force
+    }
 }
 
 Write-Host "All added-feature tests passed."

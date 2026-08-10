@@ -318,6 +318,15 @@ int main(int argc, char** argv) {
             "for field in UPrevious velocityDelta velocityDeltaSquared velocitySquared") !=
                std::string::npos);
         assert(text.str().find(
+            "stage_wall_start=$(date +%s%N)") !=
+               std::string::npos);
+        assert(text.str().find(
+            "Stage wall time: label=$label, thermalOnly=$thermal_only, ") !=
+               std::string::npos);
+        assert(text.str().find(
+            "start=$current, target=$actual_time, seconds=$stage_wall_seconds") !=
+               std::string::npos);
+        assert(text.str().find(
             "-v v=\"$latest_velocity_relative_rms\" -v limit=\"0.01\"") !=
                std::string::npos);
     }

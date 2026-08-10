@@ -777,3 +777,71 @@ that temp root whose directory name begins with
 `thermal_solver_added_feature_tests_`. The complete official suite passed, its
 specific temp directory no longer existed afterward, and `tests/` contained
 zero `.exe` files.
+
+## Full air-exchange screening reference
+
+The preserved screening reference
+`model_generic_airside_screening_spatial_gate_runtime_20260809` completed a
+full measured air-exchange horizon without being restarted or regenerated.
+Initial airflow was accepted after 4.30 s beyond the mapped fan-ramp state;
+the estimated exchange time at acceptance was 4.29280 s. The accepting window
+reported 0.84529% volume-weighted velocity RMS change, 0.034326% tracked
+boundary imbalance, 0.0491704% maximum device-flow change, valid directions,
+and a maximum Courant number below its limit. Fluid and solid temperatures
+remained bounded throughout.
+
+Native OpenFOAM comparisons against the final accepted decomposed field at
+5.1299999999999724 s quantify how misleading the early bulk-flow passes were:
+
+| Comparison | RMS delta U | RMS final U | Relative RMS |
+| --- | ---: | ---: | ---: |
+| 0.54 s to final | 0.615582 m/s | 1.90871 m/s | 32.25% |
+| 2.85 s to final | 0.413492 m/s | 1.90871 m/s | 21.66% |
+| 5.11 s to 5.13 s | 0.0312253 m/s | 1.90871 m/s | 1.636% |
+
+The terminal thermal-checkpoint refresh also demonstrated why spatial and
+device gates must both remain active. Its first live window changed the field
+by 1.60165% RMS while device flow changed only 0.301821%. The second window
+passed the spatial gate at 0.922019% but narrowly failed the device gate at
+1.03105%. The third window passed both at 0.851518% spatial RMS and 0.155930%
+device change, with 0.035005% imbalance and valid directions. This reference
+runner was generated before the consecutive-pass correction; newly generated
+runners conservatively require the current and previous spatial windows to
+pass.
+
+The early, midpoint, and final `U` fields are preserved under the case's
+`validation_snapshots` directory. Native comparisons used temporary
+`UPrevious`, `velocityDelta`, `velocityDeltaSquared`, and `velocitySquared`
+fields with cleanup traps; none remain in the accepted processor checkpoint.
+
+## Windows-mounted versus WSL-native field I/O
+
+Process inspection during the reference repeatedly caught an OpenFOAM rank in
+uninterruptible `p9_client_rpc` waits while spatial post-processing read and
+wrote decomposed fields on `/mnt/c`. A compact 214 MiB copy containing the
+identical `constant`, `system`, and processor checkpoint trees was therefore
+benchmarked on WSL-native temporary storage.
+
+Two identical spatial post-processing trials took 18.177 s and 11.628 s on
+`/mnt/c`, versus 4.227 s and 4.616 s on native storage. The averages are
+14.903 s and 4.422 s respectively, a 3.37x native-storage speedup for this
+field-reduction phase. This does not yet prove the same factor for the full
+solver window, but it directly confirms that Windows-mounted decomposed-field
+I/O is a major source of runtime and timing variability.
+
+Generated `stage()` functions now emit a `Stage wall time` record containing
+the label, flow mode, start time, target time, and total seconds after pruning.
+This measures dictionary setup, Courant preflight, the solver, Courant and
+spatial postflight, field propagation, and checkpoint cleanup as one unit;
+individual solver `ClockTime` lines cannot represent that cost.
+
+## Test artifact isolation
+
+Python syntax checks previously wrote bytecode into repository
+`__pycache__` directories, so a stale permission-locked `.pyc` could fail an
+otherwise clean suite and leave generated files behind. The test runner now
+sets `PYTHONPYCACHEPREFIX` to a uniquely named guarded temporary directory,
+restores the caller's environment, and deletes that directory in `finally`.
+The optional mesh-comparison module is run only when both NumPy and PyVista are
+available; otherwise the runner reports an explicit dependency skip instead
+of treating `unittest`'s zero-test exit code as a product failure.
