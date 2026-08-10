@@ -1226,3 +1226,50 @@ one quarter of thermal-stage runtime; all existing airflow cadence and
 convergence safeguards remain unchanged. The cases and reports are preserved
 as `screening_dt10_controlled_20260810` and
 `screening_dt20_controlled_20260810`.
+
+### Long screening confirmation with the 20 s ceiling
+
+The generated 20 s runner differed from the previously installed preserved
+screening runner at exactly one line: the implicit frozen-flow stage ceiling.
+After SHA-256 verification, it was installed in
+`model_generic_airside_screening_spatial_gate_runtime_20260809`, and that case
+was continued non-overwriting from 36,000.02 to 43,200.01 s. Production
+controls were restored after completion.
+
+The three 2,400 s thermal stages cost 184.4, 189.1, and 126.0 s, for 499.5 s
+total. The preceding 10 s-ceiling continuation over the same 7,200 simulated
+seconds used 1,033.5 s of thermal-stage time. The real long-case reduction was
+51.7%, while the complete measured solver-stage time fell from 1,799.0 to
+1,161.5 s (35.4%) despite normal flow-window runtime variability. Live-flow
+validation became 57.0% of measured stage time, confirming that airflow is now
+the dominant screening cost rather than the implicit energy solve.
+
+The accelerated continuation preserved the slow-mode behavior caught by the
+convergence guards. At 38,400 s, thermal peak and component-average rates were
+0.01383 and 0.00511 K/300 s, and accepted airflow drift was 0.744%; checkpoint
+1/2 passed. At 40,800 s, the thermal rates still passed at 0.20546 and
+0.00965 K/300 s, while local airflow changed 0.723%. The anchored change over
+4,800 s was 1.365%, so the checkpoint was rejected. A same-time window settled
+at 0.711% and rebased the accepted field. At 43,200 s, thermal rates were
+0.00519 and 0.00190 K/300 s and airflow drift was 0.718%, producing a new
+checkpoint 1/2. Exterior imbalance remained below 0.0007%, device-flow change
+below 0.036%, and all directions remained valid.
+
+Face-resolved results also remained stable from 36,000.02 to 43,200.01 s:
+
+| Metric | 36,000.02 s | 43,200.01 s | Change |
+|---|---:|---:|---:|
+| Intake mass flow | 0.297668 kg/s | 0.297649 kg/s | -0.0062% |
+| Exhaust mass flow | 0.297670 kg/s | 0.297648 kg/s | -0.0072% |
+| Exhaust mass-weighted temperature | 298.29749 K | 298.29971 K | +0.00223 K |
+| Net sensible heat rejection | 1539.91 W | 1540.47 W | +0.55 W |
+| Rejection / 1545 W applied | 99.671% | 99.707% | +0.036 percentage point |
+| Bidirectional mass fraction | 0.129159% | 0.129171% | +0.000012 percentage point |
+| Thermal re-ingestion index | 0 | 0 | unchanged |
+
+Evidence is preserved under `validation_snapshots_43200`. The long run
+confirms the 20 s ceiling is both materially faster and behaviorally
+consistent. It does not justify weakening the 2,400 s airflow cadence or the
+anchored two-checkpoint gate; those controls continue to catch a genuine
+alternating airflow mode after bulk mass flow, heat rejection, and component
+temperatures appear stationary.
