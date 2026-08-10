@@ -741,3 +741,11 @@ relaxation from 0.7 to 0.3 reduced second-window velocity drift from 7.77% to
 cross-case velocity difference and an 8.13 K worst local temperature
 difference at 0.6 s. Neither tuning is promoted to a production profile until
 the new spatial gate certifies a complete air-exchange run.
+
+The spatial-horizon audit also found a policy conflict in the in-depth
+profile. Its legacy `maximum_airflow_refresh_duration = 0.10` cap was shorter
+than the measured 4.29 s air-exchange horizon of the generic rack, making an
+adaptive refresh impossible to accept regardless of its mass balance, device
+flows, or velocity stability. The in-depth cap is now 20 s, matching the
+default, screening, and validation production safety horizon while retaining
+the strict 0.01 s check interval and Co <= 1 flow fidelity.
