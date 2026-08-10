@@ -913,3 +913,27 @@ values were 0.2206 K/300 s and 0.0096875 K/300 s, again controlled by the
 fluid and `Generic_Trenton_3U_2`. These names make an apparent convergence
 oscillation traceable to the actual region rather than the former ambiguous
 `maxInternalCellChange` label.
+
+### Continued coupled-flow settling and restart cost
+
+Continuation through 24,000 s showed a repeatable alternating pattern. The
+21,600 s accepted-field comparison changed by 1.46836% and reset the streak;
+the 24,000 s comparison changed by 0.754098% and reached checkpoint 1/2. This
+proved that returning immediately after a large accepted-field shift deferred
+the remaining live-flow evolution across another 2,400 s frozen-flow interval.
+
+The adaptive controller now continues live flow at the same thermal
+checkpoint after such a shift. It rebases the spatial reference, requires a
+subsequent locally converged window, stores that final field as the next
+baseline, and keeps the shifted checkpoint ineligible for convergence. At
+26,400 s the accumulated shift was 2.03297%; the controller immediately ran
+another window, which changed by 0.795135%, then stored the settled field and
+left the streak at zero. Previously that window was deferred until 28,800 s.
+
+Spatial-window state now persists in `.velocity_convergence_state`. A fresh
+runner at 26,400.03 s restored the preceding 0.795135% and 0.735016%
+observations. The 28,800 s refresh therefore needed one 0.01 s window
+(194.672 s wall time), rather than another roughly 160-200 s reacquisition
+window. Its local and accepted-field change was 0.762552%, so checkpoint 1/2
+passed. The case is not yet declared coupled-converged; the remaining spatial
+drift is being characterized rather than hidden by stable bulk-flow metrics.

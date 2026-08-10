@@ -321,6 +321,15 @@ int main(int argc, char** argv) {
             "previous_velocity_relative_rms=\"$latest_velocity_relative_rms\"") !=
                std::string::npos);
         assert(text.str().find(
+            "velocity_convergence_state=\"$case_dir/.velocity_convergence_state\"") !=
+               std::string::npos);
+        assert(text.str().find(
+            "Restored spatial velocity convergence state from t=$state_time s.") !=
+               std::string::npos);
+        assert(text.str().find(
+            "mv -f \"$velocity_convergence_state.tmp.$$\"") !=
+               std::string::npos);
+        assert(text.str().find(
             "accepted_airflow_reference=\"$case_dir/.accepted_airflow_reference\"") !=
                std::string::npos);
         assert(text.str().find(
@@ -328,6 +337,14 @@ int main(int argc, char** argv) {
                std::string::npos);
         assert(text.str().find(
             "airflow_refresh_long_lag_validated=1") !=
+               std::string::npos);
+        assert(text.str().find(
+            "long_lag_failed=0") != std::string::npos);
+        assert(text.str().find(
+            "continuing live-flow settling at this thermal checkpoint") !=
+               std::string::npos);
+        assert(text.str().find(
+            "this thermal checkpoint remains ineligible for convergence") !=
                std::string::npos);
         assert(text.str().find(
             "controllingPeakRegion=$controlling_peak_region") !=
