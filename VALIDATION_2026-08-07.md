@@ -756,4 +756,8 @@ window with cumulative elapsed time, and returns an explicit failure if the
 persisted refresh already exceeded `maximum_airflow_refresh_duration`.
 Malformed or future-dated markers are discarded as incompatible. The focused
 C++ exporter test passed, and the preserved generated runner passed WSL
-`bash -n` syntax validation.
+`bash -n` syntax validation. An isolated generated-function harness split a
+refresh at 5.08 s after a stored 5.00 s start: the first invocation returned
+with the marker still at 5.00 s, and the second resumed that start and returned
+status 3 at the original 0.20 s cumulative cap. The harness then removed its
+temporary marker and script.
