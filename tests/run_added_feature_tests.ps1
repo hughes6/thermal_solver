@@ -66,6 +66,7 @@ Write-Host "Checking Python plotting scripts"
     "tools/openfoam_field_convergence.py" `
     "tools/openfoam_cross_case_comparison.py" `
     "tools/openfoam_mesh_comparison.py" `
+    "tools/map_openfoam_case.py" `
     "tests/coarse_heat_io_test.py" `
     "tests/engineering_tools_test.py" `
     "tests/plot_geometry_test.py" `
@@ -73,6 +74,7 @@ Write-Host "Checking Python plotting scripts"
     "tests/openfoam_field_convergence_test.py" `
     "tests/openfoam_cross_case_comparison_test.py" `
     "tests/openfoam_mesh_comparison_test.py" `
+    "tests/map_openfoam_case_test.py" `
     "tests/openfoam_profile_policy_test.py" `
     "tools/validate_openfoam_case.py" `
     "plot_outlet_flow.py" `
@@ -106,6 +108,11 @@ if ($LASTEXITCODE -ne 0) {
 & python -m unittest "tests.recirculation_report_test"
 if ($LASTEXITCODE -ne 0) {
     throw "Recirculation reporting tests failed"
+}
+
+& python -m unittest "tests.map_openfoam_case_test"
+if ($LASTEXITCODE -ne 0) {
+    throw "OpenFOAM mapping workflow tests failed"
 }
 
 & python -m unittest "tests.openfoam_field_convergence_test"

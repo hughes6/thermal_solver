@@ -269,6 +269,11 @@ int main(int argc, char** argv) {
             "Mapped initial airflow retains full fluid heat sources.") !=
                std::string::npos);
         assert(text.str().find(
+            "Mapped airflow skips the cold-start air-exchange horizon after live spatial and device validation.") !=
+               std::string::npos);
+        assert(text.str().find(
+            "minimum_observation=\"0.01\"") != std::string::npos);
+        assert(text.str().find(
             "THERMAL_SOLVER_OPENFOAM_ENV_READY=1") !=
                std::string::npos);
         assert(text.str().find(

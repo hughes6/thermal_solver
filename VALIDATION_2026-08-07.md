@@ -1001,3 +1001,61 @@ as a thermal mesh-accuracy acceptance metric. This experiment isolates the
 current mesh/strict-flow sensitivity: screening airflow magnitude is within
 about 1.5% of the spatially settled current in-depth result, while topology
 and intake/exhaust temperature rise agree much more closely.
+
+### Guarded mapping workflow and 1,200 s in-depth continuation
+
+`tools/map_openfoam_case.py` now automates the required preparation, mapping,
+and strict warm-start order. It accepts only a distinct, freshly exported
+target with no nonzero reconstructed results or processor partitions, verifies
+the requested reconstructed source checkpoint and every target region, runs
+`prepare_regions.sh`, maps each fluid/solid region with `mapFields interpolate
+-consistent`, and finishes with the generated strict coupled warm start. Use
+`--dry-run` to inspect every command without changing either case. For example:
+
+```powershell
+python tools/map_openfoam_case.py `
+  --source C:\OpenFOAM\thermal_sim_v2\source_case `
+  --target C:\OpenFOAM\thermal_sim_v2\fresh_target_case `
+  --source-time 28800.01 --processes 2 --dry-run
+```
+
+A real safety check against the already-used in-depth target was rejected
+before execution because nonzero reconstructed results existed. Unit tests
+cover tolerant exact-time selection, region discovery, command ordering, and
+rejection of non-fresh targets and existing partitions.
+
+Runtime testing exposed a second mapped-state penalty: although mapped cases
+already skipped the cold fan ramp, they still inherited the cold-start minimum
+0.30 s airflow-observation duration. On the current fine mesh, each strict
+0.01 s window costs roughly 7-10 minutes. Generated runners now apply the
+configured cold-start minimum only to cold fields. Mapped fields may be
+accepted after the normal live spatial, mass-balance, direction, and smoothed
+device-flow checks establish sufficient history; they also skip the separate
+air-exchange horizon only after those checks pass.
+
+The preserved in-depth case validated this path. Its final mapped checks had
+0.0261% exterior mass imbalance, 0.1269% maximum device-flow change, and
+0.8256% velocity RMS change. The runner explicitly accepted the mapped field
+at 0.12 s and advanced thermally to 1,200 s in 266.8 s wall time. The terminal
+coupled refresh then passed in one 0.01 s window: accepted-field velocity drift
+was 0.8245%, exterior imbalance was 0.0264%, and maximum device-flow change was
+0.2545%. This confirms that holding airflow during the thermal segment did not
+hide a material flow shift at this checkpoint.
+
+Face-resolved snapshots at 0.06 and 1,200.01 s show the thermal field moving
+from its mapped initial state toward energy balance while preserving topology:
+
+| Metric | Mapped 0.06 s | Continued 1,200.01 s |
+|---|---:|---:|
+| Intake mass flow | 0.293510 kg/s | 0.296245 kg/s |
+| Exhaust mass flow | 0.293584 kg/s | 0.296167 kg/s |
+| Exhaust mass-weighted temperature | 298.2919 K | 298.3315 K |
+| Net sensible heat rejection | 1517.14 W | 1542.26 W |
+| Rejection / 1545 W applied | 98.20% | 99.82% |
+| Bidirectional mass fraction | 0.12485% | 0.12692% |
+| Thermal re-ingestion index | 0 | approximately 0 |
+
+All nine fan patches remained outward, the main vent remained inward, and the
+fanless KVM opening remained a small balanced bidirectional exchange. Snapshot
+reports now create a missing output directory automatically; the evidence is
+preserved in the case's `validation_snapshots_1200` directory.

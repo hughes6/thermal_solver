@@ -360,6 +360,7 @@ def main() -> None:
         raise SystemExit("--expected-heat-watts must be positive")
     if not 0.0 <= args.minimum_flow_fraction < 1.0:
         raise SystemExit("--minimum-flow-fraction must be in [0, 1)")
+    args.output.parent.mkdir(parents=True, exist_ok=True)
     if args.snapshot_times:
         run_checkpoint_report(args, plt, case, expected_heat_watts)
         return
