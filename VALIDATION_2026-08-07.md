@@ -1136,3 +1136,57 @@ temperatures, but its airflow field has not yet met the deliberately strict
 two-checkpoint spatial criterion. Continue with the 1,200 s refresh cadence or
 use the validated screening workflow for longer exploration; do not jump this
 case to sparse 10,000 s refreshes solely because 18,000 s was reached.
+
+### Controlled screening continuation to 36,000 s
+
+The preserved current-config screening case
+`model_generic_airside_screening_spatial_gate_runtime_20260809` was continued
+without overwriting from 28,800.01 to 36,000.02 s using the production
+2,400 s refresh cadence, 10 s thermal-only ceiling, and strict `Co <= 2`
+airflow windows. Production controls were restored after completion. The case
+did not declare coupled convergence.
+
+At 31,200 s, the thermal rates passed screening limits, but accepted airflow
+had moved 1.425% since 26,400 s. A same-checkpoint settling window reduced the
+local velocity change to 0.760% and rebased the accepted reference, leaving
+that checkpoint ineligible. At 33,600 s, peak and component-average rates were
+only 0.00489 and 0.00268 K/300 s; the accepted airflow change was 0.754%, so
+checkpoint 1/2 was accepted. At 36,000 s the peak rate rose to
+0.21383 K/300 s while component-average drift remained 0.01188 K/300 s. Both
+still passed the screening thermal limits, but the anchored airflow change
+across 4,800 s was 1.395%. The runner rejected that checkpoint. Its immediate
+settling window passed at 0.727% local velocity change and 0.0228% maximum
+device-flow change, but correctly remained ineligible. Exterior mass
+imbalance stayed below 0.0007% and all tracked directions remained valid.
+
+The 7,200 s continuation used 1,033.5 s in three thermal stages and 765.5 s in
+five live-flow stages, excluding orchestration overhead. Airflow therefore
+represented 42.6% of measured solver-stage time. Screening flow windows cost
+137-191 s, versus 383-573 s in the current in-depth case: approximately three
+times faster at representative averages. Thermal stages cost 248-407 s per
+2,400 simulated seconds. The screening thermal leg is not proportionally
+faster than in-depth because screening still uses a conservative 10 s
+thermal-only ceiling while the validated in-depth profile uses 20 s.
+
+Face-resolved endpoints confirm stable bulk engineering results despite the
+slow spatial airflow mode:
+
+| Metric | 28,800.01 s | 36,000.02 s | Change |
+|---|---:|---:|---:|
+| Intake mass flow | 0.297692 kg/s | 0.297668 kg/s | -0.0080% |
+| Exhaust mass flow | 0.297691 kg/s | 0.297670 kg/s | -0.0073% |
+| Exhaust mass-weighted temperature | 298.2980 K | 298.2975 K | -0.00052 K |
+| Net sensible heat rejection | 1540.18 W | 1539.91 W | -0.27 W |
+| Rejection / 1545 W applied | 99.688% | 99.671% | -0.017 percentage point |
+| Bidirectional mass fraction | 0.12914% | 0.12916% | +0.00002 percentage point |
+| Thermal re-ingestion index | 0 | 0 | unchanged |
+
+All fan patches remained outward, the main rack vent remained inward, and the
+fanless KVM opening remained the only small bidirectional exchange. The
+snapshot plot and face-flow tables are preserved under
+`validation_snapshots_36000`. The result strengthens the recommended workflow:
+use screening for long settling and operating-point exploration, retain the
+anchored two-checkpoint airflow gate, then map a selected screening checkpoint
+to in-depth for final spatial validation. A controlled same-checkpoint
+screening comparison is still required before raising its 10 s thermal-only
+ceiling.
