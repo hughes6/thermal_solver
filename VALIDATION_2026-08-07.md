@@ -937,3 +937,26 @@ observations. The 28,800 s refresh therefore needed one 0.01 s window
 window. Its local and accepted-field change was 0.762552%, so checkpoint 1/2
 passed. The case is not yet declared coupled-converged; the remaining spatial
 drift is being characterized rather than hidden by stable bulk-flow metrics.
+
+### Recirculation topology despite instantaneous field drift
+
+Exact reconstructed OpenFOAM comparisons confirmed that the residual velocity
+motion is real: RMS changes were 2.1206% from 19,200.02 to 24,000.01 s,
+2.0780% from 24,000.01 to 26,400.03 s, and 0.76255% from 26,400.03 to
+28,800.01 s. Face-resolved boundary audits nevertheless found unchanged
+engineering topology at all four checkpoints. Every fan patch was purely
+outward, the main vent was purely inward, and the fanless KVM opening retained
+a nearly balanced bidirectional exchange. Bidirectional traffic was
+0.12911-0.12914% of total gross boundary flow, thermal re-ingestion was zero,
+and net sensible rejection remained 1539.91-1540.66 W for 1545 W applied.
+
+The standard recirculation report became impractically slow while scanning the
+case's many restart-fragmented function-object files. It now accepts
+`--snapshot-times`; this mode reads reconstructed `phi` and `T` boundary faces
+directly, bypasses report-history scans, and writes a checkpoint summary CSV,
+a per-patch face-flow CSV, and a four-panel topology plot. The four-checkpoint
+208,772-cell screening report completed in 21.9 s and is preserved under the
+case's `validation_snapshots` directory. A three-checkpoint preserved in-depth
+case completed in 4.5 s and likewise showed zero thermal re-ingestion, although
+its older discretized fan/porosity sources differ from the current screening
+export and therefore are not treated as a controlled mesh-accuracy comparison.

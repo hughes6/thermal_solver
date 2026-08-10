@@ -71,6 +71,150 @@ def latest_face_resolved_samples(case: Path, patches):
     return time_s, samples
 
 
+def boundary_patch_names(case: Path) -> list[str]:
+    """Return external patch names from the reconstructed fluid mesh."""
+    path = case / "constant" / "fluid" / "polyMesh" / "boundary"
+    if not path.is_file():
+        raise ValueError(f"Fluid boundary dictionary not found: {path}")
+    text = path.read_bytes().decode("latin-1", errors="replace")
+    return re.findall(
+        r"(?m)^\s*([A-Za-z_][A-Za-z0-9_]*)\s*\n\s*\{\s*\n"
+        r"\s*type\s+patch\s*;",
+        text,
+    )
+
+
+def selected_time_path(case: Path, requested: float) -> tuple[float, Path]:
+    candidates = []
+    for path in case.iterdir():
+        if not path.is_dir():
+            continue
+        try:
+            value = float(path.name)
+        except ValueError:
+            continue
+        scale = max(1.0, abs(requested))
+        if abs(value - requested) <= 1.0e-9 * scale:
+            candidates.append((abs(value - requested), value, path))
+    if not candidates:
+        raise ValueError(f"No reconstructed checkpoint matches t={requested:g} s")
+    _, value, path = min(candidates)
+    return value, path
+
+
+def checkpoint_face_rows(case: Path, requested_times, ambient_k: float,
+                         cp_air: float = 1005.0):
+    """Read selected reconstructed face fields without report-history scans."""
+    patches = boundary_patch_names(case)
+    rows = []
+    face_rows = []
+    for requested in requested_times:
+        time_s, time_path = selected_time_path(case, requested)
+        phi = time_path / "fluid" / "phi"
+        temperature = time_path / "fluid" / "T"
+        if not phi.is_file() or not temperature.is_file():
+            raise ValueError(f"Checkpoint t={time_s:g} lacks reconstructed phi or T")
+        inward_mass = outward_mass = inward_heat = outward_heat = 0.0
+        bidirectional_mass = 0.0
+        for patch in patches:
+            sample = directional_patch_sample(
+                patch_values(phi, patch), patch_values(temperature, patch))
+            face_rows.append((time_s, patch, *sample))
+            _, inward, outward, inward_t, outward_t, _ = sample
+            if inward and inward_t == inward_t:
+                inward_mass += inward
+                inward_heat += inward * inward_t
+            if outward and outward_t == outward_t:
+                outward_mass += outward
+                outward_heat += outward * outward_t
+            bidirectional_mass += min(inward, outward)
+        inward_t = inward_heat / inward_mass if inward_mass else float("nan")
+        outward_t = outward_heat / outward_mass if outward_mass else float("nan")
+        denominator = outward_t - ambient_k
+        reingestion = (
+            max(0.0, min(1.0, (inward_t - ambient_k) / denominator))
+            if denominator > 1.0e-12 and inward_t == inward_t else float("nan")
+        )
+        sensible = cp_air * (
+            outward_mass * (outward_t - ambient_k)
+            - inward_mass * (inward_t - ambient_k))
+        gross = inward_mass + outward_mass
+        rows.append((time_s, inward_mass, outward_mass, inward_t, outward_t,
+                     reingestion, sensible,
+                     bidirectional_mass / gross if gross else 0.0))
+    return rows, face_rows
+
+
+def run_checkpoint_report(args, plt, case: Path, expected_heat_watts):
+    try:
+        rows, face_rows = checkpoint_face_rows(
+            case, args.snapshot_times, args.ambient_temperature, args.cp_air)
+    except ValueError as exc:
+        raise SystemExit(str(exc)) from exc
+    csv_path = args.output.with_suffix(".csv")
+    with csv_path.open("w", newline="", encoding="utf-8") as stream:
+        writer = csv.writer(stream)
+        writer.writerow(("time_s", "intake_kg_s", "exhaust_kg_s", "intake_T_K",
+                         "exhaust_T_K", "thermal_reingestion_index",
+                         "net_sensible_heat_rejection_W",
+                         "bidirectional_mass_fraction", "heat_rejection_fraction"))
+        for row in rows:
+            fraction = (row[6] / expected_heat_watts
+                        if expected_heat_watts is not None else float("nan"))
+            writer.writerow((*row, fraction))
+    face_csv_path = args.output.with_name(args.output.stem + "_face_flow.csv")
+    with face_csv_path.open("w", newline="", encoding="utf-8") as stream:
+        writer = csv.writer(stream)
+        writer.writerow(("time_s", "patch", "net_out_kg_s", "inward_kg_s",
+                         "outward_kg_s", "inward_T_K", "outward_T_K",
+                         "bidirectional_share_of_gross"))
+        writer.writerows(face_rows)
+    times = [row[0] for row in rows]
+    fig, axes = plt.subplots(4, 1, figsize=(11, 13), sharex=True)
+    patches = sorted({row[1] for row in face_rows})
+    for patch in patches:
+        samples = [row for row in face_rows if row[1] == patch]
+        axes[0].plot([row[0] for row in samples], [row[2] for row in samples],
+                     marker="o", label=patch)
+    axes[0].axhline(0.0, color="black", linewidth=0.8)
+    axes[0].set_ylabel("Net flow (kg/s)\n+out / -in")
+    axes[0].set_title("Selected-checkpoint boundary direction")
+    axes[0].legend(fontsize=8, ncol=2)
+    axes[1].plot(times, [row[3] for row in rows], marker="o", label="Intake")
+    axes[1].plot(times, [row[4] for row in rows], marker="o", label="Exhaust")
+    axes[1].axhline(args.ambient_temperature, color="black", linestyle="--",
+                    label="Ambient")
+    axes[1].set_ylabel("Temperature (K)")
+    axes[1].legend(fontsize=8)
+    axes[2].plot(times, [row[5] for row in rows], marker="o",
+                 label="Thermal re-ingestion")
+    axes[2].plot(times, [row[7] for row in rows], marker="o",
+                 label="Bidirectional mass fraction")
+    axes[2].set_ylabel("Fraction")
+    axes[2].legend(fontsize=8)
+    axes[3].plot(times, [row[6] for row in rows], marker="o",
+                 color="darkorange", label="Net sensible heat")
+    if expected_heat_watts is not None:
+        axes[3].axhline(expected_heat_watts, color="black", linestyle="--",
+                        label=f"Applied heat: {expected_heat_watts:g} W")
+    axes[3].set_ylabel("Heat rejection (W)")
+    axes[3].set_xlabel("Simulation time (s)")
+    axes[3].legend(fontsize=8)
+    for axis in axes:
+        axis.grid(True, alpha=0.3)
+    fig.tight_layout()
+    if args.save:
+        fig.savefig(args.output, dpi=180)
+        print(f"Saved: {args.output}")
+    else:
+        plt.show()
+    print(f"Saved: {csv_path}")
+    print(f"Saved: {face_csv_path}")
+    print(f"Latest thermal re-ingestion index: {rows[-1][5]:.6g}")
+    print(f"Latest bidirectional mass fraction: {rows[-1][7]:.6g}")
+    print(f"Latest net sensible heat rejection: {rows[-1][6]:.6g} W")
+
+
 def read_report(root: Path) -> dict[float, float]:
     samples: dict[float, float] = {}
     for path in root.glob("*/surfaceFieldValue*.dat"):
@@ -193,6 +337,11 @@ def main() -> None:
               "this fraction of total one-way rack throughput; default: 0.0001"),
     )
     parser.add_argument("--output", type=Path, default=Path("recirculation_report.png"))
+    parser.add_argument(
+        "--snapshot-times", nargs="+", type=float,
+        help=("read only these reconstructed checkpoints, bypassing potentially "
+              "large function-object histories"),
+    )
     parser.add_argument("--save", action="store_true")
     args = parser.parse_args()
 
@@ -205,6 +354,15 @@ def main() -> None:
     expected_heat_watts = args.expected_heat_watts
     if expected_heat_watts is None:
         expected_heat_watts = exported_heat_watts(case)
+    if args.cp_air <= 0.0:
+        raise SystemExit("--cp-air must be positive")
+    if expected_heat_watts is not None and expected_heat_watts <= 0.0:
+        raise SystemExit("--expected-heat-watts must be positive")
+    if not 0.0 <= args.minimum_flow_fraction < 1.0:
+        raise SystemExit("--minimum-flow-fraction must be in [0, 1)")
+    if args.snapshot_times:
+        run_checkpoint_report(args, plt, case, expected_heat_watts)
+        return
     try:
         histories = boundary_histories(case)
     except ValueError as exc:
@@ -217,12 +375,6 @@ def main() -> None:
             "postProcess does not load T and phi), then retry:\n  "
             + solver_postprocess_command(case)
         )
-    if args.cp_air <= 0.0:
-        raise SystemExit("--cp-air must be positive")
-    if expected_heat_watts is not None and expected_heat_watts <= 0.0:
-        raise SystemExit("--expected-heat-watts must be positive")
-    if not 0.0 <= args.minimum_flow_fraction < 1.0:
-        raise SystemExit("--minimum-flow-fraction must be in [0, 1)")
     rows = combined_samples(
         histories, args.ambient_temperature, args.cp_air,
         args.minimum_flow_fraction,

@@ -4,12 +4,14 @@ import unittest
 from pathlib import Path
 
 from plot.recirculation_report import (
+    boundary_patch_names,
     boundary_flow_floors,
     boundary_histories,
     combined_samples,
     directional_patch_sample,
     exported_heat_watts,
     read_report,
+    selected_time_path,
     solver_postprocess_command,
 )
 
@@ -30,6 +32,41 @@ class RecirculationReportTest(unittest.TestCase):
         self.assertAlmostEqual(sample[3], 293.8)
         self.assertAlmostEqual(sample[4], 305.0)
         self.assertAlmostEqual(sample[5], 0.4 / 0.9)
+
+    def test_external_patch_names_exclude_walls_and_mapped_interfaces(self):
+        with tempfile.TemporaryDirectory() as directory:
+            case = Path(directory)
+            mesh = case / "constant" / "fluid" / "polyMesh"
+            mesh.mkdir(parents=True)
+            (mesh / "boundary").write_text(
+                """3
+(
+inlet
+{
+    type patch;
+}
+rack_walls
+{
+    type wall;
+}
+fluid_to_solid
+{
+    type mappedWall;
+}
+)
+""",
+                encoding="utf-8",
+            )
+            self.assertEqual(boundary_patch_names(case), ["inlet"])
+
+    def test_selected_time_path_uses_numeric_tolerance(self):
+        with tempfile.TemporaryDirectory() as directory:
+            case = Path(directory)
+            checkpoint = case / "24000.009999999991"
+            checkpoint.mkdir()
+            value, path = selected_time_path(case, 24000.01)
+            self.assertAlmostEqual(value, 24000.01)
+            self.assertEqual(path, checkpoint)
 
     def test_reingestion_and_net_sensible_heat(self):
         histories = {
