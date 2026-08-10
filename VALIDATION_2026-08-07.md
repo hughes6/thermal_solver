@@ -960,3 +960,44 @@ case's `validation_snapshots` directory. A three-checkpoint preserved in-depth
 case completed in 4.5 s and likewise showed zero thermal re-ingestion, although
 its older discretized fan/porosity sources differ from the current screening
 export and therefore are not treated as a controlled mesh-accuracy comparison.
+
+## Current-config screening-to-in-depth comparison (2026-08-10)
+
+A new non-overwriting case,
+`model_generic_airside_indepth_current_20260810`, was exported from the current
+`model_generic_airside.toml`. Its 335,580-cell mesh passed full all-region
+geometry and topology checks (284,396 fluid cells). The preserved screening
+case has 208,772 cells. All four applied loads (150, 950, 425, and 20 W) and
+every fan-curve table value matched; only expected mesh-dependent selected
+thicknesses, cell zones, and porous-source discretization differed.
+
+The screening 28,800.01 s solution was mapped with `mapFields interpolate
+-consistent` into fluid and all four solid regions. The first attempted map
+was safely rejected because the freshly exported target had not yet been
+split into region meshes. Running the generated `prepare_regions.sh` first
+resolved this ordering requirement. The runner then detected mapped
+nonuniform velocity, retained full heat sources, skipped the cold fan ramp,
+and performed strict `Co <= 1` coupled warm starts to construct consistent
+target-mesh flow fields.
+
+Mapped velocity adjustment decayed from 2.876% RMS over 0.01-0.03 s, to
+1.108% over 0.03-0.04 s, 1.00066% over 0.04-0.05 s, and finally 0.94184% over
+0.05-0.06 s. The accepted 0.06 s endpoint had 0.0254% exterior mass
+imbalance, zero thermal re-ingestion, and the same fan/vent/KVM bidirectional
+topology as screening. Strict windows cost approximately 377-394 s per 0.01 s
+after preparation; mapping all five regions took 43.7 s.
+
+| Metric | Screening 28,800.01 s | Current in-depth mapped 0.06 s | Screening difference |
+|---|---:|---:|---:|
+| Intake mass flow | 0.297692 kg/s | 0.293510 kg/s | +1.425% |
+| Exhaust mass flow | 0.297691 kg/s | 0.293584 kg/s | +1.399% |
+| Exhaust mass-weighted temperature | 298.2980 K | 298.2919 K | +0.0061 K |
+| Bidirectional mass fraction | 0.12914% | 0.12485% | +0.00430 percentage point |
+| Thermal re-ingestion index | 0 | 0 | unchanged |
+
+The mapped in-depth temperature field has not undergone a long independent
+thermal transient, so its instantaneous 1517 W sensible rejection is not used
+as a thermal mesh-accuracy acceptance metric. This experiment isolates the
+current mesh/strict-flow sensitivity: screening airflow magnitude is within
+about 1.5% of the spatially settled current in-depth result, while topology
+and intake/exhaust temperature rise agree much more closely.
