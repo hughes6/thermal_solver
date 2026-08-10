@@ -1088,3 +1088,51 @@ only 0.77% spatial RMS change; the next live window reduced device change to
 required. The requested 18,000 s continuation remains non-overwriting and
 prunes completed processor checkpoints while characterizing this slow flow
 settling.
+
+### Completed 18,000 s current in-depth run
+
+The preserved current-config in-depth case completed the requested 18,000 s
+stage without overwriting earlier reconstructed endpoints. Production controls
+were restored cleanly. It did not declare coupled convergence: the final
+18,000.01 s endpoint was valid checkpoint 1/2, so proceeding directly to the
+100,000 s stage with a 10,000 s airflow interval is not yet justified for this
+case.
+
+From 3,600 to 18,000 s, twelve implicit thermal stages consumed 2,260 s wall
+time while seventeen strict live-flow stages consumed 7,857 s. Thus airflow
+validation represented 77.7% of measured solver-stage time. Each 1,200 s
+thermal advance generally took 141-267 s; each 0.01 s fine-mesh airflow window
+took 383-573 s. The long-lag gate repeatedly found approximately 1.5-1.6%
+accumulated velocity drift over two thermal checkpoints even though individual
+windows were typically 0.76-0.84%. Immediate same-checkpoint settling therefore
+prevented false convergence and rebased the accepted field.
+
+The strict fluid-hotspot criterion exposed a damped alternating response at a
+rear-side cell. Consecutive hotspot values were 324.165 K at 10,800 s,
+323.569 K at 12,000 s, 324.012 K at 13,200 s, and 323.394 K at 14,400 s.
+Component-average changes remained below 0.014 K/300 s throughout. The hotspot
+rate first passed the 0.10 K/300 s in-depth limit at 15,600 s, failed again at
+16,800 s, and passed strongly at 18,000 s (0.030675 K/300 s). The required
+second checkpoint correctly prevented the isolated 15,600 pass from being
+reported as convergence.
+
+Face-resolved reconstructed endpoints remained physically consistent:
+
+| Metric | 1,200.01 s | 3,600.01 s | 18,000.01 s |
+|---|---:|---:|---:|
+| Intake mass flow | 0.296245 kg/s | 0.296615 kg/s | 0.297498 kg/s |
+| Exhaust mass flow | 0.296167 kg/s | 0.296550 kg/s | 0.297489 kg/s |
+| Exhaust mass-weighted temperature | 298.3315 K | 298.3221 K | 298.3031 K |
+| Net sensible heat rejection | 1542.26 W | 1541.45 W | 1540.67 W |
+| Rejection / 1545 W applied | 99.82% | 99.77% | 99.72% |
+| Bidirectional mass fraction | 0.12692% | 0.12738% | 0.12886% |
+| Thermal re-ingestion index | approximately 0 | 0 | 0 |
+
+All nine fan patches remained outward, the main vent remained inward, and the
+fanless KVM opening remained the only small bidirectional exchange. Evidence is
+preserved under `validation_snapshots_18000`. The engineering conclusion is
+that the current in-depth mesh produces stable bulk energy and component
+temperatures, but its airflow field has not yet met the deliberately strict
+two-checkpoint spatial criterion. Continue with the 1,200 s refresh cadence or
+use the validated screening workflow for longer exploration; do not jump this
+case to sparse 10,000 s refreshes solely because 18,000 s was reached.
