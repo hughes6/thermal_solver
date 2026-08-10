@@ -291,6 +291,15 @@ int main(int argc, char** argv) {
             "Refreshing airflow at terminal thermal checkpoint") !=
                std::string::npos);
         assert(text.str().find(
+            "pending_refresh_start=$(awk 'NF { print $1; exit }'") !=
+               std::string::npos);
+        assert(text.str().find(
+            "Resuming airflow refresh observation window from t=$refresh_start s.") !=
+               std::string::npos);
+        assert(text.str().find(
+            "Pending airflow refresh already exceeded the maximum duration") !=
+               std::string::npos);
+        assert(text.str().find(
             "Spatial velocity change: rmsDelta=") !=
                std::string::npos);
         assert(text.str().find(

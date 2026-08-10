@@ -741,3 +741,19 @@ relaxation from 0.7 to 0.3 reduced second-window velocity drift from 7.77% to
 cross-case velocity difference and an 8.13 K worst local temperature
 difference at 0.6 s. Neither tuning is promoted to a production profile until
 the new spatial gate certifies a complete air-exchange run.
+
+## Pending adaptive-refresh restart audit
+
+The periodic adaptive-refresh marker stored the original refresh start time,
+but the generated `adaptive_airflow_refresh` function previously overwrote it
+with the current time whenever a runner retried an interrupted or endpoint-
+split refresh. That discarded accumulated refresh time, reset the maximum-
+duration safety window, and could permit unbounded retries across runner
+invocations while claiming to resume the pending refresh.
+
+The runner now reads and validates the stored start, resumes its observation
+window with cumulative elapsed time, and returns an explicit failure if the
+persisted refresh already exceeded `maximum_airflow_refresh_duration`.
+Malformed or future-dated markers are discarded as incompatible. The focused
+C++ exporter test passed, and the preserved generated runner passed WSL
+`bash -n` syntax validation.
