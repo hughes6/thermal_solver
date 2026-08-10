@@ -1059,3 +1059,32 @@ All nine fan patches remained outward, the main vent remained inward, and the
 fanless KVM opening remained a small balanced bidirectional exchange. Snapshot
 reports now create a missing output directory automatically; the evidence is
 preserved in the case's `validation_snapshots_1200` directory.
+
+### Long in-depth convergence and floating-time threshold
+
+Continuation to 2,400 and 3,600 s remained thermally stable. At 2,400 s the
+fluid-controlled peak rate was 0.05165 K/300 s, the Eaton-controlled component
+average rate was 0.0200 K/300 s, and net sensible rejection was 1541.88 W
+(99.80% of 1545 W). At 3,600 s the rates fell to 0.031625 and 0.011725 K/300 s.
+The corresponding accepted-field airflow drifts were 0.8148% and 0.8359%, with
+exterior mass imbalance below 0.025% and device-flow change below 0.11%.
+
+Despite those passes, the 3,600 s convergence streak remained zero. The
+checkpoint was represented as `3599.9999999999927`, while the minimum thermal
+convergence gate compared it to 3,600 with exact `>=`. Generated runners now
+apply a scale-aware time tolerance to this threshold, matching the tolerance
+already used for checkpoint and requested-end comparisons. The real preserved
+case then accepted nominal 4,800 s (`4799.9999999999945`) as coupled checkpoint
+1/2, directly validating the correction.
+
+The anchored two-checkpoint airflow test continued to prevent premature
+convergence. Local velocity RMS changes at 4,800, 6,000, 7,200, and 8,400 s
+were approximately 0.83%, but two-interval accumulated drift reached about
+1.6%, above the 1% coupled limit. Each such shift triggered an immediate
+same-thermal-time settling window and rebased the accepted reference. At
+9,600 s a separate 4.25% change in one internal rear fan was caught despite
+only 0.77% spatial RMS change; the next live window reduced device change to
+0.065%, demonstrating why both spatial and fan operating-point gates are
+required. The requested 18,000 s continuation remains non-overwriting and
+prunes completed processor checkpoints while characterizing this slow flow
+settling.

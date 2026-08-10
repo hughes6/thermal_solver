@@ -274,6 +274,8 @@ int main(int argc, char** argv) {
         assert(text.str().find(
             "minimum_observation=\"0.01\"") != std::string::npos);
         assert(text.str().find(
+            "t>=minimum-tolerance") != std::string::npos);
+        assert(text.str().find(
             "THERMAL_SOLVER_OPENFOAM_ENV_READY=1") !=
                std::string::npos);
         assert(text.str().find(

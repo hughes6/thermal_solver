@@ -3785,7 +3785,7 @@ functions
                     "controllingAverageRegion=$controlling_average_region, elapsed=$elapsed s\"\n"
                 "        if ! awk -v t=\"$checkpoint_time\" -v minimum=\""
                     << options.minimum_thermal_convergence_time
-                    << "\" 'BEGIN { exit !(t>=minimum) }'; then return 1; fi\n"
+                    << "\" 'BEGIN { scale=(minimum<0?-minimum:minimum); if(scale<1)scale=1; tolerance=1e-9*scale; exit !(t>=minimum-tolerance) }'; then return 1; fi\n"
                 "        if ! awk -v v=\"$scaled_delta\" -v limit=\""
                     << options.maximum_temperature_change
                     << "\" 'BEGIN { exit !(v<=limit) }'; then return 1; fi\n"
