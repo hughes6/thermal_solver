@@ -877,3 +877,39 @@ adaptive airflow stage, reconstruction, and control restoration in 124 s. Its
 timed stage was 21.665 s, a 4.11x speedup over the original generated runner,
 and its Courant and spatial metrics matched the baseline exactly at displayed
 precision.
+
+## Coupled thermal/airflow convergence gate
+
+The preserved screening case was continued through 12,000.01 s. The old
+logic declared screening convergence after two thermal checkpoints below the
+0.25 K/300 s limit, but a native comparison of accepted velocity fields from
+7,200.01 to 12,000.01 s still showed 0.0274398 m/s RMS change against
+1.90755 m/s RMS velocity, or 1.4385%. Adjacent live refresh windows were each
+below 1%, so the short-window spatial test alone could hide accumulating
+accepted-field drift.
+
+Generated runners now preserve an accepted decomposed `U` reference in
+`.accepted_airflow_reference`, outside pruned numeric time directories. A
+thermal convergence streak can advance only when the thermal limits, local
+airflow metrics, and accepted-reference velocity RMS limit all pass. The
+reference remains anchored throughout the required checkpoint streak; a
+failed comparison rebuilds the anchor and resets the streak. A restarted old
+case without a reference conservatively records a baseline and requires
+another refresh.
+
+The corrected runner was installed without regenerating the preserved mesh or
+results. At 14,400.02 s it recorded the missing baseline and reset the stale
+2/2 streak. At 16,800.01 s, accepted-field drift was 0.0154058 m/s against
+1.90644 m/s, or 0.808093%, so checkpoint 1/2 passed. The fully anchored test
+at 19,200.02 s then measured 0.0279756 m/s against 1.90587 m/s, or 1.46787%,
+and correctly reset the streak even though the two local refresh windows
+passed at 0.821285% and 0.782063%. This reproduces and prevents the prior
+premature-convergence failure.
+
+Thermal diagnostics now identify the controlling region. At 14,400 s the
+fluid peak controlled at 0.2312 K/300 s and `Generic_Trenton_3U_2` controlled
+component-average drift at 0.007675 K/300 s. At 19,200 s the corresponding
+values were 0.2206 K/300 s and 0.0096875 K/300 s, again controlled by the
+fluid and `Generic_Trenton_3U_2`. These names make an apparent convergence
+oscillation traceable to the actual region rather than the former ambiguous
+`maxInternalCellChange` label.

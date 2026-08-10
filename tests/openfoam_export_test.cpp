@@ -321,6 +321,27 @@ int main(int argc, char** argv) {
             "previous_velocity_relative_rms=\"$latest_velocity_relative_rms\"") !=
                std::string::npos);
         assert(text.str().find(
+            "accepted_airflow_reference=\"$case_dir/.accepted_airflow_reference\"") !=
+               std::string::npos);
+        assert(text.str().find(
+            "Accepted airflow drift: referenceTime=$reference_time") !=
+               std::string::npos);
+        assert(text.str().find(
+            "airflow_refresh_long_lag_validated=1") !=
+               std::string::npos);
+        assert(text.str().find(
+            "controllingPeakRegion=$controlling_peak_region") !=
+               std::string::npos);
+        assert(text.str().find(
+            "accepted airflow has not converged across refresh cycles") !=
+               std::string::npos);
+        assert(text.str().find(
+            "if ! awk -v value=\"$accepted_airflow_relative_rms\"") !=
+               std::string::npos);
+        assert(text.str().find(
+            "record_accepted_airflow_reference || return 3") !=
+               std::string::npos);
+        assert(text.str().find(
             "-dict system/spatialConvergenceDict") !=
                std::string::npos);
         assert(text.str().find(
