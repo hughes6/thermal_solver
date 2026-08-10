@@ -1190,3 +1190,39 @@ anchored two-checkpoint airflow gate, then map a selected screening checkpoint
 to in-depth for final spatial validation. A controlled same-checkpoint
 screening comparison is still required before raising its 10 s thermal-only
 ceiling.
+
+### Controlled screening thermal-timestep comparison
+
+That remaining comparison used two independent 208,772-cell cases copied from
+the same freshly mapped 36,000.02 s screening state. Both branches performed
+the same live-flow validation before advancing from 0.04 to 2,400.00 s with
+airflow held. The reference retained a 10 s thermal-only ceiling; the trial
+used 20 s. Both then ran the same strict terminal airflow window to
+2,400.01 s. The initial spatial metrics were bit-for-bit identical across the
+branches: 1.0254%, 0.88335%, and 0.848834% over successive 0.01 s windows.
+
+The endpoint comparison on the identical mesh found:
+
+| Metric | 10 s ceiling | 20 s ceiling | Difference |
+|---|---:|---:|---:|
+| Thermal-stage wall time | 380.696 s | 287.274 s | -24.5% |
+| All-region temperature RMS | reference | - | 0.0000202 K |
+| Maximum cell-temperature difference | reference | - | 0.000244 K |
+| Velocity RMS difference | reference | - | 0.000002% |
+| Maximum cell-velocity difference | reference | - | 0.000000956 m/s |
+| Exhaust mass flow | 0.297673732 kg/s | 0.297673732 kg/s | +0.00000000019 kg/s |
+| Exhaust mass-weighted temperature | 298.2992513 K | 298.2992536 K | +0.0000023 K |
+| Net sensible heat rejection | 1540.46085 W | 1540.46153 W | +0.00068 W |
+| Bidirectional mass fraction | 0.1291283% | 0.1291283% | negligible |
+| Thermal re-ingestion index | 0 | 0 | unchanged |
+
+The first terminal flow refresh changed 1.59807% in both cases, so both
+endpoints were correctly left pending rather than called converged. That
+shared airflow response does not contaminate the timestep conclusion: the
+post-refresh velocity fields differed by only 2.93e-8 m/s RMS. The 20 s
+screening thermal ceiling is therefore adopted. It preserves engineering and
+cell-field accuracy at this controlled operating point while removing roughly
+one quarter of thermal-stage runtime; all existing airflow cadence and
+convergence safeguards remain unchanged. The cases and reports are preserved
+as `screening_dt10_controlled_20260810` and
+`screening_dt20_controlled_20260810`.

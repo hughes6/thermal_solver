@@ -162,7 +162,7 @@ int main() {
     assert(screening.mesh.coarse_dx == 0.10);
     assert(screening.mesh.refinement_margin == 0.02);
     assert(
-        screening.openfoam_solver.thermal_only_maximum_time_step == 10.0);
+        screening.openfoam_solver.thermal_only_maximum_time_step == 20.0);
     assert(screening.openfoam_solver.airflow_refresh_duration == 0.02);
     assert(screening.openfoam_solver.airflow_maximum_time_step == 0.001);
     assert(
