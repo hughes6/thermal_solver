@@ -845,3 +845,35 @@ restores the caller's environment, and deletes that directory in `finally`.
 The optional mesh-comparison module is run only when both NumPy and PyVista are
 available; otherwise the runner reports an explicit dependency skip instead
 of treating `unittest`'s zero-test exit code as a product failure.
+
+## Single OpenFOAM environment initialization
+
+Whole-stage timing on a separate 600-cell validation-fan case isolated a much
+larger process-launch penalty than solver `ClockTime` suggested. The identical
+0.05 to 0.06 s airflow stage on `/mnt/c` took 89.126 s wall time even though
+the solver reported only 10 s `ClockTime`. Approximately 79.1 s, or 88.8% of
+the stage, was therefore outside the solver process. The stage produced
+0.013669 m/s RMS velocity delta, 0.102832 m/s RMS velocity, 13.2926% relative
+RMS, and maximum Courant number 0.00523598.
+
+Moving the identical checkpoint to WSL-native storage reduced the stage to
+48.335 s (1.84x faster) with the same displayed physics. A second controlled
+`/mnt/c` trial initialized the OpenFOAM environment once and then ran all
+internal utilities directly; that reduced the stage to 18.213 s (4.89x faster
+than the original `/mnt/c` runner), with the same Courant and velocity values.
+
+Generated parallel runners now validate their arguments and then perform one
+guarded self-`exec` through the configured OpenFOAM launcher. The re-entered
+process sets `THERMAL_SOLVER_OPENFOAM_ENV_READY=1` and
+`OPENFOAM_LAUNCHER=env`, so `foamDictionary`, `foamListTimes`, MPI solvers,
+post-processing, reconstruction, and the preparation script reuse one already
+initialized environment. Lock acquisition occurs only after re-entry, avoiding
+a false self-lock. Users who explicitly provide `OPENFOAM_LAUNCHER=env` retain
+direct control for a shell where OpenFOAM is already initialized.
+
+A freshly generated case passed `bash -n`, printed exactly one environment
+initialization record, and completed preparation, the five-step fan ramp, one
+adaptive airflow stage, reconstruction, and control restoration in 124 s. Its
+timed stage was 21.665 s, a 4.11x speedup over the original generated runner,
+and its Courant and spatial metrics matched the baseline exactly at displayed
+precision.

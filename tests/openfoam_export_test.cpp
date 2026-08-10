@@ -269,6 +269,15 @@ int main(int argc, char** argv) {
             "Mapped initial airflow retains full fluid heat sources.") !=
                std::string::npos);
         assert(text.str().find(
+            "THERMAL_SOLVER_OPENFOAM_ENV_READY=1") !=
+               std::string::npos);
+        assert(text.str().find(
+            "OPENFOAM_LAUNCHER=env") !=
+               std::string::npos);
+        assert(text.str().find(
+            "Initializing OpenFOAM environment once with $foam_launcher.") !=
+               std::string::npos);
+        assert(text.str().find(
             "Detected mapped nonuniform velocity fields; retaining full heat sources and skipping the cold fan ramp.") !=
                std::string::npos);
         assert(text.str().find("mapped_state_marker=") !=
