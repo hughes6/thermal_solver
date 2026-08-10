@@ -761,3 +761,19 @@ refresh at 5.08 s after a stored 5.00 s start: the first invocation returned
 with the marker still at 5.00 s, and the second resumed that start and returned
 status 3 at the original 0.20 s cumulative cap. The harness then removed its
 temporary marker and script.
+
+## Regression executable cleanup
+
+The official `tests/run_added_feature_tests.ps1` script previously linked its
+six C++ test programs directly into `tests/`. Although ignored by Git, these
+binaries accumulated, caused linker locks after interrupted test runs, and
+contradicted the repository's generated-executable cleanup policy. Thirteen
+older ignored diagnostic executables totaling 24,401,283 bytes were verified
+inside `tests/` and removed; they remain rebuildable from source.
+
+The suite now compiles C++ tests into a unique directory beneath the system
+temporary directory. A guarded `finally` block deletes only a path beneath
+that temp root whose directory name begins with
+`thermal_solver_added_feature_tests_`. The complete official suite passed, its
+specific temp directory no longer existed afterward, and `tests/` contained
+zero `.exe` files.

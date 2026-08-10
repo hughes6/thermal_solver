@@ -9,17 +9,39 @@ $tests = @(
     "model_config_test"
 )
 
-foreach ($test in $tests) {
-    Write-Host "Building $test"
-    & g++ -std=c++17 -O2 -I src "tests/$test.cpp" -o "tests/$test.exe"
-    if ($LASTEXITCODE -ne 0) {
-        throw "Compilation failed: $test"
-    }
+$tempBase = [IO.Path]::GetFullPath([IO.Path]::GetTempPath())
+$testBinDir = [IO.Path]::GetFullPath(
+    (Join-Path $tempBase ("thermal_solver_added_feature_tests_" + [guid]::NewGuid().ToString("N"))))
+if (-not $testBinDir.StartsWith($tempBase, [StringComparison]::OrdinalIgnoreCase)) {
+    throw "Unsafe test executable directory: $testBinDir"
+}
+[void](New-Item -ItemType Directory -Path $testBinDir)
 
-    Write-Host "Running $test"
-    & "tests/$test.exe"
-    if ($LASTEXITCODE -ne 0) {
-        throw "Test failed: $test"
+try {
+    foreach ($test in $tests) {
+        $testExe = Join-Path $testBinDir "$test.exe"
+        Write-Host "Building $test in $testBinDir"
+        & g++ -std=c++17 -O2 -I src "tests/$test.cpp" -o $testExe
+        if ($LASTEXITCODE -ne 0) {
+            throw "Compilation failed: $test"
+        }
+
+        Write-Host "Running $test"
+        & $testExe
+        if ($LASTEXITCODE -ne 0) {
+            throw "Test failed: $test"
+        }
+    }
+}
+finally {
+    if (Test-Path -LiteralPath $testBinDir) {
+        $cleanupTarget = [IO.Path]::GetFullPath($testBinDir)
+        if (-not $cleanupTarget.StartsWith($tempBase, [StringComparison]::OrdinalIgnoreCase) -or
+            -not ([IO.Path]::GetFileName($cleanupTarget)).StartsWith(
+                "thermal_solver_added_feature_tests_", [StringComparison]::Ordinal)) {
+            throw "Refusing unsafe test executable cleanup: $cleanupTarget"
+        }
+        Remove-Item -LiteralPath $cleanupTarget -Recurse -Force
     }
 }
 
