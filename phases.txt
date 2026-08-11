@@ -1,17 +1,20 @@
+import win32com.client as win32
 import winreg
 
-for i in range(typelib.GetTypeInfoCount()):
-    name = typelib.GetDocumentation(i)[0]
+app = win32.gencache.EnsureDispatch("CT.DBEApplication")
 
-    if name != "e3DbeBridge":
-        continue
+ti = app._oleobj_.GetTypeInfo()
+tlb, _ = ti.GetContainingTypeLib()
 
-    info = typelib.GetTypeInfo(i)
-    clsid = str(info.GetTypeAttr()[0])
+for i in range(tlb.GetTypeInfoCount()):
+    name = tlb.GetDocumentation(i)[0]
 
-    print("CLSID:", clsid)
+    if name == "e3DbeBridge":
+        info = tlb.GetTypeInfo(i)
+        clsid = str(info.GetTypeAttr()[0])
 
-    try:
+        print("CLSID:", clsid)
+
         key = winreg.OpenKey(
             winreg.HKEY_CLASSES_ROOT,
             rf"CLSID\{clsid}\ProgID"
@@ -20,6 +23,3 @@ for i in range(typelib.GetTypeInfoCount()):
         progid, _ = winreg.QueryValueEx(key, None)
 
         print("PROGID:", progid)
-
-    except Exception as e:
-        print("No ProgID:", e)
