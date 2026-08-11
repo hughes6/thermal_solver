@@ -1,55 +1,17 @@
-CABLE = "2627451-500_26S HD TO 104S HD"
-
-cur = conn.cursor()
-
-# Get cable record + internal pointer
-cur.execute("""
-SELECT ID, ENTRY, VERSION, ENTRYTYP, LPNTR
-FROM dbo.ComponentData
-WHERE ENTRY = ?
-""", CABLE)
-
-rows = cur.fetchall()
-
-print("COMPONENT DATA")
-for r in rows:
-    print(r)
-
-if not rows:
-    raise RuntimeError("Cable not found")
-
-lpntr = rows[0].LPNTR
-
-print("\nLPNTR =", lpntr)
-
-
-# What parts are inside the cable?
-print("\nASSEMBLY MEMBERS")
-
-cur.execute("""
-SELECT COPY, FLAGS, NAME, SUBENTRY, SUBVERSION
-FROM dbo.Assembly
-WHERE LPNTR = ?
-ORDER BY COPY
-""", lpntr)
-
-for r in cur.fetchall():
-    print(r)
-
-
-# Pin relationships for this exact assembly
-print("\nGATE / PIN RELATIONS")
-
 cur.execute("""
 SELECT
-    GateNumber,
-    PinNumber,
-    Representation,
-    NodeNumber
-FROM dbo.GatePinRelation
-WHERE ENTRY = ?
-ORDER BY GateNumber, PinNumber
-""", lpntr)
+    TABLE_NAME,
+    STRING_AGG(COLUMN_NAME, ', ') AS columns
+FROM INFORMATION_SCHEMA.COLUMNS
+WHERE TABLE_SCHEMA = 'dbo'
+GROUP BY TABLE_NAME
+HAVING
+       MAX(CASE WHEN COLUMN_NAME LIKE '%Pin%'  THEN 1 ELSE 0 END) = 1
+    OR MAX(CASE WHEN COLUMN_NAME LIKE '%Node%' THEN 1 ELSE 0 END) = 1
+    OR MAX(CASE WHEN COLUMN_NAME LIKE '%Gate%' THEN 1 ELSE 0 END) = 1
+    OR MAX(CASE WHEN COLUMN_NAME LIKE '%Conn%' THEN 1 ELSE 0 END) = 1
+ORDER BY TABLE_NAME
+""")
 
-for r in cur.fetchall():
-    print(r)
+for row in cur.fetchall():
+    print(row)
