@@ -1,18 +1,500 @@
-# DISPOSABLE TEST COMPONENT ONLY
+"""
+ZUKEN E3 DBE - CABLE / WIRING COMPONENT BUILDER
+================================================
 
-test_lpntr = "YOUR_TEST_LPNTR"
+PROVEN WORKFLOW
+---------------
+1. CT.DBEApplication creates the new component.
+2. User finishes the DBE New Component wizard.
+3. DbeComponent.Save() saves the component.
+4. ComponentData gives us the component LPNTR.
+5. dbo.Assembly stores:
+       COPY 1 = Connector A
+       COPY 2 = Connector B
+       COPY 3... = Wires
+6. dbo.WINRTYP_CONNECT_INFOS stores:
+       wire COPY
+       connector COPY end 1
+       pin end 1
+       connector COPY end 2
+       pin end 2
 
-copy_no = 4
-flags = 2
-name = "%.#"
-subentry = "M22759/44-22-9"
-subversion = "1"
+IMPORTANT
+---------
+Test on disposable components first.
 
-conn.autocommit = False
+This script performs SQL INSERT operations into the Zuken library.
+It uses ONE transaction and gives you a chance to ROLLBACK before commit.
+"""
+
+import time
+import sys
+
+import pyodbc
+import win32com.client as win32
+
+
+# =====================================================================
+# CONFIGURATION
+# =====================================================================
+
+# ---------------------------------------------------------------------
+# NEW COMPONENT
+# ---------------------------------------------------------------------
+
+CREATE_NEW_COMPONENT = True
+
+COMPONENT_NAME = "PYTHON_CABLE_TEST"
+COMPONENT_VERSION = "1"
+
+
+# ---------------------------------------------------------------------
+# CONNECTOR DEFINITIONS
+# ---------------------------------------------------------------------
+#
+# These must exactly match ENTRY/VERSION values in dbo.ComponentData.
+#
+# Assembly COPY:
+#     1 = Connector A
+#     2 = Connector B
+
+CONNECTOR_A = "M24308/4-12F_26P HD"
+CONNECTOR_A_VERSION = "1"
+
+CONNECTOR_B = "M24308/2-16F_104S HD"
+CONNECTOR_B_VERSION = "1"
+
+
+# ---------------------------------------------------------------------
+# WIRE DEFINITION
+# ---------------------------------------------------------------------
+
+WIRE_PART = "M22759/44-22-9"
+WIRE_VERSION = "1"
+
+
+# ---------------------------------------------------------------------
+# PIN MAP
+# ---------------------------------------------------------------------
+#
+# Each tuple:
+#
+#     (connector_A_pin, connector_B_pin)
+#
+# This example reproduces the 26-wire mapping we decoded.
+#
+# Wire COPY numbers automatically begin at 3.
+
+PIN_MAP = [
+    (1,  34),
+    (10, 35),
+    (2,  36),
+    (11, 37),
+    (19, 38),
+    (20, 39),
+    (3,  40),
+    (12, 41),
+    (4,  42),
+    (13, 43),
+    (21, 44),
+    (22, 45),
+    (5,  46),
+    (14, 47),
+    (6,  48),
+    (15, 49),
+    (23, 50),
+    (24, 51),
+    (7,  52),
+    (16, 53),
+    (8,  54),
+    (17, 55),
+    (9,  56),
+    (18, 57),
+    (25, 58),
+
+    # Your reference cable had this unusual final connection:
+    # COPY 2 PIN 26 -> COPY 2 PIN 59
+    #
+    # That cannot be represented by the normal A->B tuple format,
+    # so the final special connection is handled separately below.
+]
+
+
+# If every wire is Connector A -> Connector B, leave this empty.
+#
+# Format:
+#     (end1_connector_copy, pin1, end2_connector_copy, pin2)
+#
+# Connector A = COPY 1
+# Connector B = COPY 2
+
+SPECIAL_CONNECTIONS = [
+    (2, 26, 2, 59)
+]
+
+
+# ---------------------------------------------------------------------
+# DATABASE
+# ---------------------------------------------------------------------
+
+SQL_SERVER = "sql-zuken-prd"
+SQL_DATABASE = "Zuken_E3Library"
+
+# Observed DBE values
+ASSEMBLY_FLAGS = 2
+ASSEMBLY_NAME = "%.#"
+
+CONNECTION_FLAGS = 0
+
+# All examples we inspected used NODENO = 4.
+NODE_NO = 4
+
+
+# =====================================================================
+# HELPERS
+# =====================================================================
+
+def heading(text):
+    print()
+    print("=" * 90)
+    print(text)
+    print("=" * 90)
+
+
+def extract_ids(result):
+    """
+    Handles E3 return structures such as:
+
+        (1, (None, 118))
+        (10, (None, 123, 124, ...))
+    """
+
+    if not result:
+        return []
+
+    if isinstance(result, tuple) and len(result) == 2:
+        values = result[1]
+
+        if isinstance(values, (tuple, list)):
+            return [
+                x for x in values
+                if isinstance(x, int) and x > 0
+            ]
+
+    return []
+
+
+def choose_sql_driver():
+    drivers = pyodbc.drivers()
+
+    preferred = [
+        "ODBC Driver 18 for SQL Server",
+        "ODBC Driver 17 for SQL Server",
+        "SQL Server",
+    ]
+
+    for driver in preferred:
+        if driver in drivers:
+            return driver
+
+    raise RuntimeError(
+        "No usable SQL Server ODBC driver found.\n"
+        f"Installed drivers: {drivers}"
+    )
+
+
+def connect_sql():
+    driver = choose_sql_driver()
+
+    print("Using SQL driver:", driver)
+
+    connection_string = (
+        f"DRIVER={{{driver}}};"
+        f"SERVER={SQL_SERVER};"
+        f"DATABASE={SQL_DATABASE};"
+        "Trusted_Connection=yes;"
+    )
+
+    # Driver 18 normally requires encryption settings.
+    if "18" in driver:
+        connection_string += "TrustServerCertificate=yes;"
+
+    return pyodbc.connect(
+        connection_string,
+        autocommit=False
+    )
+
+
+def component_exists(cur, name, version):
+    cur.execute("""
+        SELECT COUNT(*)
+        FROM dbo.ComponentData
+        WHERE ENTRY = ?
+          AND VERSION = ?
+    """, name, version)
+
+    return cur.fetchone()[0] > 0
+
+
+def get_lpntr(cur, name, version):
+    cur.execute("""
+        SELECT LPNTR
+        FROM dbo.ComponentData
+        WHERE ENTRY = ?
+          AND VERSION = ?
+    """, name, version)
+
+    row = cur.fetchone()
+
+    if not row:
+        raise RuntimeError(
+            f"Could not find ComponentData record:\n"
+            f"  ENTRY   = {name}\n"
+            f"  VERSION = {version}"
+        )
+
+    return row[0]
+
+
+def validate_library_part(cur, name, version, description):
+    cur.execute("""
+        SELECT ENTRY, VERSION, ENTRYTYP, Class, Description
+        FROM dbo.ComponentData
+        WHERE ENTRY = ?
+          AND VERSION = ?
+    """, name, version)
+
+    row = cur.fetchone()
+
+    if not row:
+        raise RuntimeError(
+            f"{description} does not exist in ComponentData:\n"
+            f"    {name!r}, version {version!r}"
+        )
+
+    print(
+        f"[OK] {description}: "
+        f"{row.ENTRY} v{row.VERSION} "
+        f"ENTRYTYP={row.ENTRYTYP}"
+    )
+
+
+# =====================================================================
+# CONNECT TO SQL
+# =====================================================================
+
+heading("CONNECTING TO ZUKEN DATABASE")
+
+conn = connect_sql()
 cur = conn.cursor()
 
-try:
-    cur.execute("""
+print("Server:  ", SQL_SERVER)
+print("Database:", SQL_DATABASE)
+
+
+# =====================================================================
+# VALIDATE PART NUMBERS BEFORE DOING ANYTHING
+# =====================================================================
+
+heading("VALIDATING LIBRARY PARTS")
+
+validate_library_part(
+    cur,
+    CONNECTOR_A,
+    CONNECTOR_A_VERSION,
+    "Connector A"
+)
+
+validate_library_part(
+    cur,
+    CONNECTOR_B,
+    CONNECTOR_B_VERSION,
+    "Connector B"
+)
+
+validate_library_part(
+    cur,
+    WIRE_PART,
+    WIRE_VERSION,
+    "Wire"
+)
+
+
+# =====================================================================
+# CREATE COMPONENT THROUGH DBE
+# =====================================================================
+
+if CREATE_NEW_COMPONENT:
+
+    heading("CONNECTING TO DBE")
+
+    app = win32.gencache.EnsureDispatch(
+        "CT.DBEApplication"
+    )
+
+    print("Application:", app.GetName())
+    print("Version:    ", app.GetVersion())
+    print("Database:   ", app.GetActualDatabase())
+
+    raw_jobs = app.GetJobIds()
+    job_ids = extract_ids(raw_jobs)
+
+    if not job_ids:
+        raise RuntimeError(
+            "No DBE job is currently open.\n"
+            "Open a blank/new component DBE editor first."
+        )
+
+    job_id = job_ids[-1]
+
+    job = app.CreateDbeJobObject()
+    job.SetId(job_id)
+
+    print()
+    print("JOB")
+    print("ID:  ", job.GetId())
+    print("Name:", job.GetName())
+    print("Path:", job.GetPath())
+
+    heading("CREATING COMPONENT")
+
+    result = job.NewComponent(
+        COMPONENT_NAME,
+        COMPONENT_VERSION,
+        "",
+        "",
+        0
+    )
+
+    print("NewComponent returned:", result)
+
+    print()
+    print("The DBE New Component wizard should now be open.")
+    print()
+    print("Name:   ", COMPONENT_NAME)
+    print("Version:", COMPONENT_VERSION)
+    print()
+    print("Fill out any additional Name/Entry/category fields you need.")
+    print("Finish the wizard completely.")
+
+    input(
+        "\nPress ENTER AFTER the component editor is fully open..."
+    )
+
+    time.sleep(1)
+
+    component_id = job.GetActiveComponentId()
+
+    print("\nActive DBE component ID:", component_id)
+
+    if component_id <= 0:
+        raise RuntimeError(
+            "DBE did not return a valid active component ID."
+        )
+
+    component = job.CreateDbeComponentObject()
+    component.SetId(component_id)
+
+    print()
+    print("COMPONENT")
+    print("ID:      ", component.GetId())
+    print("Name:    ", component.GetName())
+    print("Version: ", component.GetVersion())
+    print("Type:    ", component.GetComponentType())
+    print("Subtype: ", component.GetSubType())
+
+    heading("SAVING COMPONENT")
+
+    result = component.Save()
+
+    print("component.Save() returned:", result)
+
+    # Commit happens inside DBE, not this pyodbc transaction.
+    time.sleep(2)
+
+
+# =====================================================================
+# FIND COMPONENT'S DATABASE POINTER
+# =====================================================================
+
+heading("LOCATING COMPONENT DATABASE RECORD")
+
+# New connection/cursor ensures we see data committed by DBE.
+cur.close()
+conn.close()
+
+conn = connect_sql()
+cur = conn.cursor()
+
+test_lpntr = get_lpntr(
+    cur,
+    COMPONENT_NAME,
+    COMPONENT_VERSION
+)
+
+print("Component:", COMPONENT_NAME)
+print("Version:  ", COMPONENT_VERSION)
+print("LPNTR:    ", test_lpntr)
+
+
+# =====================================================================
+# SAFETY CHECK
+# =====================================================================
+
+heading("CHECKING EXISTING ASSEMBLY")
+
+cur.execute("""
+    SELECT
+        COPY,
+        SUBENTRY,
+        SUBVERSION
+    FROM dbo.Assembly
+    WHERE LPNTR = ?
+    ORDER BY COPY
+""", test_lpntr)
+
+existing_members = cur.fetchall()
+
+if existing_members:
+
+    print("WARNING: This component already contains Assembly members:")
+
+    for row in existing_members:
+        print(tuple(row))
+
+    print()
+    print(
+        "This script will NOT blindly add duplicate members."
+    )
+
+    response = input(
+        "Type CONTINUE if you intentionally want to add more members: "
+    )
+
+    if response != "CONTINUE":
+        conn.rollback()
+        sys.exit("Cancelled.")
+
+else:
+    print("No existing Assembly members. Good.")
+
+
+# =====================================================================
+# DATABASE WRITERS
+# =====================================================================
+
+def add_member(
+    cursor,
+    lpntr,
+    copy_number,
+    part_name,
+    part_version
+):
+    """
+    Add connector/wire library member to the cable assembly.
+    """
+
+    cursor.execute("""
         INSERT INTO dbo.Assembly
         (
             LPNTR,
@@ -24,35 +506,363 @@ try:
         )
         VALUES (?, ?, ?, ?, ?, ?)
     """,
-        test_lpntr,
-        copy_no,
-        flags,
-        name,
-        subentry,
-        subversion
+        lpntr,
+        copy_number,
+        ASSEMBLY_FLAGS,
+        ASSEMBLY_NAME,
+        part_name,
+        part_version
     )
 
-    print("Inserted assembly row.")
+
+def add_connection(
+    cursor,
+    lpntr,
+    wire_copy,
+    end1_copy,
+    end1_pin,
+    end2_copy,
+    end2_pin
+):
+    """
+    Connect one Assembly wire COPY between two connector pins.
+    """
+
+    cursor.execute("""
+        INSERT INTO dbo.WINRTYP_CONNECT_INFOS
+        (
+            LPNTR,
+            FLAGS,
+            COPY,
+            NODENO,
+            COPYEND1,
+            PINCOPYEND1,
+            COPYEND2,
+            PINCOPYEND2
+        )
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+    """,
+        lpntr,
+        CONNECTION_FLAGS,
+        wire_copy,
+        NODE_NO,
+        end1_copy,
+        end1_pin,
+        end2_copy,
+        end2_pin
+    )
+
+
+# =====================================================================
+# BUILD ASSEMBLY
+# =====================================================================
+
+heading("BUILDING ASSEMBLY")
+
+try:
+
+    # -----------------------------------------------------------------
+    # CONNECTOR A
+    # -----------------------------------------------------------------
+
+    print(
+        f"COPY 1  CONNECTOR A  "
+        f"{CONNECTOR_A} v{CONNECTOR_A_VERSION}"
+    )
+
+    add_member(
+        cur,
+        test_lpntr,
+        1,
+        CONNECTOR_A,
+        CONNECTOR_A_VERSION
+    )
+
+    # -----------------------------------------------------------------
+    # CONNECTOR B
+    # -----------------------------------------------------------------
+
+    print(
+        f"COPY 2  CONNECTOR B  "
+        f"{CONNECTOR_B} v{CONNECTOR_B_VERSION}"
+    )
+
+    add_member(
+        cur,
+        test_lpntr,
+        2,
+        CONNECTOR_B,
+        CONNECTOR_B_VERSION
+    )
+
+    # -----------------------------------------------------------------
+    # NORMAL A -> B WIRES
+    # -----------------------------------------------------------------
+
+    wire_copy = 3
+
+    for pin_a, pin_b in PIN_MAP:
+
+        print(
+            f"COPY {wire_copy:<3} WIRE "
+            f"COPY 1/PIN {pin_a} "
+            f"-> COPY 2/PIN {pin_b}"
+        )
+
+        add_member(
+            cur,
+            test_lpntr,
+            wire_copy,
+            WIRE_PART,
+            WIRE_VERSION
+        )
+
+        add_connection(
+            cur,
+            test_lpntr,
+            wire_copy,
+            1,          # Connector A COPY
+            pin_a,
+            2,          # Connector B COPY
+            pin_b
+        )
+
+        wire_copy += 1
+
+    # -----------------------------------------------------------------
+    # SPECIAL CONNECTIONS
+    # -----------------------------------------------------------------
+
+    for end1_copy, pin1, end2_copy, pin2 in SPECIAL_CONNECTIONS:
+
+        print(
+            f"COPY {wire_copy:<3} WIRE "
+            f"COPY {end1_copy}/PIN {pin1} "
+            f"-> COPY {end2_copy}/PIN {pin2}"
+        )
+
+        add_member(
+            cur,
+            test_lpntr,
+            wire_copy,
+            WIRE_PART,
+            WIRE_VERSION
+        )
+
+        add_connection(
+            cur,
+            test_lpntr,
+            wire_copy,
+            end1_copy,
+            pin1,
+            end2_copy,
+            pin2
+        )
+
+        wire_copy += 1
+
+
+    # =================================================================
+    # VERIFY BEFORE COMMIT
+    # =================================================================
+
+    heading("VERIFYING ASSEMBLY BEFORE COMMIT")
 
     cur.execute("""
-        SELECT *
+        SELECT
+            COPY,
+            SUBENTRY,
+            SUBVERSION
         FROM dbo.Assembly
         WHERE LPNTR = ?
         ORDER BY COPY
     """, test_lpntr)
 
-    for row in cur.fetchall():
+    members = cur.fetchall()
+
+    print("\nMEMBERS")
+
+    for row in members:
         print(tuple(row))
 
-    answer = input("Commit? Type YES after checking DBE: ")
+
+    heading("VERIFYING CONNECTIONS BEFORE COMMIT")
+
+    cur.execute("""
+        SELECT
+            COPY,
+            NODENO,
+            COPYEND1,
+            PINCOPYEND1,
+            COPYEND2,
+            PINCOPYEND2
+        FROM dbo.WINRTYP_CONNECT_INFOS
+        WHERE LPNTR = ?
+        ORDER BY COPY
+    """, test_lpntr)
+
+    connections = cur.fetchall()
+
+    print(
+        "WIRE   NODE   END 1                 END 2"
+    )
+
+    print("-" * 70)
+
+    for (
+        copy_number,
+        node,
+        end1,
+        pin1,
+        end2,
+        pin2
+    ) in connections:
+
+        print(
+            f"{copy_number:<6}"
+            f"{node:<7}"
+            f"COPY {end1} PIN {pin1:<8}"
+            f"-> COPY {end2} PIN {pin2}"
+        )
+
+
+    # =================================================================
+    # SANITY COUNTS
+    # =================================================================
+
+    heading("SANITY CHECK")
+
+    expected_wires = (
+        len(PIN_MAP)
+        + len(SPECIAL_CONNECTIONS)
+    )
+
+    expected_members = (
+        2
+        + expected_wires
+    )
+
+    print("Expected connectors: 2")
+    print("Expected wires:     ", expected_wires)
+    print("Expected members:   ", expected_members)
+    print("Actual members:     ", len(members))
+    print("Actual connections: ", len(connections))
+
+    if len(members) < expected_members:
+        raise RuntimeError(
+            "Member count is lower than expected."
+        )
+
+    if len(connections) < expected_wires:
+        raise RuntimeError(
+            "Connection count is lower than expected."
+        )
+
+
+    # =================================================================
+    # COMMIT / ROLLBACK
+    # =================================================================
+
+    heading("READY TO COMMIT")
+
+    print(
+        "The SQL transaction currently contains the connector, "
+        "wire and pin-to-pin records."
+    )
+
+    print()
+    print(
+        "Type exactly YES to commit."
+    )
+
+    print(
+        "Anything else rolls everything back."
+    )
+
+    answer = input("\nCommit changes? ")
 
     if answer == "YES":
-        conn.commit()
-        print("COMMITTED")
-    else:
-        conn.rollback()
-        print("ROLLED BACK")
 
-except Exception:
+        conn.commit()
+
+        print()
+        print("*** COMMITTED ***")
+
+    else:
+
+        conn.rollback()
+
+        print()
+        print("*** ROLLED BACK ***")
+
+
+except Exception as exc:
+
     conn.rollback()
+
+    print()
+    print("*** ERROR - TRANSACTION ROLLED BACK ***")
+    print(repr(exc))
+
     raise
+
+
+# =====================================================================
+# FINAL READ-BACK
+# =====================================================================
+
+heading("FINAL DATABASE READ-BACK")
+
+cur.execute("""
+    SELECT
+        COPY,
+        SUBENTRY,
+        SUBVERSION
+    FROM dbo.Assembly
+    WHERE LPNTR = ?
+    ORDER BY COPY
+""", test_lpntr)
+
+print("\nASSEMBLY")
+
+for row in cur.fetchall():
+    print(tuple(row))
+
+
+cur.execute("""
+    SELECT
+        COPY,
+        COPYEND1,
+        PINCOPYEND1,
+        COPYEND2,
+        PINCOPYEND2
+    FROM dbo.WINRTYP_CONNECT_INFOS
+    WHERE LPNTR = ?
+    ORDER BY COPY
+""", test_lpntr)
+
+print("\nPIN-TO-PIN")
+
+for wire, e1, p1, e2, p2 in cur.fetchall():
+
+    print(
+        f"Wire copy {wire}: "
+        f"copy {e1}/pin {p1} "
+        f"-> copy {e2}/pin {p2}"
+    )
+
+
+cur.close()
+conn.close()
+
+heading("DONE")
+
+print("Component:", COMPONENT_NAME)
+print("Version:  ", COMPONENT_VERSION)
+print("LPNTR:    ", test_lpntr)
+print()
+print("Restart/reopen the component in DBE and verify:")
+print("  - Connector A exists")
+print("  - Connector B exists")
+print("  - Correct number of wires exists")
+print("  - Pin assignments match PIN_MAP")
