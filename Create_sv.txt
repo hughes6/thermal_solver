@@ -1,29 +1,38 @@
-import pyodbc
-
-conn = pyodbc.connect(
-    "DRIVER={ODBC Driver 18 for SQL Server};"
-    "SERVER=sql-zuken-prd;"
-    "DATABASE=Zuken_E3Library;"
-    "Trusted_Connection=yes;"
-    "TrustServerCertificate=yes;"
-)
+tables = [
+    "Assembly",
+    "ComponentAttribute",
+    "ComponentData",
+    "GatePinRelation",
+]
 
 cur = conn.cursor()
 
-cur.execute("""
-SELECT
-    s.name,
-    t.name,
-    SUM(p.rows)
-FROM sys.tables t
-JOIN sys.schemas s
-    ON t.schema_id = s.schema_id
-JOIN sys.partitions p
-    ON t.object_id = p.object_id
-WHERE p.index_id IN (0,1)
-GROUP BY s.name, t.name
-ORDER BY s.name, t.name
-""")
+for table in tables:
+    print("\n" + "=" * 80)
+    print(table)
+    print("=" * 80)
 
-for schema, table, rows in cur.fetchall():
-    print(f"{schema}.{table}|{rows}")
+    # columns
+    cur.execute("""
+        SELECT COLUMN_NAME, DATA_TYPE
+        FROM INFORMATION_SCHEMA.COLUMNS
+        WHERE TABLE_SCHEMA='dbo'
+          AND TABLE_NAME=?
+        ORDER BY ORDINAL_POSITION
+    """, table)
+
+    cols = cur.fetchall()
+
+    print("COLUMNS:")
+    for c in cols:
+        print(c)
+
+    # newest rows - just grab a few for inspection
+    cur.execute(f"""
+        SELECT TOP (10) *
+        FROM dbo.[{table}]
+    """)
+
+    print("\nROWS:")
+    for row in cur.fetchall():
+        print(row)
