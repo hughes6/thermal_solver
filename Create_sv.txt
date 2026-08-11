@@ -1,17 +1,29 @@
-import win32com.client as win32
+import pyodbc
 
-app = win32.gencache.EnsureDispatch("CT.DBEApplication")
+conn = pyodbc.connect(
+    "DRIVER={ODBC Driver 18 for SQL Server};"
+    "SERVER=sql-zuken-prd;"
+    "DATABASE=Zuken_E3Library;"
+    "Trusted_Connection=yes;"
+    "TrustServerCertificate=yes;"
+)
 
-_, ids = app.GetJobIds()
-jid = [x for x in ids if isinstance(x, int) and x > 0][-1]
+cur = conn.cursor()
 
-job = app.CreateDbeJobObject()
-job.SetId(jid)
+cur.execute("""
+SELECT
+    s.name,
+    t.name,
+    SUM(p.rows)
+FROM sys.tables t
+JOIN sys.schemas s
+    ON t.schema_id = s.schema_id
+JOIN sys.partitions p
+    ON t.object_id = p.object_id
+WHERE p.index_id IN (0,1)
+GROUP BY s.name, t.name
+ORDER BY s.name, t.name
+""")
 
-print("JOB:", job.GetId(), job.GetName())
-
-print("Active component:", job.GetActiveComponentId())
-
-print("Components:", job.GetComponentIds())
-print("Models:", job.GetModelIds())
-print("Symbols:", job.GetSymbolIds())
+for schema, table, rows in cur.fetchall():
+    print(f"{schema}.{table}|{rows}")
