@@ -414,6 +414,9 @@ int main(int argc, char** argv) {
             "summary \"initial_air_exchange_advance current=$current") !=
                std::string::npos);
         assert(text.str().find(
+            "summary \"run_paused mode=$mode reconstructedTime=$reconstruct_time reason=airflow_refresh_pending\"") !=
+               std::string::npos);
+        assert(text.str().find(
             "-v v=\"$latest_velocity_relative_rms\" -v limit=\"0.01\"") !=
                std::string::npos);
         assert(text.str().find(

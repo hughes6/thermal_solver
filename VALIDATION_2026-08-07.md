@@ -1548,3 +1548,49 @@ supporting the multirate assumption. Local results still require a mesh study:
 the coarse case predicts a 567.6 K aluminum average and 47.42% reverse share of
 gross outlet-face traffic. The signed net outlet balance is validated; solid
 temperature and local recirculation are not yet mesh-independent.
+
+## Validation-rack mesh sensitivity (2026-08-11)
+
+Two uniquely named cases were mapped from converged predecessors, rebuilt with
+a fully coupled warm start, and then continued until their own mass, energy,
+temperature, and airflow gates passed. No baseline case was overwritten. The
+horizontal refinement used 50 x 50 x 25 mm cells (2,400 total, 2,368 fluid,
+32 solid, 48 interface faces). The vertical refinement used 50 x 50 x 12.5 mm
+cells (4,800 total, 4,736 fluid, 64 solid, 80 interface faces). Both meshes
+passed `checkMesh` with zero non-orthogonality and skewness and matched AMI
+weights of one.
+
+| Mesh | Solid cells | Final time | Outlet T | Fluent difference | Heat transport | Mass error | Solid average | Outlet reverse gross share |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|
+| 100 x 100 x 25 mm | 8 | 100,001 s | 298.572 K | +0.072 K | 49.216 W | 0.00006% | 567.61 K | 47.42% |
+| 50 x 50 x 25 mm | 32 | 60,008 s | 298.585 K | +0.085 K | 49.335 W | 0.00002% | 541.07 K | 47.46% |
+| 50 x 50 x 12.5 mm | 64 | 60,012 s | 298.708 K | +0.208 K | 50.446 W | 0.00004% | 472.99 K | 47.48% |
+
+Rack-level outlet temperature, mass balance, and energy rejection remain
+stable and pass the Fluent comparison. Component temperature is not
+mesh-independent: horizontal refinement changed the aluminum average by
+-26.54 K and subsequent vertical refinement changed it by another -68.08 K.
+The coarse validation model therefore validates rack-level transport only and
+must not be cited as a component-temperature validation.
+
+The unchanged 47.4-47.5% gross reverse share is insensitive to both refinements.
+The validation fan imposes only about 0.05 m/s mean flow while the solid is
+hundreds of kelvin hotter than ambient, so buoyancy-driven local backflow at
+the pressure outlet can dominate gross face traffic even while signed net mass
+flow is correct. This metric is a physical warning for the low-flow geometry,
+not evidence that the signed outlet balance is inverted.
+
+Runtime also establishes a useful cost boundary. A 12,000 s implicit thermal
+stage took about 64-105 s at 2,400 cells and 93-108 s at 4,800 cells. A strict
+1 s coupled refresh took roughly 105-169 s and 153-169 s respectively. The
+4,800-cell post-thermal field required seven coupled seconds before two
+consecutive local spatial checks passed; boundary flow and mass checks had
+passed much earlier. Fixed one-second refreshes would therefore certify an
+unsettled refined field.
+
+The study also exposed an endpoint-reporting defect. A requested endpoint can
+arrive while `.airflow_refresh_pending` remains because the strict spatial
+field has not settled. Generated runners now report `run_paused` with reason
+`airflow_refresh_pending` in this state and explicitly instruct the operator
+to continue the same case. They emit `run_complete` only when no refresh is
+pending.
