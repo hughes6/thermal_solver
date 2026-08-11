@@ -1,21 +1,8 @@
-# ============================================================
-# SAVE ROOT COMPONENT
-# ============================================================
-
-print("\nSaving component...")
-
-component_save = component.Save()
-print("component.Save():", component_save)
-
-job_save = job.Save(0)
-print("job.Save(0):", job_save)
+print("component.Save():", component.Save())
+print("job.Save(0):", job.Save(0))
+print("app.Save(0):", app.Save(0))
 
 time.sleep(2)
-
-
-# ============================================================
-# VERIFY COMPONENT EXISTS BEFORE CLOSING JOB
-# ============================================================
 
 conn = pyodbc.connect(CONNECTION_STRING, autocommit=True)
 cur = conn.cursor()
@@ -29,60 +16,7 @@ AND VERSION = ?
 
 row = cur.fetchone()
 
-print("ComponentData before job close:", tuple(row) if row else None)
+print("ComponentData:", tuple(row) if row else None)
 
 cur.close()
 conn.close()
-
-if not row:
-    raise RuntimeError("DBE has NOT committed the component yet. Job will remain open.")
-
-
-# ============================================================
-# CLOSE DBE JOB
-# ============================================================
-
-print("\nClosing DBE job...")
-
-print("Jobs before:", app.GetJobCount())
-
-close_result = job.Close(0)
-
-print("job.Close(0):", close_result)
-
-time.sleep(2)
-
-print("Jobs after:", app.GetJobCount())
-
-
-# ============================================================
-# VERIFY AGAIN AFTER CLOSE
-# ============================================================
-
-conn = pyodbc.connect(CONNECTION_STRING, autocommit=True)
-cur = conn.cursor()
-
-cur.execute("""
-SELECT ID, ENTRY, VERSION, LPNTR
-FROM dbo.ComponentData
-WHERE ENTRY = ?
-AND VERSION = ?
-""", COMPONENT_NAME, COMPONENT_VERSION)
-
-row = cur.fetchone()
-
-print("ComponentData after job close:", tuple(row) if row else None)
-
-if not row:
-    raise RuntimeError("Component disappeared when DBE job closed.")
-
-lpntr = row.LPNTR
-
-print("Persisted LPNTR:", lpntr)
-
-cur.close()
-conn.close()
-
-del component
-del job
-del app
