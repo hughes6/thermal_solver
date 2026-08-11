@@ -1,21 +1,49 @@
+import pythoncom
 import win32com.client as win32
 
-app = win32.gencache.EnsureDispatch("CT.DBEApplication")
-
-module = __import__(
-    app.__class__.__module__,
-    fromlist=["*"]
+CLSID = pythoncom.MakeIID(
+    "{C1040041-F9E8-4502-803B-2B61FBFDEEF6}"
 )
 
-for name, value in vars(module).items():
-    text = name.lower()
+obj = pythoncom.CoCreateInstance(
+    CLSID,
+    None,
+    pythoncom.CLSCTX_LOCAL_SERVER |
+    pythoncom.CLSCTX_INPROC_SERVER,
+    pythoncom.IID_IDispatch
+)
 
-    if any(x in text for x in [
-        "dbe",
-        "cable",
-        "wire",
-        "component",
-        "connector"
-    ]):
-        if isinstance(value, (int, str)):
-            print(name, "=", value)
+bridge = win32.Dispatch(obj)
+
+print("BRIDGE CREATED:", bridge)
+
+for name in [
+    "BringToForeground",
+    "New",
+    "Edit",
+    "NewWithPreconditions",
+    "EditWithPreconditions"
+]:
+    print(name, hasattr(bridge, name))
+
+
+
+
+
+import inspect
+
+for name in [
+    "New",
+    "Edit",
+    "NewWithPreconditions",
+    "EditWithPreconditions"
+]:
+    m = getattr(bridge, name)
+
+    print("\n", name)
+    print("SIG:", inspect.signature(m))
+
+    try:
+        print(inspect.getsource(m))
+    except Exception as e:
+        print("source error:", e)
