@@ -1,79 +1,1387 @@
+"""
+ZUKEN E3.SERIES DATABASE EDITOR AUTOMATION
+==========================================
+
+PURPOSE
+-------
+Automate creation and investigation of a new DBE component using:
+
+    CT.DBEApplication
+
+CURRENTLY VERIFIED
+------------------
+- Connect to DBE
+- Find the active DBE job
+- Bind to the active DBE job
+- Launch New Component wizard
+- Pre-fill component name
+- Pre-fill component version
+- Detect the newly created component
+- Bind a DbeComponentObject to it
+- Read component type / subtype / name / version
+- Read component attributes
+- Add component attributes
+- Inspect NewComponentWithPreconditions
+- Save component
+- Probe DBE output/result information
+
+NOT YET VERIFIED
+----------------
+The actual COM calls for:
+
+- importing Connector A
+- importing Connector B
+- importing N wires
+- assigning wire endpoints
+- assigning Connector A pin -> Connector B pin
+
+DO NOT INVENT THOSE CALLS.
+
+This script intentionally leaves clean placeholders for those operations.
+
+IMPORTANT
+---------
+Do NOT directly modify the SQL Server database.
+
+Current production database:
+
+    Server:   sql-zuken-prd
+    Database: Zuken_E3Library
+
+Use the official DBE COM API.
+
+"""
+
+import sys
+import time
+import inspect
+from pprint import pprint
+
 import win32com.client as win32
 
-app = win32.gencache.EnsureDispatch("CT.DBEApplication")
 
-# --------------------------------------------------
-# Bind to current DBE job
-# --------------------------------------------------
+# ============================================================
+# USER CONFIGURATION
+# ============================================================
 
-_, raw_ids = app.GetJobIds()
+COMPONENT_NAME = "PYTHON_TEST_DELETE_ME"
 
-job_ids = [
-    x for x in raw_ids
-    if isinstance(x, int) and x > 0
-]
-
-if not job_ids:
-    raise RuntimeError("No open DBE job found.")
-
-jid = job_ids[-1]
-
-job = app.CreateDbeJobObject()
-job.SetId(jid)
-
-print("JOB")
-print("ID:", job.GetId())
-print("Name:", job.GetName())
-print("Type:", job.GetType())
-print("Path:", job.GetPath())
+# This is the SECOND argument to NewComponent().
+# It should pre-fill the Version text field in the wizard.
+COMPONENT_VERSION = "1"
 
 
-# --------------------------------------------------
-# Create component INSIDE this job
-# --------------------------------------------------
+# ------------------------------------------------------------
+# OPTIONAL COMPONENT ATTRIBUTES
+# ------------------------------------------------------------
+#
+# Once you determine the REAL attribute names used by DBE,
+# place them here.
+#
+# Example:
+#
+# COMPONENT_ATTRIBUTES = {
+#     "Manufacturer": "TE Connectivity",
+#     "Description": "26 conductor test cable",
+# }
+#
+# Keep empty until the real DBE attribute names are known.
 
-print("\nCREATING TEST COMPONENT")
+COMPONENT_ATTRIBUTES = {
+    # "REAL_ATTRIBUTE_NAME": "VALUE",
+}
 
-result = job.NewComponent(
-    "PYTHON_TEST_DELETE_ME",
-    "1",
-    "",     # baseName
-    "",     # baseVersion
-    0       # flags
+
+# ------------------------------------------------------------
+# CONNECTOR / WIRE INPUT
+# ------------------------------------------------------------
+#
+# These represent the eventual target.
+#
+# The data structures are ready now even though the underlying
+# DBE COM calls still need to be discovered.
+
+CONNECTOR_A = "CONNECTOR_A_PART_NUMBER"
+CONNECTOR_B = "CONNECTOR_B_PART_NUMBER"
+
+WIRE_PART_NUMBER = "WIRE_PART_NUMBER"
+
+NUMBER_OF_WIRES = 26
+
+
+# Default straight-through pin map:
+#
+# 1 -> 1
+# 2 -> 2
+# ...
+# 26 -> 26
+
+PIN_MAP = {
+    str(i): str(i)
+    for i in range(1, NUMBER_OF_WIRES + 1)
+}
+
+
+# Example custom mappings:
+#
+# PIN_MAP = {
+#     "1": "1",
+#     "2": "2",
+#     "3": "7",
+#     "4": "12",
+# }
+
+
+# ------------------------------------------------------------
+# SAFETY OPTIONS
+# ------------------------------------------------------------
+
+AUTO_SAVE = False
+
+# If False, script pauses after launching the wizard so that
+# you can fill out the remaining DBE wizard pages manually.
+WAIT_FOR_USER_TO_FINISH_WIZARD = True
+
+FLAGS = 0
+
+
+# ============================================================
+# GENERIC HELPERS
+# ============================================================
+
+def header(text):
+    print()
+    print("=" * 90)
+    print(text)
+    print("=" * 90)
+
+
+def subheader(text):
+    print()
+    print("-" * 90)
+    print(text)
+    print("-" * 90)
+
+
+def safe_call(label, func, *args):
+    try:
+        result = func(*args)
+
+        print(
+            f"[OK]   {label}: "
+            f"{result!r}"
+        )
+
+        return result
+
+    except Exception as exc:
+
+        print(
+            f"[FAIL] {label}: "
+            f"{exc!r}"
+        )
+
+        return None
+
+
+def usable_ids(raw_result):
+    """
+    Handle E3 / pywin32 results such as:
+
+        (1, (None, 118))
+
+    or
+
+        (10, (None, 15375, 15379, ...))
+
+    Returns:
+
+        [118]
+
+    or
+
+        [15375, 15379, ...]
+    """
+
+    if raw_result is None:
+        return []
+
+    # Expected pattern:
+    #
+    # (count, sequence)
+
+    if (
+        isinstance(raw_result, tuple)
+        and len(raw_result) == 2
+    ):
+
+        raw_values = raw_result[1]
+
+        if isinstance(
+            raw_values,
+            (tuple, list)
+        ):
+
+            return [
+                value
+                for value in raw_values
+                if (
+                    isinstance(value, int)
+                    and value > 0
+                )
+            ]
+
+    # Flattened fallback
+
+    if isinstance(
+        raw_result,
+        (tuple, list)
+    ):
+
+        return [
+            value
+            for value in raw_result
+            if (
+                isinstance(value, int)
+                and value > 0
+            )
+        ]
+
+    if (
+        isinstance(raw_result, int)
+        and raw_result > 0
+    ):
+        return [raw_result]
+
+    return []
+
+
+# ============================================================
+# CONNECT TO DBE
+# ============================================================
+
+header(
+    "CONNECTING TO ZUKEN E3.SERIES DATABASE EDITOR"
 )
 
-print("NewComponent returned:", repr(result))
+try:
+
+    app = win32.gencache.EnsureDispatch(
+        "CT.DBEApplication"
+    )
+
+except Exception as exc:
+
+    print(
+        "Could not connect to "
+        "CT.DBEApplication"
+    )
+
+    print(repr(exc))
+
+    sys.exit(1)
 
 
-# --------------------------------------------------
-# Check what DBE created
-# --------------------------------------------------
+safe_call(
+    "Application Name",
+    app.GetName
+)
 
-print("\nAFTER NewComponent")
+safe_call(
+    "Version",
+    app.GetVersion
+)
 
-active_id = job.GetActiveComponentId()
+safe_call(
+    "Actual Database",
+    app.GetActualDatabase
+)
 
-print("Active component ID:", active_id)
-print("Component IDs:", repr(job.GetComponentIds()))
+safe_call(
+    "Component Database",
+    app.GetComponentDatabase
+)
 
 
-# --------------------------------------------------
-# Bind to it if possible
-# --------------------------------------------------
+# ============================================================
+# FIND DBE JOB
+# ============================================================
 
-if isinstance(active_id, int) and active_id > 0:
+def get_active_job():
 
-    comp = job.CreateDbeComponentObject()
-    comp.SetId(active_id)
+    header(
+        "LOCATING ACTIVE DBE JOB"
+    )
 
-    print("\nCOMPONENT")
+    job_count = safe_call(
+        "GetJobCount",
+        app.GetJobCount
+    )
 
-    print("ID:", comp.GetId())
-    print("Name:", repr(comp.GetName()))
-    print("Version:", repr(comp.GetVersion()))
-    print("Type:", comp.GetComponentType())
-    print("Subtype:", comp.GetSubType())
+    raw_ids = safe_call(
+        "GetJobIds",
+        app.GetJobIds
+    )
 
-else:
+    ids = usable_ids(
+        raw_ids
+    )
 
-    print("\nNo positive component ID yet.")
+    print(
+        "Usable job IDs:",
+        ids
+    )
+
+    if not ids:
+
+        raise RuntimeError(
+            "No DBE job is currently open."
+        )
+
+    # Usually only one job exists.
+    #
+    # If multiple jobs exist, choose the last one for now.
+
+    job_id = ids[-1]
+
+    job = (
+        app.CreateDbeJobObject()
+    )
+
+    job.SetId(
+        job_id
+    )
+
+    print()
+    print("BOUND JOB")
+
+    safe_call(
+        "Job ID",
+        job.GetId
+    )
+
+    safe_call(
+        "Job Name",
+        job.GetName
+    )
+
+    safe_call(
+        "Job Type",
+        job.GetType
+    )
+
+    safe_call(
+        "Job Path",
+        job.GetPath
+    )
+
+    return job
+
+
+job = get_active_job()
+
+
+# ============================================================
+# DISPLAY CURRENT JOB STATE
+# ============================================================
+
+def inspect_job(job):
+
+    header(
+        "CURRENT JOB STATE"
+    )
+
+    safe_call(
+        "GetActiveComponentId",
+        job.GetActiveComponentId
+    )
+
+    raw_components = safe_call(
+        "GetComponentIds",
+        job.GetComponentIds
+    )
+
+    print(
+        "Usable component IDs:",
+        usable_ids(raw_components)
+    )
+
+
+inspect_job(job)
+
+
+# ============================================================
+# SHOW NewComponent SIGNATURE
+# ============================================================
+
+def inspect_creation_methods():
+
+    header(
+        "COMPONENT CREATION API"
+    )
+
+    methods = [
+        (
+            "job.NewComponent",
+            job.NewComponent
+        ),
+        (
+            "app.NewComponent",
+            app.NewComponent
+        ),
+    ]
+
+    if hasattr(
+        app,
+        "NewComponentWithPreconditions"
+    ):
+
+        methods.append(
+            (
+                "app.NewComponentWithPreconditions",
+                app.NewComponentWithPreconditions
+            )
+        )
+
+    for label, method in methods:
+
+        subheader(
+            label
+        )
+
+        try:
+            print(
+                "SIGNATURE:"
+            )
+
+            print(
+                inspect.signature(method)
+            )
+
+        except Exception as exc:
+
+            print(
+                "Signature unavailable:",
+                repr(exc)
+            )
+
+        try:
+            print()
+            print(
+                "GENERATED WRAPPER:"
+            )
+
+            print(
+                inspect.getsource(method)
+            )
+
+        except Exception as exc:
+
+            print(
+                "Source unavailable:",
+                repr(exc)
+            )
+
+
+inspect_creation_methods()
+
+
+# ============================================================
+# CREATE NEW COMPONENT
+# ============================================================
+
+def start_new_component(
+    name,
+    version
+):
+
+    header(
+        "STARTING NEW COMPONENT"
+    )
+
+    print(
+        "Requested Name:",
+        repr(name)
+    )
+
+    print(
+        "Requested Version:",
+        repr(version)
+    )
+
+    print()
+
+    print(
+        "Calling:"
+    )
+
+    print(
+        "job.NewComponent("
+    )
+
+    print(
+        f"    {name!r},"
+    )
+
+    print(
+        f"    {version!r},"
+    )
+
+    print(
+        "    '',"
+    )
+
+    print(
+        "    '',"
+    )
+
+    print(
+        f"    {FLAGS}"
+    )
+
+    print(
+        ")"
+    )
+
+    result = safe_call(
+        "NewComponent",
+        job.NewComponent,
+        name,
+        version,
+        "",
+        "",
+        FLAGS
+    )
+
+    return result
+
+
+creation_result = start_new_component(
+    COMPONENT_NAME,
+    COMPONENT_VERSION
+)
+
+
+# ============================================================
+# WAIT FOR WIZARD
+# ============================================================
+
+if WAIT_FOR_USER_TO_FINISH_WIZARD:
+
+    header(
+        "COMPLETE THE DBE WIZARD"
+    )
+
+    print(
+        "The New Component wizard should now be open."
+    )
+
+    print()
+
+    print(
+        "Name should already be:"
+    )
+
+    print(
+        "   ",
+        COMPONENT_NAME
+    )
+
+    print()
+
+    print(
+        "Version should already be:"
+    )
+
+    print(
+        "   ",
+        COMPONENT_VERSION
+    )
+
+    print()
+
+    print(
+        "Complete the remaining wizard pages manually."
+    )
+
+    print()
+
+    print(
+        "For research, add the Name / Entry "
+        "categories you normally need."
+    )
+
+    print()
+
+    print(
+        "DO NOT add connectors or wires yet "
+        "unless you specifically want to test them."
+    )
+
+    print()
+
+    input(
+        "Press ENTER here AFTER the component wizard is finished..."
+    )
+
+
+# Small pause to allow DBE state to update.
+
+time.sleep(
+    1.0
+)
+
+
+# ============================================================
+# FIND NEW COMPONENT
+# ============================================================
+
+def bind_active_component(job):
+
+    header(
+        "BINDING NEWLY CREATED COMPONENT"
+    )
+
+    cid = safe_call(
+        "job.GetActiveComponentId",
+        job.GetActiveComponentId
+    )
+
+    if (
+        not isinstance(cid, int)
+        or cid <= 0
+    ):
+
+        print()
+
+        print(
+            "No positive active component ID."
+        )
+
+        print(
+            "Checking job component IDs..."
+        )
+
+        raw = safe_call(
+            "job.GetComponentIds",
+            job.GetComponentIds
+        )
+
+        ids = usable_ids(
+            raw
+        )
+
+        print(
+            "Usable IDs:",
+            ids
+        )
+
+        if ids:
+            cid = ids[-1]
+
+    if (
+        not isinstance(cid, int)
+        or cid <= 0
+    ):
+
+        raise RuntimeError(
+            "Could not find the newly created component."
+        )
+
+    comp = (
+        job.CreateDbeComponentObject()
+    )
+
+    comp.SetId(
+        cid
+    )
+
+    print()
+    print(
+        "COMPONENT BOUND SUCCESSFULLY"
+    )
+
+    return comp
+
+
+component = bind_active_component(
+    job
+)
+
+
+# ============================================================
+# INSPECT COMPONENT
+# ============================================================
+
+def inspect_component(comp):
+
+    header(
+        "COMPONENT INFORMATION"
+    )
+
+    data = {}
+
+    data["id"] = safe_call(
+        "GetId",
+        comp.GetId
+    )
+
+    data["name"] = safe_call(
+        "GetName",
+        comp.GetName
+    )
+
+    data["version"] = safe_call(
+        "GetVersion",
+        comp.GetVersion
+    )
+
+    data["type"] = safe_call(
+        "GetComponentType",
+        comp.GetComponentType
+    )
+
+    data["subtype"] = safe_call(
+        "GetSubType",
+        comp.GetSubType
+    )
+
+    data["model"] = safe_call(
+        "GetModelName",
+        comp.GetModelName,
+        0
+    )
+
+    print()
+    print(
+        "SUMMARY"
+    )
+
+    pprint(
+        data
+    )
+
+    return data
+
+
+component_data = inspect_component(
+    component
+)
+
+
+# ============================================================
+# READ COMPONENT ATTRIBUTES
+# ============================================================
+
+def read_component_attributes(
+    comp
+):
+
+    header(
+        "READING COMPONENT ATTRIBUTES"
+    )
+
+    raw_result = safe_call(
+        "GetAttributeIds",
+        comp.GetAttributeIds
+    )
+
+    print(
+        "Raw result:",
+        repr(raw_result)
+    )
+
+    attribute_ids = (
+        usable_ids(
+            raw_result
+        )
+    )
+
+    print(
+        "Usable attribute IDs:",
+        attribute_ids
+    )
+
+    attributes = []
+
+    for attribute_id in attribute_ids:
+
+        subheader(
+            f"ATTRIBUTE {attribute_id}"
+        )
+
+        attr = (
+            job.CreateDbeAttributeObject()
+        )
+
+        try:
+
+            attr.SetId(
+                attribute_id
+            )
+
+        except Exception as exc:
+
+            print(
+                "Could not bind attribute:",
+                repr(exc)
+            )
+
+            continue
+
+        data = {
+            "id": attribute_id
+        }
+
+        getters = [
+            (
+                "name",
+                attr.GetName
+            ),
+            (
+                "internal_name",
+                attr.GetInternalName
+            ),
+            (
+                "value",
+                attr.GetValue
+            ),
+            (
+                "internal_value",
+                attr.GetInternalValue
+            ),
+            (
+                "formatted_value",
+                attr.GetFormattedValue
+            ),
+        ]
+
+        for key, getter in getters:
+
+            try:
+                data[key] = getter()
+
+            except Exception as exc:
+                data[key] = (
+                    f"<ERROR {exc!r}>"
+                )
+
+        pprint(
+            data
+        )
+
+        attributes.append(
+            data
+        )
+
+    return attributes
+
+
+existing_attributes = (
+    read_component_attributes(
+        component
+    )
+)
+
+
+# ============================================================
+# OPTIONAL ATTRIBUTE CREATION
+# ============================================================
+
+def add_requested_attributes(
+    comp,
+    attributes
+):
+
+    if not attributes:
+        return
+
+    header(
+        "ADDING REQUESTED ATTRIBUTES"
+    )
+
+    for name, value in attributes.items():
+
+        print()
+        print(
+            f"Adding {name!r} = {value!r}"
+        )
+
+        safe_call(
+            f"AddAttributeValue({name})",
+            comp.AddAttributeValue,
+            name,
+            value,
+            0
+        )
+
+
+add_requested_attributes(
+    component,
+    COMPONENT_ATTRIBUTES
+)
+
+
+# ============================================================
+# RE-READ ATTRIBUTES AFTER CHANGES
+# ============================================================
+
+if COMPONENT_ATTRIBUTES:
+
+    read_component_attributes(
+        component
+    )
+
+
+# ============================================================
+# INVESTIGATE PRECONDITIONS
+# ============================================================
+
+def investigate_preconditions():
+
+    header(
+        "NEW COMPONENT WITH PRECONDITIONS"
+    )
+
+    if not hasattr(
+        app,
+        "NewComponentWithPreconditions"
+    ):
+
+        print(
+            "NewComponentWithPreconditions "
+            "not available."
+        )
+
+        return
+
+    method = (
+        app.NewComponentWithPreconditions
+    )
+
+    try:
+
+        print(
+            "SIGNATURE:"
+        )
+
+        print(
+            inspect.signature(
+                method
+            )
+        )
+
+    except Exception as exc:
+
+        print(
+            repr(exc)
+        )
+
+    try:
+
+        print()
+        print(
+            "GENERATED SOURCE:"
+        )
+
+        print(
+            inspect.getsource(
+                method
+            )
+        )
+
+    except Exception as exc:
+
+        print(
+            repr(exc)
+        )
+
+    print()
+    print(
+        "Do NOT call this yet until the "
+        "preconditions format is understood."
+    )
+
+
+investigate_preconditions()
+
+
+# ============================================================
+# JOB OUTPUT / RESULT PROBE
+# ============================================================
+
+def inspect_job_output(
+    job,
+    limit=20
+):
+
+    header(
+        "JOB OUTPUT / RESULT WINDOW"
+    )
+
+    for index in range(limit):
+
+        for label, method in [
+            (
+                "OUTBAR",
+                job.GetOutbarText
+            ),
+            (
+                "RESULT",
+                job.GetResultText
+            ),
+        ]:
+
+            try:
+
+                result = method(
+                    index,
+                    ""
+                )
+
+                if result not in (
+                    None,
+                    "",
+                    0,
+                    -1
+                ):
+
+                    print(
+                        label,
+                        index,
+                        repr(result)
+                    )
+
+            except Exception:
+                pass
+
+
+inspect_job_output(
+    job
+)
+
+
+# ============================================================
+# CONNECTOR IMPORT PLACEHOLDER
+# ============================================================
+
+def import_connector(
+    connector_part_number,
+    side
+):
+
+    header(
+        f"IMPORT CONNECTOR {side}"
+    )
+
+    print(
+        "Requested connector:",
+        connector_part_number
+    )
+
+    print()
+
+    print(
+        "TODO:"
+    )
+
+    print(
+        "The DBE COM method that corresponds "
+        "to the manual connector import operation "
+        "has NOT yet been verified."
+    )
+
+    print()
+
+    print(
+        "Do NOT fabricate calls such as "
+        "AddConnector() or ImportConnector()."
+    )
+
+    print()
+
+    print(
+        "Next research goal:"
+    )
+
+    print(
+        "Determine what DBE changes when one "
+        "connector is manually imported."
+    )
+
+    return None
+
+
+# ============================================================
+# WIRE IMPORT PLACEHOLDER
+# ============================================================
+
+def import_wire(
+    wire_part_number,
+    wire_number
+):
+
+    print(
+        f"Wire {wire_number}: "
+        f"{wire_part_number}"
+    )
+
+    # Actual DBE COM operation unknown.
+
+    return None
+
+
+# ============================================================
+# PIN ASSIGNMENT PLACEHOLDER
+# ============================================================
+
+def assign_pin_to_pin(
+    wire,
+    connector_a,
+    pin_a,
+    connector_b,
+    pin_b
+):
+
+    print(
+        f"{connector_a}.{pin_a}"
+        "  --->  "
+        f"{connector_b}.{pin_b}"
+    )
+
+    # Actual DBE COM operation unknown.
+
+    return None
+
+
+# ============================================================
+# DISPLAY DESIRED FINAL CONNECTIVITY
+# ============================================================
+
+def display_requested_harness():
+
+    header(
+        "REQUESTED CONNECTOR / WIRE CONFIGURATION"
+    )
+
+    print(
+        "Connector A:",
+        CONNECTOR_A
+    )
+
+    print(
+        "Connector B:",
+        CONNECTOR_B
+    )
+
+    print(
+        "Wire:",
+        WIRE_PART_NUMBER
+    )
+
+    print(
+        "Wire count:",
+        NUMBER_OF_WIRES
+    )
+
+    print()
+
+    print(
+        "PIN MAP"
+    )
+
+    for pin_a, pin_b in PIN_MAP.items():
+
+        print(
+            f"    {pin_a:>4}"
+            "  --->  "
+            f"{pin_b:<4}"
+        )
+
+
+display_requested_harness()
+
+
+# ============================================================
+# FUTURE CONNECTOR / WIRE WORKFLOW
+# ============================================================
+
+def build_connections():
+
+    header(
+        "CONNECTOR / WIRE AUTOMATION"
+    )
+
+    print(
+        "The control flow is ready, but the "
+        "underlying DBE COM methods still need "
+        "to be verified."
+    )
+
+    print()
+
+    connector_a_object = (
+        import_connector(
+            CONNECTOR_A,
+            "A"
+        )
+    )
+
+    connector_b_object = (
+        import_connector(
+            CONNECTOR_B,
+            "B"
+        )
+    )
+
+    print()
+    print(
+        "WIRES"
+    )
+
+    for index, (
+        pin_a,
+        pin_b
+    ) in enumerate(
+        PIN_MAP.items(),
+        start=1
+    ):
+
+        wire = import_wire(
+            WIRE_PART_NUMBER,
+            index
+        )
+
+        assign_pin_to_pin(
+            wire,
+            CONNECTOR_A,
+            pin_a,
+            CONNECTOR_B,
+            pin_b
+        )
+
+
+# Do not execute fake connector/wire calls.
+#
+# build_connections()
+
+
+# ============================================================
+# SAVE
+# ============================================================
+
+def save_component():
+
+    header(
+        "SAVE"
+    )
+
+    if not AUTO_SAVE:
+
+        print(
+            "AUTO_SAVE is False."
+        )
+
+        print(
+            "Component will NOT be automatically saved."
+        )
+
+        print()
+
+        print(
+            "You may inspect the DBE component "
+            "before committing it."
+        )
+
+        return
+
+    result = safe_call(
+        "component.Save",
+        component.Save
+    )
+
+    print(
+        "Component Save result:",
+        result
+    )
+
+
+save_component()
+
+
+# ============================================================
+# FINAL STATUS
+# ============================================================
+
+header(
+    "DONE"
+)
+
+print(
+    "Verified workflow:"
+)
+
+print(
+    """
+DBE Application
+      |
+      v
+GetJobIds()
+      |
+      v
+CreateDbeJobObject()
+      |
+      v
+job.SetId(job_id)
+      |
+      v
+job.NewComponent(
+    name,
+    version,
+    "",
+    "",
+    flags
+)
+      |
+      v
+New Component wizard
+      |
+      v
+User completes category/entry pages
+      |
+      v
+job.GetActiveComponentId()
+      |
+      v
+job.CreateDbeComponentObject()
+      |
+      v
+component.SetId(component_id)
+      |
+      +--> GetName()
+      +--> GetVersion()
+      +--> GetComponentType()
+      +--> GetSubType()
+      +--> GetAttributeIds()
+      +--> AddAttributeValue()
+      |
+      v
+component.Save()
+"""
+)
+
+print()
+print(
+    "Still to discover:"
+)
+
+print(
+    """
+1. DBE method for importing an existing connector.
+2. DBE method for importing/adding a wire.
+3. DBE representation of wire instances.
+4. DBE representation of connector pin instances.
+5. DBE method for assigning one end of a wire to a pin.
+6. DBE method for assigning the other end to another pin.
+"""
+)
