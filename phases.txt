@@ -2,101 +2,78 @@ import win32com.client as win32
 
 app = win32.gencache.EnsureDispatch("CT.DBEApplication")
 
-# ------------------------------------------------------------
-# GET THE OPEN DBE JOB
-# ------------------------------------------------------------
+# --------------------------------------------------
+# Bind to current DBE job
+# --------------------------------------------------
 
-result = app.GetJobIds()
-print("RAW JOB IDS:", result)
+_, raw_ids = app.GetJobIds()
 
-# From your current result:
-# (1, (None, 118))
-job_id = result[1][1]
+job_ids = [
+    x for x in raw_ids
+    if isinstance(x, int) and x > 0
+]
+
+if not job_ids:
+    raise RuntimeError("No open DBE job found.")
+
+jid = job_ids[-1]
 
 job = app.CreateDbeJobObject()
-job.SetId(job_id)
+job.SetId(jid)
 
-print("\nBOUND JOB")
-print("ID:   ", job.GetId())
-print("Name: ", job.GetName())
-print("Type: ", job.GetType())
-print("Path: ", job.GetPath())
-
-
-# ------------------------------------------------------------
-# SEE WHAT COMPONENT THE JOB THINKS IS ACTIVE
-# ------------------------------------------------------------
-
-print("\nACTIVE COMPONENT")
-
-try:
-    cid = job.GetActiveComponentId()
-    print("job.GetActiveComponentId():", cid)
-except Exception as e:
-    print("GetActiveComponentId failed:", repr(e))
-    cid = None
+print("JOB")
+print("ID:", job.GetId())
+print("Name:", job.GetName())
+print("Type:", job.GetType())
+print("Path:", job.GetPath())
 
 
-# ------------------------------------------------------------
-# CREATE COMPONENT OBJECT THROUGH THE JOB
-# ------------------------------------------------------------
+# --------------------------------------------------
+# Create component INSIDE this job
+# --------------------------------------------------
 
-print("\nCOMPONENT CREATED THROUGH JOB")
+print("\nCREATING TEST COMPONENT")
 
-comp = job.CreateDbeComponentObject()
+result = job.NewComponent(
+    "PYTHON_TEST_DELETE_ME",
+    "1",
+    "",     # baseName
+    "",     # baseVersion
+    0       # flags
+)
 
-print("Raw ID:      ", comp.GetId())
-print("Raw Name:    ", repr(comp.GetName()))
-print("Raw Version: ", repr(comp.GetVersion()))
-print("Raw Type:    ", comp.GetComponentType())
-print("Raw Subtype: ", comp.GetSubType())
-
-
-# If job actually gives us an ID, bind explicitly
-if isinstance(cid, int) and cid > 0:
-
-    print("\nBinding component to job active ID:", cid)
-
-    comp.SetId(cid)
-
-    print("ID:      ", comp.GetId())
-    print("Name:    ", repr(comp.GetName()))
-    print("Version: ", repr(comp.GetVersion()))
-    print("Type:    ", comp.GetComponentType())
-    print("Subtype: ", comp.GetSubType())
+print("NewComponent returned:", repr(result))
 
 
-# ------------------------------------------------------------
-# JOB COMPONENT IDS
-# ------------------------------------------------------------
+# --------------------------------------------------
+# Check what DBE created
+# --------------------------------------------------
 
-print("\nJOB COMPONENT IDS")
+print("\nAFTER NewComponent")
 
-try:
-    r = job.GetComponentIds()
-    print("GetComponentIds():", repr(r))
-except Exception as e:
-    print("GetComponentIds failed:", repr(e))
+active_id = job.GetActiveComponentId()
+
+print("Active component ID:", active_id)
+print("Component IDs:", repr(job.GetComponentIds()))
 
 
-# ------------------------------------------------------------
-# OUTPUT/RESULT WINDOW
-# ------------------------------------------------------------
+# --------------------------------------------------
+# Bind to it if possible
+# --------------------------------------------------
 
-print("\nJOB OUTPUT")
+if isinstance(active_id, int) and active_id > 0:
 
-for i in range(20):
+    comp = job.CreateDbeComponentObject()
+    comp.SetId(active_id)
 
-    try:
-        r = job.GetResultText(i, "")
-        if r not in (None, "", -1, 0):
-            print("RESULT", i, repr(r))
-    except:
-        pass
+    print("\nCOMPONENT")
 
-    try:
-        r = job.GetOutbarText(i, "")
-        if r not in (None, "", -1, 0):
-            print("OUTBAR", i, repr(r))
-    except:
-        pass
+    print("ID:", comp.GetId())
+    print("Name:", repr(comp.GetName()))
+    print("Version:", repr(comp.GetVersion()))
+    print("Type:", comp.GetComponentType())
+    print("Subtype:", comp.GetSubType())
+
+else:
+
+    print("\nNo positive component ID yet.")
