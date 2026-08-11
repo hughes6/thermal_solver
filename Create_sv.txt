@@ -1,139 +1,17 @@
-import time
 import win32com.client as win32
-
-
-NAME = "PYTHON_TEST_DELETE_ME_2"
-VERSION = "1"
 
 app = win32.gencache.EnsureDispatch("CT.DBEApplication")
 
-
-# ============================================================
-# GET OPEN DBE JOB
-# ============================================================
-
-count, raw_ids = app.GetJobIds()
-
-job_ids = [
-    x for x in raw_ids
-    if isinstance(x, int) and x > 0
-]
-
-if not job_ids:
-    raise RuntimeError("No DBE job is open.")
+_, ids = app.GetJobIds()
+jid = [x for x in ids if isinstance(x, int) and x > 0][-1]
 
 job = app.CreateDbeJobObject()
-job.SetId(job_ids[-1])
+job.SetId(jid)
 
-print("JOB")
-print("ID:", job.GetId())
-print("Name:", job.GetName())
-print("Path:", job.GetPath())
+print("JOB:", job.GetId(), job.GetName())
 
+print("Active component:", job.GetActiveComponentId())
 
-# ============================================================
-# CREATE COMPONENT
-# ============================================================
-
-print("\nCreating component...")
-
-result = job.NewComponent(
-    NAME,
-    VERSION,
-    "",
-    "",
-    0
-)
-
-print("NewComponent returned:", result)
-
-
-# ============================================================
-# DBE WIZARD
-# ============================================================
-
-input(
-    "\nFinish the New Component wizard in DBE.\n"
-    "When the component editor is fully open, press ENTER here..."
-)
-
-
-time.sleep(1)
-
-
-# ============================================================
-# BIND COMPONENT
-# ============================================================
-
-cid = job.GetActiveComponentId()
-
-print("\nActive component ID:", cid)
-
-if cid <= 0:
-    raise RuntimeError(
-        "DBE did not create a valid working component."
-    )
-
-comp = job.CreateDbeComponentObject()
-comp.SetId(cid)
-
-print("\nWORKING COMPONENT")
-print("ID:", comp.GetId())
-print("Name:", comp.GetName())
-print("Version:", comp.GetVersion())
-print("Type:", comp.GetComponentType())
-print("Subtype:", comp.GetSubType())
-
-
-# ============================================================
-# SAVE COMPONENT TO DATABASE
-# ============================================================
-
-print("\nSAVING COMPONENT TO DATABASE...")
-
-save_result = comp.Save()
-
-print("component.Save() returned:", save_result)
-
-
-# Give DBE a moment
-time.sleep(1)
-
-
-# ============================================================
-# VERIFY CURRENT COMPONENT
-# ============================================================
-
-print("\nVERIFY AFTER SAVE")
-
-print("ID:", comp.GetId())
-print("Name:", comp.GetName())
-print("Version:", comp.GetVersion())
-
-
-# ============================================================
-# TRY TO REOPEN IT THROUGH DBE API
-# ============================================================
-
-print("\nVERIFY DATABASE ENTRY")
-
-try:
-
-    edit_result = app.EditComponent(
-        NAME,
-        VERSION
-    )
-
-    print("EditComponent returned:", edit_result)
-
-except Exception as e:
-
-    print("EditComponent failed:", repr(e))
-
-
-print("\nDONE")
-print(
-    "Now close this DBE instance and open a new one.\n"
-    f"Search for: {NAME}\n"
-    f"Version: {VERSION}"
-)
+print("Components:", job.GetComponentIds())
+print("Models:", job.GetModelIds())
+print("Symbols:", job.GetSymbolIds())
