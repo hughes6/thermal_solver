@@ -1,10 +1,58 @@
-tables = [
-    "Assembly",
-    "WINRTYP_CONNECT_INFOS",
-    "GatePinRelation",
-    "Cable",
-]
+def get_cable_definition(conn, cable_name):
+    cur = conn.cursor()
 
-for t in tables:
-    cur.execute(f"SELECT COUNT(*) FROM dbo.[{t}]")
-    print(t, cur.fetchone()[0])
+    cur.execute("""
+        SELECT LPNTR, VERSION
+        FROM dbo.ComponentData
+        WHERE ENTRY = ?
+    """, cable_name)
+
+    row = cur.fetchone()
+
+    if not row:
+        raise ValueError("Cable not found")
+
+    lpntr, version = row
+
+    cur.execute("""
+        SELECT COPY, SUBENTRY, SUBVERSION
+        FROM dbo.Assembly
+        WHERE LPNTR = ?
+        ORDER BY COPY
+    """, lpntr)
+
+    members = cur.fetchall()
+
+    cur.execute("""
+        SELECT
+            COPY,
+            COPYEND1,
+            PINCOPYEND1,
+            COPYEND2,
+            PINCOPYEND2
+        FROM dbo.WINRTYP_CONNECT_INFOS
+        WHERE LPNTR = ?
+        ORDER BY COPY
+    """, lpntr)
+
+    connections = cur.fetchall()
+
+    return members, connections
+
+
+members, connections = get_cable_definition(
+    conn,
+    "2627451-500_26S HD TO 104S HD"
+)
+
+print("\nMEMBERS")
+for x in members:
+    print(x)
+
+print("\nCONNECTIONS")
+for wire, end1, pin1, end2, pin2 in connections:
+    print(
+        f"wire copy {wire}: "
+        f"copy {end1}/pin {pin1} -> "
+        f"copy {end2}/pin {pin2}"
+    )
