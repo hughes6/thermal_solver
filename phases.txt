@@ -1,32 +1,24 @@
 import win32com.client as win32
-import winreg
 
-app = win32.gencache.EnsureDispatch("CT.Application")
+app = win32.gencache.EnsureDispatch("CT.DBEApplication")
 
 ti = app._oleobj_.GetTypeInfo()
 typelib, _ = ti.GetContainingTypeLib()
 
-targets = ["e3Device", "e3Pin", "e3Connection", "e3Bundle"]
-
 for i in range(typelib.GetTypeInfoCount()):
-    info = typelib.GetTypeInfo(i)
     name = typelib.GetDocumentation(i)[0]
 
-    if name not in targets:
+    if name != "IDbeBridge":
         continue
 
+    info = typelib.GetTypeInfo(i)
     attr = info.GetTypeAttr()
-    clsid = str(attr[0])
 
-    print("\n", name)
-    print("CLSID:", clsid)
+    print("IDbeBridge")
 
-    try:
-        key = winreg.OpenKey(
-            winreg.HKEY_CLASSES_ROOT,
-            rf"CLSID\{clsid}\ProgID"
-        )
-        progid, _ = winreg.QueryValueEx(key, None)
-        print("PROGID:", progid)
-    except Exception as e:
-        print("No ProgID found:", repr(e))
+    for j in range(attr[6]):
+        try:
+            fd = info.GetFuncDesc(j)
+            print(info.GetNames(fd[0]))
+        except:
+            pass
