@@ -1,5 +1,4 @@
 import win32com.client as win32
-import winreg
 
 app = win32.gencache.EnsureDispatch("CT.DBEApplication")
 
@@ -7,19 +6,13 @@ ti = app._oleobj_.GetTypeInfo()
 tlb, _ = ti.GetContainingTypeLib()
 
 for i in range(tlb.GetTypeInfoCount()):
-    name = tlb.GetDocumentation(i)[0]
+    name = str(tlb.GetDocumentation(i)[0])
 
-    if name == "e3DbeBridge":
-        info = tlb.GetTypeInfo(i)
-        clsid = str(info.GetTypeAttr()[0])
-
-        print("CLSID:", clsid)
-
-        key = winreg.OpenKey(
-            winreg.HKEY_CLASSES_ROOT,
-            rf"CLSID\{clsid}\ProgID"
-        )
-
-        progid, _ = winreg.QueryValueEx(key, None)
-
-        print("PROGID:", progid)
+    if any(x in name.lower() for x in [
+        "dbe",
+        "component",
+        "wire",
+        "cable",
+        "connector"
+    ]):
+        print(i, name)
