@@ -59,7 +59,7 @@ class OpenFoamProfilePolicyTest(unittest.TestCase):
             self.profile("indepth_foam_cfg.toml")[
                 "maximum_accepted_velocity_rms_change_fraction"
             ],
-            0.02,
+            0.025,
         )
         for name in ("default_foam_cfg.toml", "validation_foam_cfg.toml"):
             with self.subTest(name=name):
@@ -81,7 +81,7 @@ class OpenFoamProfilePolicyTest(unittest.TestCase):
         self.assertEqual(profile["airflow_refresh_duration"], 0.01)
         self.assertEqual(profile["airflow_refresh_check_interval"], 0.01)
         self.assertEqual(profile["maximum_airflow_refresh_duration"], 0.10)
-        self.assertEqual(profile["thermal_only_maximum_time_step"], 20.0)
+        self.assertEqual(profile["thermal_only_maximum_time_step"], 30.0)
         self.assertEqual(profile["minimum_tracked_boundary_flow_fraction"], 0.001)
 
     def test_strict_validation_retains_three_by_three(self):

@@ -399,6 +399,12 @@ int main(int argc, char** argv) {
             "summary \"run_complete mode=$mode reconstructedTime=$reconstruct_time") !=
                std::string::npos);
         assert(text.str().find(
+            "Rebased accepted airflow reference at converged checkpoint") !=
+               std::string::npos);
+        assert(text.str().find(
+            "summary \"airflow_reference_rebased time=$current") !=
+               std::string::npos);
+        assert(text.str().find(
             "-v v=\"$latest_velocity_relative_rms\" -v limit=\"0.01\"") !=
                std::string::npos);
         assert(text.str().find(

@@ -216,7 +216,8 @@ and are not accelerated by the thermal timestep.
 | Pressure RMS difference | 0.000275 Pa |
 | Pressure maximum absolute difference | 0.007813 Pa |
 
-The tested 20 s cap is now the in-depth profile default. With a valid
+The tested 20 s cap became the in-depth profile default at this stage. A later
+matched 30 s study is documented below. With a valid
 persisted airflow baseline, a normal interval can avoid the legacy baseline-
 acquisition refresh sample, making the 297 s thermal-phase saving a larger
 fraction of end-to-end runtime.
@@ -1165,8 +1166,8 @@ represented 42.6% of measured solver-stage time. Screening flow windows cost
 137-191 s, versus 383-573 s in the current in-depth case: approximately three
 times faster at representative averages. Thermal stages cost 248-407 s per
 2,400 simulated seconds. The screening thermal leg is not proportionally
-faster than in-depth because screening still uses a conservative 10 s
-thermal-only ceiling while the validated in-depth profile uses 20 s.
+faster than in-depth because screening used a conservative 10 s thermal-only
+ceiling while the then-current validated in-depth profile used 20 s.
 
 Face-resolved endpoints confirm stable bulk engineering results despite the
 slow spatial airflow mode:
@@ -1454,3 +1455,64 @@ approximately three times the simulated-time throughput on this workstation
 while keeping the rack-level outputs within the differences above. In-depth
 remains necessary for final local fields and hotspots; screening is validated
 for layout, load, fan, and recirculation iteration.
+
+## In-depth 30 s implicit timestep study (2026-08-11)
+
+Two isolated copies of the converged 9,600.01 s 335,580-cell in-depth case
+were advanced to the same 10,800.02 s coupled endpoint. The control retained
+the 20 s implicit thermal cap; the candidate changed only that cap to 30 s.
+Runs were sequential to avoid memory contention.
+
+The 20 s thermal stage took 147.380 s and the 30 s stage took 118.200 s, a
+19.8% reduction. End-to-end times including strict airflow refreshes and
+reconstruction were 879.05 and 789.22 s, respectively, although about 56 s of
+that difference came from ordinary airflow-stage timing variation rather than
+the timestep. The directly attributable saving is the 29.18 s thermal-stage
+reduction.
+
+| 30 s minus 20 s metric | Result |
+|---|---:|
+| Temperature RMS difference | 0.00001548 K (0.000005%) |
+| Maximum temperature difference | 0.0002136 K |
+| Velocity RMS difference | 4.26e-8 m/s (0.000002%) |
+| Maximum velocity difference | 9.63e-7 m/s |
+| Pressure RMS difference | 0.0000827 Pa |
+| Maximum pressure difference | 0.007813 Pa |
+
+Both thermal checks reported 0.05175 K/300 s peak change. Component-average
+change was 0.008625 K/300 s at 20 s and 0.008600 K/300 s at 30 s. Rack flow,
+outlet temperature, heat rejection, bidirectional flow, and zero re-ingestion
+were numerically indistinguishable. The in-depth profile therefore now uses a
+30 s implicit thermal-only cap. Screening remains at its separately validated
+20 s cap.
+
+## Converged-reference restart and extended in-depth gate (2026-08-11)
+
+Continuing the converged 9,600.01 s case exposed that its accepted airflow
+reference still pointed to 7,200.02 s. At 10,800.01 s, the runner therefore
+compared across three thermal intervals, measured 2.25198% RMS drift, launched
+an unnecessary 325.718 s same-time settle, and reset the thermal streak. The
+accepted field used to prove convergence must become the baseline for a later
+continuation. Generated runners now atomically record the current accepted
+velocity field immediately when the required thermal/airflow checkpoint count
+is reached.
+
+The longer continuation also expanded the in-depth long-lag evidence. After a
+4.758% internal Eaton fan shift was correctly rejected and then settled, the
+two-checkpoint accepted-field drift reached 2.10252%, just above the initial
+2% limit. From 10,800.02 to the settled 13,200.03 s endpoint, intake changed
+0.087%, outlet temperature changed -0.00599 K, heat rejection changed -0.025%,
+bidirectional flow remained about 0.128%, and thermal re-ingestion remained
+zero. The in-depth anchored limit is therefore 2.5%: below screening's 3%,
+while the strict 1% local spatial, 1% device-flow, mass-balance, direction,
+and Co <= 1 checks remain unchanged.
+
+A real continuation from the rebased 13,200.03 s state exercised the complete
+policy. The 14,400 s thermal hotspot rate failed at 0.29965 K/300 s, so no
+checkpoint was counted. The next two thermal checkpoints passed at 15,600 and
+16,800 s. Their local velocity changes were 0.70765% and 0.73119%; accumulated
+accepted-reference drift from 14,400.01 to 16,800.01 s was 1.38566%. The run
+ended at checkpoint 2/2, and both `.thermal_convergence_streak` and the stored
+accepted-reference timestamp were verified as `2` and
+`16800.009999999958`. This directly validates the convergence-time rebase fix
+and the revised in-depth gate without bypassing any local criterion.

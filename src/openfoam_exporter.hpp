@@ -4449,6 +4449,9 @@ functions
                 "            if (( streak >= "
                     << options.thermal_convergence_required_checkpoints
                     << " )); then\n"
+                "                record_accepted_airflow_reference || return 3\n"
+                "                echo \"Rebased accepted airflow reference at converged checkpoint t=$current s.\"\n"
+                "                summary \"airflow_reference_rebased time=$current reason=convergedCheckpoint\"\n"
                 "                echo \"Thermal and airflow convergence "
                     "criteria satisfied at validated checkpoint t=$current s "
                     "(requested end time $requested_end s).\"\n"
