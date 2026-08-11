@@ -2,17 +2,20 @@ import win32com.client as win32
 
 app = win32.gencache.EnsureDispatch("CT.DBEApplication")
 
-ti = app._oleobj_.GetTypeInfo()
-tlb, _ = ti.GetContainingTypeLib()
+module = __import__(
+    app.__class__.__module__,
+    fromlist=["*"]
+)
 
-for i in range(tlb.GetTypeInfoCount()):
-    name = str(tlb.GetDocumentation(i)[0])
+for name, value in vars(module).items():
+    text = name.lower()
 
-    if any(x in name.lower() for x in [
+    if any(x in text for x in [
         "dbe",
-        "component",
-        "wire",
         "cable",
+        "wire",
+        "component",
         "connector"
     ]):
-        print(i, name)
+        if isinstance(value, (int, str)):
+            print(name, "=", value)
