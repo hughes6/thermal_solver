@@ -1,6 +1,39 @@
-print("component.Save():", component.Save())
-print("job.Save(0):", job.Save(0))
-print("app.Save(0):", app.Save(0))
+import time
+import pyodbc
+import win32com.client as win32
+
+COMPONENT_NAME = "PYTHON_APP_TEST"
+COMPONENT_VERSION = "1"
+
+CONNECTION_STRING = (
+    "DRIVER={SQL Server};"
+    "SERVER=sql-zuken-prd;"
+    "DATABASE=Zuken_E3Library;"
+    "Trusted_Connection=yes;"
+)
+
+app = win32.gencache.EnsureDispatch("CT.DBEApplication")
+
+print("Creating through DBE APPLICATION...")
+
+result = app.NewComponent(COMPONENT_NAME, COMPONENT_VERSION, "", "", 0)
+print("app.NewComponent():", result)
+
+input("Finish the wizard, then press ENTER...")
+
+time.sleep(1)
+
+cid = app.GetActiveComponentId()
+print("Active ID:", cid)
+
+if cid > 0:
+    comp = app.CreateDbeComponentObject()
+    comp.SetId(cid)
+
+    print("Name:", comp.GetName())
+    print("Version:", comp.GetVersion())
+    print("Type:", comp.GetComponentType())
+    print("Save:", comp.Save())
 
 time.sleep(2)
 
@@ -16,7 +49,8 @@ AND VERSION = ?
 
 row = cur.fetchone()
 
-print("ComponentData:", tuple(row) if row else None)
+print("\nDATABASE ROW:")
+print(tuple(row) if row else None)
 
 cur.close()
 conn.close()
