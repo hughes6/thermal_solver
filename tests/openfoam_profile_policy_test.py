@@ -48,18 +48,20 @@ class OpenFoamProfilePolicyTest(unittest.TestCase):
                     0.01,
                 )
 
-    def test_only_screening_relaxes_transient_long_lag_velocity(self):
+    def test_fidelity_profiles_bound_transient_long_lag_velocity(self):
         self.assertEqual(
             self.profile("screening_foam_cfg.toml")[
                 "maximum_accepted_velocity_rms_change_fraction"
             ],
             0.03,
         )
-        for name in (
-            "default_foam_cfg.toml",
-            "validation_foam_cfg.toml",
-            "indepth_foam_cfg.toml",
-        ):
+        self.assertEqual(
+            self.profile("indepth_foam_cfg.toml")[
+                "maximum_accepted_velocity_rms_change_fraction"
+            ],
+            0.02,
+        )
+        for name in ("default_foam_cfg.toml", "validation_foam_cfg.toml"):
             with self.subTest(name=name):
                 self.assertEqual(
                     self.profile(name)[

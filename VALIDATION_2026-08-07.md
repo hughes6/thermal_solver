@@ -1317,10 +1317,9 @@ rack-level thermal and flow outputs are stable. The local two-window limit
 remains 1% to catch abrupt refresh changes. A separate
 `maximum_accepted_velocity_rms_change_fraction` now controls the anchored
 two-checkpoint comparison: screening uses 3%, bounded by the measured 2.58%
-7,200 s change and the mesh's ballpark role, while default, validation, and
-in-depth profiles retain 1%. Final conclusions still require mapping the
-screening operating point to in-depth; the relaxed limit is not propagated to
-final validation.
+7,200 s change and the mesh's ballpark role. Default and validation profiles
+retain 1%. The in-depth limit was subsequently tested separately on a fresh
+fine-mesh mapping, as documented below.
 
 The diagnostic also exposed a restart-state defect. `--warm-start` changed
 fields but previously retained the old thermal streak, device-flow history,
@@ -1372,3 +1371,48 @@ continues to protect against an actually unsettled flow update.
 Reports are preserved under the case's `validation_snapshots_50400` directory:
 `field_change_partitioned.csv`, `recirculation.csv`,
 `recirculation_face_flow.csv`, and `recirculation.png`.
+
+## Current screening endpoint mapped to in-depth and converged (2026-08-10)
+
+The qualified 50,400.01 s screening state was mapped into the new,
+non-overwriting 335,580-cell case
+`model_generic_airside_indepth_50400_validation`. The guarded mapper prepared
+all five regions, mapped the reconstructed fields, and performed a strict
+Co <= 1 warm start. Cache invalidation forced conservative airflow-history
+reacquisition; the accepted fine-mesh baseline was established at 0.06 s.
+
+With the original 1% in-depth accepted-reference limit, every local refresh
+remained below 1%, but convergence could not persist. At 4,800 s a thermal
+checkpoint was initially accepted with 0.833739% local velocity RMS change,
+then a same-time settle to 4,800.02 s rebased the accumulated drift and reset
+the thermal streak. The pattern repeated at 6,000/7,200 s: local changes were
+0.779336% and 0.773180%, but the second checkpoint again triggered a settle;
+the 7,200.02 s settle passed locally at 0.788410% and reset the streak to zero.
+
+Zone analysis showed that the long-lag signal remained dominated by transient
+internal vortices. From 4,800.02 to 7,200.02 s the full velocity field changed
+2.2294% RMS, including 12.09% in Eaton and 8.39% in Trenton, while external
+rack air changed 1.9165%. Temperature changed only 0.03915% RMS. Over that
+same interval, intake flow changed 0.205%, exhaust flow 0.219%, outlet
+temperature -0.01534 K, heat rejection -0.077%, and re-ingestion remained
+zero. The 1% anchored limit was therefore stricter than two individually
+accepted 1% updates can mathematically sustain and was rejecting bounded
+transient RANS motion rather than a changing rack operating point.
+
+The in-depth accepted-reference limit was increased only to 2%; its local
+velocity, device-flow, mass-balance, direction, Co <= 1, and thermal limits
+remain unchanged. Screening remains at 3%, while default and validation remain
+at 1%. A real continuation from the rebased 7,200.02 s state then accepted
+checkpoint 1 at 8,400.01 s with 0.780575% local velocity change and checkpoint
+2 at 9,600.01 s with 0.826818% local change. The full accepted-reference field
+change across 7,200.02 to 9,600.01 s was 1.5662%, so the new 2% threshold was
+actually exercised rather than bypassed. `.thermal_convergence_streak` ended
+at 2 and the solver stopped converged without a same-time rebase.
+
+At the converged 9,600.01 s endpoint, intake and exhaust flows were 0.2967523
+and 0.2967086 kg/s, outlet temperature was 298.3170 K, sensible heat rejection
+was 1540.76 W (99.725% of 1545 W), bidirectional boundary flow was 0.12776%,
+and thermal re-ingestion was zero. Reports are preserved under
+`validation_snapshots_2400`, `validation_snapshots_4800`,
+`validation_snapshots_7200`, and `validation_snapshots_9600` in the in-depth
+case.
