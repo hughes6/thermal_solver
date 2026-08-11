@@ -1,219 +1,70 @@
 import win32com.client as win32
-from win32com.client import VARIANT
-import pythoncom
-import inspect
 
+app = win32.gencache.EnsureDispatch("CT.DBEApplication")
 
-app = win32.gencache.EnsureDispatch(
-    "CT.DBEApplication"
-)
+# ------------------------------------------------------------
+# BIND TO ALREADY-OPEN COMPONENT
+# ------------------------------------------------------------
 
 cid = app.GetActiveComponentId()
 
 comp = app.CreateDbeComponentObject()
 comp.SetId(cid)
 
+print("ID:", comp.GetId())
+print("Name:", comp.GetName())
+print("Version:", comp.GetVersion())
+print("Type:", comp.GetComponentType())
+print("Subtype:", comp.GetSubType())
 
-print("=" * 90)
-print("BOUND COMPONENT")
-print("=" * 90)
-
-print("ID:      ", comp.GetId())
-print("Name:    ", comp.GetName())
-print("Version: ", comp.GetVersion())
-print("Type:    ", comp.GetComponentType())
-print("Subtype: ", comp.GetSubType())
+if comp.GetComponentType() != 7:
+    raise RuntimeError("Active DBE component is not a cable.")
 
 
-# ============================================================
-# 1. LOOK AT GENERATED PYWIN32 METHOD SOURCE
-# ============================================================
+# ------------------------------------------------------------
+# GET REAL ATTRIBUTE IDS
+# ------------------------------------------------------------
 
-print()
-print("=" * 90)
-print("GENERATED WRAPPER SOURCE")
-print("=" * 90)
+count, raw_ids = comp.GetAttributeIds()
 
+print("\nAttribute count:", count)
+print("Raw IDs:", raw_ids)
 
-for name, method in [
-    ("GetAttributeIds", comp.GetAttributeIds),
-    ("AddAttributeValue", comp.AddAttributeValue),
-    ("GetComponentIds", app.GetComponentIds),
-    ("NewComponent", app.NewComponent),
-]:
+# First element is coming back as None.
+# Ignore it.
+attribute_ids = [
+    x for x in raw_ids
+    if isinstance(x, int) and x > 0
+]
 
-    print()
-    print("-" * 90)
-    print(name)
-    print("-" * 90)
-
-    try:
-        print(inspect.getsource(method))
-    except Exception as e:
-        print("getsource failed:", repr(e))
-
-    try:
-        print("module:", method.__module__)
-    except Exception:
-        pass
+print("Usable IDs:", attribute_ids)
 
 
-# ============================================================
-# 2. TRY GetAttributeIds WITH EXPLICIT VARIANTS
-# ============================================================
+# ------------------------------------------------------------
+# READ EACH ATTRIBUTE
+# ------------------------------------------------------------
 
-print()
-print("=" * 90)
-print("ATTRIBUTE ARRAY TESTS")
-print("=" * 90)
+print("\n" + "=" * 80)
+print("CABLE ATTRIBUTES")
+print("=" * 80)
 
+for aid in attribute_ids:
 
-tests = []
-
-
-# Variant containing an empty Python list
-try:
-    v = VARIANT(
-        pythoncom.VT_VARIANT | pythoncom.VT_BYREF,
-        None
-    )
-
-    tests.append(
-        (
-            "BYREF VARIANT",
-            lambda: comp.GetAttributeIds(
-                v,
-                0,
-                ""
-            ),
-            v
-        )
-    )
-except Exception as e:
-    print("Could not make BYREF VARIANT:", repr(e))
-
-
-# SAFEARRAY of LONG by reference
-try:
-    v_int_array = VARIANT(
-        pythoncom.VT_ARRAY
-        | pythoncom.VT_I4
-        | pythoncom.VT_BYREF,
-        []
-    )
-
-    tests.append(
-        (
-            "BYREF LONG ARRAY",
-            lambda: comp.GetAttributeIds(
-                v_int_array,
-                0,
-                ""
-            ),
-            v_int_array
-        )
-    )
-except Exception as e:
-    print("Could not make LONG ARRAY:", repr(e))
-
-
-# SAFEARRAY of VARIANT by reference
-try:
-    v_variant_array = VARIANT(
-        pythoncom.VT_ARRAY
-        | pythoncom.VT_VARIANT
-        | pythoncom.VT_BYREF,
-        []
-    )
-
-    tests.append(
-        (
-            "BYREF VARIANT ARRAY",
-            lambda: comp.GetAttributeIds(
-                v_variant_array,
-                0,
-                ""
-            ),
-            v_variant_array
-        )
-    )
-except Exception as e:
-    print("Could not make VARIANT ARRAY:", repr(e))
-
-
-for label, function, holder in tests:
+    attr = app.CreateDbeAttributeObject()
+    attr.SetId(aid)
 
     print()
-    print("---", label, "---")
+    print("ATTRIBUTE ID:", aid)
 
-    try:
-        result = function()
+    for label, method in [
+        ("Name", attr.GetName),
+        ("Internal Name", attr.GetInternalName),
+        ("Value", attr.GetValue),
+        ("Internal Value", attr.GetInternalValue),
+        ("Formatted Value", attr.GetFormattedValue),
+    ]:
 
-        print("RETURN:", repr(result))
-        print("HOLDER VALUE:", repr(holder.value))
-
-    except Exception as e:
-        print("FAILED:", repr(e))
-
-
-# ============================================================
-# 3. TEST ENDS CORRECTLY
-# ============================================================
-
-print()
-print("=" * 90)
-print("END TESTS")
-print("=" * 90)
-
-
-for end in [-1, 0, 1, 2]:
-
-    print()
-    print("END =", end)
-
-    holder = VARIANT(
-        pythoncom.VT_ARRAY
-        | pythoncom.VT_I4
-        | pythoncom.VT_BYREF,
-        []
-    )
-
-    try:
-        result = comp.GetAttributeIds(
-            holder,
-            end,
-            ""
-        )
-
-        print("RETURN:", repr(result))
-        print("IDS:", repr(holder.value))
-
-    except Exception as e:
-        print("FAILED:", repr(e))
-
-
-# ============================================================
-# 4. SAME TEST FOR ALL COMPONENT IDS
-# ============================================================
-
-print()
-print("=" * 90)
-print("COMPONENT ID ARRAY TEST")
-print("=" * 90)
-
-
-holder = VARIANT(
-    pythoncom.VT_ARRAY
-    | pythoncom.VT_I4
-    | pythoncom.VT_BYREF,
-    []
-)
-
-try:
-    result = app.GetComponentIds(holder)
-
-    print("RETURN:", repr(result))
-    print("COMPONENT IDS:", repr(holder.value))
-
-except Exception as e:
-    print("FAILED:", repr(e))
+        try:
+            print(f"  {label:20}: {method()!r}")
+        except Exception as e:
+            print(f"  {label:20}: ERROR {e!r}")
