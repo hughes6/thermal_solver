@@ -4592,12 +4592,43 @@ functions
                     "chtMultiRegionFoam -case \"$case_dir\" -parallel\n";
         }
         output <<
+            "write_final_reports()\n"
+            "{\n"
+            "    local control_dict=\"$case_dir/system/controlDict\" "
+                "backup=\"$case_dir/system/controlDict.reportBackup.$$\" "
+                "status=0\n"
+            "    cp -p -- \"$control_dict\" \"$backup\" || return 1\n"
+            "    if ! sed -i -E "
+                "-e 's/^([[:space:]]*writeControl[[:space:]]+)[^;]+;/"
+                "\\1timeStep;/' "
+                "-e 's/^([[:space:]]*writeInterval[[:space:]]+)[^;]+;/"
+                "\\1 1;/' \"$control_dict\"; then status=1; fi\n";
+        if(options.use_multirate_thermal) {
+            output <<
+                "    if [[ \"$status\" == 0 ]] && ! \"$foam_launcher\" "
+                    "semiFrozenChtMultiRegionFoam -case \"$case_dir\" "
+                    "-postProcess -latestTime; then status=1; fi\n";
+        } else {
+            output <<
+                "    if [[ \"$status\" == 0 ]] && ! \"$foam_launcher\" "
+                    "chtMultiRegionFoam -case \"$case_dir\" "
+                    "-postProcess -latestTime; then status=1; fi\n";
+        }
+        output <<
+            "    mv -f -- \"$backup\" \"$control_dict\" || return 1\n"
+            "    return \"$status\"\n"
+            "}\n\n"
             "reconstruct_time=$(\"$foam_launcher\" foamListTimes "
                 "-case \"$case_dir\" -processor -latestTime "
                 "2>/dev/null || echo 0)\n"
             "reconstruct_time=\"${reconstruct_time##*$'\\n'}\"\n"
             "\"$foam_launcher\" reconstructPar -case \"$case_dir\" "
                 "-allRegions -time \"$reconstruct_time\"\n\n"
+            "if ! write_final_reports; then\n"
+            "    echo \"Final OpenFOAM report generation failed at "
+                "t=$reconstruct_time.\" >&2\n"
+            "    exit 3\n"
+            "fi\n\n"
             "\"$foam_launcher\" foamDictionary -precision 17 "
                 "\"$case_dir/system/fluid/fvSolution\" "
                 "-entry PIMPLE/frozenFlow -set false\n"

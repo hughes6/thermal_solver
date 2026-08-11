@@ -1664,3 +1664,51 @@ topology-incompatible caches are rebuilt from the current field, all partial
 diagnostic copies are removed, and the long-lag comparison is deferred to the
 next refresh. This prevents convergence caches from making otherwise valid
 checkpoints unreconstructable after repartitioning or mapped restarts.
+
+## Long production-style in-depth convergence (2026-08-11)
+
+The preserved `model_generic_airside_indepth_50400_validation` case was
+continued from 9,600.01 s toward a requested 18,000 s endpoint with 1,200 s
+thermal intervals. Earlier checkpoints were retained and the runner pruned
+only its normal intermediate processor writes. The 1,200 s implicit thermal
+stages took 148-162 s on this machine. A 0.01 s Co=1 coupled refresh used
+61-62 steps and normally took about 312 s before later host contention made
+the final measured wall-clock sample non-representative.
+
+The case demonstrated why thermal drift alone cannot terminate the workflow.
+At 10,800 s the peak and component-average rates were only 0.05175 and
+0.008625 K/300 s, but airflow shifted enough to force a rebase. At 12,000 s
+the rebaselined field passed with 0.7426% long-lag velocity drift. At 13,200 s
+a live window caught a 4.758% internal-fan flow change, and the subsequent
+settled field was still 2.1025% from its anchored airflow reference. The older
+generated runner's stricter 1% anchored policy rebased that field. The next
+thermal checkpoint then moved by 0.29965 K/300 s at the fluid hot spot,
+disproving the apparent earlier convergence.
+
+After the rebase, 15,600 s and 16,800 s formed two consecutive validated
+checkpoints. The final rates were 0.033275 K/300 s for the fluid peak and
+0.0123 K/300 s for the controlling component average. Final long-lag velocity
+drift was 1.38567%, local spatial drift was 0.731188%, and boundary mass
+imbalance was 0.00344%. The runner therefore stopped correctly at
+16,800.01 s before the requested 18,000 s endpoint.
+
+The reconstructed final reports give 0.296551 kg/s total fan exhaust,
+298.3032 K mass-weighted fan outlet temperature, 299.2920 K rack-fluid
+average, and 322.5547 K rack-fluid maximum. Against the configured 1,545 W
+equipment load, signed fan heat rejection is 1,535.81 W, a 0.595% energy
+difference. The nearly closed KVM boundary has only 1.48e-9 kg/s flow, so its
+standalone weighted temperature is numerically meaningless and must continue
+to be excluded by the recirculation report's minimum-flow gate.
+
+This run also exposed missing values at terminal report times. Function
+objects used a 60 s report schedule while a coupled refresh ended 0.01 s after
+the last thermal report. OpenFOAM created canonical report files containing
+only the time, and later post-processing wrote valid values into suffixed files
+that the existing plotting readers do not consume. Generated runners now
+perform one final multi-region post-processing pass after reconstruction. They
+temporarily force report writes and then restore `controlDict`; existing report
+data is never deleted. Plot readers accept both canonical and OpenFOAM's
+collision-safe suffixed report filenames. The same
+operation is available for older preserved cases through
+`tools/regenerate_openfoam_reports.sh`. On the 284,396-fluid-cell case it took
+14.7 s and restored readable final values without rerunning the simulation.

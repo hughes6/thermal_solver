@@ -25,7 +25,9 @@ def patch_basename(name: str) -> str:
 def read_surface_report(report_root: Path) -> dict[float, float]:
     """Read scalar surfaceFieldValue output across restart directories."""
     samples: dict[float, float] = {}
-    for path in report_root.glob("*/surfaceFieldValue.dat"):
+    # OpenFOAM appends the time to a filename when post-processing would
+    # otherwise overwrite an initialized terminal report. Read both forms.
+    for path in report_root.glob("*/surfaceFieldValue*.dat"):
         with path.open("r", encoding="utf-8", errors="replace") as stream:
             for line in stream:
                 columns = line.replace("(", " ").replace(")", " ").split()

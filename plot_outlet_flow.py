@@ -5,8 +5,6 @@ from __future__ import annotations
 import argparse
 from pathlib import Path
 
-import matplotlib.pyplot as plt
-
 
 def report_directories(case: Path) -> list[Path]:
     post = case / "postProcessing"
@@ -48,7 +46,7 @@ def select_report(case: Path, requested: str | None) -> Path:
 
 def read_samples(report: Path) -> tuple[list[float], list[float]]:
     samples: dict[float, float] = {}
-    for path in report.glob("*/surfaceFieldValue.dat"):
+    for path in report.glob("*/surfaceFieldValue*.dat"):
         with path.open("r", encoding="utf-8", errors="replace") as stream:
             for line in stream:
                 columns = line.replace("(", " ").replace(")", " ").split()
@@ -65,6 +63,14 @@ def read_samples(report: Path) -> tuple[list[float], list[float]]:
 
 
 def main() -> None:
+    try:
+        import matplotlib.pyplot as plt
+    except ImportError as exc:
+        raise SystemExit(
+            "This tool requires Matplotlib. Install it with:\n"
+            "  python -m pip install matplotlib"
+        ) from exc
+
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--case", type=Path, required=True)
     parser.add_argument(

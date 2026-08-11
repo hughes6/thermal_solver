@@ -405,7 +405,15 @@ int main(int argc, char** argv) {
                std::string::npos);
         assert(text.str().find(
             "Rebased accepted airflow reference at converged checkpoint") !=
-               std::string::npos);
+                std::string::npos);
+        assert(text.str().find("write_final_reports()") != std::string::npos);
+        assert(text.str().find(
+            "writeControl[[:space:]]+)[^;]+;") != std::string::npos);
+        assert(text.str().find(
+            "semiFrozenChtMultiRegionFoam -case \"$case_dir\" -postProcess") !=
+                std::string::npos);
+        assert(text.str().find(
+            "Final OpenFOAM report generation failed") != std::string::npos);
         assert(text.str().find(
             "summary \"airflow_reference_rebased time=$current") !=
                std::string::npos);
