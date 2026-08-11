@@ -1,77 +1,61 @@
 table = "WINRTYP_CONNECT_INFOS"
 
-print("TRIGGERS")
-cur.execute("""
-SELECT name, is_disabled
-FROM sys.triggers
-WHERE parent_id = OBJECT_ID(?)
-""", f"dbo.{table}")
-
-for r in cur.fetchall():
-    print(r)
-
-
-print("\nDEFAULTS")
 cur.execute("""
 SELECT
-    c.name,
-    dc.definition
-FROM sys.columns c
-LEFT JOIN sys.default_constraints dc
-    ON c.default_object_id = dc.object_id
-WHERE c.object_id = OBJECT_ID(?)
-""", f"dbo.{table}")
+    COLUMN_NAME,
+    DATA_TYPE,
+    IS_NULLABLE
+FROM INFORMATION_SCHEMA.COLUMNS
+WHERE TABLE_SCHEMA = 'dbo'
+  AND TABLE_NAME = ?
+ORDER BY ORDINAL_POSITION
+""", table)
 
 for r in cur.fetchall():
     print(r)
 
-
-print("\nINDEXES / KEYS")
-cur.execute("""
-SELECT
-    i.name,
-    i.is_unique,
-    i.is_primary_key,
-    c.name
-FROM sys.indexes i
-JOIN sys.index_columns ic
-    ON i.object_id = ic.object_id
-   AND i.index_id = ic.index_id
-JOIN sys.columns c
-    ON ic.object_id = c.object_id
-   AND ic.column_id = c.column_id
-WHERE i.object_id = OBJECT_ID(?)
-ORDER BY i.index_id, ic.key_ordinal
-""", f"dbo.{table}")
-
-for r in cur.fetchall():
-    print(r)
-
-
-
+test_lpntr = "PUT_YOUR_TEST_COMPONENT_LPNTR_HERE"
 
 cur.execute("""
 SELECT *
 FROM dbo.WINRTYP_CONNECT_INFOS
 WHERE LPNTR = ?
-ORDER BY COPY
 """, test_lpntr)
 
 before = set(cur.fetchall())
 
-
-
-
+input("Now connect exactly ONE wire in DBE, save, then press ENTER...")
 
 cur.execute("""
 SELECT *
 FROM dbo.WINRTYP_CONNECT_INFOS
 WHERE LPNTR = ?
-ORDER BY COPY
 """, test_lpntr)
 
 after = set(cur.fetchall())
 
-print("NEW ROW:")
+print("\nNEW ROWS:")
 for row in after - before:
     print(row)
+
+print("\nREMOVED ROWS:")
+for row in before - after:
+    print(row)
+
+
+
+
+
+
+name = "PYTHON_TEST_DELETE_ME_2"
+
+cur.execute("""
+SELECT ENTRY, VERSION, LPNTR
+FROM dbo.ComponentData
+WHERE ENTRY = ?
+""", name)
+
+for row in cur.fetchall():
+    print(row)
+
+
