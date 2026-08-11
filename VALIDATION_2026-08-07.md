@@ -1331,3 +1331,44 @@ of those caches after reconstructing a warm start. A real 43,200.10-to-.11 s
 warm start confirmed every cache was removed and production controls were
 restored; the next multirate continuation must conservatively reacquire its
 accepted airflow baseline.
+
+## Screening long-lag gate validation through 50,400 s (2026-08-10)
+
+The preserved screening case
+`model_generic_airside_screening_spatial_gate_runtime_20260809` was resumed
+from 43,200.11 s to 50,400 s after deliberately invalidating the cached
+warm-start convergence references.  This exercised the screening-only 3%
+accepted-reference velocity RMS limit while retaining the strict 1% limit on
+each individual airflow refresh.
+
+The first accepted thermal checkpoint at 48,000.01 s had a 0.78208% local
+velocity RMS change and a 0.78208% accepted-reference drift.  The second at
+50,400.01 s had a 0.780945% local change and 1.45851% accumulated drift from
+45,600.04 s.  Both checkpoints therefore passed for the intended reason; the
+run ended with `.thermal_convergence_streak` equal to 2.  Thermal metrics were
+0.08395 K/300 s peak and 0.0032625 K/300 s component-average at the first
+checkpoint, then 0.209113 K/300 s peak and 0.0098125 K/300 s
+component-average at the second.
+
+The endpoint engineering quantities remained effectively stationary between
+43,200.11 and 50,400.01 s:
+
+- intake mass flow: 0.2976292 -> 0.2975792 kg/s (-0.0168%)
+- exhaust mass flow: 0.2976385 -> 0.2975819 kg/s (-0.0190%)
+- exhaust mass-weighted temperature: 298.29854 -> 298.29902 K (+0.00048 K)
+- net sensible heat rejection: 1540.064 -> 1539.915 W (-0.149 W)
+- expected heat rejection fraction: 99.6805% -> 99.6709%
+- thermal re-ingestion index: 0 at both endpoints
+- bidirectional boundary-flow fraction: 0.129196% -> 0.129208%
+
+The full instantaneous velocity field still changed by 3.9808% RMS over the
+entire 7,200 s endpoint interval, concentrated in the Eaton (25.80%) and
+Trenton (11.66%) internal air passages; external rack air changed by 3.4869%.
+Temperature changed by only 0.0890% RMS overall.  This confirms that transient
+RANS vortex phase is not an appropriate long-lag screening stop metric by
+itself, while the local 1% refresh gate plus the 3% accepted-reference gate
+continues to protect against an actually unsettled flow update.
+
+Reports are preserved under the case's `validation_snapshots_50400` directory:
+`field_change_partitioned.csv`, `recirculation.csv`,
+`recirculation_face_flow.csv`, and `recirculation.png`.
