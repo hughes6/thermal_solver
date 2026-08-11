@@ -1594,3 +1594,43 @@ field has not settled. Generated runners now report `run_paused` with reason
 `airflow_refresh_pending` in this state and explicitly instruct the operator
 to continue the same case. They emit `run_complete` only when no refresh is
 pending.
+
+## Eight-layer limit and refresh timestep study (2026-08-11)
+
+A fourth unique case halved only the vertical spacing again to 6.25 mm. It had
+9,600 total cells, 9,472 fluid cells, 128 solid cells, eight cells through the
+aluminum height, and 144 matched interface faces. The clean mesh was mapped
+from the converged four-layer case and rebuilt with a coupled warm start. Its
+12,000 s implicit thermal stage took 109.1 s.
+
+The refined post-thermal airflow did not satisfy the steady-flow validation
+policy. Its first 1 s coupled window changed the velocity field by 17.93%.
+Across the complete 20 s safety window, local velocity drift ranged from 2.15%
+to 26.30%, later oscillated around 6-8%, and ended at 7.87%; final mass
+imbalance was 1.053%. The case was therefore rejected rather than added as a
+fourth converged component-temperature point. This is evidence of a resolved
+unsteady/buoyant flow regime at the finer mesh, not justification to relax the
+1% spatial gate. A future component-temperature validation at this resolution
+requires an explicitly time-averaged unsteady-flow policy.
+
+The case also exposed two runner issues. First, a requested endpoint exactly
+equal to the maximum refresh duration previously returned the endpoint-pause
+path before checking safety-limit exhaustion. Generated runners now check the
+maximum duration first. The exhausted real case then immediately returned
+nonzero with `Airflow refresh failed to converge within 20 s.` Second, all
+live-flow stages shared the cold-start 0.001 s timestep cap even though refresh
+stages already perform strict Courant preflight and postflight checks.
+
+A matched one-second study cloned the same 12,001 s checkpoint. The 0.001 s
+control took 291.8 s; a 0.005 s candidate took 104.4 s, a 64.2% reduction.
+Candidate predicted maximum Courant number was only 0.0314. Relative to the
+control, full-field velocity RMS difference was 0.787%, fluid-temperature RMS
+difference was 0.0486 K, solid-temperature RMS difference was 0.000094 K, and
+outlet temperature differed by 0.0466 K. Both runs correctly remained pending
+because the physical field was unsettled.
+
+The schema now separates `airflow_refresh_maximum_time_step` from the existing
+`airflow_maximum_time_step`. The validation profile uses 0.005 s for refreshes
+while retaining 0.001 s for startup and warm-start airflow. Default, screening,
+and in-depth profiles remain at 0.001 s until independently matched on their
+own representative cases.

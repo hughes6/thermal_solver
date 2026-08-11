@@ -19,6 +19,7 @@ class OpenFoamProfilePolicyTest(unittest.TestCase):
         self.assertEqual(profile["parallel_processes"], 2)
         self.assertEqual(profile["airflow_refresh_maximum_courant_number"], 2.0)
         self.assertEqual(profile["airflow_maximum_time_step"], 0.001)
+        self.assertEqual(profile["airflow_refresh_maximum_time_step"], 0.001)
         self.assertEqual(profile["pimple_outer_correctors"], 3)
         self.assertEqual(profile["pimple_pressure_correctors"], 2)
         self.assertEqual(profile["thermal_only_maximum_time_step"], 20.0)
@@ -34,6 +35,24 @@ class OpenFoamProfilePolicyTest(unittest.TestCase):
                     profile["airflow_refresh_maximum_courant_number"], 1.0
                 )
                 self.assertEqual(profile["maximum_courant_number"], 1.0)
+
+    def test_validation_uses_matched_refresh_timestep(self):
+        self.assertEqual(
+            self.profile("validation_foam_cfg.toml")[
+                "airflow_refresh_maximum_time_step"
+            ],
+            0.005,
+        )
+        for name in (
+            "default_foam_cfg.toml",
+            "screening_foam_cfg.toml",
+            "indepth_foam_cfg.toml",
+        ):
+            with self.subTest(name=name):
+                self.assertEqual(
+                    self.profile(name)["airflow_refresh_maximum_time_step"],
+                    0.001,
+                )
 
     def test_all_profiles_require_spatial_velocity_convergence(self):
         for name in (

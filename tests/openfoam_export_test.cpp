@@ -153,6 +153,7 @@ int main(int argc, char** argv) {
          .pimple_pressure_correctors=2,
          .use_multirate_thermal=true,
          .minimum_initial_air_exchange_fraction=1.0,
+         .airflow_refresh_maximum_time_step=0.005,
          .airflow_refresh_duration=0.1,
          .stop_when_thermally_converged=true});
 
@@ -416,6 +417,19 @@ int main(int argc, char** argv) {
         assert(text.str().find(
             "summary \"run_paused mode=$mode reconstructedTime=$reconstruct_time reason=airflow_refresh_pending\"") !=
                std::string::npos);
+        assert(text.str().find(
+            "\"Adaptive airflow refresh\" 0.0050000000000000001") !=
+               std::string::npos);
+        assert(text.str().find(
+            "\"Adaptive initial airflow\" 0.001") !=
+               std::string::npos);
+        const auto refresh_failure = text.str().find(
+            "Airflow refresh failed to converge");
+        const auto refresh_pause = text.str().find(
+            "Airflow refresh reached requested end time");
+        assert(refresh_failure != std::string::npos);
+        assert(refresh_pause != std::string::npos);
+        assert(refresh_failure < refresh_pause);
         assert(text.str().find(
             "-v v=\"$latest_velocity_relative_rms\" -v limit=\"0.01\"") !=
                std::string::npos);

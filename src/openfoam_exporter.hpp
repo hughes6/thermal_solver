@@ -48,6 +48,7 @@ struct OpenFoamExportOptions {
     double minimum_initial_airflow_duration = 0.02;
     double minimum_initial_air_exchange_fraction = 0.0;
     double airflow_maximum_time_step = 0.001;
+    double airflow_refresh_maximum_time_step = 0.001;
     // Retain these names until the TOML schema is finalized. They control the
     // thermal-only stage, not OpenFOAM's native frozenFlow implementation.
     double frozen_flow_maximum_time_step = 1.0;
@@ -1249,6 +1250,9 @@ private:
             validate_positive_finite(
                 options.airflow_maximum_time_step,
                 "airflow_maximum_time_step");
+            validate_positive_finite(
+                options.airflow_refresh_maximum_time_step,
+                "airflow_refresh_maximum_time_step");
             if(options.minimum_initial_airflow_duration >
                options.airflow_warmup_time)
                 throw std::invalid_argument(
@@ -3811,7 +3815,7 @@ functions
                 "    stage()\n"
                 "    {\n"
                 "        local thermal_only=\"$1\" target=\"$2\" max_co=\"$3\" "
-                    "max_dt=\"$4\" label=\"$5\"\n"
+                    "max_dt=\"$4\" label=\"$5\" live_dt_cap=\"$6\"\n"
                 "        local interval actual_time saved_time canonical_time restart_dt "
                     "saved_time_file rank stage_steps stage_dt stage_max_dt "
                     "stage_write_control stage_write_interval field "
@@ -3863,9 +3867,8 @@ functions
                 "            # flow field below then supplies a tighter limit.\n"
                 "            adjust_time_step=false\n"
                 "            airflow_hard_cap=$(awk -v maximum=\"$max_dt\" "
-                    "-v flow_max=\""
-                << options.airflow_maximum_time_step
-                    << "\" 'BEGIN { print (flow_max<maximum?flow_max:maximum) }')\n"
+                    "-v flow_max=\"$live_dt_cap\" "
+                    "'BEGIN { print (flow_max<maximum?flow_max:maximum) }')\n"
                 "            stage_max_dt=$(awk -v hard=\"$airflow_hard_cap\" "
                     "-v co=\"$max_co\" 'BEGIN { "
                     "scale=(co<10?co/10:1); "
@@ -4181,7 +4184,8 @@ functions
                     "            stage false \"$refresh_target\" "
                     << options.airflow_refresh_maximum_courant_number << ' '
                     << options.maximum_time_step
-                    << " \"Adaptive airflow refresh\"\n"
+                    << " \"Adaptive airflow refresh\" "
+                    << options.airflow_refresh_maximum_time_step << "\n"
                     "            refresh_elapsed=$(awk -v a=\"$current\" "
                         "-v b=\"$refresh_start\" 'BEGIN { print a-b }')\n"
                     "            if awk -v a=\"$refresh_elapsed\" -v b=\""
@@ -4207,6 +4211,15 @@ functions
                     "                    return 0\n"
                     "                fi\n"
                     "            fi\n"
+                    "            if awk -v a=\"$refresh_elapsed\" -v b=\""
+                    << options.maximum_airflow_refresh_duration
+                    << "\" 'BEGIN { exit !(a>=b) }'; then\n"
+                    "                echo \"Airflow refresh failed to converge "
+                        "within "
+                    << options.maximum_airflow_refresh_duration
+                    << " s.\" >&2\n"
+                    "                return 3\n"
+                    "            fi\n"
                     "            if ! awk -v a=\"$current\" "
                         "-v b=\"$requested_end\" "
                         "'BEGIN { s=(b<0?-b:b); if(s<1)s=1; "
@@ -4216,15 +4229,6 @@ functions
                         "unvalidated and the pending refresh will resume "
                         "before the next thermal-only stage.\"\n"
                     "                return 0\n"
-                    "            fi\n"
-                    "            if awk -v a=\"$refresh_elapsed\" -v b=\""
-                    << options.maximum_airflow_refresh_duration
-                    << "\" 'BEGIN { exit !(a>=b) }'; then\n"
-                    "                echo \"Airflow refresh failed to converge "
-                        "within "
-                    << options.maximum_airflow_refresh_duration
-                    << " s.\" >&2\n"
-                    "                return 3\n"
                     "            fi\n"
                     "        done\n"
                     "    }\n\n";
@@ -4280,7 +4284,8 @@ functions
                     "            stage false \"$initial_target\" "
                     << options.maximum_courant_number << ' '
                     << options.maximum_time_step
-                    << " \"Adaptive initial airflow\"\n"
+                    << " \"Adaptive initial airflow\" "
+                    << options.airflow_maximum_time_step << "\n"
                     "            initial_elapsed=$(awk -v a=\"$current\" "
                         "-v b=\"$initial_start\" 'BEGIN { print a-b }')\n"
                     "            minimum_observation=\""
@@ -4366,7 +4371,8 @@ functions
                     "        stage false \"$warm_target\" "
                     << options.maximum_courant_number << ' '
                     << options.maximum_time_step
-                    << " \"Fixed airflow warm-up\"\n"
+                    << " \"Fixed airflow warm-up\" "
+                    << options.airflow_maximum_time_step << "\n"
                     "    fi\n";
             }
             output <<
@@ -4382,7 +4388,7 @@ functions
                 "        stage true \"$frozen_target\" "
                 << options.frozen_flow_maximum_courant_number << ' '
                 << options.frozen_flow_maximum_time_step
-                << " \"Implicit thermal-only stage (airflow held)\"\n";
+                << " \"Implicit thermal-only stage (airflow held)\" 1\n";
             if(options.stop_when_thermally_converged) {
                 output <<
                 "        thermal_candidate=0\n"
@@ -4429,7 +4435,8 @@ functions
                     "            stage false \"$refresh_target\" "
                     << options.maximum_courant_number << ' '
                     << options.maximum_time_step
-                    << " \"Airflow refresh\"\n"
+                    << " \"Airflow refresh\" "
+                    << options.airflow_refresh_maximum_time_step << "\n"
                     "        fi\n";
             }
             if(options.stop_when_thermally_converged) {
