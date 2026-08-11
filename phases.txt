@@ -1,144 +1,27 @@
-import time
-import pyodbc
-import win32com.client as win32
-
-
-# ============================================================
-# CONFIG
-# ============================================================
-
-COMPONENT_NAME = "PYTHON_TEST_DELETE_ME"
-COMPONENT_VERSION = "1"
-
-CONNECTOR_1 = "CONNECTOR_PART_1"
-CONNECTOR_1_VERSION = "1"
-
-CONNECTOR_2 = "CONNECTOR_PART_2"
-CONNECTOR_2_VERSION = "1"
-
-# Format:
-# (wire_part, wire_version, connector_1_pin, connector_2_pin)
-
-WIRES = [
-    ("M22759/44-22-9", "1", 1, 34),
-    ("M22759/44-22-9", "1", 2, 35),
-    ("M22759/44-22-9", "1", 3, 36),
-    ("M22759/11-20-0", "1", 4, 37),
-]
-
-CONNECTION_STRING = (
-    "DRIVER={SQL Server};"
-    "SERVER=sql-zuken-prd;"
-    "DATABASE=Zuken_E3Library;"
-    "Trusted_Connection=yes;"
-)
-
-
-# ============================================================
-# DBE CONNECTION
-# ============================================================
-
-app = win32.gencache.EnsureDispatch("CT.DBEApplication")
-
-print("DBE:", app.GetName())
-print("Version:", app.GetVersion())
-print("Database:", app.GetActualDatabase())
-
-
-# ============================================================
-# GET ACTIVE JOB
-# ============================================================
-
-job_result = app.GetJobIds()
-job_ids = []
-
-if isinstance(job_result, tuple) and len(job_result) == 2:
-    raw_ids = job_result[1]
-
-    if isinstance(raw_ids, (tuple, list)):
-        job_ids = [x for x in raw_ids if isinstance(x, int) and x > 0]
-
-if not job_ids:
-    raise RuntimeError("No DBE job is open. Open a blank Database Editor window first.")
-
-job = app.CreateDbeJobObject()
-job.SetId(job_ids[-1])
-
-print("Job ID:", job.GetId())
-print("Job Name:", job.GetName())
-
-
-# ============================================================
-# NEW COMPONENT WIZARD
-# ============================================================
-
-print("\nOpening New Component wizard...")
-
-result = job.NewComponent(COMPONENT_NAME, COMPONENT_VERSION, "", "", 0)
-
-print("NewComponent returned:", result)
-print("Name should be:", COMPONENT_NAME)
-print("Version should be:", COMPONENT_VERSION)
-
-input("\nFinish the DBE wizard exactly how you normally would, then press ENTER here...")
-
-
-# ============================================================
-# BIND TO NEW COMPONENT
-# ============================================================
-
-time.sleep(1)
-
-component_id = job.GetActiveComponentId()
-
-if component_id <= 0:
-    raise RuntimeError("Could not get the new component ID after wizard completion.")
-
-component = job.CreateDbeComponentObject()
-component.SetId(component_id)
-
-print("\nCOMPONENT:")
-print("ID:", component.GetId())
-print("Name:", component.GetName())
-print("Version:", component.GetVersion())
-print("Type:", component.GetComponentType())
-print("Subtype:", component.GetSubType())
-
-
 # ============================================================
 # SAVE ROOT COMPONENT
 # ============================================================
 
-save_result = component.Save()
+print("\nSaving component...")
 
-print("\ncomponent.Save() returned:", save_result)
+component_save = component.Save()
+print("component.Save():", component_save)
 
-time.sleep(1)
+job_save = job.Save(0)
+print("job.Save(0):", job_save)
 
-
-# ============================================================
-# RELEASE DBE OBJECTS
-# ============================================================
-
-del component
-del job
-del app
+time.sleep(2)
 
 
 # ============================================================
-# DATABASE CONNECTION
+# VERIFY COMPONENT EXISTS BEFORE CLOSING JOB
 # ============================================================
 
-conn = pyodbc.connect(CONNECTION_STRING, autocommit=False)
+conn = pyodbc.connect(CONNECTION_STRING, autocommit=True)
 cur = conn.cursor()
 
-
-# ============================================================
-# GET COMPONENT LPNTR
-# ============================================================
-
 cur.execute("""
-SELECT LPNTR
+SELECT ID, ENTRY, VERSION, LPNTR
 FROM dbo.ComponentData
 WHERE ENTRY = ?
 AND VERSION = ?
@@ -146,103 +29,60 @@ AND VERSION = ?
 
 row = cur.fetchone()
 
-if not row:
-    raise RuntimeError("The component was not found in ComponentData after DBE save.")
-
-lpntr = row[0]
-
-if not lpntr:
-    raise RuntimeError("Component exists but has no LPNTR.")
-
-print("\nLPNTR:", lpntr)
-
-
-# ============================================================
-# HELPERS
-# ============================================================
-
-def add_member(copy_no, part, version):
-    cur.execute("""
-    INSERT INTO dbo.Assembly
-    (LPNTR, COPY, FLAGS, NAME, SUBENTRY, SUBVERSION)
-    VALUES (?, ?, 2, '%.#', ?, ?)
-    """, lpntr, copy_no, part, version)
-
-
-def connect_wire(wire_copy, end1_copy, pin1, end2_copy, pin2):
-    cur.execute("""
-    INSERT INTO dbo.WINRTYP_CONNECT_INFOS
-    (LPNTR, FLAGS, COPY, NODENO, COPYEND1, PINCOPYEND1, COPYEND2, PINCOPYEND2)
-    VALUES (?, 0, ?, 4, ?, ?, ?, ?)
-    """, lpntr, wire_copy, end1_copy, pin1, end2_copy, pin2)
-
-
-# ============================================================
-# CONNECTORS
-# ============================================================
-
-print("\nAdding Connector 1")
-add_member(1, CONNECTOR_1, CONNECTOR_1_VERSION)
-
-print("Adding Connector 2")
-add_member(2, CONNECTOR_2, CONNECTOR_2_VERSION)
-
-
-# ============================================================
-# WIRES + PIN ASSIGNMENTS
-# ============================================================
-
-for wire_copy, wire_data in enumerate(WIRES, start=3):
-    wire_part, wire_version, pin1, pin2 = wire_data
-
-    print(f"Wire COPY {wire_copy}: {wire_part} | Connector 1 Pin {pin1} -> Connector 2 Pin {pin2}")
-
-    add_member(wire_copy, wire_part, wire_version)
-    connect_wire(wire_copy, 1, pin1, 2, pin2)
-
-
-# ============================================================
-# VERIFY BEFORE COMMIT
-# ============================================================
-
-print("\nASSEMBLY:")
-
-cur.execute("""
-SELECT COPY, SUBENTRY, SUBVERSION
-FROM dbo.Assembly
-WHERE LPNTR = ?
-ORDER BY COPY
-""", lpntr)
-
-for row in cur.fetchall():
-    print(tuple(row))
-
-
-print("\nCONNECTIONS:")
-
-cur.execute("""
-SELECT COPY, COPYEND1, PINCOPYEND1, COPYEND2, PINCOPYEND2
-FROM dbo.WINRTYP_CONNECT_INFOS
-WHERE LPNTR = ?
-ORDER BY COPY
-""", lpntr)
-
-for row in cur.fetchall():
-    print(tuple(row))
-
-
-# ============================================================
-# COMMIT
-# ============================================================
-
-answer = input("\nType YES to commit, anything else to rollback: ")
-
-if answer == "YES":
-    conn.commit()
-    print("Committed.")
-else:
-    conn.rollback()
-    print("Rolled back.")
+print("ComponentData before job close:", tuple(row) if row else None)
 
 cur.close()
 conn.close()
+
+if not row:
+    raise RuntimeError("DBE has NOT committed the component yet. Job will remain open.")
+
+
+# ============================================================
+# CLOSE DBE JOB
+# ============================================================
+
+print("\nClosing DBE job...")
+
+print("Jobs before:", app.GetJobCount())
+
+close_result = job.Close(0)
+
+print("job.Close(0):", close_result)
+
+time.sleep(2)
+
+print("Jobs after:", app.GetJobCount())
+
+
+# ============================================================
+# VERIFY AGAIN AFTER CLOSE
+# ============================================================
+
+conn = pyodbc.connect(CONNECTION_STRING, autocommit=True)
+cur = conn.cursor()
+
+cur.execute("""
+SELECT ID, ENTRY, VERSION, LPNTR
+FROM dbo.ComponentData
+WHERE ENTRY = ?
+AND VERSION = ?
+""", COMPONENT_NAME, COMPONENT_VERSION)
+
+row = cur.fetchone()
+
+print("ComponentData after job close:", tuple(row) if row else None)
+
+if not row:
+    raise RuntimeError("Component disappeared when DBE job closed.")
+
+lpntr = row.LPNTR
+
+print("Persisted LPNTR:", lpntr)
+
+cur.close()
+conn.close()
+
+del component
+del job
+del app
