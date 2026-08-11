@@ -339,7 +339,11 @@ int main(int argc, char** argv) {
                std::string::npos);
         assert(text.str().find(
             "accepted_airflow_reference=\"$case_dir/.accepted_airflow_reference\"") !=
-               std::string::npos);
+                std::string::npos);
+        assert(text.str().find("field_internal_count()") != std::string::npos);
+        assert(text.str().find(
+            "incompatible with the current decomposition at rank $rank") !=
+                std::string::npos);
         assert(text.str().find(
             "Accepted airflow drift: referenceTime=$reference_time") !=
                std::string::npos);

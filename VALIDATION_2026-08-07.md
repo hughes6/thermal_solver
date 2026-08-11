@@ -1634,3 +1634,33 @@ The schema now separates `airflow_refresh_maximum_time_step` from the existing
 while retaining 0.001 s for startup and warm-start airflow. Default, screening,
 and in-depth profiles remain at 0.001 s until independently matched on their
 own representative cases.
+
+## In-depth refresh Courant study and cache compatibility (2026-08-11)
+
+The production-style in-depth workflow was independently tested from the same
+accepted 16,800.01 s checkpoint. The Co=1 control advanced 0.01 s in 61 steps
+at 0.000163934 s and took 405.695 s. The matched Co=2 candidate used 31 steps
+at 0.000322581 s, passed its postflight check at Co=1.5761, and took 183.323 s,
+a 54.8% runtime reduction.
+
+The candidate's full fluid-velocity field differed from the control by
+0.0189753 m/s RMS against a 1.89502 m/s RMS field, or 1.0013%. Its live flow
+metrics were also noisier at the terminal partial checkpoint. Because this is
+on the 1% accuracy boundary rather than comfortably below it, the in-depth
+profile remains at Co=1. The faster setting is not promoted based only on
+runtime.
+
+The control uncovered an independent restart defect. Its cached accepted
+airflow field came from an older processor topology: rank 0 contained 147,443
+cached cells while the current partition contained 86,589. Copying that field
+as `UPrevious` contaminated the result directory and caused `reconstructPar`
+to fail even though the coupled solve itself was valid. The recovered control
+reconstructed successfully after removal of only those temporary diagnostic
+fields.
+
+Generated runners now read the binary field's declared internal-cell count for
+every processor before materializing `UPrevious`. Missing, malformed, or
+topology-incompatible caches are rebuilt from the current field, all partial
+diagnostic copies are removed, and the long-lag comparison is deferred to the
+next refresh. This prevents convergence caches from making otherwise valid
+checkpoints unreconstructable after repartitioning or mapped restarts.
