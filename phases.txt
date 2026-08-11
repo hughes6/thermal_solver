@@ -1,27 +1,94 @@
+import win32com.client as win32
 import os
 
+app = win32.gencache.EnsureDispatch("CT.DBEApplication")
+
 root = app.GetInstallationPath()
+
+print("SEARCHING:", root)
 
 terms = [
     b"WINRTYP_CONNECT_INFOS",
     b"PINCOPYEND1",
+    b"PINCOPYEND2",
     b"COPYEND1",
+    b"COPYEND2",
     b"GatePinRelation",
 ]
 
 for base, dirs, files in os.walk(root):
+    for filename in files:
 
-    for file in files:
-
-        path = os.path.join(base, file)
+        path = os.path.join(base, filename)
 
         try:
             with open(path, "rb") as f:
                 data = f.read()
 
+            low = data.lower()
+
             for term in terms:
-                if term.lower() in data.lower():
+                if term.lower() in low:
                     print(term.decode(), "->", path)
 
         except:
             pass
+
+
+
+
+
+
+
+import os
+import win32com.client as win32
+
+app = win32.gencache.EnsureDispatch("CT.DBEApplication")
+
+roots = [
+    app.GetInstallationPath(),
+    os.path.join(
+        os.environ["LOCALAPPDATA"],
+        "Temp",
+        "gen_py"
+    )
+]
+
+terms = [
+    "WINRTYP_CONNECT_INFOS",
+    "PINCOPYEND1",
+    "COPYEND1",
+    "Assembly",
+]
+
+for root in roots:
+
+    print("\nSEARCH ROOT:", root)
+
+    if not os.path.exists(root):
+        continue
+
+    for base, dirs, files in os.walk(root):
+
+        for filename in files:
+
+            if not filename.lower().endswith(
+                (".py", ".txt", ".xml", ".ini", ".cfg", ".sql")
+            ):
+                continue
+
+            path = os.path.join(base, filename)
+
+            try:
+                text = open(
+                    path,
+                    "r",
+                    errors="ignore"
+                ).read()
+
+                for term in terms:
+                    if term.lower() in text.lower():
+                        print(term, "->", path)
+
+            except:
+                pass
