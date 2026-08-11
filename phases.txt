@@ -3,136 +3,100 @@ import win32com.client as win32
 app = win32.gencache.EnsureDispatch("CT.DBEApplication")
 
 # ------------------------------------------------------------
-# BIND TO ACTIVE COMPONENT
+# GET THE OPEN DBE JOB
 # ------------------------------------------------------------
 
-cid = app.GetActiveComponentId()
+result = app.GetJobIds()
+print("RAW JOB IDS:", result)
 
-comp = app.CreateDbeComponentObject()
-comp.SetId(cid)
+# From your current result:
+# (1, (None, 118))
+job_id = result[1][1]
 
-print("ID:", comp.GetId())
-print("Name:", comp.GetName())
-print("Version:", comp.GetVersion())
-print("Type:", comp.GetComponentType())
-print("Subtype:", comp.GetSubType())
+job = app.CreateDbeJobObject()
+job.SetId(job_id)
 
-if comp.GetComponentType() != 7:
-    raise RuntimeError("Active DBE component is not a cable.")
-
-
-# ------------------------------------------------------------
-# GET ATTRIBUTE IDS
-# ------------------------------------------------------------
-
-result = comp.GetAttributeIds()
-
-print("\nFULL RESULT:")
-print(repr(result))
-print("RESULT TYPE:")
-print(type(result))
+print("\nBOUND JOB")
+print("ID:   ", job.GetId())
+print("Name: ", job.GetName())
+print("Type: ", job.GetType())
+print("Path: ", job.GetPath())
 
 
 # ------------------------------------------------------------
-# NORMALIZE RETURN
+# SEE WHAT COMPONENT THE JOB THINKS IS ACTIVE
 # ------------------------------------------------------------
 
-attribute_ids = []
-count = None
+print("\nACTIVE COMPONENT")
 
-if isinstance(result, tuple):
-
-    # Common case:
-    # (10, (None, 15375, 15379, ...))
-    if len(result) == 2:
-
-        count = result[0]
-        raw_ids = result[1]
-
-        if isinstance(raw_ids, (tuple, list)):
-
-            attribute_ids = [
-                x for x in raw_ids
-                if isinstance(x, int) and x > 0
-            ]
-
-        elif isinstance(raw_ids, int):
-
-            # Could be a single returned ID
-            if raw_ids > 0:
-                attribute_ids = [raw_ids]
-
-        else:
-
-            print(
-                "Unexpected raw_ids type:",
-                type(raw_ids),
-                repr(raw_ids)
-            )
-
-    # Sometimes pywin32 may flatten things:
-    # (10, None, 15375, 15379, ...)
-    elif len(result) > 2:
-
-        count = result[0]
-
-        attribute_ids = [
-            x for x in result[1:]
-            if isinstance(x, int) and x > 0
-        ]
-
-else:
-
-    print(
-        "Unexpected GetAttributeIds return:",
-        type(result),
-        repr(result)
-    )
-
-
-print("\nCOUNT:", count)
-print("ATTRIBUTE IDS:", attribute_ids)
+try:
+    cid = job.GetActiveComponentId()
+    print("job.GetActiveComponentId():", cid)
+except Exception as e:
+    print("GetActiveComponentId failed:", repr(e))
+    cid = None
 
 
 # ------------------------------------------------------------
-# READ ATTRIBUTES
+# CREATE COMPONENT OBJECT THROUGH THE JOB
 # ------------------------------------------------------------
 
-print("\n" + "=" * 80)
-print("CABLE ATTRIBUTES")
-print("=" * 80)
+print("\nCOMPONENT CREATED THROUGH JOB")
 
-for aid in attribute_ids:
+comp = job.CreateDbeComponentObject()
 
-    attr = app.CreateDbeAttributeObject()
+print("Raw ID:      ", comp.GetId())
+print("Raw Name:    ", repr(comp.GetName()))
+print("Raw Version: ", repr(comp.GetVersion()))
+print("Raw Type:    ", comp.GetComponentType())
+print("Raw Subtype: ", comp.GetSubType())
+
+
+# If job actually gives us an ID, bind explicitly
+if isinstance(cid, int) and cid > 0:
+
+    print("\nBinding component to job active ID:", cid)
+
+    comp.SetId(cid)
+
+    print("ID:      ", comp.GetId())
+    print("Name:    ", repr(comp.GetName()))
+    print("Version: ", repr(comp.GetVersion()))
+    print("Type:    ", comp.GetComponentType())
+    print("Subtype: ", comp.GetSubType())
+
+
+# ------------------------------------------------------------
+# JOB COMPONENT IDS
+# ------------------------------------------------------------
+
+print("\nJOB COMPONENT IDS")
+
+try:
+    r = job.GetComponentIds()
+    print("GetComponentIds():", repr(r))
+except Exception as e:
+    print("GetComponentIds failed:", repr(e))
+
+
+# ------------------------------------------------------------
+# OUTPUT/RESULT WINDOW
+# ------------------------------------------------------------
+
+print("\nJOB OUTPUT")
+
+for i in range(20):
 
     try:
-        attr.SetId(aid)
-    except Exception as e:
-        print(
-            "\nCould not bind attribute",
-            aid,
-            repr(e)
-        )
-        continue
+        r = job.GetResultText(i, "")
+        if r not in (None, "", -1, 0):
+            print("RESULT", i, repr(r))
+    except:
+        pass
 
-    print("\nATTRIBUTE ID:", aid)
-
-    getters = [
-        ("Name", attr.GetName),
-        ("Internal Name", attr.GetInternalName),
-        ("Value", attr.GetValue),
-        ("Internal Value", attr.GetInternalValue),
-        ("Formatted Value", attr.GetFormattedValue),
-    ]
-
-    for label, getter in getters:
-
-        try:
-            value = getter()
-            print(f"  {label:20}: {value!r}")
-
-        except Exception as e:
-            print(
-                f"  {label:20}: ERROR {e!r}"
-            )
+    try:
+        r = job.GetOutbarText(i, "")
+        if r not in (None, "", -1, 0):
+            print("OUTBAR", i, repr(r))
+    except:
+        pass
