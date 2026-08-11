@@ -1,48 +1,32 @@
-# ============================================================
-# REMOVE TEMPLATE MEMBER
-# ============================================================
+CONNECTOR = CONNECTOR_2
+VERSION = CONNECTOR_2_VERSION
 
-def remove_template_member(part_name):
-    cur.execute("""
-    SELECT COPY
-    FROM dbo.Assembly
-    WHERE LPNTR = ?
-    AND SUBENTRY = ?
-    """, lpntr, part_name)
+cur.execute("""
+SELECT LPNTR
+FROM dbo.ComponentData
+WHERE ENTRY = ?
+AND VERSION = ?
+""", CONNECTOR, VERSION)
 
-    rows = cur.fetchall()
+row = cur.fetchone()
 
-    if not rows:
-        print(f"Template member not found: {part_name}")
-        return
+if not row:
+    raise RuntimeError("Connector not found.")
 
-    for row in rows:
-        copy_no = row[0]
+connector_lpntr = row[0]
 
-        print(f"Removing template member COPY {copy_no}: {part_name}")
+print("Connector LPNTR:", connector_lpntr)
 
-        # Remove any wire connections involving this member
-        cur.execute("""
-        DELETE FROM dbo.WIRTYP_CONNECT_INFOS
-        WHERE LPNTR = ?
-        AND (COPY = ? OR COPYEND1 = ? OR COPYEND2 = ?)
-        """, lpntr, copy_no, copy_no, copy_no)
+cur.execute("""
+SELECT *
+FROM dbo.Pin
+WHERE ENTRY = ?
+ORDER BY COPY
+""", connector_lpntr)
 
-        # Remove corresponding gate
-        cur.execute("""
-        DELETE FROM dbo.GatePinRelation
-        WHERE ENTRY = ?
-        AND GateNumber = ?
-        """, lpntr, copy_no)
+print("\nCOLUMNS:")
+print([x[0] for x in cur.description])
 
-        # Remove member from assembly
-        cur.execute("""
-        DELETE FROM dbo.Assembly
-        WHERE LPNTR = ?
-        AND COPY = ?
-        """, lpntr, copy_no)
-
-    print("Template member removed.")
-
-
-remove_template_member("TEMPLATE_COMPONENT_DONT_DELETE")
+print("\nPINS:")
+for row in cur.fetchall():
+    print(tuple(row))
