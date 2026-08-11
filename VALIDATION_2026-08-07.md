@@ -1516,3 +1516,35 @@ ended at checkpoint 2/2, and both `.thermal_convergence_streak` and the stored
 accepted-reference timestamp were verified as `2` and
 `16800.009999999958`. This directly validates the convergence-time rebase fix
 and the revised in-depth gate without bypassing any local criterion.
+
+## Validation-rack cold start and 100,000 s endpoint (2026-08-11)
+
+A fresh 600-cell `validation_fan_rack` export exposed a runtime inefficiency in
+the cold-start safeguard. Device flows and local velocity changes passed by
+0.58 s, but the required air-exchange observation horizon was 20.0751 s. The
+old runner would reach that horizon through roughly 1,955 separate 0.01 s MPI
+launches. Generated runners now advance directly to the bounded exchange
+horizon after the early metrics pass, while retaining the strict 0.001 s CFD
+timestep and rechecking every spatial and device criterion afterward. The real
+run correctly rejected the apparently settled field: full-field velocity RMS
+changed 63.4068% over the exchange. Two subsequent 0.01 s checks reduced the
+change to effectively zero. The model-specific warmup safety limit is now 25 s
+because one exchange takes about 20.1 s.
+
+The same preserved case was continued with 12,000 s airflow-refresh intervals.
+At 3,600 s it rejected only 7.128 W of the applied 50 W and its outlet was
+293.935 K. At 20,001 s those values improved to 24.570 W and 295.857 K, proving
+that both earlier endpoints were thermal transients. Temperature drift over a
+12,000 s window fell monotonically from 1.1045 K at 36,000 s to 0.6999 K at
+48,000 s, 0.4244 K at 60,000 s, 0.2540 K at 72,000 s, 0.1510 K at 84,000 s,
+and 0.0894 K at 96,000 s. The final 4,000 s drift at 100,000 s was 0.0631 K.
+
+The reconstructed 100,001 s endpoint passed the numerical audit: inlet and
+outlet mass flow differed by 0.00006%, signed air-side heat transport was
+49.216 W (1.568% below the 50 W source), and the signed mass-weighted outlet
+temperature was 298.572 K versus the Fluent reference of 298.500 K, a 0.072 K
+or 0.024% difference. Airflow refreshes remained below 0.1% spatial drift,
+supporting the multirate assumption. Local results still require a mesh study:
+the coarse case predicts a 567.6 K aluminum average and 47.42% reverse share of
+gross outlet-face traffic. The signed net outlet balance is validated; solid
+temperature and local recirculation are not yet mesh-independent.

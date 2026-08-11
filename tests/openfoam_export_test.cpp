@@ -405,6 +405,15 @@ int main(int argc, char** argv) {
             "summary \"airflow_reference_rebased time=$current") !=
                std::string::npos);
         assert(text.str().find(
+            "exchange_target=\"$exchange_target\"") !=
+               std::string::npos);
+        assert(text.str().find(
+            "Advancing initial airflow directly to t=$exchange_target s") !=
+               std::string::npos);
+        assert(text.str().find(
+            "summary \"initial_air_exchange_advance current=$current") !=
+               std::string::npos);
+        assert(text.str().find(
             "-v v=\"$latest_velocity_relative_rms\" -v limit=\"0.01\"") !=
                std::string::npos);
         assert(text.str().find(
