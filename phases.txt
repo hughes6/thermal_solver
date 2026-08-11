@@ -1,21 +1,24 @@
-table = "WIRTYPE_CONNECT_INFOS"
+lpntr = "LC-14840D29-FF00-4442-B1BE-7C93C4894335"
 
 cur.execute("""
-SELECT COLUMN_NAME
-FROM INFORMATION_SCHEMA.COLUMNS
-WHERE TABLE_SCHEMA='dbo'
-  AND TABLE_NAME=?
-ORDER BY ORDINAL_POSITION
-""", table)
+SELECT
+    COPY,
+    NODENO,
+    COPYEND1,
+    PINCOPYEND1,
+    COPYEND2,
+    PINCOPYEND2
+FROM dbo.WINRTYP_CONNECT_INFOS
+WHERE LPNTR = ?
+ORDER BY COPY, NODENO
+""", lpntr)
 
-cols = [r[0] for r in cur.fetchall()]
+print("WIRE   NODE   END1       END2")
+print("-" * 50)
 
-print("COLUMNS:")
-for c in cols:
-    print(repr(c))
-
-print("\nFIRST 30 ROWS:")
-cur.execute(f"SELECT TOP (30) * FROM dbo.[{table}]")
-
-for row in cur.fetchall():
-    print(row)
+for copy, node, e1, p1, e2, p2 in cur.fetchall():
+    print(
+        f"{copy:<6} {node:<6} "
+        f"COPY {e1} PIN {p1:<4} -> "
+        f"COPY {e2} PIN {p2}"
+    )
