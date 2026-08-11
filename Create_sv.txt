@@ -1,45 +1,48 @@
-I - Loading M24308/4-11F as mating connector of TEMPLATE_COMPONENT_DONT_DELETE...
-I - Loading M39029/57-356 as crimp contact of TEMPLATE_COMPONENT_DONT_DELETE...
-W - Mating connector M24308/4-264F not found in database !
-W - Mating connector M24308/24-61F not found in database !
-W - Mating connector M24308/24-73F not found in database !
-I - Loading M24308/4-11F_15P HD as mating connector of TEMPLATE_COMPONENT_DONT_DELETE...
-W - Component CONNECTOR_PART_1 not found in database!
-W - Cannot load Component cabletestt from database - look in output window for details...
-I - Loading M24308/4-11F as mating connector of TEMPLATE_COMPONENT_DONT_DELETE...
-I - Loading M39029/57-356 as crimp contact of TEMPLATE_COMPONENT_DONT_DELETE...
-W - Mating connector M24308/4-264F not found in database !
-W - Mating connector M24308/24-61F not found in database !
-W - Mating connector M24308/24-73F not found in database !
-I - Loading M24308/4-11F_15P HD as mating connector of TEMPLATE_COMPONENT_DONT_DELETE...
-I - Loading M24308/2-11F as mating connector of M24308/4-11F...
-I - Loading M39029/58-360 as crimp contact of M24308/4-11F...
-W - Mating connector M24308/23-67F not found in database !
-W - Mating connector M24308/23-73F not found in database !
-W - Mating connector M24308/4-264F not found in database !
-W - Mating connector M24308/24-61F not found in database !
-W - Mating connector M24308/24-73F not found in database !
-I - Loading 15S-HD-PCB as mating connector of M24308/4-11F_15P HD...
-I - Loading M24308/2-11F_15S HD as mating connector of M24308/4-11F_15P HD...
-W - Mating connector M24308/4-264F not found in database !
-W - Mating connector M24308/24-61F not found in database !
-W - Mating connector M24308/24-73F not found in database !
-I - Loading M39029/58-362 as mating connector of M39029/57-356...
-I - Loading M39029/56-348 as mating connector of M39029/58-360...
-I - Loading M39029/58-363 as mating connector of M39029/56-348...
-I - Loading M39029/56-351 as mating connector of M39029/58-363...
-I - Loading M24308/2-16F_104S HD as mating connector of 104P-HD-PCB...
-I - Loading 104S-HD-PCB as mating connector of 104P-HD-PCB...
-I - Loading M24308/2-16F_104S HD-BCKSHL as mating connector of 104P-HD-PCB...
-I - Loading M24308/4-16F_104P HD as mating connector of 104S-HD-PCB...
-I - Loading M24308/4-16F_104P HD-BCKSHL as mating connector of 104S-HD-PCB...
-I - Loading M24308/4-16F as mating connector of M24308/2-16F_104S HD...
-I - Loading M24308/4-16F-BS as mating connector of M24308/2-16F_104S HD...
-I - Loading M24308/2-16F as mating connector of M24308/4-16F.1...
-I - Loading M24308/2-16F-BS as mating connector of M24308/4-16F-BS...
-I - Save component cabletest (version '1   ') to the database?
-I - Answer: YES
-W - Component CONNECTOR_PART_1 not found in database!
-W - Cannot load Component cabletest from database - look in output window for details...
-W - Component CONNECTOR_PART_1 not found in database!
-W - Cannot load Component cabletest from database - look in output window for details...
+# ============================================================
+# REMOVE TEMPLATE MEMBER
+# ============================================================
+
+def remove_template_member(part_name):
+    cur.execute("""
+    SELECT COPY
+    FROM dbo.Assembly
+    WHERE LPNTR = ?
+    AND SUBENTRY = ?
+    """, lpntr, part_name)
+
+    rows = cur.fetchall()
+
+    if not rows:
+        print(f"Template member not found: {part_name}")
+        return
+
+    for row in rows:
+        copy_no = row[0]
+
+        print(f"Removing template member COPY {copy_no}: {part_name}")
+
+        # Remove any wire connections involving this member
+        cur.execute("""
+        DELETE FROM dbo.WIRTYP_CONNECT_INFOS
+        WHERE LPNTR = ?
+        AND (COPY = ? OR COPYEND1 = ? OR COPYEND2 = ?)
+        """, lpntr, copy_no, copy_no, copy_no)
+
+        # Remove corresponding gate
+        cur.execute("""
+        DELETE FROM dbo.GatePinRelation
+        WHERE ENTRY = ?
+        AND GateNumber = ?
+        """, lpntr, copy_no)
+
+        # Remove member from assembly
+        cur.execute("""
+        DELETE FROM dbo.Assembly
+        WHERE LPNTR = ?
+        AND COPY = ?
+        """, lpntr, copy_no)
+
+    print("Template member removed.")
+
+
+remove_template_member("TEMPLATE_COMPONENT_DONT_DELETE")
