@@ -1,8 +1,31 @@
-DATABASE ROW:
-('7D28F681-473A-4EC8-941E-049D1E2DD4A0', 'cabletest', '1', 'LC-3846FC0F-4759-445C-8E83-5349F9D973DA')
-LPNTR:  LC-3846FC0F-4759-445C-8E83-5349F9D973DA
-DB_ID:  7D28F681-473A-4EC8-941E-049D1E2DD4A0
-(3, 4, 1, 1, 2, 34)
-(4, 4, 1, 2, 2, 35)
-(5, 4, 1, 3, 2, 36)
-(6, 4, 1, 4, 2, 37)
+def get_pin_copy(connector_name, connector_version, physical_pin):
+    cur.execute("""
+    SELECT LPNTR
+    FROM dbo.ComponentData
+    WHERE ENTRY = ?
+    AND VERSION = ?
+    """, connector_name, connector_version)
+
+    row = cur.fetchone()
+
+    if not row:
+        raise RuntimeError(f"Connector not found: {connector_name}")
+
+    connector_lpntr = row[0]
+
+    cur.execute("""
+    SELECT COPY
+    FROM dbo.Pin
+    WHERE ENTRY = ?
+    AND PHYSPIN = ?
+    """, connector_lpntr, str(physical_pin))
+
+    row = cur.fetchone()
+
+    if not row:
+        raise RuntimeError(f"Pin {physical_pin} not found on {connector_name}")
+
+    return row[0]
+
+
+
