@@ -1,272 +1,231 @@
-"""
-Zuken E3.series Database Editor
-Cable Creation / Investigation
-
-IMPORTANT:
-    This script works through CT.DBEApplication.
-
-    It DOES NOT write directly to the Zuken SQL database.
-
-Current known cable properties:
-    ComponentType = 7
-    SubType       = 0
-    ModelName     = None
-"""
-
-import json
-import sys
-import time
 import win32com.client as win32
-
-
-# ============================================================
-# CONFIGURATION
-# ============================================================
-
-TEST_MODE = True
-
-# Existing cable manually created in DBE.
-# Ideally this cable already has:
-#
-#   Connector A
-#   Connector B
-#
-#   A.1 -> B.1
-#   A.2 -> B.2
-#   A.3 -> B.3
-#
-TEMPLATE_NAME = "PYTHON_CABLE_TEMPLATE"
-TEMPLATE_VERSION = ""
-
-# New disposable cable
-NEW_CABLE_NAME = "PYTHON_CABLE_AUTOMATION_TEST"
-NEW_CABLE_VERSION = ""
-
-FLAGS = 0
-
-EXPECTED_CABLE_TYPE = 7
+import inspect
+import sys
 
 
 # ============================================================
 # CONNECT
 # ============================================================
 
-print("=" * 80)
-print("CONNECTING TO ZUKEN DBE")
-print("=" * 80)
+app = win32.gencache.EnsureDispatch("CT.DBEApplication")
 
-try:
-    app = win32.Dispatch("CT.DBEApplication")
-except Exception as exc:
-    print("Could not connect to CT.DBEApplication")
-    print(repr(exc))
-    sys.exit(1)
+print("=" * 90)
+print("ZUKEN DBE ACTIVE COMPONENT BINDING TEST")
+print("=" * 90)
 
-
-print("Connected.")
-
-try:
-    print("Application:", app.GetName())
-except Exception:
-    pass
-
-try:
-    print("Version:", app.GetVersion())
-except Exception:
-    pass
-
-try:
-    print("Database:", app.GetActualDatabase())
-except Exception:
-    pass
-
-print()
+print("Application:", app.GetName())
+print("Version:", app.GetVersion())
+print("Database:", app.GetActualDatabase())
 
 
 # ============================================================
-# SAFE CALL HELPER
+# HELPERS
 # ============================================================
 
-def call(label, func, *args):
-
+def safe(label, func, *args):
     try:
         result = func(*args)
-
-        print(
-            f"[OK] {label}:",
-            repr(result)
-        )
-
+        print(f"[OK]   {label}: {result!r}")
         return result
-
-    except Exception as exc:
-
-        print(
-            f"[FAIL] {label}:",
-            repr(exc)
-        )
-
+    except Exception as e:
+        print(f"[FAIL] {label}: {e!r}")
         return None
 
 
-# ============================================================
-# GET ACTIVE COMPONENT
-# ============================================================
-
-def get_active_component():
-
-    print("\n--- ACTIVE COMPONENT ---")
-
-    active_id = call(
-        "GetActiveComponentId",
-        app.GetActiveComponentId
-    )
-
-    comp = app.CreateDbeComponentObject()
-
-    values = {}
-
-    values["id"] = call(
-        "component.GetId",
-        comp.GetId
-    )
-
-    values["name"] = call(
-        "component.GetName",
-        comp.GetName
-    )
-
-    values["version"] = call(
-        "component.GetVersion",
-        comp.GetVersion
-    )
-
-    values["type"] = call(
-        "component.GetComponentType",
-        comp.GetComponentType
-    )
-
-    values["subtype"] = call(
-        "component.GetSubType",
-        comp.GetSubType
-    )
-
-    values["model"] = call(
-        "component.GetModelName(0)",
-        comp.GetModelName,
-        0
-    )
-
-    print("\nSummary:")
-
-    for key, value in values.items():
-        print(
-            f"    {key:10}: {value}"
-        )
-
-    return comp, values
-
-
-# ============================================================
-# OPEN EXISTING COMPONENT
-# ============================================================
-
-def edit_component(name, version=""):
-
+def dump_component(comp, title="COMPONENT"):
     print()
-    print("=" * 80)
-    print("EDIT COMPONENT")
-    print("=" * 80)
+    print("-" * 90)
+    print(title)
+    print("-" * 90)
 
-    print("Name:   ", name)
-    print("Version:", repr(version))
-
-    result = call(
-        "EditComponent",
-        app.EditComponent,
-        name,
-        version
-    )
-
-    time.sleep(0.5)
-
-    return result
+    safe("GetId", comp.GetId)
+    safe("GetName", comp.GetName)
+    safe("GetVersion", comp.GetVersion)
+    safe("GetComponentType", comp.GetComponentType)
+    safe("GetSubType", comp.GetSubType)
+    safe("GetModelName(0)", comp.GetModelName, 0)
 
 
 # ============================================================
-# CREATE COMPONENT FROM TEMPLATE
+# 1. GET ACTIVE COMPONENT ID
 # ============================================================
 
-def clone_component(
-    new_name,
-    new_version,
-    base_name,
-    base_version=""
-):
+print()
+print("=" * 90)
+print("STEP 1 - ACTIVE ID")
+print("=" * 90)
 
+active_id = safe(
+    "GetActiveComponentId",
+    app.GetActiveComponentId
+)
+
+print("Python type:", type(active_id))
+
+
+if active_id in (None, 0, -1):
     print()
-    print("=" * 80)
-    print("CLONE COMPONENT")
-    print("=" * 80)
-
-    print("New component :", new_name)
-    print("Base component:", base_name)
-
-    result = call(
-        "NewComponent",
-        app.NewComponent,
-        new_name,
-        new_version,
-        base_name,
-        base_version,
-        FLAGS
-    )
-
-    time.sleep(0.5)
-
-    return result
+    print("No valid component appears to be active.")
+    print("Open/select the test cable manually in DBE and run again.")
+    sys.exit(1)
 
 
 # ============================================================
-# COMPONENT ATTRIBUTES
+# 2. CREATE EMPTY DBE COMPONENT OBJECT
 # ============================================================
 
-def get_attribute_ids(comp, end, attribute_name=""):
+print()
+print("=" * 90)
+print("STEP 2 - RAW DBE COMPONENT OBJECT")
+print("=" * 90)
 
+comp = app.CreateDbeComponentObject()
+
+dump_component(
+    comp,
+    "BEFORE SetId"
+)
+
+
+# ============================================================
+# 3. TRY BINDING OBJECT TO ACTIVE COMPONENT
+# ============================================================
+
+print()
+print("=" * 90)
+print("STEP 3 - SetId(active_id)")
+print("=" * 90)
+
+set_result = safe(
+    f"SetId({active_id})",
+    comp.SetId,
+    active_id
+)
+
+dump_component(
+    comp,
+    "AFTER SetId"
+)
+
+
+# ============================================================
+# 4. VERIFY AGAINST EXPECTED ACTIVE ID
+# ============================================================
+
+bound_id = safe(
+    "Bound GetId",
+    comp.GetId
+)
+
+if bound_id == active_id:
     print()
+    print("*** SUCCESS ***")
+    print("DbeComponentObject is now bound to the active component.")
+else:
+    print()
+    print("*** OBJECT STILL NOT BOUND ***")
+
+
+# ============================================================
+# 5. GET ALL COMPONENT IDS
+# ============================================================
+
+print()
+print("=" * 90)
+print("STEP 5 - GET COMPONENT IDS")
+print("=" * 90)
+
+try:
+    ids = app.GetComponentIds()
+    print("GetComponentIds():", repr(ids))
+except Exception as e:
+    print("GetComponentIds() failed:", repr(e))
+
+    # Show generated wrapper documentation
+    try:
+        print()
+        print("GetComponentIds doc:")
+        print(app.GetComponentIds.__doc__)
+    except Exception:
+        pass
+
+
+# ============================================================
+# 6. SHOW GENERATED WRAPPER DOCS
+# ============================================================
+
+print()
+print("=" * 90)
+print("STEP 6 - COM METHOD DOCUMENTATION")
+print("=" * 90)
+
+methods = [
+    ("Component.SetId", comp.SetId),
+    ("Component.GetAttributeIds", comp.GetAttributeIds),
+    ("Component.AddAttributeValue", comp.AddAttributeValue),
+    ("Application.GetComponentIds", app.GetComponentIds),
+    ("Application.GetComponentList", app.GetComponentList),
+    ("Application.EditComponent", app.EditComponent),
+    ("Application.SelectComponentFromTable", app.SelectComponentFromTable),
+]
+
+for name, method in methods:
+    print()
+    print(name)
+    print("-" * len(name))
+
+    try:
+        print("DOC:", method.__doc__)
+    except Exception as e:
+        print("No doc:", repr(e))
+
+    try:
+        print("SIGNATURE:", inspect.signature(method))
+    except Exception as e:
+        print("No Python signature:", repr(e))
+
+
+# ============================================================
+# STOP IF COMPONENT DID NOT BIND
+# ============================================================
+
+if bound_id != active_id:
+    print()
+    print("=" * 90)
+    print("STOPPING BEFORE ATTRIBUTE TEST")
+    print("=" * 90)
+
     print(
-        f"--- ATTRIBUTES: END={end} ---"
+        "We have not successfully attached the component object "
+        "to the real active cable, so attribute results would be meaningless."
     )
 
-    # COM output parameters often do not need to be supplied
-    # to pywin32. Try the most likely signatures.
+    sys.exit(0)
+
+
+# ============================================================
+# 7. NOW THAT COMPONENT IS REAL, INSPECT ATTRIBUTES
+# ============================================================
+
+print()
+print("=" * 90)
+print("STEP 7 - ATTRIBUTE TEST")
+print("=" * 90)
+
+
+def try_attributes(end):
+    print()
+    print(f"--- END {end} ---")
 
     attempts = [
-
-        (
-            "GetAttributeIds(end, name)",
-            (end, attribute_name)
-        ),
-
-        (
-            "GetAttributeIds(None, end, name)",
-            (None, end, attribute_name)
-        ),
-
-        (
-            "GetAttributeIds([], end, name)",
-            ([], end, attribute_name)
-        ),
-
+        ("GetAttributeIds()", ()),
+        ("GetAttributeIds(None,end,'')", (None, end, "")),
+        ("GetAttributeIds((),end,'')", ((), end, "")),
     ]
 
     for label, args in attempts:
-
         try:
-
-            result = comp.GetAttributeIds(
-                *args
-            )
+            result = comp.GetAttributeIds(*args)
 
             print(
                 "[SUCCESS]",
@@ -277,357 +236,58 @@ def get_attribute_ids(comp, end, attribute_name=""):
 
             return result
 
-        except Exception as exc:
-
+        except Exception as e:
             print(
-                "[FAILED]",
+                "[FAIL]",
                 label,
                 "=>",
-                repr(exc)
+                repr(e)
             )
 
     return None
 
 
-# ============================================================
-# NORMALIZE ID RESULT
-# ============================================================
-
-def normalize_ids(result):
-
-    if result is None:
-        return []
-
-    # Common E3 return:
-    #
-    #   (count, (id1,id2,id3,...))
-
-    if (
-        isinstance(result, tuple)
-        and len(result) == 2
-        and isinstance(result[1], (tuple, list))
-    ):
-        return list(result[1])
-
-    if isinstance(
-        result,
-        (tuple, list)
-    ):
-        return list(result)
-
-    return [result]
+for end in [-1, 0, 1, 2]:
+    try_attributes(end)
 
 
 # ============================================================
-# READ ATTRIBUTE
+# 8. BASIC CABLE CLASSIFICATION
 # ============================================================
 
-def inspect_attribute(attribute_id):
-
-    attr = app.CreateDbeAttributeObject()
-
-    try:
-        attr.SetId(attribute_id)
-    except Exception as exc:
-
-        print(
-            f"Cannot SetId({attribute_id}):",
-            repr(exc)
-        )
-
-        return None
-
-    data = {
-        "id": attribute_id
-    }
-
-    getters = {
-
-        "name":
-            attr.GetName,
-
-        "internal_name":
-            attr.GetInternalName,
-
-        "value":
-            attr.GetValue,
-
-        "internal_value":
-            attr.GetInternalValue,
-
-        "formatted_value":
-            attr.GetFormattedValue,
-    }
-
-    for key, getter in getters.items():
-
-        try:
-            data[key] = getter()
-
-        except Exception as exc:
-            data[key] = (
-                "<ERROR "
-                + repr(exc)
-                + ">"
-            )
-
-    print(json.dumps(
-        data,
-        indent=4,
-        default=str
-    ))
-
-    return data
-
-
-# ============================================================
-# INSPECT CABLE ENDS
-# ============================================================
-
-def inspect_cable_ends(comp):
-
-    print()
-    print("=" * 80)
-    print("CABLE END INVESTIGATION")
-    print("=" * 80)
-
-    # "end" is very interesting because the DBE component
-    # API explicitly includes it in:
-    #
-    # GetAttributeIds(ids, end, attnam)
-    # AddAttributeValue(name,value,end)
-    #
-    # Probe plausible values READ-ONLY.
-
-    for end in [
-        -1,
-        0,
-        1,
-        2
-    ]:
-
-        result = get_attribute_ids(
-            comp,
-            end,
-            ""
-        )
-
-        ids = normalize_ids(result)
-
-        print(
-            f"\nEND {end}: "
-            f"{len(ids)} attribute IDs"
-        )
-
-        for attribute_id in ids:
-
-            inspect_attribute(
-                attribute_id
-            )
-
-
-# ============================================================
-# VALIDATE CABLE
-# ============================================================
-
-def validate_cable(values):
-
-    print()
-    print("=" * 80)
-    print("CABLE VALIDATION")
-    print("=" * 80)
-
-    component_type = values.get(
-        "type"
-    )
-
-    subtype = values.get(
-        "subtype"
-    )
-
-    model = values.get(
-        "model"
-    )
-
-    print(
-        "Component Type:",
-        component_type
-    )
-
-    print(
-        "Subtype:",
-        subtype
-    )
-
-    print(
-        "Model:",
-        model
-    )
-
-    if component_type == EXPECTED_CABLE_TYPE:
-
-        print(
-            "[PASS] Component Type is 7."
-        )
-
-    else:
-
-        print(
-            "[WARNING] Expected cable "
-            "ComponentType 7."
-        )
-
-
-# ============================================================
-# TEST EXISTING TEMPLATE
-# ============================================================
-
-def test_existing_cable():
-
-    print()
-    print("#" * 80)
-    print("TEST EXISTING CABLE")
-    print("#" * 80)
-
-    edit_component(
-        TEMPLATE_NAME,
-        TEMPLATE_VERSION
-    )
-
-    comp, values = (
-        get_active_component()
-    )
-
-    validate_cable(values)
-
-    inspect_cable_ends(comp)
-
-    return comp
-
-
-# ============================================================
-# TEST CLONING
-# ============================================================
-
-def test_clone():
-
-    print()
-    print("#" * 80)
-    print("TEST CABLE CLONING")
-    print("#" * 80)
-
-    clone_component(
-        NEW_CABLE_NAME,
-        NEW_CABLE_VERSION,
-        TEMPLATE_NAME,
-        TEMPLATE_VERSION
-    )
-
-    comp, values = (
-        get_active_component()
-    )
-
-    validate_cable(values)
-
-    inspect_cable_ends(comp)
-
-    return comp
-
-
-# ============================================================
-# MODEL PIN JSON TEST
-# ============================================================
-
-def investigate_model_pin():
-
-    print()
-    print("=" * 80)
-    print("MODEL PIN INVESTIGATION")
-    print("=" * 80)
-
-    pin = (
-        app.CreateDbeModelPinObject()
-    )
-
-    print(
-        "ModelPin object created:",
-        pin
-    )
-
-    # Do NOT call SetPinProperties yet.
-    #
-    # The important discovery from the typelib is:
-    #
-    # GetPinProperties(keyList, flags)
-    # SetPinProperties(jsonInput, flags)
-    #
-    # The fact that SetPinProperties explicitly takes
-    # JSON is extremely interesting.
-    #
-    # Once we successfully bind a ModelPin to a real
-    # connector pin ID, call GetPinProperties to learn
-    # the expected JSON schema.
-
-
-# ============================================================
-# MAIN
-# ============================================================
-
-def main():
-
-    print()
-    print("=" * 80)
-    print("ZUKEN DBE CABLE AUTOMATION RESEARCH")
-    print("=" * 80)
-
-    print()
-    print("Database:")
-
-    call(
-        "GetActualDatabase",
-        app.GetActualDatabase
-    )
-
-    print()
-    print(
-        "STEP 1: Inspect existing template."
-    )
-
-    test_existing_cable()
-
-    print()
-    print(
-        "STEP 2: Investigate ModelPin API."
-    )
-
-    investigate_model_pin()
-
-    if TEST_MODE:
-
-        print()
-        print(
-            "TEST_MODE enabled."
-        )
-
-        print(
-            "No automatic Save/Delete operations "
-            "will be performed."
-        )
-
-        print()
-        print(
-            "To test cloning, manually call:"
-        )
-
-        print(
-            "    test_clone()"
-        )
-
-    print()
-    print("=" * 80)
-    print("DONE")
-    print("=" * 80)
-
-
-if __name__ == "__main__":
-    main()
+print()
+print("=" * 90)
+print("STEP 8 - COMPONENT CLASSIFICATION")
+print("=" * 90)
+
+component_type = safe(
+    "Component Type",
+    comp.GetComponentType
+)
+
+subtype = safe(
+    "Subtype",
+    comp.GetSubType
+)
+
+name = safe(
+    "Name",
+    comp.GetName
+)
+
+version = safe(
+    "Version",
+    comp.GetVersion
+)
+
+print()
+print("FINAL:")
+print("Name          :", name)
+print("Version       :", version)
+print("Component Type:", component_type)
+print("Subtype       :", subtype)
+
+print()
+print("=" * 90)
+print("DONE")
+print("=" * 90)
