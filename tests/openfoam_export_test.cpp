@@ -381,6 +381,24 @@ int main(int argc, char** argv) {
             "start=$current, target=$actual_time, seconds=$stage_wall_seconds") !=
                std::string::npos);
         assert(text.str().find(
+            "summary_log=\"$case_dir/run_summary.log\"") !=
+               std::string::npos);
+        assert(text.str().find(
+            "summary \"stage label=$label thermalOnly=$thermal_only") !=
+               std::string::npos);
+        assert(text.str().find(
+            "summary \"airflow time=$current imbalance=$imbalance") !=
+               std::string::npos);
+        assert(text.str().find(
+            "summary \"thermal time=$checkpoint_time") !=
+               std::string::npos);
+        assert(text.str().find(
+            "summary \"checkpoint time=$current streak=$streak") !=
+               std::string::npos);
+        assert(text.str().find(
+            "summary \"run_complete mode=$mode reconstructedTime=$reconstruct_time") !=
+               std::string::npos);
+        assert(text.str().find(
             "-v v=\"$latest_velocity_relative_rms\" -v limit=\"0.01\"") !=
                std::string::npos);
         assert(text.str().find(

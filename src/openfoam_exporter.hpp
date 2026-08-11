@@ -2785,7 +2785,13 @@ functions
             "    exit 3\n"
             "fi\n"
             ": >\"$run_lock\"\n"
-            "printf '%s\\n' \"$$\" >&9\n\n"
+            "printf '%s\\n' \"$$\" >&9\n"
+            "summary_log=\"$case_dir/run_summary.log\"\n"
+            "summary()\n"
+            "{\n"
+            "    printf '%s | %s\\n' \"$(date --iso-8601=seconds)\" \"$*\" >> \"$summary_log\"\n"
+            "}\n"
+            "summary \"run_start mode=$mode processes=$processes requestedEnd=$requested_end airflowRefreshInterval=$airflow_refresh_interval\"\n\n"
             "# Distinct directory spellings can represent the same numeric\n"
             "# OpenFOAM time (for example 730000.1 and\n"
             "# 730000.09999999998). Different utilities may select different\n"
@@ -3569,6 +3575,7 @@ functions
                     "previousVelocityRelativeRms="
                     "${previous_velocity_relative_rms:-unavailable}, estimatedAirExchangeTime="
                     "$air_exchange_time s\"\n"
+                "        summary \"airflow time=$current imbalance=$imbalance maxFlowChange=$maximum_change maxFlowDevice=$maximum_change_name directionsOK=$directions_ok velocityRelativeRms=${latest_velocity_relative_rms:-unavailable} previousVelocityRelativeRms=${previous_velocity_relative_rms:-unavailable} estimatedAirExchangeTime=$air_exchange_time\"\n"
                 "        [[ \"$stable\" == 1 && \"$directions_ok\" == 1 ]]\n"
                 "    }\n";
             if(options.stop_when_thermally_converged) {
@@ -3787,6 +3794,7 @@ functions
                     << options.thermal_convergence_reference_interval
                     << "s, controllingPeakRegion=$controlling_peak_region, "
                     "controllingAverageRegion=$controlling_average_region, elapsed=$elapsed s\"\n"
+                "        summary \"thermal time=$checkpoint_time maxInternalCellChange=$scaled_delta maxComponentAverageChange=$scaled_average_delta controllingPeakRegion=$controlling_peak_region controllingAverageRegion=$controlling_average_region elapsed=$elapsed\"\n"
                 "        if ! awk -v t=\"$checkpoint_time\" -v minimum=\""
                     << options.minimum_thermal_convergence_time
                     << "\" 'BEGIN { scale=(minimum<0?-minimum:minimum); if(scale<1)scale=1; tolerance=1e-9*scale; exit !(t>=minimum-tolerance) }'; then return 1; fi\n"
@@ -4111,6 +4119,7 @@ functions
                     "printf \"%.3f\", (end-start)/1e9 }')\n"
                 "        echo \"Stage wall time: label=$label, thermalOnly=$thermal_only, "
                     "start=$current, target=$actual_time, seconds=$stage_wall_seconds\"\n"
+                "        summary \"stage label=$label thermalOnly=$thermal_only start=$current target=$actual_time seconds=$stage_wall_seconds\"\n"
                 "        current=\"$actual_time\"\n"
                 "    }\n\n";
             if(options.use_adaptive_airflow_refresh) {
@@ -4434,6 +4443,9 @@ functions
                     "$streak/"
                     << options.thermal_convergence_required_checkpoints
                     << " accepted with airflow metrics converged.\"\n"
+                "            summary \"checkpoint time=$current streak=$streak required="
+                    << options.thermal_convergence_required_checkpoints
+                    << " accepted=true\"\n"
                 "            if (( streak >= "
                     << options.thermal_convergence_required_checkpoints
                     << " )); then\n"
@@ -4449,6 +4461,7 @@ functions
                 "        elif [[ \"$airflow_validated\" == 1 ]]; then\n"
                 "            printf '0\\n' > \"$thermal_convergence_streak\"\n"
                 "            echo \"Resetting thermal convergence streak: accepted airflow has not converged across refresh cycles.\"\n"
+                "            summary \"checkpoint time=$current streak=0 accepted=false reason=acceptedAirflowLongLag\"\n"
                 "        else\n"
                 "            streak=$(cat \"$thermal_convergence_streak\" "
                     "2>/dev/null || echo 0)\n"
@@ -4619,6 +4632,7 @@ functions
                 "-entry writeInterval -set "
                 << options.field_write_interval << "\n"
             "    echo \"Multirate run complete; production controls restored.\"\n"
+            "    summary \"run_complete mode=$mode reconstructedTime=$reconstruct_time\"\n"
             "else\n"
             "    echo \"Parallel CHT run and latest-time reconstruction complete.\"\n"
             "fi\n";

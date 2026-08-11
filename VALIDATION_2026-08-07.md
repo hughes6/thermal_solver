@@ -1416,3 +1416,41 @@ and thermal re-ingestion was zero. Reports are preserved under
 `validation_snapshots_2400`, `validation_snapshots_4800`,
 `validation_snapshots_7200`, and `validation_snapshots_9600` in the in-depth
 case.
+
+## Durable concise run summaries (2026-08-10)
+
+The long in-depth validation produced more than 20,000 console lines per
+2,400 s continuation. Important stage timings and convergence decisions were
+therefore easy to lose when a terminal, supervising process, or captured tool
+reached its output limit. Generated parallel runners now append a compact
+`run_summary.log` inside each case. It records run start/completion, every
+thermal or coupled stage wall time, airflow metrics, thermal metrics, accepted
+checkpoint counts, and long-lag checkpoint resets. Full solver output remains
+available on the console, but is no longer the only record of the decisions
+that control convergence.
+
+The log is intentionally append-only, so a continuation preserves earlier
+run evidence instead of overwriting it. The exporter regression test verifies
+all summary event types. The generated Bash runner also passed `bash -n` under
+the same WSL environment used for OpenFOAM.
+
+## Final screening versus in-depth operating point
+
+The independently converged current-configuration endpoints agree closely:
+
+| Metric | Screening 50,400.01 s | In-depth 9,600.01 s | Screening minus in-depth |
+|---|---:|---:|---:|
+| Intake mass flow | 0.2975792 kg/s | 0.2967523 kg/s | +0.279% |
+| Exhaust mass flow | 0.2975819 kg/s | 0.2967086 kg/s | +0.294% |
+| Exhaust mass-weighted temperature | 298.29902 K | 298.31700 K | -0.01798 K |
+| Net sensible heat rejection | 1539.915 W | 1540.757 W | -0.842 W (-0.055%) |
+| Bidirectional mass fraction | 0.129208% | 0.127760% | +0.00145 percentage point |
+| Thermal re-ingestion index | 0 | 0 | unchanged |
+
+The final mapped in-depth continuation advanced 2,400 simulated seconds in
+about 1,293 s end-to-end. The validated screening continuation advanced 7,200
+simulated seconds in roughly the same order of wall time, so screening delivers
+approximately three times the simulated-time throughput on this workstation
+while keeping the rack-level outputs within the differences above. In-depth
+remains necessary for final local fields and hotspots; screening is validated
+for layout, load, fan, and recirculation iteration.
