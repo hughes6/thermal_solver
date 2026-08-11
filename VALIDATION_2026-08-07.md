@@ -1273,3 +1273,61 @@ consistent. It does not justify weakening the 2,400 s airflow cadence or the
 anchored two-checkpoint gate; those controls continue to catch a genuine
 alternating airflow mode after bulk mass flow, heat rejection, and component
 temperatures appear stationary.
+
+### Spatial drift localization and bounded live-flow probe
+
+`openfoam_field_convergence.py` now accepts `--geometry` and partitions fluid
+field changes into each component's exported Air box and the remaining
+external rack air. This prevents a high-speed internal passage from being
+mistaken for the entire rack field while retaining the all-fluid aggregate.
+Unit tests cover non-overlapping component masks and external-cell retention.
+
+From 36,000.02 to 43,200.01 s, whole-fluid velocity changed 2.58% RMS. The
+largest cell change, 2.87 m/s, was inside the Trenton air passage at its rear
+exhaust. Partitioned RMS changes were 15.46% in Eaton, 7.30% in Trenton,
+0.178% in Dell, 0.077% in the fanless KVM, and 2.33% in external rack air.
+Thus component vortices dominate the maximum, but excluding component air
+would not eliminate the slower external-field motion.
+
+A bounded diagnostic then advanced only the coupled flow solution at strict
+`Co <= 2`, preserving reconstructed endpoints every 0.01 s from 43,200.01 to
+43,200.05 s and one further endpoint at 43,200.10 s. Consecutive whole-fluid
+changes were 0.781%, 0.688%, 0.714%, and 0.749%; external-rack changes remained
+0.603-0.638%. They did not decay. Cumulative 0.01-to-0.05 s movement reached
+2.68% whole-fluid and 2.38% external-rack RMS. Over the subsequent 0.05 s,
+movement increased to 3.35% whole-fluid and 2.97% external-rack RMS. Eaton and
+Trenton changed 23.2% and 8.37% over that final interval, consistent with
+transient internal vortices rather than relaxation toward one fixed velocity
+field.
+
+The engineering outputs remained stationary throughout the same probe:
+
+| Metric | 43,200.01 s | 43,200.10 s | Change |
+|---|---:|---:|---:|
+| Intake mass flow | 0.2976493 kg/s | 0.2976326 kg/s | -0.0056% |
+| Exhaust mass flow | 0.2976480 kg/s | 0.2976396 kg/s | -0.0028% |
+| Exhaust mass-weighted temperature | 298.29971 K | 298.29873 K | -0.00099 K |
+| Net sensible heat rejection | 1540.47 W | 1540.13 W | -0.34 W (-0.022%) |
+| Bidirectional mass fraction | 0.129171% | 0.129195% | +0.000024 percentage point |
+| Thermal re-ingestion index | 0 | 0 | unchanged |
+
+This establishes that a 1% long-lag requirement on instantaneous screening
+velocity is incompatible with the observed transient-RANS field even when the
+rack-level thermal and flow outputs are stable. The local two-window limit
+remains 1% to catch abrupt refresh changes. A separate
+`maximum_accepted_velocity_rms_change_fraction` now controls the anchored
+two-checkpoint comparison: screening uses 3%, bounded by the measured 2.58%
+7,200 s change and the mesh's ballpark role, while default, validation, and
+in-depth profiles retain 1%. Final conclusions still require mapping the
+screening operating point to in-depth; the relaxed limit is not propagated to
+final validation.
+
+The diagnostic also exposed a restart-state defect. `--warm-start` changed
+fields but previously retained the old thermal streak, device-flow history,
+spatial history, pending refresh, and accepted velocity reference. A later
+multirate run could therefore compare against stale pre-warm-start data or
+inherit a false convergence checkpoint. Generated runners now invalidate all
+of those caches after reconstructing a warm start. A real 43,200.10-to-.11 s
+warm start confirmed every cache was removed and production controls were
+restored; the next multirate continuation must conservatively reacquire its
+accepted airflow baseline.

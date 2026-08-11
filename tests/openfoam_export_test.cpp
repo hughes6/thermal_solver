@@ -383,6 +383,12 @@ int main(int argc, char** argv) {
         assert(text.str().find(
             "-v v=\"$latest_velocity_relative_rms\" -v limit=\"0.01\"") !=
                std::string::npos);
+        assert(text.str().find(
+            "Warm start invalidated cached airflow and thermal convergence references.") !=
+               std::string::npos);
+        assert(text.str().find(
+            "\"$case_dir/.thermal_convergence_streak\" \"") !=
+               std::string::npos);
     }
     assert(std::filesystem::is_regular_file(
         case_path/"system"/"spatialConvergenceDict"));

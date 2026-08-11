@@ -61,6 +61,7 @@ struct OpenFoamExportOptions {
     double maximum_mass_imbalance_fraction = 0.01;
     double maximum_device_flow_change_fraction = 0.02;
     double maximum_velocity_rms_change_fraction = 0.01;
+    double maximum_accepted_velocity_rms_change_fraction = 0.01;
     double minimum_tracked_boundary_flow_fraction = 1e-4;
     bool stop_when_thermally_converged = false;
     double minimum_thermal_convergence_time = 3600.0;
@@ -1302,6 +1303,9 @@ private:
             validate_positive_finite(
                 options.maximum_velocity_rms_change_fraction,
                 "maximum_velocity_rms_change_fraction");
+            validate_positive_finite(
+                options.maximum_accepted_velocity_rms_change_fraction,
+                "maximum_accepted_velocity_rms_change_fraction");
             validate_positive_finite(
                 options.minimum_tracked_boundary_flow_fraction,
                 "minimum_tracked_boundary_flow_fraction");
@@ -3393,7 +3397,7 @@ functions
                     "rmsVelocity=$velocity_rms_reference m/s, "
                     "relativeRms=$accepted_airflow_relative_rms\"\n"
                 "        if ! awk -v value=\"$accepted_airflow_relative_rms\" -v limit=\""
-                << options.maximum_velocity_rms_change_fraction
+                << options.maximum_accepted_velocity_rms_change_fraction
                 << "\" 'BEGIN { exit !(value<=limit) }'; then\n"
                 "            record_accepted_airflow_reference || return 1\n"
                 "            return 1\n"
@@ -4586,6 +4590,15 @@ functions
                 "\"$case_dir/system/controlDict\" "
                 "-entry writeInterval -set "
                 << options.field_write_interval << "\n"
+            "    rm -rf -- \"$case_dir/.accepted_airflow_reference\" "
+                "\"$case_dir/.accepted_airflow_reference.tmp\"\n"
+            "    rm -f -- \"$case_dir/.airflow_convergence_state\" "
+                "\"$case_dir/.velocity_convergence_state\" "
+                "\"$case_dir/.thermal_convergence_state\" "
+                "\"$case_dir/.thermal_convergence_streak\" "
+                "\"$case_dir/.airflow_refresh_pending\"\n"
+            "    echo \"Warm start invalidated cached airflow and thermal "
+                "convergence references.\"\n"
             "    echo \"Warm start complete. The normal transient is configured "
                 "to resume from latestTime.\"\n"
             "elif [[ \"$mode\" == \"--multirate\" ]]; then\n"
