@@ -1,38 +1,303 @@
-tables = [
-    "Assembly",
-    "ComponentAttribute",
-    "ComponentData",
-    "GatePinRelation",
-]
+import time
+import win32com.client as win32
+import pyodbc
 
+
+NAME = "cabletest"
+VERSION = "1"
+VERSION_TEXT = "TEST VERSION TEXT"
+BASE_COMPONENT = "TEMPLATE_CABLE_ASSY"
+BASE_COMPONENT_VERSION = 1
+
+# component wizard properties now
+# name - etc etc etc
+
+
+app = win32.gencache.EnsureDispatch("CT.DBEApplication")
+
+# ============================================================
+# GET OPEN DBE JOB
+# ============================================================
+count, raw_ids = app.GetJobIds()
+job_ids = [x for x in raw_ids if isinstance(x, int) and x > 0]
+
+if not job_ids:
+    raise RuntimeError("No DBE job is open.")
+
+job = app.CreateDbeJobObject()
+job.SetId(job_ids[-1])
+
+print("JOB")
+print("ID:", job.GetId())
+print("Name:", job.GetName())
+print("Path:", job.GetPath())
+
+
+# ============================================================
+# CREATE COMPONENT
+# ============================================================
+print("\nCreating component...")
+result = job.NewComponent(NAME, VERSION, BASE_COMPONENT, BASE_COMPONENT_VERSION, 0)
+match result:
+    case -1:
+        app.PutError( 0, "No open project" )
+    case -2:
+        app.PutError( 0, "Base Component not found" )
+    case -3:
+        app.PutError( 0, "Component is locked" )
+    case -4:
+        app.PutError( 0, "Component with name and version already exists" )
+    case -5:
+        app.PutError( 0, "Version is invalid" )
+    case -6:
+        app.PutError( 0, "Base version is invalid" )
+    case -7:
+        app.PutError( 0, "Name exceeds maximum length" )
+    case -8:
+        app.PutError( 0, "Invalid flags value" )
+    case _:
+        app.PutInfo( 0, "Component Wizard dialog appeared" )
+
+print("NewComponent returned:", result)
+
+
+# ============================================================
+# DBE WIZARD
+# ============================================================
+input("\nFinish the New Component wizard in DBE.\nWhen the component editor is fully open, press ENTER here...")
+time.sleep(1)
+
+# ============================================================
+# BIND COMPONENT
+# ============================================================
+cid = job.GetActiveComponentId()
+print("\nActive component ID:", cid)
+
+if cid <= 0:
+    raise RuntimeError("DBE did not create a valid working component.")
+
+comp = job.CreateDbeComponentObject()
+comp.SetId(cid)
+
+print("\nWORKING COMPONENT")
+print("ID:", comp.GetId())
+print("Name:", comp.GetName())
+print("Version:", comp.GetVersion())
+print("Type:", comp.GetComponentType())
+print("Subtype:", comp.GetSubType())
+
+
+# ============================================================
+# SAVE COMPONENT TO DATABASE
+# ============================================================
+print("\nSAVING COMPONENT TO DATABASE...")
+save_result = comp.Save()
+print("component.Save() returned:", save_result)
+# Give DBE a moment
+time.sleep(1)
+
+# # ============================================================
+# # VERIFY CURRENT COMPONENT
+# # ============================================================
+print("\nVERIFY AFTER SAVE")
+print("ID:", comp.GetId())
+COMPONENT_SAVE_NAME = comp.GetName()
+print("Name:", comp.GetName())
+print("Version:", comp.GetVersion())
+
+# ============================================================
+# TRY TO REOPEN IT THROUGH DBE API
+# ============================================================
+print("\nVERIFY DATABASE ENTRY")
+try:
+    edit_result = app.EditComponent(NAME, VERSION)
+    print("EditComponent returned:", edit_result)
+except Exception as e:
+    print("EditComponent failed:", repr(e))
+
+print("\nDONE")
+print("Now close this DBE instance and open a new one.\nSearch for: {NAME}\nVersion: {VERSION}" )
+
+
+# ============================================================
+# MAKE SURE IT IS A CABLE
+# ============================================================
+id_act = app.GetActiveComponentId()
+comp.SetId(id_act)
+result  = comp.GetComponentType()
+componentName = comp.GetName()
+componentId = comp.GetId()
+match result:
+    case -1:
+        app.PutError(0, "No project open or no component item set")
+    case 0:
+        app.PutInfo(0, f"Component " + componentName + " (" + componentId + ") has no subtype", componentId)
+    case 1:
+        app.PutInfo(0, f"Subtype of component " + componentName + " (" + componentId + ") is accessory", componentId)
+    case 2:
+        app.PutInfo(0, f"Subtype of component " + componentName + " (" + componentId + ") is fixture", componentId)
+    case 3:
+        app.PutInfo(0, f"Subtype of component " + componentName + " (" + componentId + ") is protection tube", componentId)
+    case 4:
+        app.PutInfo(0, f"Subtype of component " + componentName + " (" + componentId + ") is protection tape", componentId)
+    case 5:
+        app.PutInfo(0, f"Subtype of component " + componentName + " (" + componentId + ") is protector", componentId)
+    case 6:
+        app.PutInfo(0, f"Subtype of component " + componentName + " (" + componentId + ") is splice", componentId)
+    case 7:
+        app.PutInfo(0, f"Subtype of component {componentName} ({componentId}) is joint connector {componentId}")
+
+# ============================================================
+# ZUKEN CLEANUP
+# ============================================================
+del comp
+del job
+del app
+
+input("\nPRESS ENTER WHEN THE DATABASE HAS BEEN CLOSED AND REOPENED...")
+time.sleep(1)
+
+# ============================================================
+# ESTABLISH DATABASE CONNECTION
+# ============================================================
+conn = pyodbc.connect(
+    "DRIVER={ODBC Driver 17 for SQL Server};"
+    "SERVER=sql-zuken-prd;"
+    "DATABASE=Zuken_E3Library;"
+    "Trusted_Connection=yes;"
+    "TrustServerCertificate=yes;"
+)
 cur = conn.cursor()
 
-for table in tables:
-    print("\n" + "=" * 80)
-    print(table)
-    print("=" * 80)
+cur.execute("""
+SELECT
+    ID,
+    ENTRY,
+    VERSION,
+    LPNTR
+FROM dbo.ComponentData
+WHERE ENTRY = ?
+  AND VERSION = ?
+""", COMPONENT_SAVE_NAME, VERSION)
 
-    # columns
+LPNTR = cur.fetchone()[0]
+print(LPNTR)
+
+# ============================================================
+# ADD CONNECTORS AND WIRES
+# ============================================================
+CONNECTOR_1 = "M24308/2-12F_26S HD"
+CONNECTOR_2 = "M240308/4-16F_104P HD"
+WIRES = "M22759/44-22-9"
+WIRECOUNT = 2
+PINOUT = [[2, 3], [1,9]]
+
+def add_member(assy_no, part):
+    print(assy_no)
     cur.execute("""
-        SELECT COLUMN_NAME, DATA_TYPE
-        FROM INFORMATION_SCHEMA.COLUMNS
-        WHERE TABLE_SCHEMA='dbo'
-          AND TABLE_NAME=?
-        ORDER BY ORDINAL_POSITION
-    """, table)
+        INSERT INTO dbo.Assembly
+        (
+            LPNTR,
+            COPY,
+            FLAGS,
+            NAME,
+            SUBENTRY,
+            SUBVERSION
+        )
+        VALUES (?, ?, 2, '%.#', ?, ?)
+    """,
+        LPNTR,
+        assy_no,
+        part,
+        1
+    )
 
-    cols = cur.fetchall()
+def connect_wire(wire_copy, end1_assy_no, pin1, end2_assy_no, pin2):
+    cur.execute("""
+        INSERT INTO dbo.WIRTYP_CONNECT_INFOS
+        (
+            LPNTR,
+            FLAGS,
+            COPY,
+            NODENO,
+            COPYEND1,
+            PINCOPYEND1,
+            COPYEND2,
+            PINCOPYEND2
+        )
+        VALUES (?, 0, ?, 4, ?, ?, ?, ?)
+    """,
+        LPNTR,
+        wire_copy,
+        end1_assy_no,
+        pin1,
+        end2_assy_no,
+        pin2
+    )
 
-    print("COLUMNS:")
-    for c in cols:
-        print(c)
+print("adding connector 1\n")
+add_member(1, CONNECTOR_1)
+print("adding connector 2\n")
+add_member(2, CONNECTOR_2)
 
-    # newest rows - just grab a few for inspection
-    cur.execute(f"""
-        SELECT TOP (10) *
-        FROM dbo.[{table}]
-    """)
+print("adding wires & connecting pins")
+for i in range(WIRECOUNT):
+    add_member(3+i, WIRES)
 
-    print("\nROWS:")
-    for row in cur.fetchall():
-        print(row)
+    connect_wire(3+i, 1, PINOUT[i][0], 2, PINOUT[i][1])
+
+# ============================================================
+# VERIFY BEFORE COMMIT
+# ============================================================
+
+print("\nASSEMBLY:")
+
+cur.execute("""
+SELECT
+    COPY,
+    SUBENTRY,
+    SUBVERSION
+FROM dbo.Assembly
+WHERE LPNTR = ?
+ORDER BY COPY
+""", LPNTR)
+
+for row in cur.fetchall():
+    print(tuple(row))
+
+
+print("\nCONNECTIONS:")
+
+cur.execute("""
+SELECT
+    COPY,
+    COPYEND1,
+    PINCOPYEND1,
+    COPYEND2,
+    PINCOPYEND2
+FROM dbo.WIRTYP_CONNECT_INFOS
+WHERE LPNTR = ?
+ORDER BY COPY
+""", LPNTR)
+
+for row in cur.fetchall():
+    print(tuple(row))
+
+
+# ============================================================
+# SAVE TO DATABSE
+# ============================================================
+
+answer = input("\nType YES to commit, anything else to rollback: ")
+
+if answer == "YES":
+    conn.commit()
+    print("Committed.")
+else:
+    conn.rollback()
+    print("Rolled back.")
+
+cur.close()
+conn.close()
+
+
