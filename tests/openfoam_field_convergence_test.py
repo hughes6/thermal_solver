@@ -5,6 +5,7 @@ from tempfile import TemporaryDirectory
 import numpy as np
 
 from tools.openfoam_field_convergence import (
+    component_air_partitions,
     compare_snapshots,
     directory_times,
     exact_time,
@@ -14,6 +15,28 @@ from tools.openfoam_field_convergence import (
 
 
 class OpenFoamFieldConvergenceTest(unittest.TestCase):
+    def test_component_air_partitions_leave_external_cells(self):
+        centers = np.array([
+            [0.25, 0.25, 0.25],
+            [1.25, 0.25, 0.25],
+            [2.25, 0.25, 0.25],
+        ])
+        partitions = component_air_partitions(
+            centers,
+            [
+                ("server_a", (0.0, 0.0, 0.0), (1.0, 1.0, 1.0)),
+                ("server_b", (1.0, 0.0, 0.0), (1.0, 1.0, 1.0)),
+            ],
+        )
+        self.assertEqual([name for name, _ in partitions], [
+            "fluid/componentAir:server_a",
+            "fluid/componentAir:server_b",
+            "fluid/externalRackAir",
+        ])
+        np.testing.assert_array_equal(partitions[0][1], [True, False, False])
+        np.testing.assert_array_equal(partitions[1][1], [False, True, False])
+        np.testing.assert_array_equal(partitions[2][1], [False, False, True])
+
     def test_scalar_volume_weighted_error(self):
         metrics = field_error(
             np.array([10.0, 20.0]),

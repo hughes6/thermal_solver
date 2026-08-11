@@ -206,6 +206,70 @@ def compare_snapshots(reference, sample, fields):
     return rows
 
 
+def component_air_partitions(centers, components, tolerance=1.0e-9):
+    """Return non-overlapping component-air and external-rack cell masks."""
+    import numpy as np
+
+    centers = np.asarray(centers, dtype=float)
+    assigned = np.zeros(centers.shape[0], dtype=bool)
+    partitions = []
+    for name, origin, size in components:
+        lower = np.asarray(origin, dtype=float) - tolerance
+        upper = np.asarray(origin, dtype=float) + np.asarray(size, dtype=float) + tolerance
+        mask = np.all((centers >= lower) & (centers <= upper), axis=1)
+        mask &= ~assigned
+        if np.any(mask):
+            partitions.append((f"fluid/componentAir:{name}", mask))
+            assigned |= mask
+    partitions.append(("fluid/externalRackAir", ~assigned))
+    return partitions
+
+
+def append_fluid_partition_rows(rows, reference, sample, fields, components):
+    """Append field-error metrics for component air and external rack air."""
+    fluid_regions = [name for name in reference if name.endswith("fluid/internalMesh")]
+    if len(fluid_regions) != 1:
+        raise ValueError(
+            "Geometry partitioning requires exactly one fluid internal mesh; "
+            f"found {fluid_regions}"
+        )
+    region = fluid_regions[0]
+    values = reference[region]
+    for label, mask in component_air_partitions(values["center"], components):
+        if not mask.any():
+            continue
+        for field in fields:
+            if field not in values or field not in sample[region]:
+                continue
+            rows.append({
+                "region": label,
+                "field": field,
+                **field_error(
+                    values[field][mask], sample[region][field][mask],
+                    values["volume"][mask],
+                ),
+            })
+
+
+def load_component_air_boxes(path: Path):
+    """Read named component Air-region boxes from exported geometry.txt."""
+    import sys
+
+    plot_directory = Path(__file__).resolve().parents[1] / "plot"
+    sys.path.insert(0, str(plot_directory))
+    try:
+        from heat_animation import parse_rack_file
+    finally:
+        sys.path.pop(0)
+    rack = parse_rack_file(str(path))
+    return [
+        (component.name, region.origin, region.size)
+        for component in rack.components
+        for region in component.regions
+        if region.kind.strip().lower() == "air"
+    ]
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("case", type=Path)
@@ -228,6 +292,11 @@ def main() -> None:
               "contains every requested time"),
     )
     parser.add_argument("--csv", type=Path, help="optional CSV output path")
+    parser.add_argument(
+        "--geometry", type=Path,
+        help=("exported geometry.txt; report component-air and external-rack-"
+              "air field errors separately"),
+    )
     args = parser.parse_args()
     if len(args.times) < 2:
         raise SystemExit("--times requires at least two values")
@@ -286,6 +355,14 @@ def main() -> None:
             rows = compare_snapshots(
                 snapshots[reference_time], snapshots[sample_time], args.fields
             )
+            if args.geometry:
+                components = load_component_air_boxes(
+                    args.geometry.expanduser().resolve()
+                )
+                append_fluid_partition_rows(
+                    rows, snapshots[reference_time], snapshots[sample_time],
+                    args.fields, components,
+                )
         except ValueError as exc:
             raise SystemExit(str(exc)) from exc
         for row in rows:
@@ -310,11 +387,13 @@ def main() -> None:
 
     print("sample -> reference | region | field | RMS | max | relative RMS")
     for row in comparisons:
-        if row["region"] != "all":
+        if row["region"] != "all" and not (
+            args.geometry and row["region"].startswith("fluid/")
+        ):
             continue
         print(
             f"{row['sample_time']:.12g} -> "
-            f"{row['reference_time']:.12g} | all | "
+            f"{row['reference_time']:.12g} | {row['region']} | "
             f"{row['field']} | {row['rms']:.8g} | {row['maximum']:.8g} | "
             f"{row['relative_rms']:.6%}"
         )
