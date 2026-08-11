@@ -1,293 +1,219 @@
 import win32com.client as win32
+from win32com.client import VARIANT
+import pythoncom
 import inspect
-import sys
 
 
-# ============================================================
-# CONNECT
-# ============================================================
-
-app = win32.gencache.EnsureDispatch("CT.DBEApplication")
-
-print("=" * 90)
-print("ZUKEN DBE ACTIVE COMPONENT BINDING TEST")
-print("=" * 90)
-
-print("Application:", app.GetName())
-print("Version:", app.GetVersion())
-print("Database:", app.GetActualDatabase())
-
-
-# ============================================================
-# HELPERS
-# ============================================================
-
-def safe(label, func, *args):
-    try:
-        result = func(*args)
-        print(f"[OK]   {label}: {result!r}")
-        return result
-    except Exception as e:
-        print(f"[FAIL] {label}: {e!r}")
-        return None
-
-
-def dump_component(comp, title="COMPONENT"):
-    print()
-    print("-" * 90)
-    print(title)
-    print("-" * 90)
-
-    safe("GetId", comp.GetId)
-    safe("GetName", comp.GetName)
-    safe("GetVersion", comp.GetVersion)
-    safe("GetComponentType", comp.GetComponentType)
-    safe("GetSubType", comp.GetSubType)
-    safe("GetModelName(0)", comp.GetModelName, 0)
-
-
-# ============================================================
-# 1. GET ACTIVE COMPONENT ID
-# ============================================================
-
-print()
-print("=" * 90)
-print("STEP 1 - ACTIVE ID")
-print("=" * 90)
-
-active_id = safe(
-    "GetActiveComponentId",
-    app.GetActiveComponentId
+app = win32.gencache.EnsureDispatch(
+    "CT.DBEApplication"
 )
 
-print("Python type:", type(active_id))
-
-
-if active_id in (None, 0, -1):
-    print()
-    print("No valid component appears to be active.")
-    print("Open/select the test cable manually in DBE and run again.")
-    sys.exit(1)
-
-
-# ============================================================
-# 2. CREATE EMPTY DBE COMPONENT OBJECT
-# ============================================================
-
-print()
-print("=" * 90)
-print("STEP 2 - RAW DBE COMPONENT OBJECT")
-print("=" * 90)
+cid = app.GetActiveComponentId()
 
 comp = app.CreateDbeComponentObject()
+comp.SetId(cid)
 
-dump_component(
-    comp,
-    "BEFORE SetId"
-)
+
+print("=" * 90)
+print("BOUND COMPONENT")
+print("=" * 90)
+
+print("ID:      ", comp.GetId())
+print("Name:    ", comp.GetName())
+print("Version: ", comp.GetVersion())
+print("Type:    ", comp.GetComponentType())
+print("Subtype: ", comp.GetSubType())
 
 
 # ============================================================
-# 3. TRY BINDING OBJECT TO ACTIVE COMPONENT
+# 1. LOOK AT GENERATED PYWIN32 METHOD SOURCE
 # ============================================================
 
 print()
 print("=" * 90)
-print("STEP 3 - SetId(active_id)")
+print("GENERATED WRAPPER SOURCE")
 print("=" * 90)
 
-set_result = safe(
-    f"SetId({active_id})",
-    comp.SetId,
-    active_id
-)
 
-dump_component(
-    comp,
-    "AFTER SetId"
-)
+for name, method in [
+    ("GetAttributeIds", comp.GetAttributeIds),
+    ("AddAttributeValue", comp.AddAttributeValue),
+    ("GetComponentIds", app.GetComponentIds),
+    ("NewComponent", app.NewComponent),
+]:
 
-
-# ============================================================
-# 4. VERIFY AGAINST EXPECTED ACTIVE ID
-# ============================================================
-
-bound_id = safe(
-    "Bound GetId",
-    comp.GetId
-)
-
-if bound_id == active_id:
     print()
-    print("*** SUCCESS ***")
-    print("DbeComponentObject is now bound to the active component.")
-else:
-    print()
-    print("*** OBJECT STILL NOT BOUND ***")
+    print("-" * 90)
+    print(name)
+    print("-" * 90)
 
-
-# ============================================================
-# 5. GET ALL COMPONENT IDS
-# ============================================================
-
-print()
-print("=" * 90)
-print("STEP 5 - GET COMPONENT IDS")
-print("=" * 90)
-
-try:
-    ids = app.GetComponentIds()
-    print("GetComponentIds():", repr(ids))
-except Exception as e:
-    print("GetComponentIds() failed:", repr(e))
-
-    # Show generated wrapper documentation
     try:
-        print()
-        print("GetComponentIds doc:")
-        print(app.GetComponentIds.__doc__)
+        print(inspect.getsource(method))
+    except Exception as e:
+        print("getsource failed:", repr(e))
+
+    try:
+        print("module:", method.__module__)
     except Exception:
         pass
 
 
 # ============================================================
-# 6. SHOW GENERATED WRAPPER DOCS
+# 2. TRY GetAttributeIds WITH EXPLICIT VARIANTS
 # ============================================================
 
 print()
 print("=" * 90)
-print("STEP 6 - COM METHOD DOCUMENTATION")
+print("ATTRIBUTE ARRAY TESTS")
 print("=" * 90)
 
-methods = [
-    ("Component.SetId", comp.SetId),
-    ("Component.GetAttributeIds", comp.GetAttributeIds),
-    ("Component.AddAttributeValue", comp.AddAttributeValue),
-    ("Application.GetComponentIds", app.GetComponentIds),
-    ("Application.GetComponentList", app.GetComponentList),
-    ("Application.EditComponent", app.EditComponent),
-    ("Application.SelectComponentFromTable", app.SelectComponentFromTable),
-]
 
-for name, method in methods:
-    print()
-    print(name)
-    print("-" * len(name))
-
-    try:
-        print("DOC:", method.__doc__)
-    except Exception as e:
-        print("No doc:", repr(e))
-
-    try:
-        print("SIGNATURE:", inspect.signature(method))
-    except Exception as e:
-        print("No Python signature:", repr(e))
+tests = []
 
 
-# ============================================================
-# STOP IF COMPONENT DID NOT BIND
-# ============================================================
-
-if bound_id != active_id:
-    print()
-    print("=" * 90)
-    print("STOPPING BEFORE ATTRIBUTE TEST")
-    print("=" * 90)
-
-    print(
-        "We have not successfully attached the component object "
-        "to the real active cable, so attribute results would be meaningless."
+# Variant containing an empty Python list
+try:
+    v = VARIANT(
+        pythoncom.VT_VARIANT | pythoncom.VT_BYREF,
+        None
     )
 
-    sys.exit(0)
+    tests.append(
+        (
+            "BYREF VARIANT",
+            lambda: comp.GetAttributeIds(
+                v,
+                0,
+                ""
+            ),
+            v
+        )
+    )
+except Exception as e:
+    print("Could not make BYREF VARIANT:", repr(e))
+
+
+# SAFEARRAY of LONG by reference
+try:
+    v_int_array = VARIANT(
+        pythoncom.VT_ARRAY
+        | pythoncom.VT_I4
+        | pythoncom.VT_BYREF,
+        []
+    )
+
+    tests.append(
+        (
+            "BYREF LONG ARRAY",
+            lambda: comp.GetAttributeIds(
+                v_int_array,
+                0,
+                ""
+            ),
+            v_int_array
+        )
+    )
+except Exception as e:
+    print("Could not make LONG ARRAY:", repr(e))
+
+
+# SAFEARRAY of VARIANT by reference
+try:
+    v_variant_array = VARIANT(
+        pythoncom.VT_ARRAY
+        | pythoncom.VT_VARIANT
+        | pythoncom.VT_BYREF,
+        []
+    )
+
+    tests.append(
+        (
+            "BYREF VARIANT ARRAY",
+            lambda: comp.GetAttributeIds(
+                v_variant_array,
+                0,
+                ""
+            ),
+            v_variant_array
+        )
+    )
+except Exception as e:
+    print("Could not make VARIANT ARRAY:", repr(e))
+
+
+for label, function, holder in tests:
+
+    print()
+    print("---", label, "---")
+
+    try:
+        result = function()
+
+        print("RETURN:", repr(result))
+        print("HOLDER VALUE:", repr(holder.value))
+
+    except Exception as e:
+        print("FAILED:", repr(e))
 
 
 # ============================================================
-# 7. NOW THAT COMPONENT IS REAL, INSPECT ATTRIBUTES
+# 3. TEST ENDS CORRECTLY
 # ============================================================
 
 print()
 print("=" * 90)
-print("STEP 7 - ATTRIBUTE TEST")
+print("END TESTS")
 print("=" * 90)
-
-
-def try_attributes(end):
-    print()
-    print(f"--- END {end} ---")
-
-    attempts = [
-        ("GetAttributeIds()", ()),
-        ("GetAttributeIds(None,end,'')", (None, end, "")),
-        ("GetAttributeIds((),end,'')", ((), end, "")),
-    ]
-
-    for label, args in attempts:
-        try:
-            result = comp.GetAttributeIds(*args)
-
-            print(
-                "[SUCCESS]",
-                label,
-                "=>",
-                repr(result)
-            )
-
-            return result
-
-        except Exception as e:
-            print(
-                "[FAIL]",
-                label,
-                "=>",
-                repr(e)
-            )
-
-    return None
 
 
 for end in [-1, 0, 1, 2]:
-    try_attributes(end)
+
+    print()
+    print("END =", end)
+
+    holder = VARIANT(
+        pythoncom.VT_ARRAY
+        | pythoncom.VT_I4
+        | pythoncom.VT_BYREF,
+        []
+    )
+
+    try:
+        result = comp.GetAttributeIds(
+            holder,
+            end,
+            ""
+        )
+
+        print("RETURN:", repr(result))
+        print("IDS:", repr(holder.value))
+
+    except Exception as e:
+        print("FAILED:", repr(e))
 
 
 # ============================================================
-# 8. BASIC CABLE CLASSIFICATION
+# 4. SAME TEST FOR ALL COMPONENT IDS
 # ============================================================
 
 print()
 print("=" * 90)
-print("STEP 8 - COMPONENT CLASSIFICATION")
+print("COMPONENT ID ARRAY TEST")
 print("=" * 90)
 
-component_type = safe(
-    "Component Type",
-    comp.GetComponentType
+
+holder = VARIANT(
+    pythoncom.VT_ARRAY
+    | pythoncom.VT_I4
+    | pythoncom.VT_BYREF,
+    []
 )
 
-subtype = safe(
-    "Subtype",
-    comp.GetSubType
-)
+try:
+    result = app.GetComponentIds(holder)
 
-name = safe(
-    "Name",
-    comp.GetName
-)
+    print("RETURN:", repr(result))
+    print("COMPONENT IDS:", repr(holder.value))
 
-version = safe(
-    "Version",
-    comp.GetVersion
-)
-
-print()
-print("FINAL:")
-print("Name          :", name)
-print("Version       :", version)
-print("Component Type:", component_type)
-print("Subtype       :", subtype)
-
-print()
-print("=" * 90)
-print("DONE")
-print("=" * 90)
+except Exception as e:
+    print("FAILED:", repr(e))
