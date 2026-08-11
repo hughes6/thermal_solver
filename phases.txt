@@ -1,14 +1,243 @@
+import pyodbc
+
+
+# ============================================================
+# CONFIG
+# ============================================================
+
+COMPONENT_NAME = "YOUR_COMPONENT_NAME"
+COMPONENT_VERSION = "1"
+
+CONNECTOR_1 = "CONNECTOR_PART_1"
+CONNECTOR_1_VERSION = "1"
+
+CONNECTOR_2 = "CONNECTOR_PART_2"
+CONNECTOR_2_VERSION = "1"
+
+
+# Each wire can be a different part/type.
+#
+# Format:
+# (
+#     wire_part,
+#     wire_version,
+#     connector_1_pin,
+#     connector_2_pin
+# )
+#
+WIRES = [
+    ("M22759/44-22-9", "1", 1, 34),
+    ("M22759/44-22-9", "1", 2, 35),
+    ("M22759/44-22-9", "1", 3, 36),
+    ("M22759/11-20-0", "1", 4, 37),
+]
+
+
+# ============================================================
+# DATABASE CONNECTION
+# ============================================================
+
+conn = pyodbc.connect(
+    "DRIVER={SQL Server};"
+    "SERVER=sql-zuken-prd;"
+    "DATABASE=Zuken_E3Library;"
+    "Trusted_Connection=yes;",
+    autocommit=False
+)
+
+cur = conn.cursor()
+
+
+# ============================================================
+# GET COMPONENT LPNTR
+# ============================================================
+
 cur.execute("""
-SELECT
-    ID,
-    ENTRY,
-    VERSION,
-    LPNTR
+SELECT LPNTR
 FROM dbo.ComponentData
 WHERE ENTRY = ?
   AND VERSION = ?
-""", name, version)
+""",
+    COMPONENT_NAME,
+    COMPONENT_VERSION
+)
 
-print(cur.fetchone())
+row = cur.fetchone()
+
+if not row:
+    raise RuntimeError("Component not found.")
+
+lpntr = row[0]
+
+print("LPNTR:", lpntr)
 
 
+# ============================================================
+# HELPERS
+# ============================================================
+
+def add_member(copy_no, part, version):
+
+    cur.execute("""
+        INSERT INTO dbo.Assembly
+        (
+            LPNTR,
+            COPY,
+            FLAGS,
+            NAME,
+            SUBENTRY,
+            SUBVERSION
+        )
+        VALUES (?, ?, 2, '%.#', ?, ?)
+    """,
+        lpntr,
+        copy_no,
+        part,
+        version
+    )
+
+
+def connect_wire(
+    wire_copy,
+    end1_copy,
+    pin1,
+    end2_copy,
+    pin2
+):
+
+    cur.execute("""
+        INSERT INTO dbo.WINRTYP_CONNECT_INFOS
+        (
+            LPNTR,
+            FLAGS,
+            COPY,
+            NODENO,
+            COPYEND1,
+            PINCOPYEND1,
+            COPYEND2,
+            PINCOPYEND2
+        )
+        VALUES (?, 0, ?, 4, ?, ?, ?, ?)
+    """,
+        lpntr,
+        wire_copy,
+        end1_copy,
+        pin1,
+        end2_copy,
+        pin2
+    )
+
+
+# ============================================================
+# CONNECTORS
+# ============================================================
+
+print("Adding Connector 1")
+
+add_member(
+    1,
+    CONNECTOR_1,
+    CONNECTOR_1_VERSION
+)
+
+
+print("Adding Connector 2")
+
+add_member(
+    2,
+    CONNECTOR_2,
+    CONNECTOR_2_VERSION
+)
+
+
+# ============================================================
+# WIRES + PIN ASSIGNMENTS
+# ============================================================
+
+for wire_copy, wire_data in enumerate(
+    WIRES,
+    start=3
+):
+
+    wire_part, wire_version, pin1, pin2 = wire_data
+
+    print(
+        f"Wire COPY {wire_copy}: "
+        f"{wire_part} | "
+        f"Connector 1 Pin {pin1} -> "
+        f"Connector 2 Pin {pin2}"
+    )
+
+    # Add wire to assembly
+    add_member(
+        wire_copy,
+        wire_part,
+        wire_version
+    )
+
+    # Assign pin-to-pin
+    connect_wire(
+        wire_copy,
+        1,      # Connector 1 = COPY 1
+        pin1,
+        2,      # Connector 2 = COPY 2
+        pin2
+    )
+
+
+# ============================================================
+# VERIFY BEFORE COMMIT
+# ============================================================
+
+print("\nASSEMBLY:")
+
+cur.execute("""
+SELECT
+    COPY,
+    SUBENTRY,
+    SUBVERSION
+FROM dbo.Assembly
+WHERE LPNTR = ?
+ORDER BY COPY
+""", lpntr)
+
+for row in cur.fetchall():
+    print(tuple(row))
+
+
+print("\nCONNECTIONS:")
+
+cur.execute("""
+SELECT
+    COPY,
+    COPYEND1,
+    PINCOPYEND1,
+    COPYEND2,
+    PINCOPYEND2
+FROM dbo.WINRTYP_CONNECT_INFOS
+WHERE LPNTR = ?
+ORDER BY COPY
+""", lpntr)
+
+for row in cur.fetchall():
+    print(tuple(row))
+
+
+# ============================================================
+# COMMIT
+# ============================================================
+
+answer = input(
+    "\nType YES to commit, anything else to rollback: "
+)
+
+if answer == "YES":
+    conn.commit()
+    print("Committed.")
+else:
+    conn.rollback()
+    print("Rolled back.")
+
+
+cur.close()
+conn.close()
