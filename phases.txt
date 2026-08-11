@@ -1,56 +1,50 @@
-import time
-import pyodbc
-import win32com.client as win32
-
-COMPONENT_NAME = "PYTHON_APP_TEST"
-COMPONENT_VERSION = "1"
-
-CONNECTION_STRING = (
-    "DRIVER={SQL Server};"
-    "SERVER=sql-zuken-prd;"
-    "DATABASE=Zuken_E3Library;"
-    "Trusted_Connection=yes;"
-)
-
-app = win32.gencache.EnsureDispatch("CT.DBEApplication")
-
-print("Creating through DBE APPLICATION...")
-
-result = app.NewComponent(COMPONENT_NAME, COMPONENT_VERSION, "", "", 0)
-print("app.NewComponent():", result)
-
-input("Finish the wizard, then press ENTER...")
-
-time.sleep(1)
-
-cid = app.GetActiveComponentId()
-print("Active ID:", cid)
-
-if cid > 0:
-    comp = app.CreateDbeComponentObject()
-    comp.SetId(cid)
-
-    print("Name:", comp.GetName())
-    print("Version:", comp.GetVersion())
-    print("Type:", comp.GetComponentType())
-    print("Save:", comp.Save())
-
-time.sleep(2)
-
-conn = pyodbc.connect(CONNECTION_STRING, autocommit=True)
-cur = conn.cursor()
+# ============================================================
+# UPDATE COMPONENT DATA
+# ============================================================
 
 cur.execute("""
-SELECT ID, ENTRY, VERSION, LPNTR
-FROM dbo.ComponentData
-WHERE ENTRY = ?
-AND VERSION = ?
-""", COMPONENT_NAME, COMPONENT_VERSION)
+UPDATE dbo.ComponentData
+SET DeviceLetterCode = ?,
+    Class = ?,
+    Description = ?,
+    VersionText = ?
+WHERE ID = ?
+""", DEVICE_LETTER_CODE, COMPONENT_CLASS, VERSION_TEXT, VERSION_TEXT, component_db_id)
 
-row = cur.fetchone()
+print("Updated ComponentData.")
 
-print("\nDATABASE ROW:")
-print(tuple(row) if row else None)
 
-cur.close()
-conn.close()
+# ============================================================
+# ADD COMPONENT ATTRIBUTES
+# ============================================================
+
+cur.execute("""
+INSERT INTO dbo.ComponentAttribute
+(ID, ENTRY, VERSION, BundleID, NODENO, Flags, AttributeName, Copy, AttributeValue)
+VALUES (?, ?, ?, 0, 0, 0, 'AdditionalPart_ID', 1, ?)
+""", component_db_id, COMPONENT_NAME, COMPONENT_VERSION, ADDITIONAL_PART_ID)
+
+print("Added AdditionalPart_ID.")
+
+
+def set_attribute(name, value):
+    cur.execute("""
+    SELECT COUNT(*)
+    FROM dbo.ComponentAttribute
+    WHERE ID = ?
+    AND AttributeName = ?
+    """, component_db_id, name)
+
+    if cur.fetchone()[0]:
+        cur.execute("""
+        UPDATE dbo.ComponentAttribute
+        SET AttributeValue = ?
+        WHERE ID = ?
+        AND AttributeName = ?
+        """, value, component_db_id, name)
+    else:
+        cur.execute("""
+        INSERT INTO dbo.ComponentAttribute
+        (ID, ENTRY, VERSION, BundleID, NODENO, Flags, AttributeName, Copy, AttributeValue)
+        VALUES (?, ?, ?, 0, 0, 0, ?, 1, ?)
+        """, component_db_id, COMPONENT_NAME, COMPONENT_VERSION, name, value)
