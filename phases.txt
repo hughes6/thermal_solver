@@ -3,7 +3,7 @@ import win32com.client as win32
 app = win32.gencache.EnsureDispatch("CT.DBEApplication")
 
 # ------------------------------------------------------------
-# BIND TO ALREADY-OPEN COMPONENT
+# BIND TO ACTIVE COMPONENT
 # ------------------------------------------------------------
 
 cid = app.GetActiveComponentId()
@@ -22,26 +22,80 @@ if comp.GetComponentType() != 7:
 
 
 # ------------------------------------------------------------
-# GET REAL ATTRIBUTE IDS
+# GET ATTRIBUTE IDS
 # ------------------------------------------------------------
 
-count, raw_ids = comp.GetAttributeIds()
+result = comp.GetAttributeIds()
 
-print("\nAttribute count:", count)
-print("Raw IDs:", raw_ids)
-
-# First element is coming back as None.
-# Ignore it.
-attribute_ids = [
-    x for x in raw_ids
-    if isinstance(x, int) and x > 0
-]
-
-print("Usable IDs:", attribute_ids)
+print("\nFULL RESULT:")
+print(repr(result))
+print("RESULT TYPE:")
+print(type(result))
 
 
 # ------------------------------------------------------------
-# READ EACH ATTRIBUTE
+# NORMALIZE RETURN
+# ------------------------------------------------------------
+
+attribute_ids = []
+count = None
+
+if isinstance(result, tuple):
+
+    # Common case:
+    # (10, (None, 15375, 15379, ...))
+    if len(result) == 2:
+
+        count = result[0]
+        raw_ids = result[1]
+
+        if isinstance(raw_ids, (tuple, list)):
+
+            attribute_ids = [
+                x for x in raw_ids
+                if isinstance(x, int) and x > 0
+            ]
+
+        elif isinstance(raw_ids, int):
+
+            # Could be a single returned ID
+            if raw_ids > 0:
+                attribute_ids = [raw_ids]
+
+        else:
+
+            print(
+                "Unexpected raw_ids type:",
+                type(raw_ids),
+                repr(raw_ids)
+            )
+
+    # Sometimes pywin32 may flatten things:
+    # (10, None, 15375, 15379, ...)
+    elif len(result) > 2:
+
+        count = result[0]
+
+        attribute_ids = [
+            x for x in result[1:]
+            if isinstance(x, int) and x > 0
+        ]
+
+else:
+
+    print(
+        "Unexpected GetAttributeIds return:",
+        type(result),
+        repr(result)
+    )
+
+
+print("\nCOUNT:", count)
+print("ATTRIBUTE IDS:", attribute_ids)
+
+
+# ------------------------------------------------------------
+# READ ATTRIBUTES
 # ------------------------------------------------------------
 
 print("\n" + "=" * 80)
@@ -51,20 +105,34 @@ print("=" * 80)
 for aid in attribute_ids:
 
     attr = app.CreateDbeAttributeObject()
-    attr.SetId(aid)
 
-    print()
-    print("ATTRIBUTE ID:", aid)
+    try:
+        attr.SetId(aid)
+    except Exception as e:
+        print(
+            "\nCould not bind attribute",
+            aid,
+            repr(e)
+        )
+        continue
 
-    for label, method in [
+    print("\nATTRIBUTE ID:", aid)
+
+    getters = [
         ("Name", attr.GetName),
         ("Internal Name", attr.GetInternalName),
         ("Value", attr.GetValue),
         ("Internal Value", attr.GetInternalValue),
         ("Formatted Value", attr.GetFormattedValue),
-    ]:
+    ]
+
+    for label, getter in getters:
 
         try:
-            print(f"  {label:20}: {method()!r}")
+            value = getter()
+            print(f"  {label:20}: {value!r}")
+
         except Exception as e:
-            print(f"  {label:20}: ERROR {e!r}")
+            print(
+                f"  {label:20}: ERROR {e!r}"
+            )
