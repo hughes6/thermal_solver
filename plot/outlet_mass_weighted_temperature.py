@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 from pathlib import Path
 
+
 def iter_named_leaves(dataset, path=()):
     """Yield ``(block path, leaf)`` pairs from a nested PyVista dataset."""
     if dataset is None:
@@ -46,6 +47,20 @@ def report_value_at_time(samples: dict[float, float], time: float):
     return samples[max(matches)] if matches else None
 
 
+def select_report_time(samples: dict[float, float], requested: str):
+    """Select a requested report time without loading a VTK case."""
+    if not samples:
+        return None
+    if requested.lower() == "latest":
+        return max(samples)
+    target = float(requested)
+    matches = [
+        time for time in samples
+        if abs(time - target) <= 1.0e-8 * max(1.0, abs(target))
+    ]
+    return max(matches) if matches else None
+
+
 def select_time(reader, requested: str) -> float:
     times = [float(value) for value in reader.time_values]
     if not times:
@@ -80,20 +95,69 @@ def main() -> None:
         default="latest",
         help="Written result time or 'latest' (default: latest)",
     )
+    parser.add_argument(
+        "--minimum-mass-flow",
+        type=float,
+        default=1.0e-8,
+        help=(
+            "reject weighted temperatures when absolute net flow is at or "
+            "below this value in kg/s (default: 1e-8)"
+        ),
+    )
     args = parser.parse_args()
+    if args.minimum_mass_flow < 0.0:
+        raise SystemExit("--minimum-mass-flow cannot be negative")
+
+    case = args.case.expanduser().resolve()
+    if not (case / "system" / "controlDict").is_file():
+        raise SystemExit(f"Not an OpenFOAM case: {case}")
+
+    report_root = (
+        case
+        / "postProcessing"
+        / "fluid"
+        / f"{args.outlet}_mass_weighted_temperature"
+    )
+    exact_samples = read_surface_report(report_root)
+    selected_report_time = select_report_time(exact_samples, args.time)
+    if selected_report_time is not None:
+        mass_samples = read_surface_report(
+            case
+            / "postProcessing"
+            / "fluid"
+            / f"{args.outlet}_mass_flow"
+        )
+        exact_mass_flow = report_value_at_time(
+            mass_samples, selected_report_time
+        )
+        if exact_mass_flow is not None:
+            if abs(exact_mass_flow) <= args.minimum_mass_flow:
+                raise SystemExit(
+                    f"Net mass flow through patch {args.outlet!r} is "
+                    f"{exact_mass_flow:.8g} kg/s; its mass-weighted "
+                    "temperature is undefined."
+                )
+            exact_temperature = exact_samples[selected_report_time]
+            print(f"Result time:                  {selected_report_time:g} s")
+            print(f"Outlet patch:                 {args.outlet}")
+            print(f"Net outlet mass flow:         {exact_mass_flow:.8g} kg/s")
+            print(f"Mass-weighted temperature:    {exact_temperature:.6f} K")
+            print(
+                "Mass-weighted temperature:    "
+                f"{exact_temperature - 273.15:.6f} C"
+            )
+            print("Weighting source:              OpenFOAM weightedAverage(T, phi)")
+            return
 
     try:
         import numpy as np
         import pyvista as pv
     except ImportError as exc:
         raise SystemExit(
-            "This tool requires NumPy and PyVista. Install them with:\n"
+            "No matching complete OpenFOAM report was found. VTK fallback "
+            "requires NumPy and PyVista:\n"
             "  python -m pip install numpy pyvista"
         ) from exc
-
-    case = args.case.expanduser().resolve()
-    if not (case / "system" / "controlDict").is_file():
-        raise SystemExit(f"Not an OpenFOAM case: {case}")
 
     marker = case / f"{case.name}.foam"
     marker.touch(exist_ok=True)
@@ -127,30 +191,6 @@ def main() -> None:
     except ValueError as exc:
         raise SystemExit(str(exc)) from exc
     reader.set_active_time_value(selected_time)
-
-    report_name = f"{args.outlet}_mass_weighted_temperature"
-    report_root = case / "postProcessing" / "fluid" / report_name
-    exact_samples = read_surface_report(report_root)
-    exact_temperature = report_value_at_time(exact_samples, selected_time)
-    if exact_temperature is not None:
-        mass_samples = read_surface_report(
-            case
-            / "postProcessing"
-            / "fluid"
-            / f"{args.outlet}_mass_flow"
-        )
-        exact_mass_flow = report_value_at_time(mass_samples, selected_time)
-        print(f"Result time:                  {selected_time:g} s")
-        print(f"Outlet patch:                 {args.outlet}")
-        if exact_mass_flow is not None:
-            print(f"Net outlet mass flow:         {exact_mass_flow:.8g} kg/s")
-        print(f"Mass-weighted temperature:    {exact_temperature:.6f} K")
-        print(
-            "Mass-weighted temperature:    "
-            f"{exact_temperature - 273.15:.6f} C"
-        )
-        print("Weighting source:              OpenFOAM weightedAverage(T, phi)")
-        return
 
     data = reader.read()
 
@@ -226,8 +266,12 @@ def main() -> None:
         raise SystemExit(
             f"The reader returned no boundary faces for patch {args.outlet!r}"
         )
-    if abs(mass_flow_sum) <= 1.0e-15:
-        raise SystemExit(f"Net mass flow through patch {args.outlet!r} is zero")
+    if abs(mass_flow_sum) <= args.minimum_mass_flow:
+        raise SystemExit(
+            f"Net mass flow through patch {args.outlet!r} is "
+            f"{mass_flow_sum:.8g} kg/s; its mass-weighted temperature is "
+            "undefined."
+        )
 
     temperature_k = weighted_temperature_sum / mass_flow_sum
     print(f"Result time:                  {selected_time:g} s")

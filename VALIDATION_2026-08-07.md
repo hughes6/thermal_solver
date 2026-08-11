@@ -1712,3 +1712,42 @@ collision-safe suffixed report filenames. The same
 operation is available for older preserved cases through
 `tools/regenerate_openfoam_reports.sh`. On the 284,396-fluid-cell case it took
 14.7 s and restored readable final values without rerunning the simulation.
+
+## Converged screening versus in-depth rack metrics (2026-08-11)
+
+The final report repair was applied to the preserved 50,400.01 s screening
+endpoint, then its steady operating point was compared with the independently
+converged 16,800.01 s in-depth endpoint. This compares converged solutions,
+not equal transient timestamps: the in-depth case was initialized from the
+screening field and then satisfied its own thermal and airflow gates.
+
+| Metric | Screening | In-depth | In-depth minus screening |
+|---|---:|---:|---:|
+| Total fan exhaust | 0.296813 kg/s | 0.296551 kg/s | -0.0884% |
+| Mass-weighted fan outlet | 298.2975 K | 298.3032 K | +0.0057 K |
+| Signed fan heat rejection | 1535.47 W | 1535.81 W | +0.0221% |
+| Rack-fluid average | 298.9217 K | 299.2920 K | +0.3703 K |
+| Rack-fluid maximum | 322.6206 K | 322.5547 K | -0.0659 K |
+
+Individual fan flows differ by -1.00% to +1.34%, and outlet temperatures by
+-0.284 K to +0.377 K. The largest component-average difference is +0.455 K
+for the Dell region. The largest component-maximum difference is -0.863 K,
+also on the Dell region. The other component averages agree within 0.293 K
+and maxima within 0.725 K. Both meshes reject the configured 1,545 W within
+0.6%.
+
+These results support screening for rack airflow, total heat rejection,
+boundary temperatures, and hot-zone location. In-depth resolution remains the
+appropriate source for reported local component temperatures, but this case
+does not show a rack-level bias large enough to justify making screening more
+expensive.
+
+Both endpoints also reproduce an OpenFOAM numerical artifact at the passive
+KVM boundary: net flow is about 1.5e-9 kg/s, so dividing signed thermal flux by
+near-zero signed mass flux produces a reported weighted temperature near
+-2.9 million K. This is not a physical temperature. The outlet-temperature
+tool now reads complete OpenFOAM reports before loading PyVista, rejects flows
+at or below 1e-8 kg/s by default, and reports that the weighted temperature is
+undefined. This both prevents misleading output and avoids the earlier `T` and
+`phi` array failure when valid reports are already present. The threshold is
+configurable with `--minimum-mass-flow` for genuinely smaller systems.
