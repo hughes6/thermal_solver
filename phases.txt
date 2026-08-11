@@ -1,25 +1,32 @@
 import win32com.client as win32
+import winreg
 
-for progid in [
-    "CT.Application",
-    "CT.E3Application",
-]:
+app = win32.gencache.EnsureDispatch("CT.Application")
+
+ti = app._oleobj_.GetTypeInfo()
+typelib, _ = ti.GetContainingTypeLib()
+
+targets = ["e3Device", "e3Pin", "e3Connection", "e3Bundle"]
+
+for i in range(typelib.GetTypeInfoCount()):
+    info = typelib.GetTypeInfo(i)
+    name = typelib.GetDocumentation(i)[0]
+
+    if name not in targets:
+        continue
+
+    attr = info.GetTypeAttr()
+    clsid = str(attr[0])
+
+    print("\n", name)
+    print("CLSID:", clsid)
+
     try:
-        e3 = win32.gencache.EnsureDispatch(progid)
-        print("WORKED:", progid)
-        print("Name:", e3.GetName())
-        print("Version:", e3.GetVersion())
-
-        for name in dir(e3):
-            if any(x in name.lower() for x in [
-                "device",
-                "pin",
-                "connection",
-                "component"
-            ]):
-                print(name)
-
-        break
-
+        key = winreg.OpenKey(
+            winreg.HKEY_CLASSES_ROOT,
+            rf"CLSID\{clsid}\ProgID"
+        )
+        progid, _ = winreg.QueryValueEx(key, None)
+        print("PROGID:", progid)
     except Exception as e:
-        print("FAILED:", progid, repr(e))
+        print("No ProgID found:", repr(e))
