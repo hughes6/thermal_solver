@@ -1,58 +1,77 @@
-def get_cable_definition(conn, cable_name):
-    cur = conn.cursor()
+table = "WINRTYP_CONNECT_INFOS"
 
-    cur.execute("""
-        SELECT LPNTR, VERSION
-        FROM dbo.ComponentData
-        WHERE ENTRY = ?
-    """, cable_name)
+print("TRIGGERS")
+cur.execute("""
+SELECT name, is_disabled
+FROM sys.triggers
+WHERE parent_id = OBJECT_ID(?)
+""", f"dbo.{table}")
 
-    row = cur.fetchone()
-
-    if not row:
-        raise ValueError("Cable not found")
-
-    lpntr, version = row
-
-    cur.execute("""
-        SELECT COPY, SUBENTRY, SUBVERSION
-        FROM dbo.Assembly
-        WHERE LPNTR = ?
-        ORDER BY COPY
-    """, lpntr)
-
-    members = cur.fetchall()
-
-    cur.execute("""
-        SELECT
-            COPY,
-            COPYEND1,
-            PINCOPYEND1,
-            COPYEND2,
-            PINCOPYEND2
-        FROM dbo.WINRTYP_CONNECT_INFOS
-        WHERE LPNTR = ?
-        ORDER BY COPY
-    """, lpntr)
-
-    connections = cur.fetchall()
-
-    return members, connections
+for r in cur.fetchall():
+    print(r)
 
 
-members, connections = get_cable_definition(
-    conn,
-    "2627451-500_26S HD TO 104S HD"
-)
+print("\nDEFAULTS")
+cur.execute("""
+SELECT
+    c.name,
+    dc.definition
+FROM sys.columns c
+LEFT JOIN sys.default_constraints dc
+    ON c.default_object_id = dc.object_id
+WHERE c.object_id = OBJECT_ID(?)
+""", f"dbo.{table}")
 
-print("\nMEMBERS")
-for x in members:
-    print(x)
+for r in cur.fetchall():
+    print(r)
 
-print("\nCONNECTIONS")
-for wire, end1, pin1, end2, pin2 in connections:
-    print(
-        f"wire copy {wire}: "
-        f"copy {end1}/pin {pin1} -> "
-        f"copy {end2}/pin {pin2}"
-    )
+
+print("\nINDEXES / KEYS")
+cur.execute("""
+SELECT
+    i.name,
+    i.is_unique,
+    i.is_primary_key,
+    c.name
+FROM sys.indexes i
+JOIN sys.index_columns ic
+    ON i.object_id = ic.object_id
+   AND i.index_id = ic.index_id
+JOIN sys.columns c
+    ON ic.object_id = c.object_id
+   AND ic.column_id = c.column_id
+WHERE i.object_id = OBJECT_ID(?)
+ORDER BY i.index_id, ic.key_ordinal
+""", f"dbo.{table}")
+
+for r in cur.fetchall():
+    print(r)
+
+
+
+
+cur.execute("""
+SELECT *
+FROM dbo.WINRTYP_CONNECT_INFOS
+WHERE LPNTR = ?
+ORDER BY COPY
+""", test_lpntr)
+
+before = set(cur.fetchall())
+
+
+
+
+
+cur.execute("""
+SELECT *
+FROM dbo.WINRTYP_CONNECT_INFOS
+WHERE LPNTR = ?
+ORDER BY COPY
+""", test_lpntr)
+
+after = set(cur.fetchall())
+
+print("NEW ROW:")
+for row in after - before:
+    print(row)
