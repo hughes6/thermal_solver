@@ -1,61 +1,67 @@
-table = "WINRTYP_CONNECT_INFOS"
+# DISPOSABLE TEST COMPONENT ONLY
 
-cur.execute("""
-SELECT
-    COLUMN_NAME,
-    DATA_TYPE,
-    IS_NULLABLE
-FROM INFORMATION_SCHEMA.COLUMNS
-WHERE TABLE_SCHEMA = 'dbo'
-  AND TABLE_NAME = ?
-ORDER BY ORDINAL_POSITION
-""", table)
+test_lpntr = "YOUR_TEST_LPNTR"
 
-for r in cur.fetchall():
-    print(r)
+wire_copy = 2
 
-test_lpntr = "PUT_YOUR_TEST_COMPONENT_LPNTR_HERE"
+end1_copy = 1
+end1_pin = 2
 
-cur.execute("""
-SELECT *
-FROM dbo.WINRTYP_CONNECT_INFOS
-WHERE LPNTR = ?
-""", test_lpntr)
+end2_copy = 3
+end2_pin = 4
 
-before = set(cur.fetchall())
+node_no = 4
+flags = 0
 
-input("Now connect exactly ONE wire in DBE, save, then press ENTER...")
+conn.autocommit = False
+cur = conn.cursor()
 
-cur.execute("""
-SELECT *
-FROM dbo.WINRTYP_CONNECT_INFOS
-WHERE LPNTR = ?
-""", test_lpntr)
+try:
+    cur.execute("""
+        INSERT INTO dbo.WINRTYP_CONNECT_INFOS
+        (
+            LPNTR,
+            FLAGS,
+            COPY,
+            NODENO,
+            COPYEND1,
+            PINCOPYEND1,
+            COPYEND2,
+            PINCOPYEND2
+        )
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+    """,
+        test_lpntr,
+        flags,
+        wire_copy,
+        node_no,
+        end1_copy,
+        end1_pin,
+        end2_copy,
+        end2_pin
+    )
 
-after = set(cur.fetchall())
+    print("Inserted row.")
 
-print("\nNEW ROWS:")
-for row in after - before:
-    print(row)
+    cur.execute("""
+        SELECT *
+        FROM dbo.WINRTYP_CONNECT_INFOS
+        WHERE LPNTR = ?
+          AND COPY = ?
+    """, test_lpntr, wire_copy)
 
-print("\nREMOVED ROWS:")
-for row in before - after:
-    print(row)
+    for row in cur.fetchall():
+        print(tuple(row))
 
+    answer = input("Commit? Type YES only after checking DBE: ")
 
+    if answer == "YES":
+        conn.commit()
+        print("COMMITTED")
+    else:
+        conn.rollback()
+        print("ROLLED BACK")
 
-
-
-
-name = "PYTHON_TEST_DELETE_ME_2"
-
-cur.execute("""
-SELECT ENTRY, VERSION, LPNTR
-FROM dbo.ComponentData
-WHERE ENTRY = ?
-""", name)
-
-for row in cur.fetchall():
-    print(row)
-
-
+except Exception:
+    conn.rollback()
+    raise
