@@ -2,58 +2,49 @@
 
 test_lpntr = "YOUR_TEST_LPNTR"
 
-wire_copy = 2
-
-end1_copy = 1
-end1_pin = 2
-
-end2_copy = 3
-end2_pin = 4
-
-node_no = 4
-flags = 0
+copy_no = 4
+flags = 2
+name = "%.#"
+subentry = "M22759/44-22-9"
+subversion = "1"
 
 conn.autocommit = False
 cur = conn.cursor()
 
 try:
     cur.execute("""
-        INSERT INTO dbo.WINRTYP_CONNECT_INFOS
+        INSERT INTO dbo.Assembly
         (
             LPNTR,
-            FLAGS,
             COPY,
-            NODENO,
-            COPYEND1,
-            PINCOPYEND1,
-            COPYEND2,
-            PINCOPYEND2
+            FLAGS,
+            NAME,
+            SUBENTRY,
+            SUBVERSION
         )
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        VALUES (?, ?, ?, ?, ?, ?)
     """,
         test_lpntr,
+        copy_no,
         flags,
-        wire_copy,
-        node_no,
-        end1_copy,
-        end1_pin,
-        end2_copy,
-        end2_pin
+        name,
+        subentry,
+        subversion
     )
 
-    print("Inserted row.")
+    print("Inserted assembly row.")
 
     cur.execute("""
         SELECT *
-        FROM dbo.WINRTYP_CONNECT_INFOS
+        FROM dbo.Assembly
         WHERE LPNTR = ?
-          AND COPY = ?
-    """, test_lpntr, wire_copy)
+        ORDER BY COPY
+    """, test_lpntr)
 
     for row in cur.fetchall():
         print(tuple(row))
 
-    answer = input("Commit? Type YES only after checking DBE: ")
+    answer = input("Commit? Type YES after checking DBE: ")
 
     if answer == "YES":
         conn.commit()
