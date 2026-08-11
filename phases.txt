@@ -1,47 +1,21 @@
-lpntr = "LC-14840D29-FF00-4442-B1BE-7C93C4894335"
+table = "WIRTYPE_CONNECT_INFOS"
 
-tables = [
-    "Cable",
-    "COMPONENT_PINS",
-    "Pin",
-    "WIRTYPE_CONNECT_INFOS",
-]
+cur.execute("""
+SELECT COLUMN_NAME
+FROM INFORMATION_SCHEMA.COLUMNS
+WHERE TABLE_SCHEMA='dbo'
+  AND TABLE_NAME=?
+ORDER BY ORDINAL_POSITION
+""", table)
 
-for table in tables:
+cols = [r[0] for r in cur.fetchall()]
 
-    print("\n" + "=" * 90)
-    print(table)
-    print("=" * 90)
+print("COLUMNS:")
+for c in cols:
+    print(repr(c))
 
-    cur.execute("""
-        SELECT COLUMN_NAME
-        FROM INFORMATION_SCHEMA.COLUMNS
-        WHERE TABLE_SCHEMA='dbo'
-          AND TABLE_NAME=?
-        ORDER BY ORDINAL_POSITION
-    """, table)
+print("\nFIRST 30 ROWS:")
+cur.execute(f"SELECT TOP (30) * FROM dbo.[{table}]")
 
-    cols = [r[0] for r in cur.fetchall()]
-    print("COLUMNS:", cols)
-
-    # Only directly filter tables that actually contain LPNTR
-    if "LPNTR" in cols:
-
-        cur.execute(
-            f"SELECT * FROM dbo.[{table}] WHERE LPNTR=?",
-            lpntr
-        )
-
-    elif "ENTRY" in cols:
-
-        cur.execute(
-            f"SELECT TOP 100 * FROM dbo.[{table}] WHERE ENTRY=?",
-            lpntr
-        )
-
-    else:
-        print("No direct LPNTR/ENTRY key - skipping rows for now.")
-        continue
-
-    for row in cur.fetchall():
-        print(row)
+for row in cur.fetchall():
+    print(row)
