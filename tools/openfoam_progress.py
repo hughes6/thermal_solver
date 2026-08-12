@@ -13,6 +13,9 @@ EXECUTION_RE = re.compile(r"^ExecutionTime = ([0-9.eE+-]+) s")
 CONTROL_TIME_RE = re.compile(
     r"^\s*(startTime|endTime)\s+([0-9.eE+-]+)\s*;"
 )
+CONTROL_STEP_RE = re.compile(
+    r"^\s*(deltaT|writeInterval)\s+([0-9.eE+-]+)\s*;"
+)
 COURANT_RE = re.compile(
     r"Region: fluid Courant Number mean: ([0-9.eE+-]+) max: ([0-9.eE+-]+)"
 )
@@ -101,6 +104,19 @@ def read_control_times(case_directory: Path) -> tuple[float, float]:
     return values["startTime"], values["endTime"]
 
 
+def read_checkpoint_stride(case_directory: Path) -> float | None:
+    control = case_directory / "system" / "controlDict"
+    values: dict[str, float] = {}
+    for line in control.read_text(encoding="utf-8", errors="ignore").splitlines():
+        match = CONTROL_STEP_RE.match(line)
+        if match and match.group(1) not in values:
+            values[match.group(1)] = float(match.group(2))
+    if "deltaT" not in values or "writeInterval" not in values:
+        return None
+    stride = values["deltaT"] * values["writeInterval"]
+    return stride if stride > 0 else None
+
+
 def numeric_directories(path: Path) -> list[float]:
     values: list[float] = []
     if not path.is_dir():
@@ -155,6 +171,7 @@ def main() -> int:
     end_time = args.end_time if args.end_time is not None else configured_end_time
     remaining_simulated = max(0.0, end_time - current_time)
     checkpoints = numeric_directories(case_directory / "processor0")
+    checkpoint_stride = read_checkpoint_stride(case_directory)
     maximum_courant, cumulative_continuity, fatal_signatures = read_health(log_path)
 
     print(f"Case: {case_directory}")
@@ -180,6 +197,13 @@ def main() -> int:
             f"Processor checkpoints: {len(checkpoints)} "
             f"(latest {checkpoints[-1]:.9g} s)"
         )
+        if checkpoint_stride is not None:
+            next_checkpoint = min(end_time, checkpoints[-1] + checkpoint_stride)
+            if next_checkpoint > current_time + 1e-12:
+                print(
+                    f"Next checkpoint: {next_checkpoint:.9g} s "
+                    f"(ETA {format_duration((next_checkpoint-current_time)*slope)})"
+                )
     else:
         print("Processor checkpoints: none")
     return 0

@@ -7,6 +7,7 @@ from tools.openfoam_progress import (
     format_duration,
     numeric_directories,
     read_control_times,
+    read_checkpoint_stride,
     read_health,
     read_samples,
     recent_slope,
@@ -63,13 +64,16 @@ class OpenFoamProgressTest(unittest.TestCase):
             case = Path(directory)
             (case / "system").mkdir()
             (case / "system" / "controlDict").write_text(
-                "startTime 2.5;\nendTime 12.5;\n", encoding="utf-8"
+                "startTime 2.5;\nendTime 12.5;\n"
+                "deltaT 0.01;\nwriteInterval 25;\n",
+                encoding="utf-8",
             )
             processor = case / "processor0"
             processor.mkdir()
             for name in ("0.5", "2", "uniform"):
                 (processor / name).mkdir()
             self.assertEqual(read_control_times(case), (2.5, 12.5))
+            self.assertEqual(read_checkpoint_stride(case), 0.25)
             self.assertEqual(numeric_directories(processor), [0.5, 2.0])
 
     def test_selects_latest_log_and_formats_duration(self):
