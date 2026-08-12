@@ -2792,3 +2792,29 @@ Trenton's 26.3% ratio still rests on only a 0.0046 K outlet rise. The combined
 trend shows slow spatial wake settling with stable engineering flows and
 physically warming powered equipment, not a reason to bypass the remaining
 air-exchange gate.
+
+At `3.40190204 s`, whole-fluid and external-air velocity movement rebounded to
+9.026% and 9.014%, so the prior decrease was not monotonic. However, the
+maximum velocity difference fell again to 4.115 m/s, at
+`(0.282286, 0.285950, 0.255750) m` inside the Dell, and Dell's volume-weighted
+change decreased to 11.329%. This combination indicates a broader,
+lower-amplitude wake phase rather than renewed growth at one fan-source cell.
+`k`, `alphat`, and `omega` changed 13.517%, 10.322%, and 5.225%; pressure
+movement remained only 0.102 Pa RMS (0.657%).
+
+Boundary behavior remained stable. Intake magnitude changed +0.01374%, Fan 4
+was again the largest exhaust change at -0.25047%, all directions remained
+correct, and bidirectional flow remained zero. Dell's direct intake/rear-outlet
+temperatures reached 293.1535/293.2197 K and its index decreased to 4.96%.
+Eaton remained reversed and undefined during the cold stage; Trenton reached
+293.1512/293.1548 K, still too small a rise for an engineering conclusion.
+The retained-window spatial oscillation therefore remains the sole failed
+startup criterion.
+
+The direct internal checkpoint data was initially present only in CSV and
+console output. Saved `--snapshot-times --save` figures now add a fifth panel
+with dashed intake and solid rear-outlet temperature traces for every paired
+component plus ambient. Cases without readable internal data retain the
+original four panels and the explicit warning. A real two-checkpoint production
+render produced a 252,708-byte PNG; visual inspection confirmed readable
+legends, scales, all three equipment pairs, and the Dell warming trend.
