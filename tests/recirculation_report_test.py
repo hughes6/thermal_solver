@@ -10,6 +10,7 @@ from plot.recirculation_report import (
     combined_samples,
     directional_patch_sample,
     exported_heat_watts,
+    internal_device_temperature_rows,
     read_report,
     selected_time_path,
     solver_postprocess_command,
@@ -167,6 +168,61 @@ fluid_to_solid
             histories = boundary_histories(case)
             self.assertEqual(histories["outlet"]["flow"], {10.0: 0.2})
             self.assertEqual(histories["outlet"]["temperature"], {10.0: 300.0})
+
+    def test_internal_device_air_rise_pairs_adjacent_intake_and_exhaust(self):
+        with tempfile.TemporaryDirectory() as directory:
+            fluid = Path(directory) / "postProcessing" / "fluid"
+            intake = fluid / "internal_Front_intake_2_temperature_average" / "0"
+            exhaust = (
+                fluid / "internal_Rear_exhaust_fan_3_temperature_average" / "0"
+            )
+            unrelated = fluid / "internal_Front_intake_4_temperature_average" / "0"
+            intake.mkdir(parents=True)
+            exhaust.mkdir(parents=True)
+            unrelated.mkdir(parents=True)
+            (intake / "volFieldValue.dat").write_text(
+                "10 299\n", encoding="utf-8"
+            )
+            (exhaust / "volFieldValue.dat").write_text(
+                "10 313\n", encoding="utf-8"
+            )
+            (unrelated / "volFieldValue.dat").write_text(
+                "10 301\n", encoding="utf-8"
+            )
+
+            rows = internal_device_temperature_rows(
+                Path(directory), ambient_k=293.0
+            )
+            self.assertEqual(len(rows), 1)
+            self.assertEqual(rows[0][1], "internal_pair_2_3")
+            self.assertAlmostEqual(rows[0][4], 299.0)
+            self.assertAlmostEqual(rows[0][5], 313.0)
+            self.assertAlmostEqual(rows[0][6], 0.3)
+
+    def test_internal_device_metadata_labels_component_pair(self):
+        with tempfile.TemporaryDirectory() as directory:
+            case = Path(directory)
+            fluid = case / "postProcessing" / "fluid"
+            intake = fluid / "internal_Intake_8_temperature_average" / "0"
+            exhaust = fluid / "internal_Fan_9_temperature_average" / "0"
+            intake.mkdir(parents=True)
+            exhaust.mkdir(parents=True)
+            (intake / "volFieldValue.dat").write_text(
+                "10 296\n", encoding="utf-8"
+            )
+            (exhaust / "volFieldValue.dat").write_text(
+                "10 306\n", encoding="utf-8"
+            )
+            (case / "internal_airflow_devices.csv").write_text(
+                "zone,component_id,component,kind,device\n"
+                'internal_Intake_8,4,"Server A",intake,"Intake"\n'
+                'internal_Fan_9,4,"Server A",exhaust,"Fan"\n',
+                encoding="utf-8",
+            )
+
+            rows = internal_device_temperature_rows(case, ambient_k=293.0)
+            self.assertEqual(len(rows), 1)
+            self.assertEqual(rows[0][1], "Server A")
 
 
 if __name__ == "__main__":

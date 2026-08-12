@@ -163,6 +163,15 @@ int main(int argc, char** argv) {
             case_path/"constant"/"polyMesh"/file));
     assert(std::filesystem::is_regular_file(
         case_path/"system"/"controlDict"));
+    assert(std::filesystem::is_regular_file(
+        case_path/"internal_airflow_devices.csv"));
+    {
+        std::ifstream metadata(case_path/"internal_airflow_devices.csv");
+        std::ostringstream text;
+        text << metadata.rdbuf();
+        assert(text.str().find(
+            "zone,component_id,component,kind,device") != std::string::npos);
+    }
     std::ifstream control_file(case_path/"system"/"controlDict");
     std::ostringstream control_text;
     control_text << control_file.rdbuf();

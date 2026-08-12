@@ -138,6 +138,8 @@ public:
         write_external_device_files(mesh, options, options.case_directory);
         write_device_report(
             mesh,options,options.case_directory/"airflow_devices.txt");
+        write_internal_device_metadata(
+            mesh,options.case_directory/"internal_airflow_devices.csv");
         write_interface_toposet_dict(mesh, options.case_directory);
         write_region_properties(
             mesh, options.case_directory/"constant"/"regionProperties");
@@ -490,6 +492,31 @@ private:
                   <<" | cells="<<device.cells.size()
                   <<" | direction=("<<device.direction[0]<<' '
                   <<device.direction[1]<<' '<<device.direction[2]<<")\n";
+    }
+
+    static std::string csv_field(std::string value) {
+        std::string escaped;
+        for(char character : value) {
+            if(character=='\"') escaped += "\"\"";
+            else escaped += character;
+        }
+        return "\""+escaped+"\"";
+    }
+
+    static void write_internal_device_metadata(
+        const Mesh& mesh, const std::filesystem::path& path) {
+        std::ofstream output(path);
+        require_stream(output,path);
+        output << "zone,component_id,component,kind,device\n";
+        for(const auto& device : mesh.get_openfoam_internal_flow_devices()) {
+            output << csv_field(internal_device_name(device)) << ','
+                   << device.component_id << ','
+                   << csv_field(device.component_name) << ','
+                   << (device.kind==
+                           Mesh::OpenFoamInternalFlowDevice::Kind::Fan
+                           ? "exhaust" : "intake") << ','
+                   << csv_field(device.name) << '\n';
+        }
     }
 
     static int boundary_patch(const Mesh& mesh,

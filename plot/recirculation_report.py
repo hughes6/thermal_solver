@@ -169,45 +169,46 @@ def run_checkpoint_report(args, plt, case: Path, expected_heat_watts):
                          "outward_kg_s", "inward_T_K", "outward_T_K",
                          "bidirectional_share_of_gross"))
         writer.writerows(face_rows)
-    times = [row[0] for row in rows]
-    fig, axes = plt.subplots(4, 1, figsize=(11, 13), sharex=True)
-    patches = sorted({row[1] for row in face_rows})
-    for patch in patches:
-        samples = [row for row in face_rows if row[1] == patch]
-        axes[0].plot([row[0] for row in samples], [row[2] for row in samples],
-                     marker="o", label=patch)
-    axes[0].axhline(0.0, color="black", linewidth=0.8)
-    axes[0].set_ylabel("Net flow (kg/s)\n+out / -in")
-    axes[0].set_title("Selected-checkpoint boundary direction")
-    axes[0].legend(fontsize=8, ncol=2)
-    axes[1].plot(times, [row[3] for row in rows], marker="o", label="Intake")
-    axes[1].plot(times, [row[4] for row in rows], marker="o", label="Exhaust")
-    axes[1].axhline(args.ambient_temperature, color="black", linestyle="--",
-                    label="Ambient")
-    axes[1].set_ylabel("Temperature (K)")
-    axes[1].legend(fontsize=8)
-    axes[2].plot(times, [row[5] for row in rows], marker="o",
-                 label="Thermal re-ingestion")
-    axes[2].plot(times, [row[7] for row in rows], marker="o",
-                 label="Bidirectional mass fraction")
-    axes[2].set_ylabel("Fraction")
-    axes[2].legend(fontsize=8)
-    axes[3].plot(times, [row[6] for row in rows], marker="o",
-                 color="darkorange", label="Net sensible heat")
-    if expected_heat_watts is not None:
-        axes[3].axhline(expected_heat_watts, color="black", linestyle="--",
-                        label=f"Applied heat: {expected_heat_watts:g} W")
-    axes[3].set_ylabel("Heat rejection (W)")
-    axes[3].set_xlabel("Simulation time (s)")
-    axes[3].legend(fontsize=8)
-    for axis in axes:
-        axis.grid(True, alpha=0.3)
-    fig.tight_layout()
-    if args.save:
-        fig.savefig(args.output, dpi=180)
-        print(f"Saved: {args.output}")
-    else:
-        plt.show()
+    if plt is not None:
+        times = [row[0] for row in rows]
+        fig, axes = plt.subplots(4, 1, figsize=(11, 13), sharex=True)
+        patches = sorted({row[1] for row in face_rows})
+        for patch in patches:
+            samples = [row for row in face_rows if row[1] == patch]
+            axes[0].plot([row[0] for row in samples],
+                         [row[2] for row in samples], marker="o", label=patch)
+        axes[0].axhline(0.0, color="black", linewidth=0.8)
+        axes[0].set_ylabel("Net flow (kg/s)\n+out / -in")
+        axes[0].set_title("Selected-checkpoint boundary direction")
+        axes[0].legend(fontsize=8, ncol=2)
+        axes[1].plot(times, [row[3] for row in rows], marker="o", label="Intake")
+        axes[1].plot(times, [row[4] for row in rows], marker="o", label="Exhaust")
+        axes[1].axhline(args.ambient_temperature, color="black", linestyle="--",
+                        label="Ambient")
+        axes[1].set_ylabel("Temperature (K)")
+        axes[1].legend(fontsize=8)
+        axes[2].plot(times, [row[5] for row in rows], marker="o",
+                     label="Thermal re-ingestion")
+        axes[2].plot(times, [row[7] for row in rows], marker="o",
+                     label="Bidirectional mass fraction")
+        axes[2].set_ylabel("Fraction")
+        axes[2].legend(fontsize=8)
+        axes[3].plot(times, [row[6] for row in rows], marker="o",
+                     color="darkorange", label="Net sensible heat")
+        if expected_heat_watts is not None:
+            axes[3].axhline(expected_heat_watts, color="black", linestyle="--",
+                            label=f"Applied heat: {expected_heat_watts:g} W")
+        axes[3].set_ylabel("Heat rejection (W)")
+        axes[3].set_xlabel("Simulation time (s)")
+        axes[3].legend(fontsize=8)
+        for axis in axes:
+            axis.grid(True, alpha=0.3)
+        fig.tight_layout()
+        if args.save:
+            fig.savefig(args.output, dpi=180)
+            print(f"Saved: {args.output}")
+        else:
+            plt.show()
     print(f"Saved: {csv_path}")
     print(f"Saved: {face_csv_path}")
     print(f"Latest thermal re-ingestion index: {rows[-1][5]:.6g}")
@@ -217,7 +218,7 @@ def run_checkpoint_report(args, plt, case: Path, expected_heat_watts):
 
 def read_report(root: Path) -> dict[float, float]:
     samples: dict[float, float] = {}
-    for path in root.glob("*/surfaceFieldValue*.dat"):
+    for path in root.glob("*/*FieldValue*.dat"):
         for line in path.read_text(encoding="utf-8", errors="replace").splitlines():
             columns = line.replace("(", " ").replace(")", " ").split()
             if not columns or columns[0].startswith("#"):
@@ -249,6 +250,112 @@ def boundary_histories(case: Path) -> dict[str, dict[str, dict[float, float]]]:
         patch: fields for patch, fields in result.items()
         if fields.get("flow") and fields.get("temperature")
     }
+
+
+def internal_device_temperature_rows(case: Path, ambient_k: float):
+    """Pair adjacent internal intake/exhaust reports and quantify intake heat."""
+    fluid = case / "postProcessing" / "fluid"
+    metadata = {}
+    metadata_path = case / "internal_airflow_devices.csv"
+    if metadata_path.is_file():
+        with metadata_path.open("r", newline="", encoding="utf-8") as stream:
+            for row in csv.DictReader(stream):
+                try:
+                    row["component_id"] = int(row["component_id"])
+                except (KeyError, TypeError, ValueError):
+                    continue
+                metadata[row.get("zone", "")] = row
+    pattern = re.compile(
+        r"^internal_(?P<name>.+)_(?P<id>[0-9]+)_temperature_average$"
+    )
+    devices = []
+    if not fluid.is_dir():
+        return []
+    for directory in fluid.iterdir():
+        match = pattern.match(directory.name) if directory.is_dir() else None
+        if not match:
+            continue
+        name = match.group("name")
+        normalized = name.lower()
+        kind = (
+            "exhaust" if "fan" in normalized or "exhaust" in normalized
+            else "intake" if "intake" in normalized or "vent" in normalized
+            else "unknown"
+        )
+        devices.append({
+            "id": int(match.group("id")),
+            "name": name,
+            "zone": directory.name.removesuffix("_temperature_average"),
+            "kind": kind,
+            "temperature": read_report(directory),
+        })
+        device_metadata = metadata.get(devices[-1]["zone"])
+        if device_metadata:
+            devices[-1]["kind"] = device_metadata.get("kind", kind)
+            devices[-1]["component_id"] = device_metadata["component_id"]
+            devices[-1]["component"] = device_metadata.get("component", "")
+    devices.sort(key=lambda device: device["id"])
+    rows = []
+    pairs = []
+    if metadata:
+        component_ids = sorted({
+            device.get("component_id") for device in devices
+            if device.get("component_id") is not None
+        })
+        for component_id in component_ids:
+            component_devices = [
+                device for device in devices
+                if device.get("component_id") == component_id
+            ]
+            intakes = [d for d in component_devices if d["kind"] == "intake"]
+            exhausts = [d for d in component_devices if d["kind"] == "exhaust"]
+            if intakes and exhausts:
+                pairs.append((intakes[0], exhausts[0]))
+    else:
+        pairs = list(zip(devices, devices[1:]))
+    for intake, exhaust in pairs:
+        if intake["kind"] != "intake" or exhaust["kind"] != "exhaust":
+            continue
+        common_times = sorted(
+            set(intake["temperature"]) & set(exhaust["temperature"])
+        )
+        pair = intake.get("component") or (
+            f"internal_pair_{intake['id']}_{exhaust['id']}"
+        )
+        for time in common_times:
+            intake_t = intake["temperature"][time]
+            exhaust_t = exhaust["temperature"][time]
+            rise = exhaust_t - ambient_k
+            index_value = (
+                max(0.0, min(1.0, (intake_t - ambient_k) / rise))
+                if rise > 1.0e-12 else float("nan")
+            )
+            rows.append((
+                time, pair, intake["name"], exhaust["name"],
+                intake_t, exhaust_t, index_value,
+            ))
+    return rows
+
+
+def write_internal_device_csv(output: Path, rows, selected_times=None):
+    """Write equipment intake/exhaust temperature indicators."""
+    if selected_times:
+        selected = []
+        for row in rows:
+            if any(abs(row[0] - requested) <=
+                   1.0e-8 * max(1.0, abs(requested))
+                   for requested in selected_times):
+                selected.append(row)
+        rows = selected
+    path = output.with_name(output.stem + "_internal_air.csv")
+    with path.open("w", newline="", encoding="utf-8") as stream:
+        writer = csv.writer(stream)
+        writer.writerow((
+            "time_s", "pair", "intake_device", "exhaust_device",
+            "intake_T_K", "exhaust_T_K", "equipment_air_rise_index",
+        ))
+        writer.writerows(rows)
+    return path, rows
 
 
 def exported_heat_watts(case: Path) -> float | None:
@@ -343,12 +450,21 @@ def main() -> None:
               "large function-object histories"),
     )
     parser.add_argument("--save", action="store_true")
+    parser.add_argument(
+        "--csv-only", action="store_true",
+        help="write numerical CSV reports without importing Matplotlib",
+    )
     args = parser.parse_args()
 
-    try:
-        import matplotlib.pyplot as plt
-    except ImportError as exc:
-        raise SystemExit("Install Matplotlib with: python -m pip install matplotlib") from exc
+    plt = None
+    if not args.csv_only:
+        try:
+            import matplotlib.pyplot as plt
+        except ImportError as exc:
+            raise SystemExit(
+                "Install Matplotlib with: python -m pip install matplotlib, "
+                "or use --csv-only"
+            ) from exc
 
     case = args.case.expanduser().resolve()
     expected_heat_watts = args.expected_heat_watts
@@ -363,6 +479,15 @@ def main() -> None:
     args.output.parent.mkdir(parents=True, exist_ok=True)
     if args.snapshot_times:
         run_checkpoint_report(args, plt, case, expected_heat_watts)
+        internal_path, internal_rows = write_internal_device_csv(
+            args.output,
+            internal_device_temperature_rows(case, args.ambient_temperature),
+            args.snapshot_times,
+        )
+        print(f"Saved: {internal_path}")
+        if internal_rows:
+            print("Maximum selected equipment air-rise index: "
+                  f"{max(row[6] for row in internal_rows):.6g}")
         return
     try:
         histories = boundary_histories(case)
@@ -407,55 +532,66 @@ def main() -> None:
         for patch, sample in sorted(face_samples.items()):
             writer.writerow((snapshot_time, patch, *sample))
 
-    fig, axes = plt.subplots(4, 1, figsize=(11, 13), sharex=True)
+    internal_path, internal_rows = write_internal_device_csv(
+        args.output,
+        internal_device_temperature_rows(case, args.ambient_temperature),
+    )
+
     flow_floors = boundary_flow_floors(
         histories, args.minimum_flow_fraction)
     ignored_temperature_samples = 0
-    for patch, fields in sorted(histories.items()):
-        times = sorted(fields["flow"])
-        axes[0].plot(times, [fields["flow"][t] for t in times], label=patch)
-        common = [t for t in times if t in fields["temperature"]]
-        temperatures = []
-        for time in common:
-            if abs(fields["flow"][time]) <= flow_floors[time]:
-                temperatures.append(float("nan"))
+    for fields in histories.values():
+        for time in fields["flow"]:
+            if (time in fields["temperature"] and
+                    abs(fields["flow"][time]) <= flow_floors[time]):
                 ignored_temperature_samples += 1
-            else:
-                temperatures.append(fields["temperature"][time])
-        axes[1].plot(common, temperatures, label=patch)
-    axes[0].axhline(0.0, color="black", linewidth=0.8)
-    axes[0].set_ylabel("Signed mass flow (kg/s)\n+out / -in")
-    axes[0].set_title("Boundary flow direction and reversal")
-    axes[0].legend(fontsize=8, ncol=2)
-    axes[1].axhline(args.ambient_temperature, color="black", linestyle="--",
-                    label="Ambient")
-    axes[1].set_ylabel("Mass-weighted T (K)")
-    axes[1].set_title(
-        "Boundary mass-weighted temperature (near-zero flow omitted)")
-    axes[1].legend(fontsize=8, ncol=2)
-    axes[2].plot([row[0] for row in rows], [row[5] for row in rows], color="crimson")
-    axes[2].set_ylim(-0.02, 1.02)
-    axes[2].set_ylabel("Thermal re-ingestion index")
-    axes[2].set_title("0 = ambient intake; 1 = exhaust-temperature intake")
-    axes[3].plot([row[0] for row in rows], [row[6] for row in rows],
-                 color="darkorange", label="Net boundary sensible heat")
-    if expected_heat_watts is not None:
-        axes[3].axhline(expected_heat_watts, color="black", linestyle="--",
-                        label=f"Applied heat: {expected_heat_watts:g} W")
-        axes[3].legend(fontsize=8)
-    axes[3].set_ylabel("Heat rejection (W)")
-    axes[3].set_xlabel("Simulation time (s)")
-    axes[3].set_title("Net sensible heat rejected relative to ambient")
-    for axis in axes:
-        axis.grid(True, alpha=0.3)
-    fig.tight_layout()
-    if args.save:
-        fig.savefig(args.output, dpi=180)
-        print(f"Saved: {args.output}")
-    else:
-        plt.show()
+    if plt is not None:
+        fig, axes = plt.subplots(4, 1, figsize=(11, 13), sharex=True)
+        for patch, fields in sorted(histories.items()):
+            times = sorted(fields["flow"])
+            axes[0].plot(times, [fields["flow"][t] for t in times], label=patch)
+            common = [t for t in times if t in fields["temperature"]]
+            temperatures = [
+                (float("nan") if abs(fields["flow"][time]) <= flow_floors[time]
+                 else fields["temperature"][time])
+                for time in common
+            ]
+            axes[1].plot(common, temperatures, label=patch)
+        axes[0].axhline(0.0, color="black", linewidth=0.8)
+        axes[0].set_ylabel("Signed mass flow (kg/s)\n+out / -in")
+        axes[0].set_title("Boundary flow direction and reversal")
+        axes[0].legend(fontsize=8, ncol=2)
+        axes[1].axhline(args.ambient_temperature, color="black", linestyle="--",
+                        label="Ambient")
+        axes[1].set_ylabel("Mass-weighted T (K)")
+        axes[1].set_title(
+            "Boundary mass-weighted temperature (near-zero flow omitted)")
+        axes[1].legend(fontsize=8, ncol=2)
+        axes[2].plot([row[0] for row in rows], [row[5] for row in rows],
+                     color="crimson")
+        axes[2].set_ylim(-0.02, 1.02)
+        axes[2].set_ylabel("Thermal re-ingestion index")
+        axes[2].set_title("0 = ambient intake; 1 = exhaust-temperature intake")
+        axes[3].plot([row[0] for row in rows], [row[6] for row in rows],
+                     color="darkorange", label="Net boundary sensible heat")
+        if expected_heat_watts is not None:
+            axes[3].axhline(expected_heat_watts, color="black", linestyle="--",
+                            label=f"Applied heat: {expected_heat_watts:g} W")
+            axes[3].legend(fontsize=8)
+        axes[3].set_ylabel("Heat rejection (W)")
+        axes[3].set_xlabel("Simulation time (s)")
+        axes[3].set_title("Net sensible heat rejected relative to ambient")
+        for axis in axes:
+            axis.grid(True, alpha=0.3)
+        fig.tight_layout()
+        if args.save:
+            fig.savefig(args.output, dpi=180)
+            print(f"Saved: {args.output}")
+        else:
+            plt.show()
     print(f"Saved: {csv_path}")
     print(f"Saved: {face_csv_path}")
+    print(f"Saved: {internal_path}")
     print(f"Latest thermal re-ingestion index: {rows[-1][5]:.6g}")
     print(f"Latest net sensible heat rejection: {rows[-1][6]:.6g} W")
     print("Ignored undefined near-zero-flow boundary-temperature samples: "
@@ -463,6 +599,13 @@ def main() -> None:
     if expected_heat_watts is not None:
         print("Latest heat-rejection fraction: "
               f"{rows[-1][6] / expected_heat_watts:.6%}")
+    if internal_rows:
+        latest_internal_time = max(row[0] for row in internal_rows)
+        latest_internal = [
+            row for row in internal_rows if row[0] == latest_internal_time
+        ]
+        print("Latest maximum equipment air-rise index: "
+              f"{max(row[6] for row in latest_internal):.6g}")
     print("Note: this temperature index indicates hot intake air but does not identify "
           "which exhaust produced it; source attribution requires a passive tracer.")
 

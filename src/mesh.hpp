@@ -76,6 +76,8 @@ public:
     struct OpenFoamInternalFlowDevice {
         enum class Kind : unsigned char { Fan, Vent };
         int id = -1;
+        int component_id = -1;
+        std::string component_name;
         std::string name;
         Kind kind = Kind::Vent;
         std::array<double,3> direction{0.0,0.0,0.0};
@@ -704,6 +706,7 @@ public:
                         : at(0,0,plane_index).get_dz());
             openfoam_internal_flow_devices.push_back(
                 {static_cast<int>(openfoam_internal_flow_devices.size()),
+                 component_id,component.get_name(),
                  region.get_name(),
                  region.get_region_type() == RegionType::Fan
                     ? OpenFoamInternalFlowDevice::Kind::Fan

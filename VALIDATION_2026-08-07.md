@@ -1751,3 +1751,50 @@ at or below 1e-8 kg/s by default, and reports that the weighted temperature is
 undefined. This both prevents misleading output and avoids the earlier `T` and
 `phi` array failure when valid reports are already present. The threshold is
 configurable with `--minimum-mass-flow` for genuinely smaller systems.
+
+## External and equipment-level recirculation audit (2026-08-11)
+
+The recirculation tool was run directly on reconstructed face fields at both
+converged endpoints. A new `--csv-only` mode makes the numerical audit usable
+without Matplotlib and writes the summary, face-resolved boundary traffic, and
+internal equipment-air CSV files without creating a plot.
+
+| Endpoint | External thermal re-ingestion | Bidirectional boundary mass | Net sensible rejection | Load fraction |
+|---|---:|---:|---:|---:|
+| Screening, 50,400.01 s | 0.0000 | 0.12921% | 1539.92 W | 99.6709% |
+| In-depth, 16,800.01 s | 0.0000 | 0.12858% | 1540.17 W | 99.6872% |
+
+All nine rack exhaust patches are one-way outward and the main vent is one-way
+inward. The passive KVM front opening is locally bidirectional even though its
+net flow is essentially zero. Screening resolves 0.0007690 kg/s in and
+0.0007690 kg/s out at that patch; in-depth resolves 0.0007646 kg/s each way.
+Its inward faces receive the imposed 293.15 K ambient condition and its outward
+faces discharge at 298.90 K screening or 298.82 K in-depth. This explains both
+the 50% patch-local bidirectional share and the meaningless signed
+mass-weighted temperature obtained when the opposing streams are collapsed to
+one near-zero net flow.
+
+The earlier external index of zero does not answer the server-to-server
+question by itself. The rack boundary condition supplies ambient air on every
+external inward face and does not model the room outside the rack. Equipment
+front-intake and rear-exhaust cell-zone temperatures give the following
+separate air-rise indicator:
+
+| Internal pair | Screening | In-depth |
+|---|---:|---:|
+| UPS intake/exhaust (zones 0/1) | 0.0753 | 0.0620 |
+| Dell intake/exhaust (zones 2/3) | 0.2854 | 0.2800 |
+| Trenton intake/exhaust (zones 4/5) | 0.5675 | 0.5404 |
+
+The indicator is `(T_intake - T_ambient) / (T_exhaust - T_ambient)`, clamped
+to zero through one. It demonstrates substantial hot intake air at the
+Trenton and moderate hot intake air at the Dell, with close agreement between
+meshes. It is not source attribution: proving that a particular exhaust fed a
+particular intake still requires a passive scalar/tracer or resolved room
+domain.
+
+Future exports now include `internal_airflow_devices.csv`, mapping every
+internal OpenFOAM zone to its component, kind, and original device name. The
+recirculation tool uses this metadata to label equipment pairs. It retains an
+adjacent-zone fallback for preserved cases exported before the metadata was
+added, which is why the audited legacy CSVs use zone-pair identifiers.
