@@ -8,6 +8,7 @@ from tools.openfoam_progress import (
     format_bytes,
     format_duration,
     numeric_directories,
+    processor_checkpoints,
     read_control_times,
     read_checkpoint_stride,
     read_health,
@@ -99,6 +100,29 @@ class OpenFoamProgressTest(unittest.TestCase):
                 encoding="utf-8",
             )
             self.assertEqual(read_checkpoint_stride(case), 30.0)
+
+    def test_detects_mismatched_parallel_checkpoints(self):
+        with tempfile.TemporaryDirectory() as directory:
+            case = Path(directory)
+            for rank in (0, 1):
+                (case / f"processor{rank}" / "1").mkdir(parents=True)
+                (case / f"processor{rank}" / "1" / "T").write_text("field")
+            (case / "processor0" / "2").mkdir()
+            (case / "processor0" / "2" / "T").write_text("field")
+            self.assertEqual(
+                processor_checkpoints(case), ([1.0, 2.0], 2, False, [1, 1])
+            )
+
+    def test_reports_aligned_parallel_checkpoint_file_counts(self):
+        with tempfile.TemporaryDirectory() as directory:
+            case = Path(directory)
+            for rank in (0, 1):
+                latest = case / f"processor{rank}" / "1.5"
+                latest.mkdir(parents=True)
+                (latest / "T").write_text("field")
+            self.assertEqual(
+                processor_checkpoints(case), ([1.5], 2, True, [1, 1])
+            )
 
     def test_selects_latest_log_and_formats_duration(self):
         with tempfile.TemporaryDirectory() as directory:

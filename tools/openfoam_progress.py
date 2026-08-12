@@ -147,6 +147,46 @@ def numeric_directories(path: Path) -> list[float]:
     return sorted(values)
 
 
+def processor_checkpoints(
+    case_directory: Path,
+) -> tuple[list[float], int, bool, list[int]]:
+    """Summarize decomposed checkpoints and consistency across MPI ranks."""
+    processors = sorted(
+        (path for path in case_directory.glob("processor*") if path.is_dir()),
+        key=lambda path: (
+            int(path.name[9:]) if path.name[9:].isdigit() else 10**9,
+            path.name,
+        ),
+    )
+    if not processors:
+        return [], 0, True, []
+    time_sets = [numeric_directories(processor) for processor in processors]
+    aligned = all(times == time_sets[0] for times in time_sets[1:])
+    latest_file_counts: list[int] = []
+    for processor, times in zip(processors, time_sets):
+        if not times:
+            latest_file_counts.append(0)
+            continue
+        latest_name = max(
+            (child for child in processor.iterdir() if child.is_dir()),
+            key=lambda child: float(child.name)
+            if _is_float(child.name)
+            else float("-inf"),
+        )
+        latest_file_counts.append(
+            sum(1 for child in latest_name.rglob("*") if child.is_file())
+        )
+    return time_sets[0], len(processors), aligned, latest_file_counts
+
+
+def _is_float(value: str) -> bool:
+    try:
+        float(value)
+    except ValueError:
+        return False
+    return True
+
+
 def format_duration(seconds: float) -> str:
     seconds = max(0.0, seconds)
     hours, remainder = divmod(int(round(seconds)), 3600)
@@ -203,7 +243,9 @@ def main() -> int:
     start_time, configured_end_time = read_control_times(case_directory)
     end_time = args.end_time if args.end_time is not None else configured_end_time
     remaining_simulated = max(0.0, end_time - current_time)
-    checkpoints = numeric_directories(case_directory / "processor0")
+    checkpoints, processor_count, checkpoints_aligned, latest_file_counts = (
+        processor_checkpoints(case_directory)
+    )
     checkpoint_stride = read_checkpoint_stride(case_directory)
     maximum_courant, cumulative_continuity, fatal_signatures = read_health(log_path)
     case_bytes = directory_size(case_directory)
@@ -233,8 +275,16 @@ def main() -> int:
     )
     if checkpoints:
         print(
-            f"Processor checkpoints: {len(checkpoints)} "
+            f"Processor checkpoints: {len(checkpoints)} across {processor_count} ranks "
             f"(latest {checkpoints[-1]:.9g} s)"
+        )
+        print(
+            "Checkpoint consistency: "
+            + (
+                f"aligned; latest files/rank {latest_file_counts}"
+                if checkpoints_aligned
+                else "MISMATCHED TIME SETS ACROSS RANKS"
+            )
         )
         if checkpoint_stride is not None:
             next_checkpoint = min(end_time, checkpoints[-1] + checkpoint_stride)
@@ -244,7 +294,10 @@ def main() -> int:
                     f"(ETA {format_duration((next_checkpoint-current_time)*slope)})"
                 )
     else:
-        print("Processor checkpoints: none")
+        print(
+            "Processor checkpoints: none"
+            + (f" across {processor_count} ranks" if processor_count else "")
+        )
     return 0
 
 
