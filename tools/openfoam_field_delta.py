@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
 """Compare an OpenFOAM binary internal field between decomposed checkpoints.
 
-This lightweight reader weights every stored cell value equally.  It does not
-read mesh volumes, so its RMS values are not the volume-weighted spatial metric
-used by the generated OpenFOAM runner's airflow-convergence gate.
+This lightweight reader weights every stored scalar component equally.  It
+does not read mesh volumes, so its RMS values are not the volume-weighted
+vector-magnitude metric used by the generated OpenFOAM runner's airflow-
+convergence gate.
 """
 
 from __future__ import annotations
@@ -191,11 +192,14 @@ def main() -> int:
     if args.rank is not None:
         print(f"Processor rank: {args.rank}")
     print(f"Scalar values compared: {count}")
-    print("Weighting: equal per cell (not the runner's volume-weighted gate metric)")
-    print(f"Cell-weighted RMS delta: {rms_delta:.9g}")
+    print(
+        "Weighting: equal per scalar component (not the runner's "
+        "volume-weighted vector-magnitude gate metric)"
+    )
+    print(f"Component-weighted RMS delta: {rms_delta:.9g}")
     print(f"Maximum component delta: {maximum_delta:.9g}")
-    print(f"Cell-weighted RMS field component: {rms_field:.9g}")
-    print(f"Cell-weighted relative RMS delta: {100.0 * relative:.6g}%")
+    print(f"Component-weighted RMS field value: {rms_field:.9g}")
+    print(f"Component-weighted relative RMS delta: {100.0 * relative:.6g}%")
     return 0
 
 

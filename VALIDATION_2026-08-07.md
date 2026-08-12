@@ -2588,7 +2588,7 @@ performance state and should not attribute its approximately 15% late-window
 slowdown to solver settings. Cooling/platform throttling is the most consistent
 explanation, although direct CPU-core temperature evidence is unavailable.
 
-At the aligned `2.81152163 s` checkpoint, the equal-cell diagnostic measured
+At the aligned `2.81152163 s` checkpoint, the equal-component diagnostic measured
 8.009% velocity RMS change and 10.781% `alphat` change over the preceding
 0.0983967 s; fluid-temperature movement remained only 0.000576 K RMS. Fan and
 vent outputs were much steadier over the same interval: maximum individual fan
@@ -2603,8 +2603,9 @@ The established volume-weighted, geometry-partitioned diagnostic measured
 Dell internal air, 7.819% in Trenton internal air, and 0.875% in Eaton internal
 air. Thus the movement is strongest around Dell but is not confined to
 equipment passages. The lightweight binary `openfoam_field_delta.py` result
-differs because it weights every cell equally and does not read cell volumes.
-Its output now labels all RMS values as cell-weighted and explicitly warns that
-they are not the runner's volume-weighted convergence-gate metric. The
+differs because it weights every stored scalar component equally and does not
+read cell volumes. Its output now labels all RMS values as component-weighted
+and explicitly warns that they are not the runner's volume-weighted vector-
+magnitude convergence-gate metric. The
 volume-aware `openfoam_field_convergence.py` remains authoritative when
 assessing or localizing runner-gate behavior.
