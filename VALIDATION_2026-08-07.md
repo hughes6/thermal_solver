@@ -2469,3 +2469,14 @@ For live `Fan_1`, report history ended at `0.45 s` and 0.02756503 kg/s; the
 updated endpoint is `2.22114122 s` and +0.033209906 kg/s. Positive still means
 out of the domain, so no sign inversion was reintroduced. Thirteen focused
 outlet/validation tests pass.
+
+At `2.31953796 s`, all four ranks again held 29 matching files and the solver
+advanced beyond the checkpoint. Equal-window velocity change reached a new low
+of 6.826%, `alphat` fell to 11.279%, and fluid-temperature change fell to
+0.000590 K RMS. The localized maximum velocity-component change also decreased
+from 6.86 to 6.11 m/s. Relative to `2.22114122 s`, the largest fan-flow change
+was about 0.30% (Fan 4) and intake flow changed only about 0.034%. All external
+directions remained correct, bidirectional flow remained zero, and the audit
+measured 0.00149% exterior mass imbalance. The cold-stage energy check still
+correctly failed at -4.28 W sensible rejection versus 1545 W applied, while the
+hottest solid cell had begun warming to 293.634 K.
