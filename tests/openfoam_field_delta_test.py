@@ -3,7 +3,11 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from tools.openfoam_field_delta import compare_fields, read_internal_field
+from tools.openfoam_field_delta import (
+    compare_fields,
+    read_internal_field,
+    resolve_time_directory,
+)
 
 
 def write_field(path: Path, field_type: str, values: list[float]) -> None:
@@ -18,6 +22,22 @@ def write_field(path: Path, field_type: str, values: list[float]) -> None:
 
 
 class OpenFoamFieldDeltaTest(unittest.TestCase):
+    def test_resolves_openfoam_floating_point_directory_spelling(self):
+        with tempfile.TemporaryDirectory() as directory:
+            processor = Path(directory)
+            written = processor / "1.237173877551027"
+            written.mkdir()
+            self.assertEqual(
+                resolve_time_directory(processor, "1.2371738775510202"), written
+            )
+
+    def test_rejects_unavailable_nearest_time(self):
+        with tempfile.TemporaryDirectory() as directory:
+            processor = Path(directory)
+            (processor / "1.0").mkdir()
+            with self.assertRaisesRegex(FileNotFoundError, "nearest is 1.0"):
+                resolve_time_directory(processor, "1.1")
+
     def test_reads_binary_vector_field(self):
         with tempfile.TemporaryDirectory() as directory:
             field = Path(directory) / "U"

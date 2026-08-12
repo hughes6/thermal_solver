@@ -67,12 +67,39 @@ def compare_fields(
     return value_count, rms_delta, maximum_delta, rms_after, relative
 
 
+def resolve_time_directory(processor: Path, requested: str) -> Path:
+    exact = processor / requested
+    if exact.is_dir():
+        return exact
+    requested_value = float(requested)
+    candidates: list[tuple[float, Path]] = []
+    for child in processor.iterdir():
+        if not child.is_dir():
+            continue
+        try:
+            candidates.append((float(child.name), child))
+        except ValueError:
+            pass
+    if not candidates:
+        raise FileNotFoundError(f"no numeric time directories in {processor}")
+    value, path = min(candidates, key=lambda candidate: abs(candidate[0] - requested_value))
+    tolerance = 1.0e-8 * max(1.0, abs(requested_value))
+    if abs(value - requested_value) > tolerance:
+        raise FileNotFoundError(
+            f"time {requested} is unavailable in {processor}; nearest is {path.name}"
+        )
+    return path
+
+
 def processor_field_paths(case: Path, time: str, region: str, field: str) -> list[Path]:
     processors = sorted(
         (path for path in case.glob("processor*") if path.is_dir()),
         key=lambda path: int(path.name[9:]),
     )
-    paths = [processor / time / region / field for processor in processors]
+    paths = [
+        resolve_time_directory(processor, time) / region / field
+        for processor in processors
+    ]
     missing = [str(path) for path in paths if not path.is_file()]
     if missing:
         raise FileNotFoundError("missing field files: " + ", ".join(missing))
