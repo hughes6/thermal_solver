@@ -3773,7 +3773,7 @@ functions
                     "print (one_way>1e-12?volume*rho/one_way:1e30) }')\n"
                 "        latest_air_exchange_time=\"$air_exchange_time\"\n"
                 "        latest_one_way_boundary_mass_flow=$(awk -v s=\"$sum_abs\" "
-                    "'BEGIN { print 0.5*s }')\n"
+                    "'BEGIN { printf \"%.17g\", 0.5*s }')\n"
                 "        for rule in \"${fan_direction_rules[@]}\"; do\n"
                 "            name=\"${rule%%:*}\"\n"
                 "            expected=\"${rule##*:}\"\n"
@@ -4618,7 +4618,7 @@ functions
                     << mesh.get_env().get_rho()
                     << "\" 'BEGIN { dt=now-previous_time; if(dt<0)dt=0; "
                         "increment=0.5*(previous_flow+flow)*dt/(volume*rho); "
-                        "print accumulated+increment }')\n"
+                        "printf \"%.17g\", accumulated+increment }')\n"
                     "                    air_exchange_last_time=\"$current\"\n"
                     "                    air_exchange_last_flow=\"$latest_one_way_boundary_mass_flow\"\n"
                     "                    air_exchange_state_tmp=\"${initial_exchange_state}.tmp.$$\"\n"
@@ -4639,7 +4639,7 @@ functions
                     "                    fi\n"
                     "                    if ! awk -v completed=\"$air_exchange_fraction\" -v required=\""
                     << options.minimum_initial_air_exchange_fraction
-                    << "\" 'BEGIN { exit !(completed>=required) }'; then\n"
+                    << "\" 'BEGIN { exit !(completed+1e-9>=required) }'; then\n"
                     "                        exchange_target=$(awk -v now=\"$current\" -v interval=\""
                     << options.airflow_checkpoint_interval
                     << "\" -v limit=\"$initial_limit\" 'BEGIN { x=now+interval; "

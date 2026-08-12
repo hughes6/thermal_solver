@@ -337,6 +337,11 @@ int main(int argc, char** argv) {
             "increment=0.5*(previous_flow+flow)*dt/(volume*rho)") !=
                std::string::npos);
         assert(text.str().find(
+            "completed+1e-9>=required") != std::string::npos);
+        assert(text.str().find(
+            "printf \"%.17g\", accumulated+increment") !=
+               std::string::npos);
+        assert(text.str().find(
             "latest_one_way_boundary_mass_flow=\"\"") !=
                std::string::npos);
         assert(text.str().find(
@@ -512,9 +517,6 @@ int main(int argc, char** argv) {
             "Final OpenFOAM report generation failed") != std::string::npos);
         assert(text.str().find(
             "summary \"airflow_reference_rebased time=$current") !=
-               std::string::npos);
-        assert(text.str().find(
-            "completed>=required") !=
                std::string::npos);
         assert(text.str().find(
             "completedFraction=$air_exchange_fraction") !=
