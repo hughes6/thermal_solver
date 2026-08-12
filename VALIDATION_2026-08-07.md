@@ -2885,3 +2885,33 @@ The combined evidence again supports continuing through the physical
 air-exchange gate: boundary mass flow is effectively settled, localized
 fan-bank differences are shrinking, but the spatial velocity and turbulence
 fields have not yet met the convergence criteria.
+
+At `3.69709224 s`, adjacent whole-fluid velocity movement decreased again to
+7.313%, external rack-air movement to 7.387%, and Dell internal-air movement
+to 4.544%. The maximum local velocity difference fell from 2.635 to
+2.053 m/s and moved to `(0.492756, 0.234950, 0.071625) m` in the external
+rack air. Eaton movement was 1.650%; Trenton's 16.662% relative value again
+represented only 0.00882 m/s RMS absolute movement, and KVM movement remained
+negligible in absolute terms. Fluid temperature moved 0.000410 K RMS and all
+regions moved 0.000798 K RMS. `k`, `alphat`, and `omega` movement decreased to
+10.205%, 10.677%, and 3.981%; gauge-invariant pressure movement decreased to
+0.075 Pa RMS (0.484%).
+
+Boundary flow remained much more stable than the spatial field. Intake
+magnitude changed -0.00954%; Fan 4 was the largest exhaust change at
+-0.24722%; all nine fans remained outward, the intake remained inward, and
+bidirectional flow remained zero. Dell's direct intake/rear-outlet averages
+reached 293.1537/293.2251 K and its intake-rise index was 4.91%. Eaton remained
+reversed and undefined at 293.1581/293.1555 K. Trenton reached
+293.1514/293.1552 K; its 26.05% ratio still rests on only a 0.0039 K outlet
+rise. Net sensible rejection remained an expected early-transient -3.48 W.
+The velocity, pressure, and turbulence trends are improving, but the retained
+spatial windows still fail the cold-start convergence criterion, so the run
+continues toward the complete physical air-exchange target.
+
+The workstation's default Python initially could not see the user-installed
+NumPy/PyVista packages under the restricted analysis environment. The
+checkpoint reader failed closed before accessing the fields; rerunning it with
+access to the existing user site completed normally. No solver files were
+installed, reconstructed, or modified, and the numerical CSVs were written to
+the user's temporary directory rather than the production case.
