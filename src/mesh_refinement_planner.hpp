@@ -86,7 +86,7 @@ private:
 
         std::vector<std::pair<double, double>> bands;
         // OpenFOAM's cell-determinant check becomes singular for a material
-        // layer that is only one cell thick between coupled boundaries. Keep
+        // layer that is only one cell thick between region boundaries. Keep
         // reduced-order chassis walls, heat blocks, and their surrounding air
         // gaps at a minimum of two cells without refining the whole rack.
         std::vector<std::pair<double,double>> minimum_two_cell_spans;
@@ -306,6 +306,29 @@ private:
         }
         std::sort(clean_breakpoints.begin(),clean_breakpoints.end());
 
+        // Material boundaries may be snapped to a nearby higher-priority
+        // global cut (for example, one component's air boundary can lie near
+        // another component's outer face). Apply the two-cell guarantee to
+        // those realized breakpoints, not the pre-snap coordinates, or the
+        // stamper can create a one-cell material strip even though the
+        // original span was marked as protected.
+        auto nearest_breakpoint = [&](double coordinate) {
+            auto upper=std::lower_bound(
+                clean_breakpoints.begin(),clean_breakpoints.end(),coordinate);
+            if(upper==clean_breakpoints.begin()) return *upper;
+            if(upper==clean_breakpoints.end()) return clean_breakpoints.back();
+            const double lower=*std::prev(upper);
+            return coordinate-lower<=*upper-coordinate+cut_eps
+                ? lower : *upper;
+        };
+        std::vector<std::pair<double,double>> snapped_two_cell_spans;
+        for(const auto& span : minimum_two_cell_spans) {
+            const double begin=nearest_breakpoint(span.first);
+            const double end=nearest_breakpoint(span.second);
+            if(end-begin>cut_eps)
+                snapped_two_cell_spans.push_back({begin,end});
+        }
+
         std::vector<double> widths;
         for(std::size_t i=1;i<clean_breakpoints.size();++i) {
             const double begin=clean_breakpoints[i-1];
@@ -317,7 +340,7 @@ private:
             int count=std::max(
                 1,static_cast<int>(std::ceil(length/target)));
             const bool requires_two_cells=std::any_of(
-                minimum_two_cell_spans.begin(),minimum_two_cell_spans.end(),
+                snapped_two_cell_spans.begin(),snapped_two_cell_spans.end(),
                 [&](const auto& span) {
                     return std::abs(begin-span.first)<cut_eps &&
                            std::abs(end-span.second)<cut_eps;

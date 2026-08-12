@@ -207,6 +207,25 @@ int main(int argc, char** argv) {
         case_path/"system"/"topoSetDict_heated_internal_air_2"));
     assert(std::filesystem::is_regular_file(
         case_path/"prepare_regions.sh"));
+    std::ifstream preparation_file(case_path/"prepare_regions.sh");
+    std::ostringstream preparation_text;
+    preparation_text << preparation_file.rdbuf();
+    preparation_file.close();
+    const std::string preparation_script=preparation_text.str();
+    const std::size_t failure_check=preparation_script.find(
+        "failed_checks=$(awk");
+    const std::size_t success_marker=preparation_script.find(
+        "touch \"$case_dir/.openfoam_regions_prepared\"");
+    assert(failure_check != std::string::npos);
+    assert(success_marker != std::string::npos);
+    assert(failure_check < success_marker);
+    assert(preparation_script.find("unexpected_diagnostics") !=
+           std::string::npos);
+    assert(preparation_script.find(
+        ".openfoam_mesh_determinant_warning") != std::string::npos);
+    assert(preparation_script.find(
+        "failed_checks > determinant_failures") != std::string::npos);
+    assert(preparation_script.find("exit 1") != std::string::npos);
     assert(std::filesystem::is_regular_file(case_path/"run_cht.sh"));
     assert(std::filesystem::is_regular_file(case_path/"run_parallel.sh"));
     {

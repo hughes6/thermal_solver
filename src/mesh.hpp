@@ -1358,6 +1358,45 @@ public:
                     cell.set_flow_source(0.0);
                     cell.set_state(Cell::State::Vent);
                     cell.set_vent_conductance(C_per_cell);
+
+                    // A component vent represents an opening through the
+                    // chassis, not a one-cell surface coating. Carve the
+                    // remaining wall cells along the inward normal until the
+                    // already-stamped internal air cavity is reached. Leaving
+                    // those cells solid both blocks the flow physically and
+                    // creates one-cell solid skins that fail OpenFOAM's cell
+                    // determinant/connectivity check.
+                    const double component_center[3]{
+                        x+0.5*c.get_width_m(),
+                        y+0.5*c.get_depth_m(),
+                        z+0.5*c.get_height_m()};
+                    const double vent_center[3]{cx,cy,cz};
+                    const int normal_axis =
+                        ay >= ax && ay >= az ? 1 : (az >= ax ? 2 : 0);
+                    const int inward_step =
+                        component_center[normal_axis] >=
+                                vent_center[normal_axis]
+                            ? 1 : -1;
+                    int cursor[3]{i,j,k};
+                    while(true) {
+                        cursor[normal_axis] += inward_step;
+                        if(cursor[0] < mx || cursor[0] >= mx1 ||
+                           cursor[1] < my || cursor[1] >= my1 ||
+                           cursor[2] < mz || cursor[2] >= mz1)
+                            break;
+                        Cell& wall_cell=at(cursor[0],cursor[1],cursor[2]);
+                        if(wall_cell.is_fluid()) break;
+                        wall_cell.set_T(env.get_T_ambient());
+                        wall_cell.set_rho(env.get_rho());
+                        wall_cell.set_cp(env.get_cp());
+                        wall_cell.set_k(env.get_k());
+                        wall_cell.set_mu(env.get_mu());
+                        wall_cell.set_pr(env.get_pr());
+                        wall_cell.set_qdot(0.0);
+                        wall_cell.set_h(0.0);
+                        wall_cell.set_flow_source(0.0);
+                        wall_cell.set_state(Cell::State::Air);
+                    }
                 }
 
             }
