@@ -117,9 +117,15 @@ int main(int argc, char *argv[])
     }
 
     tracer.write();
+    const surfaceScalarField faceTracer(fvc::interpolate(tracer));
     forAll(mesh.cellZones(), zonei)
     {
         const cellZone& zone = mesh.cellZones()[zonei];
+        boolList inZone(mesh.nCells(), false);
+        forAll(zone, i)
+        {
+            inZone[zone[i]] = true;
+        }
         scalar weighted = 0;
         scalar volume = 0;
         forAll(zone, i)
@@ -132,6 +138,47 @@ int main(int argc, char *argv[])
         reduce(volume, sumOp<scalar>());
         Info<< "ZONE_AVERAGE," << zone.name() << ','
             << (volume > VSMALL ? weighted/volume : 0) << nl;
+
+        scalar incomingMass = 0;
+        scalar incomingTracerMass = 0;
+        const labelUList& owner = mesh.faceOwner();
+        const labelUList& neighbour = mesh.faceNeighbour();
+        forAll(neighbour, facei)
+        {
+            if (inZone[owner[facei]] == inZone[neighbour[facei]])
+            {
+                continue;
+            }
+            const scalar flux = phi[facei];
+            const bool entersZone =
+                (inZone[neighbour[facei]] && flux > 0)
+             || (inZone[owner[facei]] && flux < 0);
+            if (entersZone)
+            {
+                incomingMass += mag(flux);
+                incomingTracerMass += mag(flux)*faceTracer[facei];
+            }
+        }
+        forAll(mesh.boundary(), patchi)
+        {
+            const fvPatch& patch = mesh.boundary()[patchi];
+            forAll(patch, patchFacei)
+            {
+                const label celli = patch.faceCells()[patchFacei];
+                const scalar flux = phi.boundaryField()[patchi][patchFacei];
+                if (inZone[celli] && flux < 0)
+                {
+                    incomingMass += mag(flux);
+                    incomingTracerMass +=
+                        mag(flux)*faceTracer.boundaryField()[patchi][patchFacei];
+                }
+            }
+        }
+        reduce(incomingMass, sumOp<scalar>());
+        reduce(incomingTracerMass, sumOp<scalar>());
+        Info<< "ZONE_MASS_INLET," << zone.name() << ','
+            << (incomingMass > VSMALL ? incomingTracerMass/incomingMass : 0)
+            << ',' << incomingMass << nl;
     }
     Info<< "Source zone: " << sourceName << nl
         << "Iterations: " << iteration << nl

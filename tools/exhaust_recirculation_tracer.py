@@ -14,6 +14,7 @@ from pathlib import Path
 
 ZONE_RE = re.compile(r"^ZONE_AVERAGE,([^,\r\n]+),([^,\r\n]+)$", re.MULTILINE)
 CHANGE_RE = re.compile(r"^Final max change:\s*(\S+)", re.MULTILINE)
+MASS_RE = re.compile(r"^ZONE_MASS_INLET,([^,\r\n]+),([^,\r\n]+),([^,\r\n]+)$", re.MULTILINE)
 
 
 @dataclass(frozen=True)
@@ -53,15 +54,16 @@ def numeric_times(case: Path) -> list[tuple[float, Path]]:
     return sorted(result)
 
 
-def parse_solver_output(text: str, tolerance: float) -> tuple[dict[str, float], float]:
+def parse_solver_output(text: str, tolerance: float) -> tuple[dict[str, float], dict[str, tuple[float, float]], float]:
     averages = {name: float(value) for name, value in ZONE_RE.findall(text)}
+    mass_inlets = {name: (float(value), float(flow)) for name, value, flow in MASS_RE.findall(text)}
     match = CHANGE_RE.search(text)
     if not match:
         raise ValueError("Tracer solver did not report final convergence")
     change = float(match.group(1))
     if change > tolerance:
         raise ValueError(f"Tracer did not converge: max change {change:g} > {tolerance:g}")
-    return averages, change
+    return averages, mass_inlets, change
 
 
 def copy_case(source: Path, output: Path, time_dir: Path) -> None:
@@ -85,16 +87,16 @@ def safe_field_name(component_id: int) -> str:
     return f"tracer_source_{component_id}"
 
 
-def write_reports(output: Path, devices: list[Device], matrix: dict[tuple[int, int], float]) -> None:
+def write_reports(output: Path, devices: list[Device], matrix: dict[tuple[int, int], float], intake_flows: dict[int, float]) -> None:
     csv_path = output / "exhaust_recirculation_matrix.csv"
     with csv_path.open("w", newline="", encoding="utf-8") as handle:
         writer = csv.writer(handle)
-        writer.writerow(["source_exhaust", "source_component", "target_intake", "target_component", "tracer_fraction", "percent"])
+        writer.writerow(["source_exhaust", "source_component", "target_intake", "target_component", "mass_weighted_tracer_fraction", "percent", "target_incoming_mass_flow_kg_s"])
         for source in devices:
             for target in devices:
                 value = matrix[source.component_id, target.component_id]
-                writer.writerow([source.exhaust_zone, source.component, target.intake_zone, target.component, f"{value:.9g}", f"{100*value:.6g}"])
-    lines = ["# Exhaust-to-intake recirculation attribution", "", "Values are volume-weighted passive-tracer fractions over each thin intake cell zone.", "They identify source paths but are not a face-integrated mass-flow fraction.", "", "| Exhaust source \\ Intake | " + " | ".join(d.component for d in devices) + " |", "|---|" + "---:|" * len(devices)]
+                writer.writerow([source.exhaust_zone, source.component, target.intake_zone, target.component, f"{value:.9g}", f"{100*value:.6g}", f"{intake_flows[target.component_id]:.9g}"])
+    lines = ["# Exhaust-to-intake recirculation attribution", "", "Values are incoming-mass-flux-weighted passive-tracer fractions across each intake cell-zone boundary.", "", "| Exhaust source \\ Intake | " + " | ".join(d.component for d in devices) + " |", "|---|" + "---:|" * len(devices)]
     for source in devices:
         values = [f"{100*matrix[source.component_id, target.component_id]:.4f}%" for target in devices]
         lines.append(f"| {source.component} | " + " | ".join(values) + " |")
@@ -119,18 +121,25 @@ def main() -> int:
     _, latest = times[-1]
     copy_case(source, output, latest)
     matrix: dict[tuple[int, int], float] = {}
+    intake_flows: dict[int, float] = {}
     for source_device in devices:
         command = [args.solver, "-case", str(output), "-region", "fluid", "-latestTime", "-source-zone", source_device.exhaust_zone, "-field", safe_field_name(source_device.component_id), "-schmidt", str(args.schmidt), "-iterations", str(args.iterations), "-tolerance", str(args.tolerance)]
         result = subprocess.run(command, text=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
         (output / f"log.tracer_source_{source_device.component_id}").write_text(result.stdout, encoding="utf-8")
         if result.returncode:
             raise RuntimeError(f"Tracer solve failed for {source_device.component}: see {output / f'log.tracer_source_{source_device.component_id}'}")
-        averages, _ = parse_solver_output(result.stdout, args.tolerance)
+        _, mass_inlets, _ = parse_solver_output(result.stdout, args.tolerance)
         for target in devices:
-            if target.intake_zone not in averages:
+            if target.intake_zone not in mass_inlets:
                 raise ValueError(f"Missing intake zone {target.intake_zone} in solver output")
-            matrix[source_device.component_id, target.component_id] = averages[target.intake_zone]
-    write_reports(output, devices, matrix)
+            fraction, mass_flow = mass_inlets[target.intake_zone]
+            if mass_flow <= 0:
+                raise ValueError(f"Intake zone {target.intake_zone} has no incoming mass flow")
+            matrix[source_device.component_id, target.component_id] = fraction
+            previous = intake_flows.setdefault(target.component_id, mass_flow)
+            if abs(previous - mass_flow) > max(1e-10, 1e-6*mass_flow):
+                raise ValueError(f"Inconsistent incoming mass flow for {target.intake_zone}")
+    write_reports(output, devices, matrix, intake_flows)
     print(output / "exhaust_recirculation_matrix.csv")
     print(output / "exhaust_recirculation_matrix.md")
     return 0

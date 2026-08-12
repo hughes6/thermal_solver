@@ -1990,13 +1990,19 @@ fields stayed within 0--1 and converged below `1e-9` maximum field change. The
 
 | Exhaust source / Intake | Eaton UPS | Dell R470 | Trenton |
 |---|---:|---:|---:|
-| Eaton UPS | 0.0000% | 1.1683% | 2.1774% |
-| Dell R470 | 0.0001% | 9.2441% | 15.4799% |
-| Trenton | 0.0001% | 25.7389% | 32.3068% |
+| Eaton UPS | 0.0000% | 1.1744% | 2.1158% |
+| Dell R470 | 0.0001% | 9.2344% | 15.1859% |
+| Trenton | 0.0001% | 25.4010% | 32.4304% |
 
-These are volume-weighted tracer fractions over the thin intake cell zones.
-They robustly identify which exhaust source reaches which intake, but they are
-not yet face-integrated mass fractions. The result identifies Trenton exhaust
-as the dominant Dell-intake contaminant and quantifies substantial Dell and
-Trenton self-recirculation without adding multiple transported fields to the
-long thermal solve.
+These are true incoming-mass-flux-weighted tracer fractions, integrated over
+the boundary of each thin intake cell zone. The corresponding intake flows
+were 0.014676 kg/s for Eaton, 0.052811 kg/s for Dell, and 0.039835 kg/s for
+Trenton. The result identifies Trenton exhaust as the dominant Dell-intake
+contaminant and quantifies substantial Dell and Trenton self-recirculation
+without adding multiple transported fields to the long thermal solve.
+
+The earlier volume-weighted proxy differed from the mass-weighted values by at
+most 0.338 percentage points. Turbulent-Schmidt sensitivity runs at 0.5 and
+0.9 preserved every source ranking; the largest shift from one endpoint to the
+other was 0.628 percentage points. The source-attribution conclusion is
+therefore not an artifact of the default `Sc_t = 0.7` choice.

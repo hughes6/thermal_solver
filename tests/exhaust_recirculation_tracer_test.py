@@ -14,13 +14,14 @@ class ExhaustTracerTest(unittest.TestCase):
             self.assertEqual([(d.component, d.intake_zone, d.exhaust_zone) for d in devices], [("A", "intake0", "exhaust0")])
 
     def test_parses_zone_values_and_convergence(self):
-        values, change = parse_solver_output("ZONE_AVERAGE,intake0,0.125\nFinal max change: 9e-10\n", 1e-9)
+        values, mass, change = parse_solver_output("ZONE_AVERAGE,intake0,0.125\nZONE_MASS_INLET,intake0,0.2,0.03\nFinal max change: 9e-10\n", 1e-9)
         self.assertEqual(values["intake0"], 0.125)
+        self.assertEqual(mass["intake0"], (0.2, 0.03))
         self.assertEqual(change, 9e-10)
 
     def test_rejects_unconverged_result(self):
         with self.assertRaisesRegex(ValueError, "did not converge"):
-            parse_solver_output("ZONE_AVERAGE,intake0,0.1\nFinal max change: 2e-7\n", 1e-9)
+            parse_solver_output("ZONE_AVERAGE,intake0,0.1\nZONE_MASS_INLET,intake0,0.1,0.03\nFinal max change: 2e-7\n", 1e-9)
 
 
 if __name__ == "__main__":
