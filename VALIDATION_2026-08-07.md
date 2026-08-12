@@ -2770,3 +2770,25 @@ an empty internal CSV is complete. Explicit historical reconstructed times
 also remain selectable when newer processor checkpoints exist. The CLI help
 correctly describes both storage layouts, and focused tests cover exact center
 mapping, mismatch rejection, outlet pairing, and stale-time non-substitution.
+
+The next complete checkpoint at `3.30350531 s` exercised the new direct
+internal-temperature path in routine use. Whole-fluid velocity movement over
+the retained `0.0983967 s` interval eased from 8.763% to 8.348%, external rack
+air eased from 8.558% to 8.269%, and Dell internal air eased from 17.142% to
+12.943%. The 8.454 m/s maximum remained at the Dell fan bank at
+`(0.461929, 0.268950, 0.229000) m`. Turbulence movement also declined: `k`
+changed 12.421%, `alphat` 9.763%, and `omega` 5.180%. Gauge-invariant pressure
+movement decreased to 0.100 Pa RMS (0.645%).
+
+The boundary operating point remained stable: intake magnitude changed
++0.01854%, Fan 4 was the largest exhaust change at -0.16582%, all nine fans
+remained outward, the vent remained inward, and bidirectional flow remained
+zero. Net sensible rejection was still an intentionally unconverged -3.65 W.
+Direct internal averages at `3.30350531 s` were 293.1580/293.1546 K for Eaton,
+293.1534/293.2171 K for Dell, and 293.1512/293.1546 K for Trenton. Dell's
+defined intake-rise index decreased from 5.34% to 5.12%; Eaton remained
+undefined because its cold-stage rear outlet was cooler than its intake, and
+Trenton's 26.3% ratio still rests on only a 0.0046 K outlet rise. The combined
+trend shows slow spatial wake settling with stable engineering flows and
+physically warming powered equipment, not a reason to bypass the remaining
+air-exchange gate.
