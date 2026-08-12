@@ -8,7 +8,7 @@ $tests = @(
     "pcg_flow_test",
     "advection_subcycling_test",
     "face_wall_test",
-    "model_config_test"
+    "model_config_test",
     "model_runner_tracer_commands_test"
 )
 
