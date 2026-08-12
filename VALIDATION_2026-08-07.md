@@ -2674,3 +2674,16 @@ the rack, showing broader wake-phase motion rather than one fixed Eaton-side
 cell. Despite that field motion, intake magnitude changed only 0.00521%, the
 largest top-fan change was 0.3372%, all directions remained correct, reverse
 flow was zero, and fluid temperature changed only 0.000508 K RMS.
+
+At `3.10671184 s`, the next retained interval increased to 8.700%
+volume-weighted whole-fluid velocity change and 8.545% in external rack air.
+The 10.835 m/s maximum returned to Dell fan-bank cells at
+`(0.451257, 0.285950, 0.229000) m`; the 3.109 m/s external maximum remained
+along the lower left/rear rack boundary at
+`(0.003750, 0.681250, 0.001250) m`. Dell and Trenton internal-air changes were
+15.646% and 13.343%, while fluid temperature changed only 0.000486 K RMS.
+The repeated fan-bank and lower-rack locations support a bounded wake-phase
+interpretation and provide specific targets for a future matched timestep or
+source-smoothing study. No profile limit is changed from these 0.0983967 s
+retained intervals because the generated runner evaluates shorter 0.01 s
+acceptance windows.
