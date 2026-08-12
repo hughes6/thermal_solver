@@ -2250,3 +2250,23 @@ delete this region or invent a KVM exhaust merely to make `checkMesh` report one
 fluid component. Conversely, any additional disconnected fluid component, or
 one whose bounds do not match an intentionally sealed internal-air definition,
 remains a mesh defect requiring investigation.
+
+### Production heat-source audit
+
+The active case's `constant/openfoamExportProperties` and per-region
+`fvOptions` contain the same 13 absolute heat sources. They sum exactly to
+1,545 W:
+
+| Component | Sources | Applied heat |
+|---|---:|---:|
+| Eaton UPS | 3 | 150 W |
+| Dell R470 | 4 | 950 W |
+| Trenton 3U | 4 | 425 W |
+| Fanless KVM | 2 | 20 W |
+
+The Dell power-supply source is the intended reduced 50 W value rather than
+the former 100 W placeholder. Its selected volume is 0.0003808 m3 and its
+volumetric generation is 131,303 W/m3, well below the Dell CPU/memory zone's
+598,086 W/m3. The long run is therefore validating the revised power
+allocation; no heat source is missing or duplicated, and the small PSU region
+is no longer predisposed to dominate solely through its source density.
