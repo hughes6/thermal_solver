@@ -163,9 +163,11 @@ def processor_checkpoints(
     time_sets = [numeric_directories(processor) for processor in processors]
     time_sets_aligned = all(times == time_sets[0] for times in time_sets[1:])
     latest_file_counts: list[int] = []
+    latest_file_sets: list[set[str]] = []
     for processor, times in zip(processors, time_sets):
         if not times:
             latest_file_counts.append(0)
+            latest_file_sets.append(set())
             continue
         latest_time = times[-1]
         latest_name = next(
@@ -175,14 +177,20 @@ def processor_checkpoints(
             and _is_float(child.name)
             and float(child.name) == latest_time
         )
-        latest_file_counts.append(
-            sum(1 for child in latest_name.rglob("*") if child.is_file())
-        )
-    file_counts_aligned = len(set(latest_file_counts)) <= 1
+        files = {
+            child.relative_to(latest_name).as_posix()
+            for child in latest_name.rglob("*")
+            if child.is_file()
+        }
+        latest_file_sets.append(files)
+        latest_file_counts.append(len(files))
+    file_manifests_aligned = all(
+        files == latest_file_sets[0] for files in latest_file_sets[1:]
+    )
     return (
         time_sets[0],
         len(processors),
-        time_sets_aligned and file_counts_aligned,
+        time_sets_aligned and file_manifests_aligned,
         latest_file_counts,
     )
 

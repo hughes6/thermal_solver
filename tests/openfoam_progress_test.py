@@ -136,6 +136,19 @@ class OpenFoamProgressTest(unittest.TestCase):
                 processor_checkpoints(case), ([1.5], 2, False, [2, 1])
             )
 
+    def test_detects_equal_count_but_different_parallel_manifests(self):
+        with tempfile.TemporaryDirectory() as directory:
+            case = Path(directory)
+            first = case / "processor0" / "1.5" / "fluid"
+            second = case / "processor1" / "1.5" / "fluid"
+            first.mkdir(parents=True)
+            second.mkdir(parents=True)
+            (first / "T").write_text("field")
+            (second / "U").write_text("field")
+            self.assertEqual(
+                processor_checkpoints(case), ([1.5], 2, False, [1, 1])
+            )
+
     def test_selects_latest_log_and_formats_duration(self):
         with tempfile.TemporaryDirectory() as directory:
             case = Path(directory)
