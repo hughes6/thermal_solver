@@ -237,6 +237,13 @@ def applied_power(case: Path) -> float:
     return sum(values)
 
 
+def expected_fluid_regions(case: Path) -> int:
+    properties_path = case / "constant" / "openfoamExportProperties"
+    properties = properties_path.read_text(encoding="utf-8", errors="replace")
+    match = re.search(r"\bexpectedConnectedFluidRegions\s+(\d+)\s*;", properties)
+    return int(match.group(1)) if match else 1
+
+
 def signed_weighted_average(values: list[float], weights: list[float]) -> float:
     if len(values) == 1:
         return values[0]
@@ -282,8 +289,10 @@ def audit_case(
     energy_tolerance: float,
     mass_tolerance: float,
     fluent_tolerance_k: float,
-    expected_connected_fluid_regions: int = 1,
+    expected_connected_fluid_regions: int | None = None,
 ) -> ValidationResult:
+    if expected_connected_fluid_regions is None:
+        expected_connected_fluid_regions = expected_fluid_regions(case)
     time_s, result_paths = latest_result_paths(case)
     missing = [
         str(path / "fluid" / field)
@@ -436,8 +445,8 @@ def main() -> None:
     parser.add_argument(
         "--expected-connected-fluid-regions",
         type=int,
-        default=1,
-        help="expected mesh components, including intentional sealed air volumes",
+        help=("expected mesh components, including intentional sealed air volumes; "
+              "defaults to exported metadata or 1 for legacy cases"),
     )
     parser.add_argument("--json", type=Path)
     parser.add_argument("--markdown", type=Path)

@@ -5,6 +5,7 @@ from pathlib import Path
 
 from tools.validate_openfoam_case import (
     internal_values,
+    expected_fluid_regions,
     latest_result_paths,
     patch_values,
     signed_weighted_average,
@@ -70,6 +71,16 @@ class BinaryPatchParsingTests(unittest.TestCase):
 
 
 class LatestResultTests(unittest.TestCase):
+    def test_expected_topology_reads_export_metadata(self):
+        with tempfile.TemporaryDirectory() as directory:
+            case = Path(directory)
+            constant = case / "constant"
+            constant.mkdir()
+            (constant / "openfoamExportProperties").write_text(
+                "expectedConnectedFluidRegions 2;\n"
+            )
+            self.assertEqual(expected_fluid_regions(case), 2)
+
     def test_decomposed_common_checkpoint_wins_over_stale_reconstructed_time(self):
         with tempfile.TemporaryDirectory() as directory:
             case = Path(directory)

@@ -200,6 +200,14 @@ int main(int argc, char** argv) {
             "homogeneous_heater_load_1"));
     assert(std::filesystem::is_regular_file(
         case_path/"constant"/"openfoamExportProperties"));
+    {
+        std::ifstream properties_file(
+            case_path/"constant"/"openfoamExportProperties");
+        std::ostringstream properties_text;
+        properties_text << properties_file.rdbuf();
+        assert(properties_text.str().find(
+            "expectedConnectedFluidRegions 1;") != std::string::npos);
+    }
     assert(std::filesystem::is_regular_file(
         case_path/"0"/"heatSourceMask_0"));
     assert(std::filesystem::is_regular_file(

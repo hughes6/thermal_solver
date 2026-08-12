@@ -290,6 +290,57 @@ public:
         return connected_volume;
     }
 
+    static std::size_t connected_fluid_region_count(const Mesh& mesh) {
+        const auto& metadata=mesh.get_openfoam_cell_metadata();
+        if(mesh.get_cells().size()!=metadata.size())
+            throw std::logic_error(
+                "OpenFoamExporter: missing cell metadata while counting "
+                "connected fluid regions.");
+        const int ny=mesh.get_ny();
+        const int nz=mesh.get_nz();
+        const std::array<std::array<int,3>,6> offsets{{
+            {{-1,0,0}},{{1,0,0}},{{0,-1,0}},
+            {{0,1,0}},{{0,0,-1}},{{0,0,1}}
+        }};
+        std::vector<unsigned char> visited(metadata.size(),0);
+        std::size_t regions=0;
+        for(std::size_t seed=0;seed<metadata.size();++seed) {
+            if(visited[seed] || metadata[seed].region_type!=
+               Mesh::OpenFoamCellMetadata::RegionType::Fluid)
+                continue;
+            ++regions;
+            visited[seed]=1;
+            std::vector<std::size_t> frontier{seed};
+            for(std::size_t cursor=0;cursor<frontier.size();++cursor) {
+                const std::size_t cell=frontier[cursor];
+                const int x=static_cast<int>(cell/
+                    static_cast<std::size_t>(ny*nz));
+                const std::size_t remainder=
+                    cell%static_cast<std::size_t>(ny*nz);
+                const int y=static_cast<int>(
+                    remainder/static_cast<std::size_t>(nz));
+                const int z=static_cast<int>(
+                    remainder%static_cast<std::size_t>(nz));
+                for(const auto& offset : offsets) {
+                    const int next_x=x+offset[0];
+                    const int next_y=y+offset[1];
+                    const int next_z=z+offset[2];
+                    if(next_x<0 || next_x>=mesh.get_nx() ||
+                       next_y<0 || next_y>=ny || next_z<0 || next_z>=nz ||
+                       mesh.wall_between(x,y,z,next_x,next_y,next_z)!=nullptr)
+                        continue;
+                    const std::size_t next=mesh.idx(next_x,next_y,next_z);
+                    if(visited[next] || metadata[next].region_type!=
+                       Mesh::OpenFoamCellMetadata::RegionType::Fluid)
+                        continue;
+                    visited[next]=1;
+                    frontier.push_back(next);
+                }
+            }
+        }
+        return regions;
+    }
+
 private:
     static bool is_openfoam_time_name(const std::string& name) {
         if(name.empty() || name=="0") return false;
@@ -961,7 +1012,10 @@ private:
         write_header(
             properties,"dictionary","openfoamExportProperties","constant");
         properties.precision(17);
-        properties << "heatSources\n(\n";
+        properties
+            << "expectedConnectedFluidRegions "
+            << connected_fluid_region_count(mesh) << ";\n\n"
+            << "heatSources\n(\n";
 
         for(const auto& source : sources) {
             std::vector<std::size_t> labels;

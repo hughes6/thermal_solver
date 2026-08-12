@@ -2387,3 +2387,13 @@ temperature changed only 0.000636 K RMS. The corrected audit measured
 imbalance to 0.00060%. Energy transport remained intentionally unconverged at
 `-4.37 W` versus 1545 W applied. This supports continued airflow settling and
 confirms that a sound mass balance alone is not thermal acceptance.
+
+Future exports now write `expectedConnectedFluidRegions` into
+`constant/openfoamExportProperties`, and the numerical validator consumes that
+value automatically (legacy cases still default to one, with a CLI override).
+The exporter counts fluid components across face-connected cells while treating
+explicit internal walls as barriers. The focused sealed-cavity fixture proves
+that the count changes from one to two when its final three inward faces are
+closed; the standard export fixture emits one. This makes topology validation
+self-describing and prevents both false failures for intentional sealed air and
+false passes caused by globally disabling connectivity checks.

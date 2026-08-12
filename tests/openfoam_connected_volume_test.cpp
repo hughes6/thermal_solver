@@ -27,6 +27,7 @@ int main() {
     const double initially_connected=
         OpenFoamExporter::ambient_connected_fluid_volume(mesh);
     assert(std::abs(initially_connected-0.035)<1e-12);
+    assert(OpenFoamExporter::connected_fluid_region_count(mesh)==1);
 
     // The corner cell is bounded by rack walls on its positive faces. Add
     // walls on its three inward faces to create a sealed fluid cavity.
@@ -37,5 +38,6 @@ int main() {
     const double ambient_connected=
         OpenFoamExporter::ambient_connected_fluid_volume(mesh);
     assert(std::abs(ambient_connected-0.034)<1e-12);
+    assert(OpenFoamExporter::connected_fluid_region_count(mesh)==2);
     assert(mesh.at(3,2,2).is_fluid());
 }
