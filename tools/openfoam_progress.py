@@ -13,6 +13,22 @@ EXECUTION_RE = re.compile(r"^ExecutionTime = ([0-9.eE+-]+) s")
 CONTROL_TIME_RE = re.compile(
     r"^\s*(startTime|endTime)\s+([0-9.eE+-]+)\s*;"
 )
+COURANT_RE = re.compile(
+    r"Region: fluid Courant Number mean: ([0-9.eE+-]+) max: ([0-9.eE+-]+)"
+)
+CONTINUITY_RE = re.compile(
+    r"time step continuity errors \(fluid\):.*cumulative = ([0-9.eE+-]+)"
+)
+FATAL_SIGNATURES = (
+    "--> FOAM FATAL ERROR",
+    "Foam::sigFpe::sigHandler",
+    "Segmentation fault",
+    "MPI_ABORT",
+    "Killed",
+)
+STAGE_MARKER_RE = re.compile(
+    r"^[A-Za-z].*: t=[0-9.eE+-]+ -> [0-9.eE+-]+$"
+)
 
 
 def read_samples(log_path: Path) -> list[tuple[float, float]]:
@@ -29,6 +45,29 @@ def read_samples(log_path: Path) -> list[tuple[float, float]]:
             if match and current_time is not None:
                 samples.append((current_time, float(match.group(1))))
     return samples
+
+
+def read_health(log_path: Path) -> tuple[float | None, float | None, list[str]]:
+    maximum_courant: float | None = None
+    cumulative_continuity: float | None = None
+    signatures: list[str] = []
+    with log_path.open("r", encoding="utf-8", errors="ignore") as stream:
+        for line in stream:
+            if STAGE_MARKER_RE.match(line.strip()):
+                maximum_courant = None
+                cumulative_continuity = None
+                signatures = []
+                continue
+            match = COURANT_RE.search(line)
+            if match:
+                maximum_courant = float(match.group(2))
+            match = CONTINUITY_RE.search(line)
+            if match:
+                cumulative_continuity = float(match.group(1))
+            for signature in FATAL_SIGNATURES:
+                if signature in line and signature not in signatures:
+                    signatures.append(signature)
+    return maximum_courant, cumulative_continuity, signatures
 
 
 def recent_slope(samples: list[tuple[float, float]], window: int) -> float:
@@ -116,6 +155,7 @@ def main() -> int:
     end_time = args.end_time if args.end_time is not None else configured_end_time
     remaining_simulated = max(0.0, end_time - current_time)
     checkpoints = numeric_directories(case_directory / "processor0")
+    maximum_courant, cumulative_continuity, fatal_signatures = read_health(log_path)
 
     print(f"Case: {case_directory}")
     print(f"Log: {log_path}")
@@ -127,6 +167,14 @@ def main() -> int:
     print(f"Recent rate: {slope:.1f} wall s / simulated s")
     print(f"Solver execution time: {format_duration(execution_time)}")
     print(f"Estimated remaining wall time: {format_duration(remaining_simulated * slope)}")
+    if maximum_courant is not None:
+        print(f"Latest fluid max Courant: {maximum_courant:.6g}")
+    if cumulative_continuity is not None:
+        print(f"Latest cumulative continuity error: {cumulative_continuity:.6g}")
+    print(
+        "Fatal signatures: "
+        + (", ".join(fatal_signatures) if fatal_signatures else "none")
+    )
     if checkpoints:
         print(
             f"Processor checkpoints: {len(checkpoints)} "
