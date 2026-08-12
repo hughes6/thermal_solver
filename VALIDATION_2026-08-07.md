@@ -2270,3 +2270,19 @@ volumetric generation is 131,303 W/m3, well below the Dell CPU/memory zone's
 598,086 W/m3. The long run is therefore validating the revised power
 allocation; no heat source is missing or duplicated, and the small PSU region
 is no longer predisposed to dominate solely through its source density.
+
+### Live rolling-purge ceiling
+
+The production full-exchange stage subsequently wrote checkpoints at
+`0.64679346938775251`, `0.74519020408162717`, and
+`0.84358693877550184 s`. At the fourth write made by this solver invocation,
+OpenFOAM removed its oldest invocation-local checkpoint
+(`0.54839673469387784 s`) on all four ranks. Each rank retained exactly the same
+six directories: three inherited stage-start directories plus the newest three
+rolling writes. The new checkpoint contained all 29 expected files per rank,
+including every fluid/turbulence restart field and all four solid temperatures.
+
+This proves the live ceiling rather than merely inferring it from
+`purgeWrite`: during one continuous stage, storage is bounded at the inherited
+history plus `saved_time_directories`; after solver completion, the runner's
+explicit prune reduces the combined history to `saved_time_directories`.
