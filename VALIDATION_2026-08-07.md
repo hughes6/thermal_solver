@@ -1856,3 +1856,53 @@ detected gradual redistribution across multiple 2,400 s thermal intervals.
 The 18,000 s endpoint had rebuilt only checkpoint 1 of the required two, so it
 was not labelled fully coupled-converged. Continuing the preserved case with
 the documented 100,000 s / 10,000 s refresh workflow is therefore warranted.
+
+## Long screening continuation and convergence-reference fix (2026-08-11)
+
+The preserved case was continued from 18,000.01 s with
+`--multirate 100000 10000`. Each 10,000 s frozen-flow interval took roughly
+329--482 wall-clock seconds. Thermal drift remained below 0.014 K/300 s after
+30,000 s, while each live 0.01 s airflow refresh required roughly 109--166
+seconds and retained mass imbalance below 0.03% and device-flow change below
+0.17%. This validates the longer refresh interval for a thermally settled rack.
+
+The continuation exposed a convergence-state defect. A validated checkpoint
+incremented the thermal streak but did not advance the accepted airflow
+reference until the entire required streak completed. Consequently, the next
+checkpoint compared its field across two refresh intervals. This rack changes
+about 2% RMS per 10,000 s interval, so two individually acceptable intervals
+accumulated to about 4%, exceeded the 3% screening long-lag limit, and reset
+the streak. Two consecutive checkpoints were therefore structurally
+unreachable even though every one-interval comparison passed.
+
+The runner now records the current airflow reference after every fully
+validated thermal/airflow checkpoint, before testing the required streak
+count. It still rejects and rebases any material single-interval shift. An
+exporter regression asserts this ordering. The active case was stopped only
+after its completed 60,000.02 s rebase and resumed with the corrected script.
+Live evidence then showed:
+
+| Checkpoint | Peak/average thermal drift (K/300 s) | Mass imbalance | Device change | One-interval airflow drift | Result |
+|---|---:|---:|---:|---:|---|
+| 70,000.01 s | 0.005451 / 0.005394 | 0.01491% | 0.13380% | 1.95519% | 1/2; reference advanced |
+| 80,000.01 s | 0.013188 / 0.005670 | 0.01558% | 0.09296% | 1.98922% | 2/2; coupled converged |
+
+The solver stopped early at 80,000.01 s rather than continuing to the requested
+100,000 s. Terminal reporting and reconstruction completed normally. The
+final rack-level comparison is:
+
+| Metric | 18,000.01 s | Converged 80,000.01 s | Change |
+|---|---:|---:|---:|
+| External exhaust mass flow | 0.292239 kg/s | 0.295190 kg/s | +1.010% |
+| Aggregate exhaust temperature | 298.3844 K | 298.3302 K | -0.0542 K |
+| Net sensible heat rejection | 1537.35 W | 1536.79 W | -0.56 W |
+| Heat-rejection fraction | 99.5047% | 99.4686% | -0.0361 percentage points |
+| External thermal re-ingestion | 0.0000 | 0.0000 | none |
+| Maximum equipment air-rise index | 0.49279 | 0.52835 | +0.03556 |
+
+The small rack-level changes confirm that the 18,000 s result was already a
+good engineering estimate, while the corrected 80,000 s endpoint provides the
+formal two-checkpoint coupled-convergence proof. The equipment air-rise index
+continues to show meaningful internal hot-air exposure, especially for the
+Trenton, but remains a temperature indicator rather than exhaust-source
+attribution.

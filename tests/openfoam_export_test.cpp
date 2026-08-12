@@ -413,8 +413,16 @@ int main(int argc, char** argv) {
             "summary \"run_complete mode=$mode reconstructedTime=$reconstruct_time") !=
                std::string::npos);
         assert(text.str().find(
-            "Rebased accepted airflow reference at converged checkpoint") !=
+            "Advanced accepted airflow reference after validated checkpoint") !=
                 std::string::npos);
+        const auto accepted_checkpoint = text.str().find(
+            "summary \"checkpoint time=$current streak=$streak");
+        const auto advanced_reference = text.str().find(
+            "reason=validatedCheckpoint");
+        const auto completion_gate = text.str().find(
+            "if (( streak >= ");
+        assert(accepted_checkpoint < advanced_reference);
+        assert(advanced_reference < completion_gate);
         assert(text.str().find("write_final_reports()") != std::string::npos);
         assert(text.str().find(
             "writeControl[[:space:]]+)[^;]+;") != std::string::npos);
