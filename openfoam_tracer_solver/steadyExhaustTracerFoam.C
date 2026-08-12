@@ -42,6 +42,7 @@ int main(int argc, char *argv[])
     (
         IOobject(regionName, runTime.timeName(), runTime, IOobject::MUST_READ)
     );
+    Info<< "MESH_SIZE," << mesh.nCells() << ',' << mesh.nFaces() << nl;
     volScalarField rho
     (
         IOobject("rho", runTime.timeName(), mesh, IOobject::MUST_READ, IOobject::NO_WRITE),

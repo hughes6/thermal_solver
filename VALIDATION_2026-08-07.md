@@ -2006,3 +2006,46 @@ most 0.338 percentage points. Turbulent-Schmidt sensitivity runs at 0.5 and
 0.9 preserved every source ranking; the largest shift from one endpoint to the
 other was 0.628 percentage points. The source-attribution conclusion is
 therefore not an artifact of the default `Sc_t = 0.7` choice.
+
+### Screening versus in-depth source attribution
+
+The same fixed-flow tracer workflow was run against the independently
+converged 284,396-cell in-depth endpoint at 16,800.01 s. The preserved legacy
+case predates `internal_airflow_devices.csv`, so the driver gained an explicit
+`--device-metadata` override. It copies the selected CSV into the derivative as
+provenance and leaves the preserved result untouched. The mesh contained the
+same six internal device-zone names as the current model.
+
+This comparison exposed a scalar-solver defect in the initial driver. It had
+expanded the existing `(U|h|k|omega)` solver regex to include tracers, which
+also inherited `relTol 0.1`. Screening happened to settle after 63--138 outer
+iterations, but the in-depth Eaton tracer oscillated around `1e-3` field change
+and failed its 500-iteration limit. Derivatives now receive a separate
+`"tracer.*"` PBiCGStab/DILU entry with `tolerance 1e-12` and `relTol 0`.
+Both meshes subsequently converged every source in two outer iterations. The
+three scalar solves took 6.1 seconds total on screening and 18.0 seconds on
+in-depth, excluding case-copy/startup overhead.
+
+| Exhaust source / Intake | Screening 177,064 cells | In-depth 284,396 cells | In-depth minus screening |
+|---|---:|---:|---:|
+| Eaton / Eaton | 0.0000% | 0.4900% | +0.4900 pp |
+| Eaton / Dell | 1.1763% | 1.7684% | +0.5920 pp |
+| Eaton / Trenton | 2.1196% | 3.2202% | +1.1006 pp |
+| Dell / Dell | 9.2344% | 10.1030% | +0.8686 pp |
+| Dell / Trenton | 15.1860% | 17.5818% | +2.3958 pp |
+| Trenton / Dell | 25.4083% | 18.1400% | -7.2683 pp |
+| Trenton / Trenton | 32.4377% | 29.9792% | -2.4585 pp |
+
+The component intake mass flows still agree closely: screening differs from
+in-depth by +0.988% for Eaton, -0.136% for Dell, and +0.381% for Trenton. The
+source split is more mesh-sensitive because it depends on local mixing and jet
+paths. In-depth `Sc_t = 0.5--0.9` sensitivity changed any entry by at most
+0.719 percentage points, far less than the 7.268-point Trenton-to-Dell mesh
+difference. Therefore screening is appropriate for detecting and ranking
+recirculation paths, but quantitative source fractions should use the in-depth
+mesh or carry a mesh-discretization uncertainty.
+
+Every new report now includes a JSON provenance file with the source case and
+exact time, device metadata path, mesh cells/faces, Schmidt number, convergence
+settings, per-source runtime, and final field change. This prevents attribution
+results from being silently associated with a stale endpoint or another mesh.

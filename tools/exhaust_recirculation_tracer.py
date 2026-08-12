@@ -5,9 +5,11 @@ from __future__ import annotations
 
 import argparse
 import csv
+import json
 import re
 import shutil
 import subprocess
+import time
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -15,6 +17,7 @@ from pathlib import Path
 ZONE_RE = re.compile(r"^ZONE_AVERAGE,([^,\r\n]+),([^,\r\n]+)$", re.MULTILINE)
 CHANGE_RE = re.compile(r"^Final max change:\s*(\S+)", re.MULTILINE)
 MASS_RE = re.compile(r"^ZONE_MASS_INLET,([^,\r\n]+),([^,\r\n]+),([^,\r\n]+)$", re.MULTILINE)
+MESH_RE = re.compile(r"^MESH_SIZE,(\d+),(\d+)$", re.MULTILINE)
 
 
 @dataclass(frozen=True)
@@ -54,6 +57,22 @@ def numeric_times(case: Path) -> list[tuple[float, Path]]:
     return sorted(result)
 
 
+def add_tracer_solver(solution: str) -> str:
+    match = re.search(r"\bsolvers\s*\{", solution)
+    if not match:
+        raise ValueError("fvSolution has no solvers dictionary")
+    tracer = '''
+    "tracer.*"
+    {
+        solver          PBiCGStab;
+        preconditioner  DILU;
+        tolerance       1e-12;
+        relTol          0;
+    }
+'''
+    return solution[:match.end()] + tracer + solution[match.end():]
+
+
 def parse_solver_output(text: str, tolerance: float) -> tuple[dict[str, float], dict[str, tuple[float, float]], float]:
     averages = {name: float(value) for name, value in ZONE_RE.findall(text)}
     mass_inlets = {name: (float(value), float(flow)) for name, value, flow in MASS_RE.findall(text)}
@@ -66,7 +85,7 @@ def parse_solver_output(text: str, tolerance: float) -> tuple[dict[str, float], 
     return averages, mass_inlets, change
 
 
-def copy_case(source: Path, output: Path, time_dir: Path) -> None:
+def copy_case(source: Path, output: Path, time_dir: Path, metadata: Path) -> None:
     if output.exists():
         raise FileExistsError(f"Refusing to overwrite existing output: {output}")
     (output / "constant" / "fluid").mkdir(parents=True)
@@ -77,17 +96,17 @@ def copy_case(source: Path, output: Path, time_dir: Path) -> None:
         shutil.copy2(time_dir / "fluid" / field, output / time_dir.name / "fluid" / field)
     shutil.copy2(source / "system" / "controlDict", output / "system" / "controlDict")
     shutil.copy2(source / "system" / "fluid" / "fvSchemes", output / "system" / "fluid" / "fvSchemes")
-    solution = (source / "system" / "fluid" / "fvSolution").read_text(encoding="utf-8")
-    solution = solution.replace("(U|h|k|omega)", "(U|h|k|omega|tracer.*)")
+    solution = add_tracer_solver(
+        (source / "system" / "fluid" / "fvSolution").read_text(encoding="utf-8"))
     (output / "system" / "fluid" / "fvSolution").write_text(solution, encoding="utf-8")
-    shutil.copy2(source / "internal_airflow_devices.csv", output / "internal_airflow_devices.csv")
+    shutil.copy2(metadata, output / "internal_airflow_devices.csv")
 
 
 def safe_field_name(component_id: int) -> str:
     return f"tracer_source_{component_id}"
 
 
-def write_reports(output: Path, devices: list[Device], matrix: dict[tuple[int, int], float], intake_flows: dict[int, float]) -> None:
+def write_reports(output: Path, devices: list[Device], matrix: dict[tuple[int, int], float], intake_flows: dict[int, float], metadata: dict) -> None:
     csv_path = output / "exhaust_recirculation_matrix.csv"
     with csv_path.open("w", newline="", encoding="utf-8") as handle:
         writer = csv.writer(handle)
@@ -96,11 +115,13 @@ def write_reports(output: Path, devices: list[Device], matrix: dict[tuple[int, i
             for target in devices:
                 value = matrix[source.component_id, target.component_id]
                 writer.writerow([source.exhaust_zone, source.component, target.intake_zone, target.component, f"{value:.9g}", f"{100*value:.6g}", f"{intake_flows[target.component_id]:.9g}"])
-    lines = ["# Exhaust-to-intake recirculation attribution", "", "Values are incoming-mass-flux-weighted passive-tracer fractions across each intake cell-zone boundary.", "", "| Exhaust source \\ Intake | " + " | ".join(d.component for d in devices) + " |", "|---|" + "---:|" * len(devices)]
+    lines = ["# Exhaust-to-intake recirculation attribution", "", f"Source: `{metadata['source_case']}` at `{metadata['source_time']}` s", f"Mesh: {metadata['mesh_cells']} cells, {metadata['mesh_faces']} faces; Sc_t = {metadata['turbulent_schmidt']}", "", "Values are incoming-mass-flux-weighted passive-tracer fractions across each intake cell-zone boundary.", "", "| Exhaust source \\ Intake | " + " | ".join(d.component for d in devices) + " |", "|---|" + "---:|" * len(devices)]
     for source in devices:
         values = [f"{100*matrix[source.component_id, target.component_id]:.4f}%" for target in devices]
         lines.append(f"| {source.component} | " + " | ".join(values) + " |")
     (output / "exhaust_recirculation_matrix.md").write_text("\n".join(lines) + "\n", encoding="utf-8")
+    (output / "exhaust_recirculation_metadata.json").write_text(
+        json.dumps(metadata, indent=2) + "\n", encoding="utf-8")
 
 
 def main() -> int:
@@ -108,27 +129,51 @@ def main() -> int:
     parser.add_argument("source_case", type=Path)
     parser.add_argument("output_case", type=Path)
     parser.add_argument("--solver", default="steadyExhaustTracerFoam")
+    parser.add_argument("--device-metadata", type=Path,
+                        help="device CSV override for a legacy source case")
     parser.add_argument("--schmidt", type=float, default=0.7)
     parser.add_argument("--iterations", type=int, default=500)
     parser.add_argument("--tolerance", type=float, default=1e-9)
     args = parser.parse_args()
     source = args.source_case.resolve()
     output = args.output_case.resolve()
-    devices = load_devices(source / "internal_airflow_devices.csv")
+    metadata = (args.device_metadata.resolve() if args.device_metadata
+                else source / "internal_airflow_devices.csv")
+    if not metadata.is_file():
+        raise SystemExit(
+            f"Missing device metadata: {metadata}. Supply --device-metadata "
+            "for a legacy exported case.")
+    devices = load_devices(metadata)
     times = [(value, path) for value, path in numeric_times(source) if all((path / "fluid" / field).is_file() for field in ("rho", "phi", "nut"))]
     if not times:
         raise SystemExit("No reconstructed time contains fluid/rho, fluid/phi, and fluid/nut")
     _, latest = times[-1]
-    copy_case(source, output, latest)
+    copy_case(source, output, latest, metadata)
     matrix: dict[tuple[int, int], float] = {}
     intake_flows: dict[int, float] = {}
+    solve_records = []
+    mesh_size = None
     for source_device in devices:
         command = [args.solver, "-case", str(output), "-region", "fluid", "-latestTime", "-source-zone", source_device.exhaust_zone, "-field", safe_field_name(source_device.component_id), "-schmidt", str(args.schmidt), "-iterations", str(args.iterations), "-tolerance", str(args.tolerance)]
+        started = time.perf_counter()
         result = subprocess.run(command, text=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+        elapsed = time.perf_counter() - started
         (output / f"log.tracer_source_{source_device.component_id}").write_text(result.stdout, encoding="utf-8")
         if result.returncode:
             raise RuntimeError(f"Tracer solve failed for {source_device.component}: see {output / f'log.tracer_source_{source_device.component_id}'}")
-        _, mass_inlets, _ = parse_solver_output(result.stdout, args.tolerance)
+        _, mass_inlets, change = parse_solver_output(result.stdout, args.tolerance)
+        mesh_match = MESH_RE.search(result.stdout)
+        if not mesh_match:
+            raise ValueError("Tracer solver did not report mesh size")
+        current_mesh = (int(mesh_match.group(1)), int(mesh_match.group(2)))
+        if mesh_size is not None and current_mesh != mesh_size:
+            raise ValueError("Mesh size changed between tracer source solves")
+        mesh_size = current_mesh
+        solve_records.append({"component_id": source_device.component_id,
+                              "component": source_device.component,
+                              "exhaust_zone": source_device.exhaust_zone,
+                              "elapsed_seconds": elapsed,
+                              "final_max_change": change})
         for target in devices:
             if target.intake_zone not in mass_inlets:
                 raise ValueError(f"Missing intake zone {target.intake_zone} in solver output")
@@ -139,9 +184,21 @@ def main() -> int:
             previous = intake_flows.setdefault(target.component_id, mass_flow)
             if abs(previous - mass_flow) > max(1e-10, 1e-6*mass_flow):
                 raise ValueError(f"Inconsistent incoming mass flow for {target.intake_zone}")
-    write_reports(output, devices, matrix, intake_flows)
+    metadata_output = {
+        "source_case": str(source),
+        "source_time": latest.name,
+        "device_metadata": str(metadata),
+        "mesh_cells": mesh_size[0],
+        "mesh_faces": mesh_size[1],
+        "turbulent_schmidt": args.schmidt,
+        "maximum_iterations": args.iterations,
+        "field_change_tolerance": args.tolerance,
+        "source_solves": solve_records,
+    }
+    write_reports(output, devices, matrix, intake_flows, metadata_output)
     print(output / "exhaust_recirculation_matrix.csv")
     print(output / "exhaust_recirculation_matrix.md")
+    print(output / "exhaust_recirculation_metadata.json")
     return 0
 
 
