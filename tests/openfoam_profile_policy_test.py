@@ -14,6 +14,10 @@ class OpenFoamProfilePolicyTest(unittest.TestCase):
     def profile(self, name):
         return self.config(name)["openfoam_solver"]
 
+    def model(self, name):
+        with (ROOT / "library" / "models" / name).open("rb") as stream:
+            return tomllib.load(stream)
+
     def test_screening_uses_validated_balanced_refresh_limit(self):
         profile = self.profile("screening_foam_cfg.toml")
         self.assertEqual(profile["parallel_processes"], 2)
@@ -26,6 +30,14 @@ class OpenFoamProfilePolicyTest(unittest.TestCase):
         self.assertEqual(
             profile["minimum_tracked_boundary_flow_fraction"], 0.001
         )
+
+    def test_production_model_uses_validated_four_rank_override(self):
+        solver = self.model("model.toml")["openfoam_solver"]
+        self.assertEqual(
+            solver["template"],
+            "library/openfoam_cfg/screening_foam_cfg.toml",
+        )
+        self.assertEqual(solver["parallel_processes"], 4)
 
     def test_validation_profiles_use_courant_one_refreshes(self):
         for name in ("validation_foam_cfg.toml", "indepth_foam_cfg.toml"):
