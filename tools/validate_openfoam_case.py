@@ -10,6 +10,14 @@ import struct
 from dataclasses import asdict, dataclass
 from pathlib import Path
 
+try:
+    from tools.openfoam_field_delta import (
+        latest_common_time_names,
+        resolve_time_directory,
+    )
+except ModuleNotFoundError:  # Direct execution: python tools/validate_openfoam_case.py
+    from openfoam_field_delta import latest_common_time_names, resolve_time_directory
+
 
 @dataclass
 class ValidationResult:
@@ -17,6 +25,7 @@ class ValidationResult:
     time_s: float
     cells: int
     connected_fluid_regions: int
+    expected_connected_fluid_regions: int
     inlet_mass_flow_kg_s: float
     outlet_mass_flow_kg_s: float
     mass_imbalance_fraction: float
@@ -62,6 +71,33 @@ def latest_time(case: Path) -> tuple[float, Path]:
     if not candidates:
         raise ValueError(f"No reconstructed result times found in {case}")
     return max(candidates, key=lambda item: item[0])
+
+
+def latest_result_paths(case: Path) -> tuple[float, list[Path]]:
+    """Return the newest complete result, preferring decomposed checkpoints."""
+    processors = sorted(
+        (path for path in case.glob("processor*") if path.is_dir()),
+        key=lambda path: int(path.name[9:]),
+    )
+    if processors:
+        _, latest = latest_common_time_names(case)
+        paths = [resolve_time_directory(processor, latest) for processor in processors]
+        return float(latest), paths
+    value, path = latest_time(case)
+    return value, [path]
+
+
+def physical_open_patches(case: Path) -> list[str]:
+    """Read physical, non-wall openings from the undecomposed fluid mesh."""
+    boundary = case / "constant" / "fluid" / "polyMesh" / "boundary"
+    text = boundary.read_text(encoding="ascii", errors="replace")
+    names = re.findall(
+        r"(?m)^\s{4}([^\s{}]+)\s*\n\s*\{\s*\n\s*type\s+patch\s*;",
+        text,
+    )
+    if not names:
+        raise ValueError(f"No physical type=patch openings found in {boundary}")
+    return names
 
 
 def _list_payload(
@@ -115,9 +151,20 @@ def patch_values(field: Path, patch: str) -> list[float]:
     uniform = re.search(
         rb"\bvalue\s+uniform\s+([\d.eE+-]+)\s*;", patch_data[:512]
     )
-    nonuniform = re.search(rb"\bvalue\s+nonuniform\b", patch_data)
-    if uniform and (not nonuniform or uniform.start() < nonuniform.start()):
+    empty = re.search(
+        rb"\bvalue\s+nonuniform\s+List<scalar>\s+0\s*;", patch_data[:512]
+    )
+    nonuniform = re.search(
+        rb"\bvalue\s+nonuniform\s+List<scalar>\s+\d+\s*\(", patch_data
+    )
+    first_nonuniform = min(
+        (match.start() for match in (empty, nonuniform) if match),
+        default=None,
+    )
+    if uniform and (first_nonuniform is None or uniform.start() < first_nonuniform):
         return [float(uniform.group(1))]
+    if empty and (not nonuniform or empty.start() < nonuniform.start()):
+        return []
     return [
         float(value)
         for value in _list_payload(
@@ -132,6 +179,10 @@ def internal_values(field: Path) -> list[float]:
     nonuniform = re.search(rb"\binternalField\s+nonuniform\b", data)
     if uniform and (not nonuniform or uniform.start() < nonuniform.start()):
         return [float(uniform.group(1))]
+    if re.search(
+        rb"\binternalField\s+nonuniform\s+List<scalar>\s+0\s*;", data
+    ):
+        return []
     return [float(value) for value in _list_payload(data, b"internalField", 8)]
 
 
@@ -197,29 +248,75 @@ def signed_weighted_average(values: list[float], weights: list[float]) -> float:
     return sum(value * weight for value, weight in zip(values, weights)) / denominator
 
 
+def _expanded_patch_values(values: list[float], count: int) -> list[float]:
+    if len(values) == 1:
+        return values * count
+    if len(values) != count:
+        raise ValueError("Patch temperature and flux arrays have different lengths")
+    return values
+
+
+def collect_patch_faces(
+    result_paths: list[Path], patches: list[str]
+) -> tuple[list[float], list[float]]:
+    fluxes: list[float] = []
+    temperatures: list[float] = []
+    for result_path in result_paths:
+        fluid = result_path / "fluid"
+        for patch in patches:
+            patch_fluxes = patch_values(fluid / "phi", patch)
+            patch_temperatures = _expanded_patch_values(
+                patch_values(fluid / "T", patch), len(patch_fluxes)
+            )
+            fluxes.extend(patch_fluxes)
+            temperatures.extend(patch_temperatures)
+    return fluxes, temperatures
+
+
 def audit_case(
     case: Path,
-    inlet: str,
-    outlet: str,
+    inlet: str | None,
+    outlet: str | None,
     cp: float,
     fluent_temperature: float | None,
     energy_tolerance: float,
     mass_tolerance: float,
     fluent_tolerance_k: float,
+    expected_connected_fluid_regions: int = 1,
 ) -> ValidationResult:
-    time_s, time_path = latest_time(case)
-    fluid = time_path / "fluid"
-    phi_path = fluid / "phi"
-    temperature_path = fluid / "T"
-    if not phi_path.is_file() or not temperature_path.is_file():
+    time_s, result_paths = latest_result_paths(case)
+    missing = [
+        str(path / "fluid" / field)
+        for path in result_paths
+        for field in ("phi", "T")
+        if not (path / "fluid" / field).is_file()
+    ]
+    if missing:
         raise ValueError(
-            f"Latest time {time_s:g} is missing reconstructed fluid phi or T"
+            f"Latest complete time {time_s:g} is missing fluid fields: "
+            + ", ".join(missing)
         )
 
-    inlet_phi = patch_values(phi_path, inlet)
-    outlet_phi = patch_values(phi_path, outlet)
-    inlet_temperature = patch_values(temperature_path, inlet)
-    outlet_temperature = patch_values(temperature_path, outlet)
+    if (inlet is None) != (outlet is None):
+        raise ValueError("Specify both inlet and outlet, or neither for automatic openings")
+    if inlet is None:
+        patches = physical_open_patches(case)
+        all_phi, all_temperature = collect_patch_faces(result_paths, patches)
+        inlet_phi = [value for value in all_phi if value < 0.0]
+        inlet_temperature = [
+            temperature for temperature, flux in zip(all_temperature, all_phi)
+            if flux < 0.0
+        ]
+        outlet_phi = [value for value in all_phi if value > 0.0]
+        outlet_temperature = [
+            temperature for temperature, flux in zip(all_temperature, all_phi)
+            if flux > 0.0
+        ]
+        if not inlet_phi or not outlet_phi:
+            raise ValueError("Automatic openings contain no inlet or outlet flow")
+    else:
+        inlet_phi, inlet_temperature = collect_patch_faces(result_paths, [inlet])
+        outlet_phi, outlet_temperature = collect_patch_faces(result_paths, [outlet])
 
     inlet_flow = sum(inlet_phi)
     outlet_flow = sum(outlet_phi)
@@ -245,16 +342,18 @@ def audit_case(
         else None
     )
     solid_values: list[float] = []
-    for region in time_path.iterdir():
-        solid_t = region / "T"
-        if region.name != "fluid" and solid_t.is_file():
-            solid_values.extend(internal_values(solid_t))
+    for result_path in result_paths:
+        for region in result_path.iterdir():
+            solid_t = region / "T"
+            if region.name != "fluid" and solid_t.is_file():
+                solid_values.extend(internal_values(solid_t))
 
     return ValidationResult(
         case=str(case),
         time_s=time_s,
         cells=cells,
         connected_fluid_regions=regions,
+        expected_connected_fluid_regions=expected_connected_fluid_regions,
         inlet_mass_flow_kg_s=inlet_flow,
         outlet_mass_flow_kg_s=outlet_flow,
         mass_imbalance_fraction=mass_error,
@@ -273,7 +372,7 @@ def audit_case(
         ),
         solid_min_temperature_k=min(solid_values) if solid_values else None,
         solid_max_temperature_k=max(solid_values) if solid_values else None,
-        pass_connectivity=regions == 1,
+        pass_connectivity=regions == expected_connected_fluid_regions,
         pass_mass_balance=mass_error <= mass_tolerance,
         pass_energy_balance=energy_error <= energy_tolerance,
         pass_fluent_temperature=(
@@ -300,7 +399,7 @@ Overall result: **{status}**
 
 | Check | Result | Error/diagnostic | Status |
 |---|---:|---:|---:|
-| Fluid connectivity | {result.connected_fluid_regions} region(s), {result.cells} cells | expected 1 | {'PASS' if result.pass_connectivity else 'FAIL'} |
+| Fluid connectivity | {result.connected_fluid_regions} region(s), {result.cells} cells | expected {result.expected_connected_fluid_regions} | {'PASS' if result.pass_connectivity else 'FAIL'} |
 | Mass conservation | inlet {result.inlet_mass_flow_kg_s:.8g} kg/s, outlet {result.outlet_mass_flow_kg_s:.8g} kg/s | {100*result.mass_imbalance_fraction:.5f}% | {'PASS' if result.pass_mass_balance else 'FAIL'} |
 | Energy conservation | {result.transported_power_w:.4f} W transported vs {result.applied_power_w:.4f} W applied | {100*result.energy_error_fraction:.4f}% | {'PASS' if result.pass_energy_balance else 'FAIL'} |
 {fluent_row}
@@ -323,13 +422,23 @@ forward and reverse flow. An absolute-flow average is not an energy balance.
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("case", type=Path)
-    parser.add_argument("--inlet", default="Validation_inlet")
-    parser.add_argument("--outlet", default="Validation_outlet")
+    parser.add_argument(
+        "--inlet", help="inlet patch; omit with --outlet to classify all open faces"
+    )
+    parser.add_argument(
+        "--outlet", help="outlet patch; omit with --inlet to classify all open faces"
+    )
     parser.add_argument("--cp", type=float, default=1005.0)
     parser.add_argument("--fluent-temperature", type=float)
     parser.add_argument("--energy-tolerance", type=float, default=0.02)
     parser.add_argument("--mass-tolerance", type=float, default=0.01)
     parser.add_argument("--fluent-tolerance-k", type=float, default=1.0)
+    parser.add_argument(
+        "--expected-connected-fluid-regions",
+        type=int,
+        default=1,
+        help="expected mesh components, including intentional sealed air volumes",
+    )
     parser.add_argument("--json", type=Path)
     parser.add_argument("--markdown", type=Path)
     args = parser.parse_args()
@@ -338,6 +447,7 @@ def main() -> None:
         args.case.resolve(), args.inlet, args.outlet, args.cp,
         args.fluent_temperature, args.energy_tolerance,
         args.mass_tolerance, args.fluent_tolerance_k,
+        args.expected_connected_fluid_regions,
     )
     rendered = markdown(result)
     print(rendered)

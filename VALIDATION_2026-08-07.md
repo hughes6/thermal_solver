@@ -2351,3 +2351,29 @@ maximum) for the KVM. At 1.631 s, Dell's cumulative maximum rise was 0.2446 K.
 Over the same 0.45-to-1.631 s span, fluid temperature changed only 0.00602 K RMS
 and density changed 0.0153% RMS. Powered-solid preheating is therefore physical
 but too small to materially move this initial fan operating point.
+
+### Decomposed production-case numerical audit
+
+The numerical case validator previously selected the newest reconstructed root
+time and assumed patches named `Validation_inlet` and `Validation_outlet`.
+On the live production case that selected stale `0.06 s` data even though newer
+complete four-rank checkpoints existed. It also misread zero-face boundary
+lists and zero-cell solid partitions by continuing into the next binary list.
+
+The validator now prefers the latest numeric checkpoint common to every MPI
+rank, aggregates boundary and solid fields across ranks, treats legitimate
+zero-length lists as empty, and automatically classifies inflow and outflow on
+all physical `type patch` openings when explicit patch names are omitted. An
+explicit expected connected-fluid-region count accounts for intentional sealed
+air volumes without weakening the mesh-connectivity check. Six focused tests
+and 35 related OpenFOAM Python tests pass.
+
+At `1.92595102 s`, the corrected audit covered 425,353 fluid cells and the two
+expected connected components (ambient rack air plus the sealed fanless KVM).
+External inflow was `-0.29707002 kg/s`, outflow was `0.29706584 kg/s`, and mass
+imbalance was 0.00141%. Energy balance intentionally failed during the cold
+airflow stage: net sensible transport was `-4.43 W` against 1545 W of solid
+loads, outlet temperature was 293.1352 K, and the hottest solid cell was only
+293.5592 K. This is valid evidence that mass flow is established but not a
+thermal-convergence result; the same audit must pass energy balance after the
+thermal stages before the production result can be accepted.
