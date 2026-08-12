@@ -9,6 +9,7 @@
 #include <filesystem>
 #include <fstream>
 #include <limits>
+#include <map>
 #include <stdexcept>
 #include <string>
 #include <vector>
@@ -508,13 +509,65 @@ private:
         std::ofstream output(path);
         require_stream(output,path);
         output << "zone,component_id,component,kind,device\n";
+        std::map<int,std::array<double,3>> component_flow_direction;
+        std::map<int,double> minimum_vent_projection;
+        const auto projection=[&mesh](
+            const Mesh::OpenFoamInternalFlowDevice& device,
+            const std::array<double,3>& direction) {
+            double sum=0.0;
+            for(const std::size_t flat : device.cells) {
+                const int yz=mesh.get_ny()*mesh.get_nz();
+                const int i=static_cast<int>(flat)/yz;
+                const int remainder=static_cast<int>(flat)%yz;
+                const int j=remainder/mesh.get_nz();
+                const int k=remainder%mesh.get_nz();
+                sum += direction[0]*mesh.cell_center_x(i)+
+                       direction[1]*mesh.cell_center_y(j)+
+                       direction[2]*mesh.cell_center_z(k);
+            }
+            return sum/static_cast<double>(device.cells.size());
+        };
+        for(const auto& device : mesh.get_openfoam_internal_flow_devices())
+            if(device.kind==Mesh::OpenFoamInternalFlowDevice::Kind::Fan)
+                component_flow_direction.emplace(
+                    device.component_id,device.direction);
+        for(const auto& device : mesh.get_openfoam_internal_flow_devices())
+            if(device.kind==Mesh::OpenFoamInternalFlowDevice::Kind::Vent &&
+               component_flow_direction.find(device.component_id)==
+                   component_flow_direction.end())
+                component_flow_direction.emplace(
+                    device.component_id,device.direction);
         for(const auto& device : mesh.get_openfoam_internal_flow_devices()) {
+            if(device.kind!=Mesh::OpenFoamInternalFlowDevice::Kind::Vent)
+                continue;
+            const auto direction=component_flow_direction.find(
+                device.component_id);
+            if(direction==component_flow_direction.end()) continue;
+            const double value=projection(device,direction->second);
+            const auto existing=minimum_vent_projection.find(
+                device.component_id);
+            if(existing==minimum_vent_projection.end() ||
+               value<existing->second)
+                minimum_vent_projection[device.component_id]=value;
+        }
+        for(const auto& device : mesh.get_openfoam_internal_flow_devices()) {
+            std::string kind="exhaust";
+            if(device.kind==Mesh::OpenFoamInternalFlowDevice::Kind::Vent) {
+                kind="intake";
+                const auto direction=component_flow_direction.find(
+                    device.component_id);
+                const auto minimum=minimum_vent_projection.find(
+                    device.component_id);
+                if(direction!=component_flow_direction.end() &&
+                   minimum!=minimum_vent_projection.end() &&
+                   projection(device,direction->second)>
+                       minimum->second+1e-9)
+                    kind="outlet";
+            }
             output << csv_field(internal_device_name(device)) << ','
                    << device.component_id << ','
                    << csv_field(device.component_name) << ','
-                   << (device.kind==
-                           Mesh::OpenFoamInternalFlowDevice::Kind::Fan
-                           ? "exhaust" : "intake") << ','
+                   << kind << ','
                    << csv_field(device.name) << '\n';
         }
     }

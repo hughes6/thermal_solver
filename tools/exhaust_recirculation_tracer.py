@@ -24,25 +24,28 @@ MESH_RE = re.compile(r"^MESH_SIZE,(\d+),(\d+)$", re.MULTILINE)
 class Device:
     component_id: int
     component: str
-    intake_zone: str
-    exhaust_zone: str
+    intake_zones: tuple[str, ...]
+    exhaust_zones: tuple[str, ...]
 
 
 def load_devices(path: Path) -> list[Device]:
-    paired: dict[int, dict[str, str]] = {}
+    paired: dict[int, dict[str, list[str]]] = {}
     names: dict[int, str] = {}
     with path.open(newline="", encoding="utf-8-sig") as handle:
         for row in csv.DictReader(handle):
             component_id = int(row["component_id"])
             names[component_id] = row["component"]
-            paired.setdefault(component_id, {})[row["kind"]] = row["zone"]
+            paired.setdefault(component_id, {}).setdefault(
+                row["kind"], []).append(row["zone"])
     devices = []
     for component_id in sorted(paired):
         zones = paired[component_id]
-        if "intake" in zones and "exhaust" in zones:
-            devices.append(Device(component_id, names[component_id], zones["intake"], zones["exhaust"]))
-    if not devices:
-        raise ValueError(f"No paired intake/exhaust devices in {path}")
+        if "intake" in zones:
+            devices.append(Device(
+                component_id, names[component_id],
+                tuple(zones["intake"]), tuple(zones.get("exhaust", ()))))
+    if not devices or not any(device.exhaust_zones for device in devices):
+        raise ValueError(f"No exhaust source with component intakes in {path}")
     return devices
 
 
@@ -129,16 +132,21 @@ def safe_field_name(component_id: int) -> str:
 
 
 def write_reports(output: Path, devices: list[Device], matrix: dict[tuple[int, int], float], intake_flows: dict[int, float], metadata: dict) -> None:
+    sources = [device for device in devices if device.exhaust_zones]
     csv_path = output / "exhaust_recirculation_matrix.csv"
     with csv_path.open("w", newline="", encoding="utf-8") as handle:
         writer = csv.writer(handle)
         writer.writerow(["source_exhaust", "source_component", "target_intake", "target_component", "mass_weighted_tracer_fraction", "percent", "target_incoming_mass_flow_kg_s"])
-        for source in devices:
+        for source in sources:
             for target in devices:
                 value = matrix[source.component_id, target.component_id]
-                writer.writerow([source.exhaust_zone, source.component, target.intake_zone, target.component, f"{value:.9g}", f"{100*value:.6g}", f"{intake_flows[target.component_id]:.9g}"])
+                writer.writerow([
+                    ";".join(source.exhaust_zones), source.component,
+                    ";".join(target.intake_zones), target.component,
+                    f"{value:.9g}", f"{100*value:.6g}",
+                    f"{intake_flows[target.component_id]:.9g}"])
     lines = ["# Exhaust-to-intake recirculation attribution", "", f"Source: `{metadata['source_case']}` at `{metadata['source_time']}` s", f"Mesh: {metadata['mesh_cells']} cells, {metadata['mesh_faces']} faces; Sc_t = {metadata['turbulent_schmidt']}", "", "Values are incoming-mass-flux-weighted passive-tracer fractions across each intake cell-zone boundary.", "", "| Exhaust source \\ Intake | " + " | ".join(d.component for d in devices) + " |", "|---|" + "---:|" * len(devices)]
-    for source in devices:
+    for source in sources:
         values = [f"{100*matrix[source.component_id, target.component_id]:.4f}%" for target in devices]
         lines.append(f"| {source.component} | " + " | ".join(values) + " |")
     (output / "exhaust_recirculation_matrix.md").write_text("\n".join(lines) + "\n", encoding="utf-8")
@@ -176,8 +184,13 @@ def main() -> int:
     intake_flows: dict[int, float] = {}
     solve_records = []
     mesh_size = None
-    for source_device in devices:
-        command = [args.solver, "-case", str(output), "-region", "fluid", "-latestTime", "-source-zone", source_device.exhaust_zone, "-field", safe_field_name(source_device.component_id), "-schmidt", str(args.schmidt), "-iterations", str(args.iterations), "-tolerance", str(args.tolerance)]
+    for source_device in (device for device in devices if device.exhaust_zones):
+        source_zone_list = "(" + " ".join(source_device.exhaust_zones) + ")"
+        command = [args.solver, "-case", str(output), "-region", "fluid",
+                   "-latestTime", "-source-zones", source_zone_list,
+                   "-field", safe_field_name(source_device.component_id),
+                   "-schmidt", str(args.schmidt), "-iterations",
+                   str(args.iterations), "-tolerance", str(args.tolerance)]
         started = time.perf_counter()
         result = subprocess.run(command, text=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
         elapsed = time.perf_counter() - started
@@ -194,19 +207,23 @@ def main() -> int:
         mesh_size = current_mesh
         solve_records.append({"component_id": source_device.component_id,
                               "component": source_device.component,
-                              "exhaust_zone": source_device.exhaust_zone,
+                              "exhaust_zones": list(source_device.exhaust_zones),
                               "elapsed_seconds": elapsed,
                               "final_max_change": change})
         for target in devices:
-            if target.intake_zone not in mass_inlets:
-                raise ValueError(f"Missing intake zone {target.intake_zone} in solver output")
-            fraction, mass_flow = mass_inlets[target.intake_zone]
+            missing = [zone for zone in target.intake_zones
+                       if zone not in mass_inlets]
+            if missing:
+                raise ValueError(f"Missing intake zone {missing[0]} in solver output")
+            samples = [mass_inlets[zone] for zone in target.intake_zones]
+            mass_flow = sum(flow for _, flow in samples)
             if mass_flow <= 0:
-                raise ValueError(f"Intake zone {target.intake_zone} has no incoming mass flow")
+                raise ValueError(f"Component {target.component} has no incoming mass flow")
+            fraction = sum(value*flow for value, flow in samples)/mass_flow
             matrix[source_device.component_id, target.component_id] = fraction
             previous = intake_flows.setdefault(target.component_id, mass_flow)
             if abs(previous - mass_flow) > max(1e-10, 1e-6*mass_flow):
-                raise ValueError(f"Inconsistent incoming mass flow for {target.intake_zone}")
+                raise ValueError(f"Inconsistent incoming mass flow for {target.component}")
     metadata_output = {
         "source_case": str(source),
         "source_time": latest.name,

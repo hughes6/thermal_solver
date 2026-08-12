@@ -1,5 +1,6 @@
 #include <cassert>
 #include <filesystem>
+#include <fstream>
 #include <iostream>
 #include <sstream>
 #include <string>
@@ -68,6 +69,16 @@ int main() {
 #endif
     assert(std::filesystem::is_regular_file(
         case_directory / "internal_airflow_devices.csv"));
+    {
+        std::ifstream metadata_stream(
+            case_directory / "internal_airflow_devices.csv");
+        std::ostringstream metadata;
+        metadata << metadata_stream.rdbuf();
+        assert(metadata.str().find(",intake,\"Passive test vent\"") !=
+               std::string::npos);
+        assert(metadata.str().find(",exhaust,\"Test rear exhaust\"") !=
+               std::string::npos);
+    }
     std::filesystem::remove_all(case_directory);
     std::cout << "model_runner_tracer_commands_test PASSED\n";
     return 0;

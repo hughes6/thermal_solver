@@ -2099,3 +2099,31 @@ the solver's generated objects, and installs `steadyExhaustTracerFoam` under
 executes both paired and unpaired exports and verifies that WSL commands use
 `/mnt/<drive>/...` paths rather than invalid Windows paths.
 
+### Detailed-equipment multi-device attribution
+
+A fresh export of the current detailed `model.toml` produced 469,742 fluid
+cells and exposed a correctness defect before the long run began. Detailed
+equipment can have multiple intake vents and multiple fan zones: Eaton has two
+front intakes, Dell has six internal cooling fans, and Trenton has no fan. The
+initial tracer metadata/driver retained only the last intake and last fan for
+each component, which was valid for the earlier generic one-zone templates but
+would misrepresent the detailed model.
+
+The exporter now classifies passive device planes by their projection along
+the component flow direction. Co-planar upstream vents are `intake`; downstream
+passive vents are `outlet`; fans remain `exhaust`. The tracer utility clamps all
+fan zones belonging to one component in a single source solve, aggregates all
+of a target component's intake-zone mass and tracer flux, and retains fanless
+equipment such as Trenton as a target column without inventing an exhaust
+source row. The detailed export now resolves:
+
+- Eaton: two intake zones and one exhaust-fan source zone;
+- Dell: one intake zone and six exhaust-fan source zones;
+- Trenton: one intake zone, one passive outlet, and no source row.
+
+An 80,000.01 s generic-case backward-compatibility run reproduced every one of
+the previous nine source fractions and three intake flows exactly. Exporter,
+paired/unpaired model-runner, Python grouping, plotting, and OpenFOAM-v2606
+compilation regressions pass. The long detailed-model run must use an export
+created after this metadata fix.
+

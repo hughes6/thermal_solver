@@ -9,6 +9,7 @@ int main(int argc, char *argv[])
 {
     argList::addNote("Solve a bounded steady passive exhaust tracer on fixed flow fields");
     argList::addOption("source-zone", "name", "Cell zone held at tracer concentration one");
+    argList::addOption("source-zones", "names", "OpenFOAM wordList of cell zones held at one");
     argList::addOption("field", "name", "Tracer field name (default exhaustTracer)");
     argList::addOption("schmidt", "number", "Turbulent Schmidt number (default 0.7)");
     argList::addOption("iterations", "count", "Maximum iterations (default 500)");
@@ -26,7 +27,15 @@ int main(int argc, char *argv[])
     runTime.setTime(selectedTimes.last(), selectedTimes.size() - 1);
 
     const word regionName(args.getOrDefault<word>("region", "fluid"));
-    const word sourceName(args.get<word>("source-zone"));
+    wordList sourceNames;
+    if (args.found("source-zones"))
+    {
+        sourceNames = args.get<wordList>("source-zones");
+    }
+    else
+    {
+        sourceNames = wordList(1, args.get<word>("source-zone"));
+    }
     const word fieldName(args.getOrDefault<word>("field", "exhaustTracer"));
     const scalar schmidt(args.getOrDefault<scalar>("schmidt", 0.7));
     const label maxIterations(args.getOrDefault<label>("iterations", 500));
@@ -83,13 +92,19 @@ int main(int argc, char *argv[])
     }
     tracer.correctBoundaryConditions();
 
-    const label zoneId = mesh.cellZones().findZoneID(sourceName);
-    if (zoneId < 0)
+    DynamicList<label> sourceCellBuffer;
+    forAll(sourceNames, sourcei)
     {
-        FatalErrorInFunction << "Unknown source cellZone '" << sourceName
-            << "'. Valid zones: " << mesh.cellZones().names() << exit(FatalError);
+        const label zoneId = mesh.cellZones().findZoneID(sourceNames[sourcei]);
+        if (zoneId < 0)
+        {
+            FatalErrorInFunction << "Unknown source cellZone '" << sourceNames[sourcei]
+                << "'. Valid zones: " << mesh.cellZones().names() << exit(FatalError);
+        }
+        sourceCellBuffer.append(mesh.cellZones()[zoneId]);
     }
-    const labelList sourceCells(mesh.cellZones()[zoneId]);
+    labelHashSet sourceCellSet(sourceCellBuffer);
+    const labelList sourceCells(sourceCellSet.sortedToc());
     scalarField sourceValues(sourceCells.size(), 1.0);
 
     volScalarField gamma
@@ -181,7 +196,7 @@ int main(int argc, char *argv[])
             << (incomingMass > VSMALL ? incomingTracerMass/incomingMass : 0)
             << ',' << incomingMass << nl;
     }
-    Info<< "Source zone: " << sourceName << nl
+    Info<< "Source zones: " << sourceNames << nl
         << "Iterations: " << iteration << nl
         << "Final max change: " << change << nl
         << "Tracer min/max: " << gMin(tracer) << ' ' << gMax(tracer) << nl

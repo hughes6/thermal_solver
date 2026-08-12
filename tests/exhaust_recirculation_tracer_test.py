@@ -9,9 +9,14 @@ class ExhaustTracerTest(unittest.TestCase):
     def test_loads_paired_devices_and_ignores_unpaired(self):
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "devices.csv"
-            path.write_text("zone,component_id,component,kind,device\nintake0,0,A,intake,front\nexhaust0,0,A,exhaust,rear\nintake1,1,B,intake,front\n", encoding="utf-8")
+            path.write_text("zone,component_id,component,kind,device\nintake0,0,A,intake,front\nintake0b,0,A,intake,front2\noutlet0,0,A,outlet,rear vent\nexhaust0,0,A,exhaust,fan1\nexhaust0b,0,A,exhaust,fan2\nintake1,1,B,intake,front\n", encoding="utf-8")
             devices = load_devices(path)
-            self.assertEqual([(d.component, d.intake_zone, d.exhaust_zone) for d in devices], [("A", "intake0", "exhaust0")])
+            self.assertEqual(
+                [(d.component, d.intake_zones, d.exhaust_zones)
+                 for d in devices],
+                [("A", ("intake0", "intake0b"),
+                  ("exhaust0", "exhaust0b")),
+                 ("B", ("intake1",), ())])
 
     def test_parses_zone_values_and_convergence(self):
         values, mass, change = parse_solver_output("ZONE_AVERAGE,intake0,0.125\nZONE_MASS_INLET,intake0,0.2,0.03\nFinal max change: 9e-10\n", 1e-9)
