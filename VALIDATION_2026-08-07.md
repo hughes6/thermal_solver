@@ -2480,3 +2480,13 @@ directions remained correct, bidirectional flow remained zero, and the audit
 measured 0.00149% exterior mass imbalance. The cold-stage energy check still
 correctly failed at -4.28 W sensible rejection versus 1545 W applied, while the
 hottest solid cell had begun warming to 293.634 K.
+
+The default recirculation-history mode still used its final function-object
+row for headline heat rejection even though its separate face-flow CSV used the
+newest decomposed checkpoint. It now appends a direct external-boundary row
+from all-rank `T` and `phi` whenever report history is stale, and labels that
+endpoint explicitly. On the live case, history ends at `0.06 s`; the generated
+CSV now ends at `2.31953796 s` with 0.29767717 kg/s intake, 0.29767275 kg/s
+exhaust, and -4.28272 W cold-stage sensible rejection. The thermal re-ingestion
+index remains correctly undefined until exhaust exceeds ambient. Twenty-eight
+related direct-field and recirculation tests pass.

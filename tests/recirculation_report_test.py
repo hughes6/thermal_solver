@@ -4,6 +4,7 @@ import unittest
 from pathlib import Path
 
 from plot.recirculation_report import (
+    append_latest_checkpoint_row,
     boundary_patch_names,
     boundary_flow_floors,
     boundary_histories,
@@ -19,6 +20,34 @@ from plot.recirculation_report import (
 
 
 class RecirculationReportTest(unittest.TestCase):
+    def test_stale_history_appends_latest_direct_external_endpoint(self):
+        with tempfile.TemporaryDirectory() as directory:
+            case = Path(directory)
+            mesh = case / "constant" / "fluid" / "polyMesh"
+            mesh.mkdir(parents=True)
+            (mesh / "boundary").write_text(
+                "2\n(\ninlet\n{\n type patch;\n}\n"
+                "outlet\n{\n type patch;\n}\n)\n"
+            )
+            fluid = case / "processor0" / "20" / "fluid"
+            fluid.mkdir(parents=True)
+            (fluid / "phi").write_text(
+                "FoamFile { format ascii; }\n"
+                "boundaryField { inlet { value nonuniform List<scalar> 1 "
+                "(-0.1); } outlet { value nonuniform List<scalar> 1 (0.1); } }\n"
+            )
+            (fluid / "T").write_text(
+                "FoamFile { format ascii; }\n"
+                "boundaryField { inlet { value uniform 293; } "
+                "outlet { value uniform 303; } }\n"
+            )
+            rows = [(10.0, 0.1, 0.1, 293.0, 300.0, 0.0, 700.0)]
+            self.assertTrue(
+                append_latest_checkpoint_row(case, rows, 293.0, 1000.0)
+            )
+            self.assertEqual(rows[-1][0], 20.0)
+            self.assertAlmostEqual(rows[-1][6], 1000.0)
+
     def test_solver_postprocess_command_loads_endpoint_fields(self):
         command = solver_postprocess_command(Path("example_case"))
         self.assertIn("semiFrozenChtMultiRegionFoam -postProcess", command)

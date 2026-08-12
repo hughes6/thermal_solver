@@ -180,6 +180,25 @@ def checkpoint_face_rows(case: Path, requested_times, ambient_k: float,
     return rows, face_rows
 
 
+def append_latest_checkpoint_row(
+    case: Path, rows, ambient_k: float, cp_air: float
+) -> bool:
+    """Append a current direct-field endpoint when report history is stale."""
+    try:
+        latest_time, _ = latest_result_paths(case)
+        if rows and latest_time <= rows[-1][0] + 1.0e-8 * max(
+            1.0, abs(latest_time)
+        ):
+            return False
+        direct_rows, _ = checkpoint_face_rows(
+            case, [latest_time], ambient_k, cp_air
+        )
+    except (FileNotFoundError, ValueError):
+        return False
+    rows.extend(direct_rows)
+    return bool(direct_rows)
+
+
 def run_checkpoint_report(args, plt, case: Path, expected_heat_watts):
     try:
         rows, face_rows = checkpoint_face_rows(
@@ -542,6 +561,9 @@ def main() -> None:
     )
     if not rows:
         raise SystemExit("Boundary reports have no matching time samples")
+    appended_direct = append_latest_checkpoint_row(
+        case, rows, args.ambient_temperature, args.cp_air
+    )
 
     csv_path = args.output.with_suffix(".csv")
     with csv_path.open("w", newline="", encoding="utf-8") as stream:
@@ -629,6 +651,8 @@ def main() -> None:
     print(f"Saved: {internal_path}")
     print(f"Latest thermal re-ingestion index: {rows[-1][5]:.6g}")
     print(f"Latest net sensible heat rejection: {rows[-1][6]:.6g} W")
+    if appended_direct:
+        print("Latest external endpoint source: direct all-rank T and phi")
     print("Ignored undefined near-zero-flow boundary-temperature samples: "
           f"{ignored_temperature_samples}")
     if expected_heat_watts is not None:
