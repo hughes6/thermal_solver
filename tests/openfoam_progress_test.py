@@ -5,6 +5,7 @@ from pathlib import Path
 from tools.openfoam_progress import (
     choose_log,
     courant_timestep_headroom,
+    current_checkpoint_series_count,
     directory_size,
     format_bytes,
     format_duration,
@@ -21,6 +22,14 @@ from tools.openfoam_progress import (
 
 
 class OpenFoamProgressTest(unittest.TestCase):
+    def test_current_checkpoint_series_excludes_prior_stage_writes(self):
+        checkpoints = [0.43, 0.44, 0.45, 3.205, 3.305, 3.405]
+        self.assertEqual(
+            current_checkpoint_series_count(checkpoints, 0.1), 3
+        )
+        self.assertEqual(current_checkpoint_series_count(checkpoints, None), 6)
+        self.assertEqual(current_checkpoint_series_count([], 0.1), 0)
+
     def test_reports_diagnostic_courant_timestep_headroom(self):
         with tempfile.TemporaryDirectory() as directory:
             case = Path(directory)
@@ -128,7 +137,7 @@ class OpenFoamProgressTest(unittest.TestCase):
             (case / "processor0" / "2").mkdir()
             (case / "processor0" / "2" / "T").write_text("field")
             self.assertEqual(
-                processor_checkpoints(case), ([1.0, 2.0], 2, False, [1, 1])
+                processor_checkpoints(case), ([1.0], 2, False, [1, 0], [2.0])
             )
 
     def test_reports_aligned_parallel_checkpoint_file_counts(self):
@@ -139,7 +148,23 @@ class OpenFoamProgressTest(unittest.TestCase):
                 latest.mkdir(parents=True)
                 (latest / "T").write_text("field")
             self.assertEqual(
-                processor_checkpoints(case), ([1.5], 2, True, [1, 1])
+                processor_checkpoints(case), ([1.5], 2, True, [1, 1], [])
+            )
+
+    def test_rejects_equal_rank_partial_checkpoint_manifest(self):
+        with tempfile.TemporaryDirectory() as directory:
+            case = Path(directory)
+            for rank in (0, 1):
+                complete = case / f"processor{rank}" / "1.0"
+                complete.mkdir(parents=True)
+                (complete / "T").write_text("field")
+                (complete / "U").write_text("field")
+                partial = case / f"processor{rank}" / "2.0"
+                partial.mkdir()
+                (partial / "T").write_text("field")
+            self.assertEqual(
+                processor_checkpoints(case, maximum_completed_time=1.5),
+                ([1.0], 2, True, [1, 1], [2.0]),
             )
 
     def test_detects_mismatched_parallel_checkpoint_file_counts(self):
@@ -151,7 +176,7 @@ class OpenFoamProgressTest(unittest.TestCase):
                 (latest / "T").write_text("field")
             (case / "processor0" / "1.5" / "U").write_text("field")
             self.assertEqual(
-                processor_checkpoints(case), ([1.5], 2, False, [2, 1])
+                processor_checkpoints(case), ([], 2, False, [2, 1], [1.5])
             )
 
     def test_detects_equal_count_but_different_parallel_manifests(self):
@@ -164,7 +189,7 @@ class OpenFoamProgressTest(unittest.TestCase):
             (first / "T").write_text("field")
             (second / "U").write_text("field")
             self.assertEqual(
-                processor_checkpoints(case), ([1.5], 2, False, [1, 1])
+                processor_checkpoints(case), ([], 2, False, [1, 1], [1.5])
             )
 
     def test_selects_latest_log_and_formats_duration(self):

@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import math
 import re
 import shutil
 import time
@@ -188,7 +189,8 @@ def numeric_directories(path: Path) -> list[float]:
 
 def processor_checkpoints(
     case_directory: Path,
-) -> tuple[list[float], int, bool, list[int]]:
+    maximum_completed_time: float | None = None,
+) -> tuple[list[float], int, bool, list[int], list[float]]:
     """Summarize decomposed checkpoints and consistency across MPI ranks."""
     processors = sorted(
         (path for path in case_directory.glob("processor*") if path.is_dir()),
@@ -198,40 +200,82 @@ def processor_checkpoints(
         ),
     )
     if not processors:
-        return [], 0, True, []
-    time_sets = [numeric_directories(processor) for processor in processors]
+        return [], 0, True, [], []
+    raw_time_sets = [numeric_directories(processor) for processor in processors]
+
+    def eligible(value: float) -> bool:
+        if maximum_completed_time is None:
+            return True
+        tolerance = 1.0e-9 * max(1.0, abs(maximum_completed_time))
+        return value < maximum_completed_time - tolerance
+
+    time_sets = [
+        [value for value in times if eligible(value)] for times in raw_time_sets
+    ]
     time_sets_aligned = all(times == time_sets[0] for times in time_sets[1:])
-    latest_file_counts: list[int] = []
-    latest_file_sets: list[set[str]] = []
-    for processor, times in zip(processors, time_sets):
-        if not times:
-            latest_file_counts.append(0)
-            latest_file_sets.append(set())
-            continue
-        latest_time = times[-1]
-        latest_name = next(
-            child
-            for child in processor.iterdir()
-            if child.is_dir()
-            and _is_float(child.name)
-            and float(child.name) == latest_time
-        )
-        files = {
-            child.relative_to(latest_name).as_posix()
-            for child in latest_name.rglob("*")
-            if child.is_file()
-        }
-        latest_file_sets.append(files)
-        latest_file_counts.append(len(files))
-    file_manifests_aligned = all(
-        files == latest_file_sets[0] for files in latest_file_sets[1:]
-    )
+    common_times = sorted(set.intersection(*(set(times) for times in time_sets)))
+    manifests_by_time = {}
+    for value in common_times:
+        manifests = []
+        for processor in processors:
+            directory = next(
+                child for child in processor.iterdir()
+                if child.is_dir() and _is_float(child.name)
+                and float(child.name) == value
+            )
+            manifests.append({
+                child.relative_to(directory).as_posix()
+                for child in directory.rglob("*") if child.is_file()
+            })
+        manifests_by_time[value] = manifests
+    complete_times = [
+        value for value, manifests in manifests_by_time.items()
+        if manifests and manifests[0]
+        and all(item == manifests[0] for item in manifests[1:])
+    ]
+    all_times = sorted(set().union(*(set(times) for times in raw_time_sets)))
+    incomplete_newer = [
+        value for value in all_times if value not in complete_times
+    ]
+    inspected_time = all_times[-1] if all_times else None
+    latest_file_counts = []
+    if inspected_time is not None:
+        for processor, times in zip(processors, raw_time_sets):
+            if inspected_time not in times:
+                latest_file_counts.append(0)
+                continue
+            directory = next(
+                child for child in processor.iterdir()
+                if child.is_dir() and _is_float(child.name)
+                and float(child.name) == inspected_time
+            )
+            latest_file_counts.append(sum(
+                1 for child in directory.rglob("*") if child.is_file()
+            ))
+    manifests_aligned = len(complete_times) == len(common_times)
+    state_aligned = time_sets_aligned and manifests_aligned
     return (
-        time_sets[0],
+        complete_times,
         len(processors),
-        time_sets_aligned and file_manifests_aligned,
+        state_aligned,
         latest_file_counts,
+        incomplete_newer,
     )
+
+
+def current_checkpoint_series_count(checkpoints, stride: float | None) -> int:
+    """Count the cadence-aligned tail, excluding writes from prior stages."""
+    if not checkpoints:
+        return 0
+    if stride is None or not math.isfinite(stride) or stride <= 0.0:
+        return len(checkpoints)
+    count = 1
+    for earlier, later in zip(reversed(checkpoints[:-1]), reversed(checkpoints[1:])):
+        tolerance = 1.0e-6 * max(1.0, abs(stride), abs(later))
+        if abs((later - earlier) - stride) > tolerance:
+            break
+        count += 1
+    return count
 
 
 def _is_float(value: str) -> bool:
@@ -314,10 +358,14 @@ def main() -> int:
     start_time, configured_end_time = read_control_times(case_directory)
     end_time = args.end_time if args.end_time is not None else configured_end_time
     remaining_simulated = max(0.0, end_time - current_time)
-    checkpoints, processor_count, checkpoints_aligned, latest_file_counts = (
-        processor_checkpoints(case_directory)
+    (checkpoints, processor_count, checkpoints_aligned, latest_file_counts,
+     incomplete_checkpoints) = processor_checkpoints(
+        case_directory, current_time
     )
     checkpoint_stride = read_checkpoint_stride(case_directory)
+    current_series_count = current_checkpoint_series_count(
+        checkpoints, checkpoint_stride
+    )
     maximum_courant, cumulative_continuity, fatal_signatures = read_health(log_path)
     run_request = read_latest_run_request(case_directory)
     case_bytes = directory_size(case_directory)
@@ -373,7 +421,9 @@ def main() -> int:
     )
     if checkpoints:
         print(
-            f"Processor checkpoints: {len(checkpoints)} across {processor_count} ranks "
+            f"Processor checkpoints: {len(checkpoints)} common across "
+            f"{processor_count} ranks; current cadence series "
+            f"{current_series_count} "
             f"(latest {checkpoints[-1]:.9g} s)"
         )
         print(
@@ -384,6 +434,12 @@ def main() -> int:
                 else f"MISMATCHED RANK OUTPUT; latest files/rank {latest_file_counts}"
             )
         )
+        if incomplete_checkpoints:
+            print(
+                "Checkpoint write in progress/incomplete: "
+                + ", ".join(f"{value:.9g}" for value in incomplete_checkpoints)
+                + f" s; observed files/rank {latest_file_counts}"
+            )
         if checkpoint_stride is not None:
             next_checkpoint = min(end_time, checkpoints[-1] + checkpoint_stride)
             if next_checkpoint > current_time + 1e-12:

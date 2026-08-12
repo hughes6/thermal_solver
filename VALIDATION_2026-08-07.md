@@ -2828,3 +2828,36 @@ and snapshot equipment traces now use point markers, so single-sample data is
 visible. A second real render produced a 291,993-byte PNG; visual inspection
 confirmed all six honest intake/outlet points at `0.05 s` and no fabricated
 internal continuation through the later boundary endpoint.
+
+A two-window comparison from `3.20510857` to `3.40190204 s` measured 15.225%
+whole-fluid and 15.206% external-air velocity change. This is larger than
+either adjacent 8.76-9.03% interval, so the field is not merely toggling
+between two identical phases; it remains spatially evolving. The comparison
+also demonstrated rolling retention: by then, only `3.2051`, `3.3035`, and
+`3.4019 s` remained from the current cadence, while startup checkpoints
+`0.43-0.45 s` also remained. Older documented checkpoints had been correctly
+pruned and the field reader refused to substitute a nearest time.
+
+At `3.50029878 s`, adjacent whole-fluid and external-air changes remained
+9.206% and 9.254%, but the maximum local velocity difference fell again to
+2.875 m/s at `(0.399081, 0.268950, 0.232500) m`, and Dell internal-air change
+fell to 8.724%. `k`, `alphat`, and `omega` changed 13.652%, 11.071%, and
+5.101%, while pressure remained only 0.102 Pa RMS (0.660%). Intake magnitude
+changed +0.00564%; Fan 4 was the largest exhaust change at -0.30266%; all
+directions remained correct and reverse flow remained zero. Dell's direct
+intake/rear-outlet temperatures reached 293.1535/293.2221 K and its index fell
+to 4.86%. The result continues the pattern of broad spatial evolution with
+decreasing localized fan-bank peaks and stable engineering operation.
+
+Monitoring the `3.50029878 s` write exposed a live-directory race. All four
+processor directories appeared with the same seven partial files before the
+solver log reached that time, so the old progress tool called the checkpoint
+aligned and used its future timestamp for ETA. A first file-count heuristic was
+rejected during real-case testing because startup checkpoints legitimately
+contain 31 files (`Co` and `yPlus`) while continuous checkpoints contain 29.
+The corrected monitor accepts a time only after the solver log has advanced
+strictly beyond it, then requires common rank time sets and matching nonempty
+manifests. Newer directories are reported separately as writes in progress.
+It also distinguishes all common checkpoints from the cadence-aligned tail:
+the live case correctly reports six common times but three in the current
+rolling series. A focused test reproduces the equal-rank partial-manifest race.
