@@ -12,6 +12,7 @@ from tools.openfoam_progress import (
     read_control_times,
     read_checkpoint_stride,
     read_health,
+    read_latest_run_request,
     read_samples,
     recent_slope,
     is_stale_run,
@@ -175,6 +176,25 @@ class OpenFoamProgressTest(unittest.TestCase):
         self.assertTrue(is_stale_run(301.0, 5.0, 10.0, 300.0))
         self.assertFalse(is_stale_run(299.0, 5.0, 10.0, 300.0))
         self.assertFalse(is_stale_run(301.0, 10.0, 10.0, 300.0))
+
+    def test_reads_latest_overall_run_request(self):
+        with tempfile.TemporaryDirectory() as directory:
+            case = Path(directory)
+            (case / "run_summary.log").write_text(
+                "2026-01-01T00:00:00Z | run_start mode=--multirate "
+                "processes=2 requestedEnd=18000 airflowRefreshInterval=2400\n"
+                "2026-01-01T01:00:00Z | stage label=test\n"
+                "2026-01-02T00:00:00Z | run_start mode=--multirate "
+                "processes=4 requestedEnd=100000 airflowRefreshInterval=2400\n",
+                encoding="utf-8",
+            )
+            self.assertEqual(
+                read_latest_run_request(case), ("--multirate", 100000.0)
+            )
+
+    def test_missing_run_summary_has_no_overall_request(self):
+        with tempfile.TemporaryDirectory() as directory:
+            self.assertIsNone(read_latest_run_request(Path(directory)))
 
 
 if __name__ == "__main__":

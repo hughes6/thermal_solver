@@ -37,6 +37,9 @@ FATAL_SIGNATURES = (
 STAGE_MARKER_RE = re.compile(
     r"^[A-Za-z].*: t=[0-9.eE+-]+ -> [0-9.eE+-]+$"
 )
+RUN_REQUEST_RE = re.compile(
+    r"\|\s+run_start\s+mode=(\S+)\s+processes=\d+\s+requestedEnd=([0-9.eE+-]+)"
+)
 
 
 def read_samples(log_path: Path) -> list[tuple[float, float]]:
@@ -132,6 +135,18 @@ def read_checkpoint_stride(case_directory: Path) -> float | None:
     else:
         return None
     return stride if stride > 0 else None
+
+
+def read_latest_run_request(case_directory: Path) -> tuple[str, float] | None:
+    summary = case_directory / "run_summary.log"
+    if not summary.is_file():
+        return None
+    latest: tuple[str, float] | None = None
+    for line in summary.read_text(encoding="utf-8", errors="ignore").splitlines():
+        match = RUN_REQUEST_RE.search(line)
+        if match:
+            latest = match.group(1), float(match.group(2))
+    return latest
 
 
 def numeric_directories(path: Path) -> list[float]:
@@ -281,6 +296,7 @@ def main() -> int:
     )
     checkpoint_stride = read_checkpoint_stride(case_directory)
     maximum_courant, cumulative_continuity, fatal_signatures = read_health(log_path)
+    run_request = read_latest_run_request(case_directory)
     case_bytes = directory_size(case_directory)
     free_bytes = shutil.disk_usage(case_directory).free
 
@@ -292,6 +308,16 @@ def main() -> int:
     if stage_span > 0:
         stage_fraction = min(1.0, max(0.0, (current_time - start_time) / stage_span))
         print(f"Stage progress: {100.0 * stage_fraction:.2f}%")
+    if run_request is not None:
+        run_mode, requested_end = run_request
+        if requested_end > start_time and abs(requested_end - end_time) > 1e-9:
+            overall_fraction = min(
+                1.0, max(0.0, current_time / requested_end)
+            )
+            print(
+                f"Overall requested progress ({run_mode}): "
+                f"{100.0 * overall_fraction:.2f}% toward {requested_end:.9g} s"
+            )
     print(f"Recent rate: {slope:.1f} wall s / simulated s")
     print(f"Solver logged wall time: {format_duration(logged_wall_time)}")
     print(f"Estimated remaining wall time: {format_duration(remaining_simulated * slope)}")
