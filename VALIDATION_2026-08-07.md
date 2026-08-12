@@ -2557,3 +2557,18 @@ The unchanged active case subsequently completed an aligned checkpoint at
 velocity-component change to 5.04 m/s. Exterior mass imbalance was 0.00205%,
 and the hottest solid cell was 293.6705 K. These results continue the settling
 trend independently of the future-export exchange-integral change.
+
+The later aligned `2.71312490 s` checkpoint showed that the cold-start RANS
+field is bounded but not monotonically freezing. Across the preceding
+`0.0983967 s`, velocity relative RMS change rebounded to 7.584% and `alphat` to
+10.057%, while fluid-temperature change remained only 0.000581 K RMS. The
+engineering boundary values remained much steadier: the main vent supplied
+0.29773941 kg/s, the nine top fans exhausted 0.032797-0.033271 kg/s each, all
+directions were correct, reverse flow was zero, and exterior mass imbalance
+was 0.00086%. A connectivity audit passed when supplied the physically correct
+legacy expectation of two fluid regions (rack ambient plus the sealed fanless
+KVM); future exports store that expectation in case metadata automatically.
+The energy audit still intentionally failed at -4.02 W transported versus
+1545 W applied because fluid heat sources remain disabled throughout the cold
+airflow stage. This checkpoint reinforces that stable bulk/device flow alone
+must not bypass the spatial and one-air-exchange startup gates.
