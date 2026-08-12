@@ -67,6 +67,7 @@ Write-Host "Checking Python plotting scripts"
     "tools/fan_curve_fitter.py" `
     "tools/heat_load_estimator.py" `
     "tools/openfoam_field_convergence.py" `
+    "tools/openfoam_field_delta.py" `
     "tools/openfoam_cross_case_comparison.py" `
     "tools/openfoam_mesh_comparison.py" `
     "tools/openfoam_progress.py" `
@@ -78,6 +79,7 @@ Write-Host "Checking Python plotting scripts"
     "tests/plot_geometry_test.py" `
     "tests/openfoam_animation_test.py" `
     "tests/openfoam_field_convergence_test.py" `
+    "tests/openfoam_field_delta_test.py" `
     "tests/openfoam_cross_case_comparison_test.py" `
     "tests/openfoam_mesh_comparison_test.py" `
     "tests/map_openfoam_case_test.py" `
@@ -126,6 +128,11 @@ if ($LASTEXITCODE -ne 0) {
 & python -m unittest "tests.openfoam_field_convergence_test"
 if ($LASTEXITCODE -ne 0) {
     throw "OpenFOAM field convergence tests failed"
+}
+
+& python -m unittest "tests.openfoam_field_delta_test"
+if ($LASTEXITCODE -ne 0) {
+    throw "OpenFOAM binary field delta tests failed"
 }
 
 & python -m unittest "tests.openfoam_cross_case_comparison_test"
