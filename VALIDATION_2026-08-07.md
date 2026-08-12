@@ -2190,3 +2190,21 @@ and 0.01 s interval, the targets are 0.33, 0.34, and 0.35 s. Timestep caps,
 physical duration, spatial gates, device-flow gates, and air-exchange gates are
 unchanged; only unnecessary solver launches and premature postprocessing are
 removed.
+
+### Purge-safe spatial reference
+
+Runtime review of the first continuous stage found that endpoint spatial RMS
+postprocessing still read `U` from the stage's original processor checkpoint.
+That worked for short stages, but a long exchange advance writes enough rolling
+checkpoints for `purgeWrite` to delete the original time before the endpoint.
+The CFD solve would complete and then fail while attempting to construct
+`UPrevious` from a purged directory.
+
+Before each live-flow solve, the runner now atomically preserves only the
+starting `U` field for every rank in `.stage_velocity_reference`, outside the
+OpenFOAM time directories. Endpoint spatial postprocessing reads that immutable
+reference and removes it after the convergence state is safely written. A
+restart from an intermediate rolling checkpoint naturally replaces the stage
+reference with the velocity at that new authoritative start. Full checkpoint
+retention remains bounded at three time directories while exact start-to-end
+spatial comparison remains available regardless of stage duration.

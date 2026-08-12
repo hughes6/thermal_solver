@@ -340,6 +340,18 @@ int main(int argc, char** argv) {
         assert(text.str().find(
             "stage_write_interval=\"$checkpoint_steps\"") !=
                std::string::npos);
+        const auto preserve_stage_velocity = text.str().find(
+            "stage_velocity_reference_tmp=");
+        const auto launch_live_stage = text.str().find(
+            "echo \"$label: t=$current -> $target\"");
+        const auto use_stage_velocity = text.str().find(
+            "source_field=\"$stage_velocity_reference/processor${rank}/U\"");
+        assert(preserve_stage_velocity != std::string::npos);
+        assert(preserve_stage_velocity < launch_live_stage);
+        assert(use_stage_velocity > launch_live_stage);
+        assert(text.str().find(
+            "rm -rf -- \"$stage_velocity_reference\"") !=
+               std::string::npos);
         assert(text.str().find(
             "read -r stage_dt stage_steps checkpoint_steps") !=
                std::string::npos);
