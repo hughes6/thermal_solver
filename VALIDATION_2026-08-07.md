@@ -2490,3 +2490,13 @@ CSV now ends at `2.31953796 s` with 0.29767717 kg/s intake, 0.29767275 kg/s
 exhaust, and -4.28272 W cold-stage sensible rejection. The thermal re-ingestion
 index remains correctly undefined until exhaust exceeds ambient. Twenty-eight
 related direct-field and recirculation tests pass.
+
+The live heat-animation path was exercised directly against the decomposed
+production case. VTK selected `2.31953796 s`, returned five populated regions
+with 494,039 total fluid-plus-solid cells, and an off-screen plot produced a
+143,459-byte PNG without exposing any `mesh contains no cells` warnings. The
+current cold-stage hotspot was 20.4836 C in `Dell_PowerEdge_R470_1U_1` at
+approximately `(0.152654, 0.504725, 0.238250) m`. Low-level unsuppressed VTK
+inspection still reports empty meshes for legitimate rank/solid combinations
+with zero owned cells; the user-facing animation correctly suppresses only
+those read-time warnings and retains all five populated regions.
