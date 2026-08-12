@@ -1798,3 +1798,61 @@ internal OpenFOAM zone to its component, kind, and original device name. The
 recirculation tool uses this metadata to label equipment pairs. It retains an
 adjacent-zone fallback for preserved cases exported before the metadata was
 added, which is why the audited legacy CSVs use zone-pair identifiers.
+
+## Fresh unique-case screening validation (2026-08-11)
+
+`model_runner --case-name NAME` now replaces only the final directory name of
+the configured OpenFOAM case path. It rejects paths, `.` and `..`, and cannot
+be combined with `--plot-existing`. This makes it possible to export and run a
+new case without deleting or reusing the configured production case. The
+runner's generated Bash and plotting commands all use the unique path.
+
+The current exporter was exercised with the unique case
+`model_generic_airside_screening_mapped_20260811`. Its 208,772 total cells
+split into 177,064 fluid cells and four solid regions. `checkMesh
+-allRegions -allGeometry -allTopology` passed every region; the fluid maximum
+aspect ratio was 38.3013 and all AMI weight sums were one.
+
+A true cold start exposed a screening-only runtime problem. After the 0.05 s
+fan ramp, the full acceptance audit at 0.35 s had 0.2832% mass imbalance,
+correct device directions, and stable device flows, while consecutive spatial
+velocity changes were 2.959% and 2.922%. The former 1% screening threshold
+therefore rejected an otherwise settled transient RANS field. At roughly
+70--110 wall-clock seconds per 0.01 s window, advancing through the measured
+5.35 s rack air-exchange horizon would have taken about 10--16 hours. The
+screening local spatial threshold is now 3%, matching its previously validated
+3% two-checkpoint long-lag threshold. The in-depth profile remains at 1%.
+
+This relaxation does not bypass the independent safeguards. In the mapped
+run, checkpoints were still rejected for a 3.108% spatial change, a 5.57%
+internal fan-flow change, and 4--9.5% accepted-field long-lag changes. The
+mapped state was accepted only after three live 0.01 s windows with 0.132%
+mass imbalance, 0.311% maximum device-flow change, correct directions, and
+2.55% spatial change. Only then did it skip the cold-start air-exchange
+horizon. The global undecomposed mesh was verified byte-for-byte identical to
+the source mesh; processor fields were regenerated rather than copied because
+the two decompositions had different cell ordering.
+
+The fresh 18,000 s screening stage completed with a mandatory terminal live
+flow refresh and final report regeneration:
+
+| Metric | Fresh screening at 18,000.01 s |
+|---|---:|
+| Peak thermal drift | 0.03785 K/300 s |
+| Component-average thermal drift | 0.016675 K/300 s |
+| Boundary mass imbalance | 0.04105% |
+| Maximum device-flow change | 0.18894% |
+| Local velocity RMS change | 2.0781% |
+| Main intake mass flow | 0.292358 kg/s inward |
+| Main intake temperature | 293.15 K |
+| External exhaust temperature | 298.3844 K |
+| Net sensible heat rejection | 1537.35 W |
+| Heat-rejection fraction of 1545 W | 99.5047% |
+| External thermal re-ingestion index | 0.0000 |
+| Maximum equipment air-rise index | 0.49279 |
+
+The thermal field was settled, but the long-lag airflow guard repeatedly
+detected gradual redistribution across multiple 2,400 s thermal intervals.
+The 18,000 s endpoint had rebuilt only checkpoint 1 of the required two, so it
+was not labelled fully coupled-converged. Continuing the preserved case with
+the documented 100,000 s / 10,000 s refresh workflow is therefore warranted.

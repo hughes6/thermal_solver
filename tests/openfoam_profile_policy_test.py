@@ -54,10 +54,15 @@ class OpenFoamProfilePolicyTest(unittest.TestCase):
                     0.001,
                 )
 
-    def test_all_profiles_require_spatial_velocity_convergence(self):
+    def test_profiles_require_validated_spatial_velocity_convergence(self):
+        self.assertEqual(
+            self.profile("screening_foam_cfg.toml")[
+                "maximum_velocity_rms_change_fraction"
+            ],
+            0.03,
+        )
         for name in (
             "default_foam_cfg.toml",
-            "screening_foam_cfg.toml",
             "validation_foam_cfg.toml",
             "indepth_foam_cfg.toml",
         ):

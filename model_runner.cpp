@@ -39,6 +39,7 @@ int main(int argc, char* argv[]) {
   bool force_native = false;
   bool geometry_only = false;
   bool plot_existing = false;
+  std::string openfoam_case_name;
   std::vector<std::string> positional_arguments;
   for(int i = 1; i < argc; ++i) {
     const std::string argument = argv[i];
@@ -49,10 +50,23 @@ int main(int argc, char* argv[]) {
       force_native = true;
     } else if(argument == "--plot-existing") {
       plot_existing = true;
+    } else if(argument == "--case-name") {
+      if(i + 1 >= argc) {
+        std::cerr << "--case-name requires a directory name.\n";
+        return 2;
+      }
+      openfoam_case_name = argv[++i];
+      const std::filesystem::path requested(openfoam_case_name);
+      if(openfoam_case_name.empty() || openfoam_case_name == "." ||
+         openfoam_case_name == ".." || requested.has_parent_path() ||
+         requested.filename().string() != openfoam_case_name) {
+        std::cerr << "--case-name must be one directory name without a path.\n";
+        return 2;
+      }
     } else if(argument == "--help" || argument == "-h") {
       std::cout
           << "Usage: model_runner.exe [--native] [--geometry-only] "
-             "[--plot-existing] "
+             "[--plot-existing] [--case-name NAME] "
              "[model.toml] [fan_curves.toml]\n"
           << "  --native  Run the built-in solver even when the model enables "
              "OpenFOAM.\n"
@@ -61,6 +75,9 @@ int main(int argc, char* argv[]) {
           << "  --plot-existing  Plot existing native results without loading "
              "a model or modifying data. Optional positional arguments are "
              "[simulation.csv] [output.txt].\n";
+      std::cout
+          << "  --case-name NAME  Override only the exported OpenFOAM case "
+             "directory name while preserving its configured root.\n";
       return 0;
     } else if(!argument.empty() && argument[0] == '-') {
       std::cerr << "Unknown option: " << argument << "\n";
@@ -75,9 +92,9 @@ int main(int argc, char* argv[]) {
   }
 
   if(plot_existing) {
-    if(force_native || geometry_only) {
+    if(force_native || geometry_only || !openfoam_case_name.empty()) {
       std::cerr << "--plot-existing cannot be combined with --native or "
-                   "--geometry-only.\n";
+                   "--geometry-only or --case-name.\n";
       return 2;
     }
     const std::filesystem::path simulation_path =
@@ -130,6 +147,14 @@ int main(int argc, char* argv[]) {
       ? "library/fan_curves/fan_curves.toml" : positional_arguments[1];
   loader.load_fan_curves(fan_curve_path);
   loader.load_model(model_path);
+  if(!openfoam_case_name.empty()) {
+    const std::filesystem::path configured =
+        loader.model.openfoam_solver.case_directory;
+    loader.model.openfoam_solver.case_directory =
+        configured.parent_path() / openfoam_case_name;
+    std::cout << "OpenFOAM case name overridden: "
+              << loader.model.openfoam_solver.case_directory << "\n";
+  }
   if(force_native) {
     loader.model.openfoam_solver.enabled = false;
     std::cout << "Native backend forced; OpenFOAM export is disabled.\n";
