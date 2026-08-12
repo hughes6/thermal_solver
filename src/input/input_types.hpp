@@ -152,7 +152,7 @@ struct OpenFoamSolverInput {
     int pimple_pressure_correctors = 0;
     double fan_curve_extension_multiplier = 2.0;
     bool use_multirate_thermal = true;
-    double airflow_warmup_time = 5.0;
+    double airflow_warmup_time = 20.0;
     bool use_fan_startup_ramp = true;
     double fan_startup_ramp_time = 0.05;
     int fan_startup_ramp_steps = 5;

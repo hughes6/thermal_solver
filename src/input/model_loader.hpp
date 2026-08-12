@@ -981,7 +981,7 @@ struct ModelLoader {
                     value("use_multirate_thermal")
                         .value<bool>().value_or(true);
                 cfg.airflow_warmup_time=value("airflow_warmup_time")
-                    .value<double>().value_or(5.0);
+                    .value<double>().value_or(20.0);
                 cfg.use_fan_startup_ramp=value("use_fan_startup_ramp")
                     .value<bool>().value_or(true);
                 cfg.fan_startup_ramp_time=value("fan_startup_ramp_time")

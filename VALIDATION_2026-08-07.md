@@ -682,7 +682,9 @@ measured air-exchange time * minimum_initial_air_exchange_fraction
 
 The default, screening, validation, and in-depth profiles set the fraction to
 1.0. Their existing 0.30 s fixed minimum remains a lower bound, while the
-existing 5 s `airflow_warmup_time` remains the safety limit. A weakly
+current 20 s `airflow_warmup_time` remains the safety limit. It was increased
+after a production-rack case measured a 12.43 s exchange horizon that could
+not possibly satisfy the former 5 s cap. A weakly
 ventilated model whose required exchange horizon exceeds that limit now fails
 explicitly instead of being certified prematurely; the user must increase the
 safety limit. A truly sealed model uses the existing undefined-exchange
