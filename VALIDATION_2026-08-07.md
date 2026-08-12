@@ -2500,3 +2500,17 @@ approximately `(0.152654, 0.504725, 0.238250) m`. Low-level unsuppressed VTK
 inspection still reports empty meshes for legitimate rank/solid combinations
 with zero owned cells; the user-facing animation correctly suppresses only
 those read-time warnings and retains all five populated regions.
+
+Solid warming across `2.22114122 -> 2.31953796 s` followed applied-load order:
+Dell (950 W) changed 0.006236 K RMS, Trenton (425 W) 0.001033 K, Eaton
+(150 W) 0.000649 K, and the fanless KVM (20 W) 0.000100 K. Dell's maximum
+cell change was only 0.01851 K. This ordering supports correctly placed active
+sources rather than anomalous or runaway preheating.
+
+At the next aligned checkpoint, `2.41793469 s`, equal-window velocity change
+fell again to 6.123%, `alphat` crossed below 10% at 9.905%, fluid-temperature
+change fell to 0.000551 K RMS, and the localized maximum velocity-component
+change dropped to 5.18 m/s. Exterior mass imbalance remained only 0.00255%.
+`Fan_1` delivered +0.033220511 kg/s at 293.136195 K from 53 all-rank faces.
+The hottest solid cell was 293.6520 K; cold-stage sensible rejection remained
+intentionally unconverged at -4.24 W.
