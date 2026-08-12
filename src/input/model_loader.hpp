@@ -1738,7 +1738,7 @@ struct ModelLoader {
                 << cfg.parallel_processes;
             if(cfg.use_multirate_thermal)
                 std::cout << " --multirate " << model.simulation.duration;
-            std::cout << " 2>&1 | tee thermal_solver.stdout.log\n";
+            std::cout << " 2>&1 | tee -a thermal_solver.stdout.log\n";
             if(cfg.use_multirate_thermal) {
                 std::cout
                     << "\nTwo-stage long-rack convergence workflow "
@@ -1749,14 +1749,14 @@ struct ModelLoader {
                     << "' && set -o pipefail && ./run_parallel.sh "
                     << cfg.parallel_processes
                     << " --multirate 18000 2>&1 | "
-                       "tee multirate_18000.stdout.log\n"
+                       "tee -a multirate_18000.stdout.log\n"
                     << "  # Stage 2: continue from latestTime to 100000 s; "
                        "thermal-only with a 10000 s airflow refresh interval\n"
                     << "  cd '" << launch_directory
                     << "' && set -o pipefail && ./run_parallel.sh "
                     << cfg.parallel_processes
                     << " --multirate 100000 10000 2>&1 | "
-                       "tee multirate_100000.stdout.log\n"
+                       "tee -a multirate_100000.stdout.log\n"
                     << "Stage 2 preserves the 18000 s fields and may stop "
                        "early when thermal and refreshed-airflow convergence "
                        "criteria pass. Do not re-export with overwrite=true "
