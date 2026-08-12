@@ -2206,8 +2206,11 @@ OpenFOAM time directories. Endpoint spatial postprocessing reads that immutable
 reference and removes it after the convergence state is safely written. A
 restart from an intermediate rolling checkpoint naturally replaces the stage
 reference with the velocity at that new authoritative start. Full checkpoint
-retention remains bounded at three time directories while exact start-to-end
-spatial comparison remains available regardless of stage duration.
+retention remains bounded during a solver invocation: OpenFOAM can retain the
+three inherited directories plus up to the configured three writes made by
+that invocation. After the stage, the generated runner prunes the combined
+processor history back to three. Exact start-to-end spatial comparison remains
+available regardless of stage duration.
 
 The 494,039-cell production case then provided an actual interruption proof.
 Its continuous 0.17-to-0.33 s stage wrote an intermediate checkpoint at
@@ -2219,3 +2222,11 @@ observation start, planned exactly 80 steps to 0.33 s, and atomically preserved
 four stage velocity references totaling about 10.5 MB before relaunching the
 solver. This is runtime proof on the production mesh, not only generated-script
 coverage.
+
+The subsequent 0.45-to-5.27144 s full-exchange stage provided a real rolling
+write on the same case. It planned 4,851 equal steps at
+`deltaT=0.0009939064110492681 s`, writing every 99 steps. The first checkpoint
+landed exactly at `0.54839673469387784 s` on all four ranks. Every rank contained
+all required fluid, turbulence, and solid-temperature restart fields. The case
+grew from 0.709 to 0.768 GB, while the immutable velocity references remained
+byte-identical to the 0.45 s starting fields.
