@@ -2377,3 +2377,13 @@ loads, outlet temperature was 293.1352 K, and the hottest solid cell was only
 293.5592 K. This is valid evidence that mass flow is established but not a
 thermal-convergence result; the same audit must pass energy balance after the
 thermal stages before the production result can be accepted.
+
+The next four-rank checkpoint at `2.02434776 s` was complete (29 matching files
+per rank), and the solver advanced beyond it. Over the same `0.0983967 s`
+window used above, full-field velocity relative RMS change fell from 8.210% to
+7.367%; turbulent thermal diffusivity fell from 14.004% to 12.317%. Fluid
+temperature changed only 0.000636 K RMS. The corrected audit measured
+`-0.29727392 kg/s` inflow and `0.29727571 kg/s` outflow, improving exterior mass
+imbalance to 0.00060%. Energy transport remained intentionally unconverged at
+`-4.37 W` versus 1545 W applied. This supports continued airflow settling and
+confirms that a sound mass balance alone is not thermal acceptance.
