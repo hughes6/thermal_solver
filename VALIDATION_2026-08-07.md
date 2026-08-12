@@ -2397,3 +2397,15 @@ that the count changes from one to two when its final three inward faces are
 closed; the standard export fixture emits one. This makes topology validation
 self-describing and prevents both false failures for intentional sealed air and
 false passes caused by globally disabling connectivity checks.
+
+The selected-checkpoint recirculation report had the same stale-root-time
+assumption as the old validator. It now selects requested or latest complete
+decomposed checkpoints and aggregates face-resolved `phi` and `T` across every
+rank; a single common MPI checkpoint is valid and rounded directory names are
+resolved tolerantly. Thirty focused tests pass. A live CSV-only report at
+`2.02434776 s` reproduced the validator's all-rank values: 0.297273923 kg/s
+inflow, 0.297275709 kg/s outflow, and -4.37134 W sensible rejection. It also
+resolved each of nine exhaust fan patches at about 0.03275-0.03323 kg/s and the
+single intake vent at -0.297274 kg/s. Bidirectional flow was zero. The thermal
+re-ingestion index was correctly undefined because cold-stage exhaust remained
+slightly below ambient; it becomes meaningful only after powered air warms.

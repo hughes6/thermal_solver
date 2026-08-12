@@ -12,11 +12,10 @@ from pathlib import Path
 
 try:
     from tools.openfoam_field_delta import (
-        latest_common_time_names,
         resolve_time_directory,
     )
 except ModuleNotFoundError:  # Direct execution: python tools/validate_openfoam_case.py
-    from openfoam_field_delta import latest_common_time_names, resolve_time_directory
+    from openfoam_field_delta import resolve_time_directory
 
 
 @dataclass
@@ -80,9 +79,24 @@ def latest_result_paths(case: Path) -> tuple[float, list[Path]]:
         key=lambda path: int(path.name[9:]),
     )
     if processors:
-        _, latest = latest_common_time_names(case)
-        paths = [resolve_time_directory(processor, latest) for processor in processors]
-        return float(latest), paths
+        common: set[float] | None = None
+        for processor in processors:
+            values = set()
+            for child in processor.iterdir():
+                if child.is_dir():
+                    try:
+                        values.add(float(child.name))
+                    except ValueError:
+                        pass
+            common = values if common is None else common & values
+        if not common:
+            raise ValueError("No numeric checkpoint time is common to every rank")
+        latest = max(common)
+        paths = [
+            resolve_time_directory(processor, str(latest))
+            for processor in processors
+        ]
+        return latest, paths
     value, path = latest_time(case)
     return value, [path]
 

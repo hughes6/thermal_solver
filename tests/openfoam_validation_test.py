@@ -71,6 +71,18 @@ class BinaryPatchParsingTests(unittest.TestCase):
 
 
 class LatestResultTests(unittest.TestCase):
+    def test_single_decomposed_checkpoint_is_valid_latest_result(self):
+        with tempfile.TemporaryDirectory() as directory:
+            case = Path(directory)
+            expected = []
+            for rank in range(2):
+                checkpoint = case / f"processor{rank}" / "12.5"
+                checkpoint.mkdir(parents=True)
+                expected.append(checkpoint)
+            value, paths = latest_result_paths(case)
+            self.assertEqual(value, 12.5)
+            self.assertEqual(paths, expected)
+
     def test_expected_topology_reads_export_metadata(self):
         with tempfile.TemporaryDirectory() as directory:
             case = Path(directory)

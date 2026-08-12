@@ -13,6 +13,7 @@ from plot.recirculation_report import (
     internal_device_temperature_rows,
     read_report,
     selected_time_path,
+    selected_result_paths,
     solver_postprocess_command,
 )
 
@@ -68,6 +69,18 @@ fluid_to_solid
             value, path = selected_time_path(case, 24000.01)
             self.assertAlmostEqual(value, 24000.01)
             self.assertEqual(path, checkpoint)
+
+    def test_selected_result_paths_use_all_decomposed_ranks(self):
+        with tempfile.TemporaryDirectory() as directory:
+            case = Path(directory)
+            expected = []
+            for rank in range(2):
+                checkpoint = case / f"processor{rank}" / "24000.009999999991"
+                checkpoint.mkdir(parents=True)
+                expected.append(checkpoint)
+            value, paths = selected_result_paths(case, 24000.01)
+            self.assertAlmostEqual(value, 24000.01)
+            self.assertEqual(paths, expected)
 
     def test_reingestion_and_net_sensible_heat(self):
         histories = {

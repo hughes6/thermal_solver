@@ -9,7 +9,8 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from tools.validate_openfoam_case import latest_time, patch_values
+from tools.openfoam_field_delta import resolve_time_directory
+from tools.validate_openfoam_case import latest_result_paths, patch_values
 
 
 def solver_postprocess_command(case: Path) -> str:
@@ -55,17 +56,25 @@ def directional_patch_sample(fluxes, temperatures):
 
 
 def latest_face_resolved_samples(case: Path, patches):
-    """Read reconstructed boundary faces so bidirectional flow is not hidden."""
-    time_s, time_path = latest_time(case)
-    phi = time_path / "fluid" / "phi"
-    temperature = time_path / "fluid" / "T"
-    if not phi.is_file() or not temperature.is_file():
+    """Read latest complete boundary faces so bidirectional flow is not hidden."""
+    time_s, result_paths = latest_result_paths(case)
+    if any(not (path / "fluid" / field).is_file()
+           for path in result_paths for field in ("phi", "T")):
         return time_s, {}
     samples = {}
     for patch in patches:
         try:
-            samples[patch] = directional_patch_sample(
-                patch_values(phi, patch), patch_values(temperature, patch))
+            fluxes = []
+            temperatures = []
+            for result_path in result_paths:
+                rank_fluxes = patch_values(result_path / "fluid" / "phi", patch)
+                rank_temperatures = patch_values(
+                    result_path / "fluid" / "T", patch)
+                if len(rank_temperatures) == 1:
+                    rank_temperatures *= len(rank_fluxes)
+                fluxes.extend(rank_fluxes)
+                temperatures.extend(rank_temperatures)
+            samples[patch] = directional_patch_sample(fluxes, temperatures)
         except ValueError:
             continue
     return time_s, samples
@@ -84,7 +93,15 @@ def boundary_patch_names(case: Path) -> list[str]:
     )
 
 
-def selected_time_path(case: Path, requested: float) -> tuple[float, Path]:
+def selected_result_paths(case: Path, requested: float) -> tuple[float, list[Path]]:
+    processors = sorted(
+        (path for path in case.glob("processor*") if path.is_dir()),
+        key=lambda path: int(path.name[9:]),
+    )
+    if processors:
+        paths = [resolve_time_directory(processor, str(requested))
+                 for processor in processors]
+        return float(paths[0].name), paths
     candidates = []
     for path in case.iterdir():
         if not path.is_dir():
@@ -99,7 +116,17 @@ def selected_time_path(case: Path, requested: float) -> tuple[float, Path]:
     if not candidates:
         raise ValueError(f"No reconstructed checkpoint matches t={requested:g} s")
     _, value, path = min(candidates)
-    return value, path
+    return value, [path]
+
+
+def selected_time_path(case: Path, requested: float) -> tuple[float, Path]:
+    """Backward-compatible reconstructed checkpoint selector."""
+    value, paths = selected_result_paths(case, requested)
+    if len(paths) != 1:
+        raise ValueError(
+            f"Checkpoint t={requested:g} is decomposed across {len(paths)} ranks"
+        )
+    return value, paths[0]
 
 
 def checkpoint_face_rows(case: Path, requested_times, ambient_k: float,
@@ -109,16 +136,24 @@ def checkpoint_face_rows(case: Path, requested_times, ambient_k: float,
     rows = []
     face_rows = []
     for requested in requested_times:
-        time_s, time_path = selected_time_path(case, requested)
-        phi = time_path / "fluid" / "phi"
-        temperature = time_path / "fluid" / "T"
-        if not phi.is_file() or not temperature.is_file():
+        time_s, result_paths = selected_result_paths(case, requested)
+        if any(not (path / "fluid" / field).is_file()
+               for path in result_paths for field in ("phi", "T")):
             raise ValueError(f"Checkpoint t={time_s:g} lacks reconstructed phi or T")
         inward_mass = outward_mass = inward_heat = outward_heat = 0.0
         bidirectional_mass = 0.0
         for patch in patches:
-            sample = directional_patch_sample(
-                patch_values(phi, patch), patch_values(temperature, patch))
+            fluxes = []
+            temperatures = []
+            for result_path in result_paths:
+                rank_fluxes = patch_values(result_path / "fluid" / "phi", patch)
+                rank_temperatures = patch_values(
+                    result_path / "fluid" / "T", patch)
+                if len(rank_temperatures) == 1:
+                    rank_temperatures *= len(rank_fluxes)
+                fluxes.extend(rank_fluxes)
+                temperatures.extend(rank_temperatures)
+            sample = directional_patch_sample(fluxes, temperatures)
             face_rows.append((time_s, patch, *sample))
             _, inward, outward, inward_t, outward_t, _ = sample
             if inward and inward_t == inward_t:
