@@ -28,6 +28,16 @@ class OpenFoamProgressTest(unittest.TestCase):
             self.assertEqual(samples, [(1.0, 10.0), (2.0, 30.0), (3.0, 50.0)])
             self.assertAlmostEqual(recent_slope(samples, 3), 20.0)
 
+    def test_rate_prefers_clock_time_over_execution_time(self):
+        with tempfile.TemporaryDirectory() as directory:
+            log = Path(directory) / "run.stdout.log"
+            log.write_text(
+                "Time = 1\nExecutionTime = 5 s ClockTime = 10 s\n"
+                "Time = 2\nExecutionTime = 10 s ClockTime = 30 s\n",
+                encoding="utf-8",
+            )
+            self.assertEqual(read_samples(log), [(1.0, 10.0), (2.0, 30.0)])
+
     def test_health_parser_ignores_trap_banner(self):
         with tempfile.TemporaryDirectory() as directory:
             log = Path(directory) / "run.stdout.log"

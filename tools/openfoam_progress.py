@@ -9,7 +9,9 @@ from pathlib import Path
 
 
 TIME_RE = re.compile(r"^Time = ([0-9.eE+-]+)$")
-EXECUTION_RE = re.compile(r"^ExecutionTime = ([0-9.eE+-]+) s")
+EXECUTION_RE = re.compile(
+    r"^ExecutionTime = ([0-9.eE+-]+) s(?:\s+ClockTime = ([0-9.eE+-]+) s)?"
+)
 CONTROL_TIME_RE = re.compile(
     r"^\s*(startTime|endTime)\s+([0-9.eE+-]+)\s*;"
 )
@@ -47,7 +49,8 @@ def read_samples(log_path: Path) -> list[tuple[float, float]]:
                 continue
             match = EXECUTION_RE.match(line)
             if match and current_time is not None:
-                samples.append((current_time, float(match.group(1))))
+                logged_wall_time = match.group(2) or match.group(1)
+                samples.append((current_time, float(logged_wall_time)))
     return samples
 
 
@@ -178,7 +181,7 @@ def main() -> int:
     log_path = choose_log(case_directory, args.log.resolve() if args.log else None)
     samples = read_samples(log_path)
     slope = recent_slope(samples, args.window)
-    current_time, execution_time = samples[-1]
+    current_time, logged_wall_time = samples[-1]
     start_time, configured_end_time = read_control_times(case_directory)
     end_time = args.end_time if args.end_time is not None else configured_end_time
     remaining_simulated = max(0.0, end_time - current_time)
@@ -194,7 +197,7 @@ def main() -> int:
         stage_fraction = min(1.0, max(0.0, (current_time - start_time) / stage_span))
         print(f"Stage progress: {100.0 * stage_fraction:.2f}%")
     print(f"Recent rate: {slope:.1f} wall s / simulated s")
-    print(f"Solver execution time: {format_duration(execution_time)}")
+    print(f"Solver logged wall time: {format_duration(logged_wall_time)}")
     print(f"Estimated remaining wall time: {format_duration(remaining_simulated * slope)}")
     if maximum_courant is not None:
         print(f"Latest fluid max Courant: {maximum_courant:.6g}")
