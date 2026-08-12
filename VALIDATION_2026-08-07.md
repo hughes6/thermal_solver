@@ -2696,8 +2696,8 @@ for `k`, 10.13% for `alphat`, and 5.24% for `omega`. The largest `k` and
 `alphat` change was at `(0.183742, 0.922850, 0.101045) m` in the upper rear
 wake. Pressure-pattern change was only 0.116 Pa RMS after removing its
 arbitrary uniform gauge offset, equal to 0.749% of the reference
-pressure-fluctuation RMS. The Dell internal-air subset was 0.448 Pa RMS and
-2.59%; regions with an almost uniform pressure field can have a large relative
+pressure-fluctuation RMS. The Dell internal-air subset was 0.477 Pa RMS and
+2.49%; regions with an almost uniform pressure field can have a large relative
 percentage despite a negligible absolute-Pa change, so both values must be
 read together.
 
@@ -2707,6 +2707,9 @@ a misleading 0.000149% for the same interval. Pressure comparisons now remove
 each snapshot's volume-weighted uniform offset before calculating differences
 and the reference RMS. This is invariant to OpenFOAM's arbitrary pressure
 gauge while preserving real spatial pressure-pattern changes and reporting
-them in Pa. A focused test proves that a pure 500 Pa uniform shift produces
-zero error and that a nonuniform perturbation remains nonzero; velocity,
+them in Pa. Component-air partitions use the one whole-fluid gauge correction,
+not a separate correction per component, so a real change in component-to-rack
+pressure drop remains measurable. Focused tests prove that a pure 500 Pa
+uniform shift produces zero error, a nonuniform perturbation remains nonzero,
+and opposite component/external pressure shifts are retained; velocity,
 temperature, and turbulence metrics are unchanged.

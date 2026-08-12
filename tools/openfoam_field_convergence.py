@@ -253,6 +253,8 @@ def component_air_partitions(centers, components, tolerance=1.0e-9):
 
 def append_fluid_partition_rows(rows, reference, sample, fields, components):
     """Append field-error metrics for component air and external rack air."""
+    import numpy as np
+
     fluid_regions = [name for name in reference if name.endswith("fluid/internalMesh")]
     if len(fluid_regions) != 1:
         raise ValueError(
@@ -261,19 +263,35 @@ def append_fluid_partition_rows(rows, reference, sample, fields, components):
         )
     region = fluid_regions[0]
     values = reference[region]
+    partition_fields = {}
+    for field in fields:
+        if field not in values or field not in sample[region]:
+            continue
+        reference_field = values[field]
+        sample_field = sample[region][field]
+        if field in ("p", "p_rgh"):
+            volumes = values["volume"]
+            total_volume = float(np.sum(volumes))
+            reference_field = reference_field - float(
+                np.sum(volumes * reference_field) / total_volume
+            )
+            sample_field = sample_field - float(
+                np.sum(volumes * sample_field) / total_volume
+            )
+        partition_fields[field] = (reference_field, sample_field)
     for label, mask in component_air_partitions(values["center"], components):
         if not mask.any():
             continue
         for field in fields:
-            if field not in values or field not in sample[region]:
+            if field not in partition_fields:
                 continue
+            reference_field, sample_field = partition_fields[field]
             rows.append({
                 "region": label,
                 "field": field,
                 **field_error(
-                    values[field][mask], sample[region][field][mask],
+                    reference_field[mask], sample_field[mask],
                     values["volume"][mask], values["center"][mask],
-                    remove_uniform_offset=field in ("p", "p_rgh"),
                 ),
             })
 

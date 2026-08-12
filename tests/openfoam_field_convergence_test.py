@@ -5,6 +5,7 @@ from tempfile import TemporaryDirectory
 import numpy as np
 
 from tools.openfoam_field_convergence import (
+    append_fluid_partition_rows,
     component_air_partitions,
     compare_snapshots,
     directory_times,
@@ -87,6 +88,39 @@ class OpenFoamFieldConvergenceTest(unittest.TestCase):
         )[0]
         self.assertGreater(changed_row["rms"], 0.0)
         self.assertGreater(changed_row["relative_rms"], 0.0)
+
+    def test_pressure_partitions_preserve_relative_pressure_level(self):
+        reference = {
+            "fluid/internalMesh": {
+                "volume": np.ones(4),
+                "center": np.array([
+                    [0.25, 0.25, 0.25],
+                    [0.75, 0.25, 0.25],
+                    [1.25, 0.25, 0.25],
+                    [1.75, 0.25, 0.25],
+                ]),
+                "p_rgh": np.array([100000.0, 100000.0, 100000.0, 100000.0]),
+            },
+        }
+        sample = {
+            "fluid/internalMesh": {
+                **reference["fluid/internalMesh"],
+                "p_rgh": np.array([100501.0, 100501.0, 100499.0, 100499.0]),
+            },
+        }
+        rows = []
+        append_fluid_partition_rows(
+            rows, reference, sample, ("p_rgh",),
+            [("server", (0.0, 0.0, 0.0), (1.0, 1.0, 1.0))],
+        )
+        server = next(
+            row for row in rows if row["region"] == "fluid/componentAir:server"
+        )
+        external = next(
+            row for row in rows if row["region"] == "fluid/externalRackAir"
+        )
+        self.assertAlmostEqual(server["rms"], 1.0)
+        self.assertAlmostEqual(external["rms"], 1.0)
 
     def test_vector_norm_and_aggregate(self):
         reference = {
