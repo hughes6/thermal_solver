@@ -26,6 +26,14 @@ int main() {
         "Report live simulation progress and ETA") != std::string::npos);
     assert(unpaired_captured.str().find("tools/openfoam_progress.py") !=
            std::string::npos);
+    assert(unpaired_captured.str().find("set -o pipefail") !=
+           std::string::npos);
+    assert(unpaired_captured.str().find(
+        "tee thermal_solver.stdout.log") != std::string::npos);
+    assert(unpaired_captured.str().find(
+        "tee multirate_18000.stdout.log") != std::string::npos);
+    assert(unpaired_captured.str().find(
+        "tee multirate_100000.stdout.log") != std::string::npos);
     assert(unpaired_captured.str().find(
         "Build the source-attributed exhaust tracer once") ==
         std::string::npos);
