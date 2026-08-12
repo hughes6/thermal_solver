@@ -2208,3 +2208,14 @@ restart from an intermediate rolling checkpoint naturally replaces the stage
 reference with the velocity at that new authoritative start. Full checkpoint
 retention remains bounded at three time directories while exact start-to-end
 spatial comparison remains available regardless of stage duration.
+
+The 494,039-cell production case then provided an actual interruption proof.
+Its continuous 0.17-to-0.33 s stage wrote an intermediate checkpoint at
+0.25000000000000017 s. All four ranks contained every required fluid restart
+field and all four solid-region temperature fields. The process was terminated
+after reaching 0.253 s and restarted. The runner selected the complete 0.25 s
+checkpoint rather than falling back to 0.17 s, retained the original 0.05 s
+observation start, planned exactly 80 steps to 0.33 s, and atomically preserved
+four stage velocity references totaling about 10.5 MB before relaunching the
+solver. This is runtime proof on the production mesh, not only generated-script
+coverage.
