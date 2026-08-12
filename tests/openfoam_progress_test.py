@@ -15,6 +15,7 @@ from tools.openfoam_progress import (
     read_checkpoint_stride,
     read_health,
     read_latest_run_request,
+    read_initial_airflow_progress,
     read_samples,
     recent_slope,
     is_stale_run,
@@ -236,6 +237,24 @@ class OpenFoamProgressTest(unittest.TestCase):
     def test_missing_run_summary_has_no_overall_request(self):
         with tempfile.TemporaryDirectory() as directory:
             self.assertIsNone(read_latest_run_request(Path(directory)))
+
+    def test_reads_pending_initial_air_exchange_stage(self):
+        with tempfile.TemporaryDirectory() as directory:
+            case = Path(directory)
+            (case / ".initial_airflow_pending").write_text(
+                "0.05\n", encoding="utf-8"
+            )
+            (case / "run_summary.log").write_text(
+                "2026-01-01T00:00:00Z | initial_air_exchange_advance "
+                "current=0.45 target=5.27144 requiredElapsed=5.22144\n",
+                encoding="utf-8",
+            )
+            self.assertEqual(
+                read_initial_airflow_progress(case),
+                (0.05, 5.27144, 5.22144),
+            )
+            (case / ".initial_airflow_converged").touch()
+            self.assertIsNone(read_initial_airflow_progress(case))
 
 
 if __name__ == "__main__":

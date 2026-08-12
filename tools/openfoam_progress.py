@@ -41,6 +41,10 @@ STAGE_MARKER_RE = re.compile(
 RUN_REQUEST_RE = re.compile(
     r"\|\s+run_start\s+mode=(\S+)\s+processes=\d+\s+requestedEnd=([0-9.eE+-]+)"
 )
+INITIAL_EXCHANGE_RE = re.compile(
+    r"\|\s+initial_air_exchange_advance\s+current=([0-9.eE+-]+)\s+"
+    r"target=([0-9.eE+-]+)\s+requiredElapsed=([0-9.eE+-]+)"
+)
 
 
 def read_samples(log_path: Path) -> list[tuple[float, float]]:
@@ -171,6 +175,35 @@ def read_latest_run_request(case_directory: Path) -> tuple[str, float] | None:
         if match:
             latest = match.group(1), float(match.group(2))
     return latest
+
+
+def read_initial_airflow_progress(
+    case_directory: Path,
+) -> tuple[float, float | None, float | None] | None:
+    """Read the restart-safe initial-airflow observation and exchange target."""
+    if (case_directory / ".initial_airflow_converged").is_file():
+        return None
+    pending = case_directory / ".initial_airflow_pending"
+    if not pending.is_file():
+        return None
+    try:
+        observation_start = float(
+            pending.read_text(encoding="utf-8", errors="ignore").split()[0]
+        )
+    except (IndexError, ValueError, OSError):
+        return None
+    latest_target: float | None = None
+    required_elapsed: float | None = None
+    summary = case_directory / "run_summary.log"
+    if summary.is_file():
+        for line in summary.read_text(
+            encoding="utf-8", errors="ignore"
+        ).splitlines():
+            match = INITIAL_EXCHANGE_RE.search(line)
+            if match:
+                latest_target = float(match.group(2))
+                required_elapsed = float(match.group(3))
+    return observation_start, latest_target, required_elapsed
 
 
 def numeric_directories(path: Path) -> list[float]:
@@ -368,6 +401,7 @@ def main() -> int:
     )
     maximum_courant, cumulative_continuity, fatal_signatures = read_health(log_path)
     run_request = read_latest_run_request(case_directory)
+    initial_airflow = read_initial_airflow_progress(case_directory)
     case_bytes = directory_size(case_directory)
     free_bytes = shutil.disk_usage(case_directory).free
 
@@ -388,6 +422,20 @@ def main() -> int:
             print(
                 f"Overall requested progress ({run_mode}): "
                 f"{100.0 * overall_fraction:.2f}% toward {requested_end:.9g} s"
+            )
+    if initial_airflow is not None:
+        observation_start, exchange_target, required_elapsed = initial_airflow
+        if exchange_target is not None and required_elapsed is not None:
+            print(
+                "Workflow stage: initial airflow physical exchange "
+                f"(observation start {observation_start:.9g} s, required "
+                f"elapsed {required_elapsed:.9g} s, target "
+                f"{exchange_target:.9g} s)"
+            )
+        else:
+            print(
+                "Workflow stage: adaptive initial airflow observation "
+                f"(started {observation_start:.9g} s)"
             )
     print(f"Recent rate: {slope:.1f} wall s / simulated s")
     print(f"Solver logged wall time: {format_duration(logged_wall_time)}")
