@@ -82,6 +82,36 @@ class OpenFoamFieldDeltaTest(unittest.TestCase):
                 ("vector", [1.0, 2.0, 3.0, 4.0, 5.0, 6.0]),
             )
 
+    def test_reads_zero_cell_partition_field(self):
+        with tempfile.TemporaryDirectory() as directory:
+            field = Path(directory) / "T"
+            field.write_bytes(
+                b'FoamFile\n{\nformat      binary;\n'
+                b'arch        "LSB;label=32;scalar=64";\n}\n'
+                b'internalField nonuniform List<scalar> 0;\n'
+            )
+            self.assertEqual(read_internal_field(field), ("scalar", []))
+
+    def test_comparison_accepts_matching_zero_cell_rank(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            before = root / "before"
+            after = root / "after"
+            zero_before = root / "zero_before"
+            zero_after = root / "zero_after"
+            write_field(before, "scalar", [1.0])
+            write_field(after, "scalar", [2.0])
+            for path in (zero_before, zero_after):
+                path.write_bytes(
+                    b'FoamFile\n{\nformat      binary;\n'
+                    b'arch        "LSB;label=32;scalar=64";\n}\n'
+                    b'internalField nonuniform List<scalar> 0;\n'
+                )
+            count, *_ = compare_fields(
+                [before, zero_before], [after, zero_after]
+            )
+            self.assertEqual(count, 1)
+
     def test_compares_binary_fields(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

@@ -14,6 +14,10 @@ FIELD_RE = re.compile(
     rb"internalField\s+nonuniform\s+List<(scalar|vector)>\s+(\d+)\s*\(",
     re.MULTILINE,
 )
+EMPTY_FIELD_RE = re.compile(
+    rb"internalField\s+nonuniform\s+List<(scalar|vector)>\s+0\s*;",
+    re.MULTILINE,
+)
 
 
 def read_internal_field(path: Path) -> tuple[str, list[float]]:
@@ -26,6 +30,9 @@ def read_internal_field(path: Path) -> tuple[str, list[float]]:
         raise ValueError(f"{path} does not use supported 64-bit scalars")
     match = FIELD_RE.search(payload)
     if not match:
+        empty = EMPTY_FIELD_RE.search(payload)
+        if empty:
+            return empty.group(1).decode("ascii"), []
         raise ValueError(f"nonuniform internalField was not found in {path}")
     field_type = match.group(1).decode("ascii")
     item_count = int(match.group(2))
