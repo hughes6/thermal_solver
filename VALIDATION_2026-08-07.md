@@ -1953,3 +1953,50 @@ converged. The case was stopped at that completed checkpoint before another
 thermal interval. The result confirms that screening's speed advantage is
 large: strict live-flow windows are several times slower even though both
 profiles already agree closely on the engineering outputs.
+
+## Source-attributed exhaust recirculation (2026-08-11)
+
+A dedicated steady passive-scalar utility now traces each internal equipment
+exhaust independently on an already-converged airflow field. It reads fixed
+`rho`, `phi`, and `nut`, solves a bounded 0--1 scalar with turbulent diffusion
+`rho*nut/Sc_t`, clamps the selected exhaust cell zone to one, and applies zero
+concentration to ambient inflow. It does not advance or modify the thermal
+solution. The Python driver creates a unique compact derivative case and
+refuses to overwrite an existing output directory.
+
+Build under OpenFOAM v2606, from a path without spaces:
+
+```bash
+source /usr/lib/openfoam/openfoam2606/etc/bashrc
+export WM_PROJECT_USER_DIR=/tmp/thermal_sim_foam_user
+export FOAM_USER_APPBIN=/mnt/c/OpenFOAM/thermal_sim_v2_tools/bin
+cd /mnt/c/Users/hconn/Downloads/Thermal\\ Sim/v2.2/openfoam_tracer_solver
+wmake
+```
+
+Run the complete source-to-intake matrix from a reconstructed converged case:
+
+```bash
+cd /tmp
+python3 /mnt/c/Users/hconn/Downloads/Thermal\\ Sim/v2.2/tools/exhaust_recirculation_tracer.py \
+  /mnt/c/OpenFOAM/thermal_sim_v2/model_generic_airside_screening_mapped_20260811 \
+  /mnt/c/OpenFOAM/thermal_sim_v2/tracer_attribution_RUN_ID \
+  --solver /mnt/c/OpenFOAM/thermal_sim_v2_tools/bin/steadyExhaustTracerFoam
+```
+
+The end-to-end validation copied only 32.9 MB before scalar output. All three
+fields stayed within 0--1 and converged below `1e-9` maximum field change. The
+80,000.01 s screening result was:
+
+| Exhaust source / Intake | Eaton UPS | Dell R470 | Trenton |
+|---|---:|---:|---:|
+| Eaton UPS | 0.0000% | 1.1683% | 2.1774% |
+| Dell R470 | 0.0001% | 9.2441% | 15.4799% |
+| Trenton | 0.0001% | 25.7389% | 32.3068% |
+
+These are volume-weighted tracer fractions over the thin intake cell zones.
+They robustly identify which exhaust source reaches which intake, but they are
+not yet face-integrated mass fractions. The result identifies Trenton exhaust
+as the dominant Dell-intake contaminant and quantifies substantial Dell and
+Trenton self-recirculation without adding multiple transported fields to the
+long thermal solve.

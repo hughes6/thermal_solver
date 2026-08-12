@@ -67,6 +67,7 @@ Write-Host "Checking Python plotting scripts"
     "tools/openfoam_cross_case_comparison.py" `
     "tools/openfoam_mesh_comparison.py" `
     "tools/map_openfoam_case.py" `
+    "tools/exhaust_recirculation_tracer.py" `
     "tests/coarse_heat_io_test.py" `
     "tests/engineering_tools_test.py" `
     "tests/plot_geometry_test.py" `
@@ -76,6 +77,7 @@ Write-Host "Checking Python plotting scripts"
     "tests/openfoam_mesh_comparison_test.py" `
     "tests/map_openfoam_case_test.py" `
     "tests/openfoam_profile_policy_test.py" `
+    "tests/exhaust_recirculation_tracer_test.py" `
     "tools/validate_openfoam_case.py" `
     "plot_outlet_flow.py" `
     "plot/recirculation_report.py" `
@@ -143,6 +145,11 @@ else {
 & python -m unittest "tests.openfoam_profile_policy_test"
 if ($LASTEXITCODE -ne 0) {
     throw "OpenFOAM profile policy tests failed"
+}
+
+& python -m unittest "tests.exhaust_recirculation_tracer_test"
+if ($LASTEXITCODE -ne 0) {
+    throw "Exhaust recirculation tracer tests failed"
 }
 
 & python -m unittest "tests.openfoam_validation_test"
