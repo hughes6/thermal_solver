@@ -142,7 +142,10 @@ def direct_patch_temperature(
         faces += len(fluxes)
     if not faces:
         raise ValueError(f"Patch {patch!r} has no faces at t={time_s:g} s")
-    return time_s, mass_flow, weighted_temperature / mass_flow, faces
+    temperature = (
+        weighted_temperature / mass_flow if mass_flow else float("nan")
+    )
+    return time_s, mass_flow, temperature, faces
 
 
 def main() -> None:
