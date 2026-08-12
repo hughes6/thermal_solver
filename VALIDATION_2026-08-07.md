@@ -2861,3 +2861,27 @@ manifests. Newer directories are reported separately as writes in progress.
 It also distinguishes all common checkpoints from the cadence-aligned tail:
 the live case correctly reports six common times but three in the current
 rolling series. A focused test reproduces the equal-rank partial-manifest race.
+
+At `3.59869551 s`, adjacent whole-fluid velocity movement decreased to
+8.257%, external rack-air movement to 8.320%, and Dell internal-air movement
+to 6.585%. The maximum velocity difference decreased again to 2.635 m/s at
+`(0.232500, 0.217950, 0.229000) m`, still inside the Dell. Eaton and KVM
+movement were 1.737% and 4.928%; Trenton's 17.756% relative value corresponds
+to a low reference velocity and is therefore not evidence of a large absolute
+disturbance. Temperature movement remained small at 0.000426 K RMS in the
+fluid and 0.000806 K across all regions. `k`, `alphat`, and `omega` changed
+11.865%, 11.210%, and 4.519%, while gauge-invariant pressure movement decreased
+to 0.093 Pa RMS (0.602%).
+
+The boundary operating point remained much steadier than the internal wake
+field. Intake magnitude changed -0.00297%; Fan 4 was the largest exhaust
+change at -0.33260%; all nine fans remained outward and the intake remained
+inward. Dell's direct intake/rear-outlet averages reached
+293.1536/293.2240 K and its intake-rise index decreased to 4.85%. Eaton's
+293.1580/293.1553 K pair remained reversed and therefore undefined, while
+Trenton's 293.1513/293.1551 K pair produced a 25.39% ratio based on only a
+0.0038 K outlet rise. Net sensible rejection remained an unconverged -3.53 W.
+The combined evidence again supports continuing through the physical
+air-exchange gate: boundary mass flow is effectively settled, localized
+fan-bank differences are shrinking, but the spatial velocity and turbulence
+fields have not yet met the convergence criteria.
