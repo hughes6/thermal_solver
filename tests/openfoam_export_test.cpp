@@ -329,6 +329,12 @@ int main(int argc, char** argv) {
             "summary \"initial_air_exchange_infeasible current=$current") !=
                std::string::npos);
         assert(text.str().find(
+            "lead=minimum-2*interval; if(lead<0)lead=0") !=
+               std::string::npos);
+        assert(text.str().find(
+            "eligibility_target=\"$eligibility_target\"") !=
+               std::string::npos);
+        assert(text.str().find(
             "-v checkpoint=\"0.10000000000000001\"") !=
                std::string::npos);
         assert(text.str().find(

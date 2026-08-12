@@ -2174,3 +2174,19 @@ checkpoint blocks and recomputes a no-larger timestep, ensuring the final write
 also lands exactly on the requested stage endpoint. A 12.379 s example at the
 0.001 s cap produces 12,400 steps, writes every 100 steps, uses
 `deltaT=0.00099830645 s`, and lands exactly at 12.379 s.
+
+### Pre-eligibility launch reduction
+
+Cold airflow cannot be accepted before `minimum_initial_airflow_duration`, but
+the older controller still stopped for postprocessing and relaunched at every
+0.01 s check interval throughout that forbidden period. Those interruptions do
+not change the continuously integrated CFD solution and add substantial fixed
+overhead on large meshes. The controller now advances directly to two check
+intervals before the eligibility time, using the rolling live-flow checkpoints
+above. It then performs two ordinary adjacent check windows so both the current
+and previous spatial RMS changes are measured at the configured interval before
+the first possible acceptance. For a 0.05 s post-ramp start, 0.30 s minimum,
+and 0.01 s interval, the targets are 0.33, 0.34, and 0.35 s. Timestep caps,
+physical duration, spatial gates, device-flow gates, and air-exchange gates are
+unchanged; only unnecessary solver launches and premature postprocessing are
+removed.

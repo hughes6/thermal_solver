@@ -4376,7 +4376,8 @@ functions
                     "    {\n"
                     "        local initial_start=\"$current\" "
                         "initial_elapsed=0 initial_target initial_limit "
-                        "pending_initial_start exchange_horizon exchange_target=\n"
+                        "pending_initial_start exchange_horizon exchange_target= "
+                        "eligibility_target=\n"
                     "        if [[ -s \"$initial_pending_marker\" ]]; then\n"
                     "            pending_initial_start=$(awk 'NF { print $1; exit }' "
                         "\"$initial_pending_marker\")\n"
@@ -4411,14 +4412,25 @@ functions
                     << options.airflow_warmup_time
                     << "\" -v end=\"$requested_end\" "
                         "'BEGIN { limit=start+maximum; print (limit<end?limit:end) }')\n"
+                    "        if [[ ! -f \"$mapped_state_marker\" ]]; then\n"
+                    "            eligibility_target=$(awk -v start=\"$initial_start\" -v minimum=\""
+                    << options.minimum_initial_airflow_duration
+                    << "\" -v interval=\""
+                    << options.initial_airflow_check_interval
+                    << "\" -v limit=\"$initial_limit\" 'BEGIN { "
+                        "lead=minimum-2*interval; if(lead<0)lead=0; "
+                        "x=start+lead; if(x>limit)x=limit; printf \"%.17g\", x }')\n"
+                    "        fi\n"
                     "        while awk -v a=\"$current\" "
                         "-v b=\"$initial_limit\" "
                         "'BEGIN { s=(b<0?-b:b); if(s<1)s=1; "
                         "tol=1e-9*s; exit !(a<b-tol) }'; do\n"
                     "            initial_target=$(awk -v a=\"$current\" -v d=\""
                     << options.initial_airflow_check_interval
-                    << "\" -v exchange_target=\"$exchange_target\" -v limit=\"$initial_limit\" "
-                        "'BEGIN { x=a+d; if(exchange_target!=\"\" && exchange_target>x)x=exchange_target; if(x>limit)x=limit; "
+                    << "\" -v eligibility_target=\"$eligibility_target\" "
+                        "-v exchange_target=\"$exchange_target\" -v limit=\"$initial_limit\" "
+                        "'BEGIN { x=a+d; if(eligibility_target!=\"\" && eligibility_target>x)x=eligibility_target; "
+                        "if(exchange_target!=\"\" && exchange_target>x)x=exchange_target; if(x>limit)x=limit; "
                         "printf \"%.17g\", x }')\n"
                     "            stage false \"$initial_target\" "
                     << options.maximum_courant_number << ' '
