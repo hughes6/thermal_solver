@@ -2572,3 +2572,39 @@ The energy audit still intentionally failed at -4.02 W transported versus
 1545 W applied because fluid heat sources remain disabled throughout the cold
 airflow stage. This checkpoint reinforces that stable bulk/device flow alone
 must not bypass the spatial and one-air-exchange startup gates.
+
+The apparent late-stage runtime regression was traced to the workstation, not
+to deteriorating linear convergence. Over successive 0.10 s windows from
+2.28-2.78 s, average pressure iterations per timestep remained in the narrow
+32.18-33.70 range. The final two windows changed only from 33.24 to 33.63
+pressure iterations per step, while execution cost rose from 7.88 to 9.05 s
+per step. All four MPI ranks remained CPU-bound, I/O wait and swap activity
+were zero, but Windows reported the 2.40 GHz i5-1135G7 at only 907 MHz and
+about 49% processor performance under sustained load. The laptop was on AC at
+100% charge, with the Balanced plan allowing a 100% maximum processor state.
+Only a 53.9 C platform thermal zone was exposed; CPU-core telemetry was not
+available. Runtime comparisons from this long run must therefore record CPU
+performance state and should not attribute its approximately 15% late-window
+slowdown to solver settings. Cooling/platform throttling is the most consistent
+explanation, although direct CPU-core temperature evidence is unavailable.
+
+At the aligned `2.81152163 s` checkpoint, the equal-cell diagnostic measured
+8.009% velocity RMS change and 10.781% `alphat` change over the preceding
+0.0983967 s; fluid-temperature movement remained only 0.000576 K RMS. Fan and
+vent outputs were much steadier over the same interval: maximum individual fan
+change was 0.2911%, intake changed 0.00531% in magnitude, exhaust changed
+0.00406%, all directions remained correct, and reverse flow remained zero.
+The retained checkpoint interval is almost ten times the runner's 0.01 s local
+acceptance window, so its cumulative change must not be compared directly with
+the profile's per-window threshold.
+
+The established volume-weighted, geometry-partitioned diagnostic measured
+6.996% whole-fluid velocity change, 6.706% in external rack air, 16.716% in
+Dell internal air, 7.819% in Trenton internal air, and 0.875% in Eaton internal
+air. Thus the movement is strongest around Dell but is not confined to
+equipment passages. The lightweight binary `openfoam_field_delta.py` result
+differs because it weights every cell equally and does not read cell volumes.
+Its output now labels all RMS values as cell-weighted and explicitly warns that
+they are not the runner's volume-weighted convergence-gate metric. The
+volume-aware `openfoam_field_convergence.py` remains authoritative when
+assessing or localizing runner-gate behavior.
