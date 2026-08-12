@@ -4,6 +4,8 @@ from pathlib import Path
 
 from tools.openfoam_progress import (
     choose_log,
+    directory_size,
+    format_bytes,
     format_duration,
     numeric_directories,
     read_control_times,
@@ -109,6 +111,15 @@ class OpenFoamProgressTest(unittest.TestCase):
             newer.touch()
             self.assertEqual(choose_log(case, newer), newer)
             self.assertEqual(format_duration(3661), "1h 01m 01s")
+
+    def test_reports_directory_size_and_formats_gibibytes(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "nested").mkdir()
+            (root / "first").write_bytes(b"1234")
+            (root / "nested" / "second").write_bytes(b"56789")
+            self.assertEqual(directory_size(root), 9)
+            self.assertEqual(format_bytes(3 * 1024 ** 3), "3.00 GiB")
 
 
 if __name__ == "__main__":

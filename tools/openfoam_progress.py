@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import re
+import shutil
 from pathlib import Path
 
 
@@ -153,6 +154,23 @@ def format_duration(seconds: float) -> str:
     return f"{hours:d}h {minutes:02d}m {seconds:02d}s"
 
 
+def directory_size(path: Path) -> int:
+    """Return the allocated file payload below path, tolerating live-file races."""
+    total = 0
+    for child in path.rglob("*"):
+        try:
+            if child.is_file():
+                total += child.stat().st_size
+        except OSError:
+            # A rolling checkpoint may be purged while this report is running.
+            pass
+    return total
+
+
+def format_bytes(byte_count: int) -> str:
+    return f"{byte_count / (1024 ** 3):.2f} GiB"
+
+
 def choose_log(case_directory: Path, explicit: Path | None) -> Path:
     if explicit is not None:
         return explicit
@@ -188,6 +206,8 @@ def main() -> int:
     checkpoints = numeric_directories(case_directory / "processor0")
     checkpoint_stride = read_checkpoint_stride(case_directory)
     maximum_courant, cumulative_continuity, fatal_signatures = read_health(log_path)
+    case_bytes = directory_size(case_directory)
+    free_bytes = shutil.disk_usage(case_directory).free
 
     print(f"Case: {case_directory}")
     print(f"Log: {log_path}")
@@ -206,6 +226,10 @@ def main() -> int:
     print(
         "Fatal signatures: "
         + (", ".join(fatal_signatures) if fatal_signatures else "none")
+    )
+    print(
+        f"Storage: case {format_bytes(case_bytes)}, "
+        f"volume free {format_bytes(free_bytes)}"
     )
     if checkpoints:
         print(
