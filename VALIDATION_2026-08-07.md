@@ -2286,3 +2286,24 @@ This proves the live ceiling rather than merely inferring it from
 `purgeWrite`: during one continuous stage, storage is bounded at the inherited
 history plus `saved_time_directories`; after solver completion, the runner's
 explicit prune reduces the combined history to `saved_time_directories`.
+
+### Ambient-connected air-exchange volume
+
+The KVM connectivity classification exposed a second issue: the generated
+air-exchange calculation summed every OpenFOAM fluid cell, including sealed
+equipment air. The active case therefore embedded `1.05595265 m3` in its
+runner, while the ambient-connected rack component measured `1.04811571 m3`.
+The sealed KVM added 0.00783697 m3, or 0.742% of the old exchange volume. At the
+0.45 s operating point, excluding it changes the estimated horizon from
+5.22144 to approximately 5.18269 s. The active validation stage was left
+unchanged because shortening a running endpoint would invalidate its restart
+proof; its result is conservative by about 0.039 s.
+
+Future exports now flood-fill fluid cells from every external fan/vent source
+zone and use only that ambient-connected volume for the exchange horizon.
+Solid cells and active zero-thickness face walls block traversal. Sealed fluid
+remains present in the CHT solve and continues to store and transfer heat; it is
+excluded only from the rack-air replacement calculation. A focused 36-cell
+regression encloses one fluid cell behind three inward face walls and verifies
+that connected volume falls from 0.035 to 0.034 m3 while the sealed cell remains
+fluid.

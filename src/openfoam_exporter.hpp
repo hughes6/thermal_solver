@@ -223,6 +223,73 @@ public:
             options.case_directory / "run_parallel.sh");
     }
 
+    static double ambient_connected_fluid_volume(const Mesh& mesh) {
+        const auto& cells=mesh.get_cells();
+        const auto& metadata=mesh.get_openfoam_cell_metadata();
+        if(cells.size()!=metadata.size())
+            throw std::logic_error(
+                "OpenFoamExporter: missing cell metadata while calculating "
+                "ambient-connected fluid volume.");
+
+        double total_fluid_volume=0.0;
+        for(std::size_t cell=0;cell<cells.size();++cell)
+            if(metadata[cell].region_type==
+               Mesh::OpenFoamCellMetadata::RegionType::Fluid)
+                total_fluid_volume+=cells[cell].volume();
+
+        std::vector<unsigned char> connected(cells.size(),0);
+        std::vector<std::size_t> frontier;
+        for(const auto& patch : mesh.get_openfoam_boundary_patches())
+            for(const std::size_t cell : patch.adjacent_cells) {
+                if(cell>=cells.size() || connected[cell] ||
+                   metadata[cell].region_type!=
+                       Mesh::OpenFoamCellMetadata::RegionType::Fluid)
+                    continue;
+                connected[cell]=1;
+                frontier.push_back(cell);
+            }
+
+        // Closed conduction-only cases have no ambient device seed and do not
+        // use an exchange horizon. Retain their prior total-volume behavior.
+        if(frontier.empty()) return total_fluid_volume;
+
+        const int ny=mesh.get_ny();
+        const int nz=mesh.get_nz();
+        const std::array<std::array<int,3>,6> offsets{{
+            {{-1,0,0}},{{1,0,0}},{{0,-1,0}},
+            {{0,1,0}},{{0,0,-1}},{{0,0,1}}
+        }};
+        for(std::size_t cursor=0;cursor<frontier.size();++cursor) {
+            const std::size_t cell=frontier[cursor];
+            const int x=static_cast<int>(cell/
+                static_cast<std::size_t>(ny*nz));
+            const std::size_t remainder=
+                cell%static_cast<std::size_t>(ny*nz);
+            const int y=static_cast<int>(remainder/static_cast<std::size_t>(nz));
+            const int z=static_cast<int>(remainder%static_cast<std::size_t>(nz));
+            for(const auto& offset : offsets) {
+                const int next_x=x+offset[0];
+                const int next_y=y+offset[1];
+                const int next_z=z+offset[2];
+                if(next_x<0 || next_x>=mesh.get_nx() ||
+                   next_y<0 || next_y>=ny || next_z<0 || next_z>=nz ||
+                   mesh.wall_between(x,y,z,next_x,next_y,next_z)!=nullptr)
+                    continue;
+                const std::size_t next=mesh.idx(next_x,next_y,next_z);
+                if(connected[next] || metadata[next].region_type!=
+                   Mesh::OpenFoamCellMetadata::RegionType::Fluid)
+                    continue;
+                connected[next]=1;
+                frontier.push_back(next);
+            }
+        }
+
+        double connected_volume=0.0;
+        for(const std::size_t cell : frontier)
+            connected_volume+=cells[cell].volume();
+        return connected_volume;
+    }
+
 private:
     static bool is_openfoam_time_name(const std::string& name) {
         if(name.empty() || name=="0") return false;
@@ -2814,18 +2881,10 @@ functions
         const Mesh& mesh,
         const OpenFoamExportOptions& options,
         const std::filesystem::path& path) {
-        double fluid_volume_m3=0.0;
-        const auto& cells=mesh.get_cells();
-        const auto& metadata=mesh.get_openfoam_cell_metadata();
-        if(cells.size()!=metadata.size())
-            throw std::logic_error(
-                "OpenFoamExporter: missing cell metadata while writing "
-                "parallel runner.");
-        for(std::size_t cell=0;cell<cells.size();++cell)
-            if(metadata[cell].region_type==
-               Mesh::OpenFoamCellMetadata::RegionType::Fluid)
-                fluid_volume_m3+=cells[cell].volume();
-        validate_positive_finite(fluid_volume_m3,"fluid volume");
+        const double fluid_volume_m3=
+            ambient_connected_fluid_volume(mesh);
+        validate_positive_finite(
+            fluid_volume_m3,"ambient-connected fluid volume");
         std::ofstream output(path,std::ios::binary);
         require_stream(output,path);
         output.precision(17);

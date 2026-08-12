@@ -3,6 +3,7 @@ $ErrorActionPreference = "Stop"
 $tests = @(
     "air_heat_source_parser_test",
     "openfoam_export_test",
+    "openfoam_connected_volume_test",
     "openfoam_profile_options_test",
     "pcg_flow_test",
     "advection_subcycling_test",
