@@ -65,6 +65,7 @@ class OpenFoamProgressTest(unittest.TestCase):
             (case / "system").mkdir()
             (case / "system" / "controlDict").write_text(
                 "startTime 2.5;\nendTime 12.5;\n"
+                "writeControl timeStep;\n"
                 "deltaT 0.01;\nwriteInterval 25;\n",
                 encoding="utf-8",
             )
@@ -75,6 +76,17 @@ class OpenFoamProgressTest(unittest.TestCase):
             self.assertEqual(read_control_times(case), (2.5, 12.5))
             self.assertEqual(read_checkpoint_stride(case), 0.25)
             self.assertEqual(numeric_directories(processor), [0.5, 2.0])
+
+    def test_adjustable_runtime_interval_is_already_physical_time(self):
+        with tempfile.TemporaryDirectory() as directory:
+            case = Path(directory)
+            (case / "system").mkdir()
+            (case / "system" / "controlDict").write_text(
+                "writeControl adjustableRunTime;\n"
+                "deltaT 0.01;\nwriteInterval 30;\n",
+                encoding="utf-8",
+            )
+            self.assertEqual(read_checkpoint_stride(case), 30.0)
 
     def test_selects_latest_log_and_formats_duration(self):
         with tempfile.TemporaryDirectory() as directory:

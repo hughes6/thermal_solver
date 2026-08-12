@@ -16,6 +16,7 @@ CONTROL_TIME_RE = re.compile(
 CONTROL_STEP_RE = re.compile(
     r"^\s*(deltaT|writeInterval)\s+([0-9.eE+-]+)\s*;"
 )
+WRITE_CONTROL_RE = re.compile(r"^\s*writeControl\s+([A-Za-z]+)\s*;")
 COURANT_RE = re.compile(
     r"Region: fluid Courant Number mean: ([0-9.eE+-]+) max: ([0-9.eE+-]+)"
 )
@@ -107,13 +108,24 @@ def read_control_times(case_directory: Path) -> tuple[float, float]:
 def read_checkpoint_stride(case_directory: Path) -> float | None:
     control = case_directory / "system" / "controlDict"
     values: dict[str, float] = {}
+    write_control: str | None = None
     for line in control.read_text(encoding="utf-8", errors="ignore").splitlines():
+        control_match = WRITE_CONTROL_RE.match(line)
+        if control_match and write_control is None:
+            write_control = control_match.group(1)
         match = CONTROL_STEP_RE.match(line)
         if match and match.group(1) not in values:
             values[match.group(1)] = float(match.group(2))
-    if "deltaT" not in values or "writeInterval" not in values:
+    if "writeInterval" not in values:
         return None
-    stride = values["deltaT"] * values["writeInterval"]
+    if write_control == "timeStep":
+        if "deltaT" not in values:
+            return None
+        stride = values["deltaT"] * values["writeInterval"]
+    elif write_control in ("runTime", "adjustableRunTime"):
+        stride = values["writeInterval"]
+    else:
+        return None
     return stride if stride > 0 else None
 
 
