@@ -2409,3 +2409,14 @@ resolved each of nine exhaust fan patches at about 0.03275-0.03323 kg/s and the
 single intake vent at -0.297274 kg/s. Bidirectional flow was zero. The thermal
 re-ingestion index was correctly undefined because cold-stage exhaust remained
 slightly below ambient; it becomes meaningful only after powered air warms.
+
+At the next aligned checkpoint, `2.12274449 s`, velocity relative RMS change
+continued downward to 7.062% and `alphat` to 11.443%; `k`, `omega`, and `nut`
+changed 11.272%, 3.793%, and 11.443%, respectively. A 6.46 m/s maximum velocity
+component change was localized to rank 0, whose aggregate relative change was
+only 5.50%. Rank 2 had the largest relative change (17.87%) because its field
+magnitude was low (0.477 m/s RMS), while its maximum component change was only
+1.50 m/s. Exterior mass imbalance remained 0.00157%, all ambient faces retained
+their intended directions, maxCo remained about 2.59, and no fatal signature
+appeared. The combined evidence identifies bounded source/wake motion rather
+than a broad numerical instability.
