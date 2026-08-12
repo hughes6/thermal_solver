@@ -2915,3 +2915,26 @@ checkpoint reader failed closed before accessing the fields; rerunning it with
 access to the existing user site completed normally. No solver files were
 installed, reconstructed, or modified, and the numerical CSVs were written to
 the user's temporary directory rather than the production case.
+
+At `3.79548898 s`, adjacent whole-fluid velocity movement decreased for a
+third consecutive window to 6.820%, external rack-air movement to 6.896%, and
+Dell internal-air movement to 3.465%. Trenton's low-speed relative movement
+also decreased to 12.862%, or 0.00722 m/s RMS in absolute terms. The maximum
+local velocity difference rose from 2.053 to 3.038 m/s at
+`(0.345249, 0.333200, 0.229000) m` in the Dell region, confirming that local
+wake phase is not monotonic even while volume-wide motion decreases. Fluid
+temperature moved 0.000389 K RMS and all regions moved 0.000787 K RMS. `k`
+movement changed slightly from 10.205% to 10.569%, while `alphat` and `omega`
+decreased to 10.356% and 3.716%. Gauge-invariant pressure movement remained
+small at 0.078 Pa RMS (0.501%).
+
+The boundary operating point tightened further. Intake magnitude changed
+-0.01484%, Fan 9 was the largest exhaust change at +0.17231%, all nine fans
+remained outward, the intake remained inward, and bidirectional flow remained
+zero. Dell's intake/rear-outlet averages reached 293.1538/293.2271 K and its
+intake-rise index remained 4.92%. Eaton remained reversed and undefined at
+293.1581/293.1557 K. Trenton reached 293.1515/293.1554 K; its 27.15% ratio
+still rests on only a 0.0039 K outlet rise. Net sensible rejection remained an
+expected early-transient -3.43 W. The global trend is favorable but remains
+above the spatial gate, and the nonmonotonic local maximum reinforces the
+decision to continue through the full physical air exchange.
