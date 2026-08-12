@@ -2307,3 +2307,47 @@ excluded only from the rack-air replacement calculation. A focused 36-cell
 regression encloses one fluid cell behind three inward face walls and verifies
 that connected volume falls from 0.035 to 0.034 m3 while the sealed cell remains
 fluid.
+
+### Full-exchange production continuation
+
+The same four-rank production stage was allowed to continue without changing
+its numerical controls. Rolling writes through `1.6307608163265697 s` remained
+aligned across every rank. Each latest checkpoint contained the same 29-file
+relative manifest, including all critical fluid fields and all four solid
+temperature fields. OpenFOAM retained exactly six time directories per rank
+(three inherited plus three invocation-local writes), replacing the oldest
+rolling write after each new completed checkpoint. No fatal signature occurred;
+maximum fluid Courant number remained about 2.56 against the cold-screening
+limit of 5, and cumulative continuity error remained of order `7e-6`.
+
+A lightweight binary-field audit compared all 425,353 decomposed fluid cells
+(1,276,059 velocity components) without launching VTK or OpenFOAM
+postprocessing. Relative unweighted RMS velocity changes over equal
+`0.0983967 s` checkpoint intervals fell from 13.30% to 12.61%, 10.87%, 9.72%,
+and 9.37%, then remained in a 9.59-9.80% band. Scaling the long-window values by
+the square root of the 9.84 screening check windows gives approximately
+3.0-3.1%, consistent with the screening profile's measured short-window
+transient-RANS fluctuation band. The simple early exponential projection was
+therefore rejected: the field approaches a statistically unsteady floor, not
+a cellwise motionless state. Final acceptance remains the generated runner's
+volume-weighted adjacent-window spatial checks plus device-flow stability,
+direction validity, exterior mass balance, and the complete air-exchange
+duration.
+
+The turbulence fields independently showed the same behavior. Across the two
+latest retained equal intervals, `k` relative RMS change was 13.74% and 13.54%,
+while turbulent thermal diffusivity changed 18.62% and 17.56%. Fluid
+temperature changed only about 0.00061 K RMS per interval. These measurements
+support retaining the full exchange horizon; they do not justify shortening it
+from stable Courant or continuity values alone.
+
+Solid watt loads remain active during initial airflow. In this case the
+generated `fvOptions.flowOnly` and `fvOptions.fullFan` fluid dictionaries are
+identical because there is no separate fluid volumetric heat source to remove.
+From 0.45 to 1.532 s, cumulative solid temperature changes were 0.0669 K RMS
+(0.2255 K maximum) for Dell, 0.0114 K RMS (0.0291 K maximum) for Trenton,
+0.00714 K RMS (0.0519 K maximum) for Eaton, and 0.00106 K RMS (0.00286 K
+maximum) for the KVM. At 1.631 s, Dell's cumulative maximum rise was 0.2446 K.
+Over the same 0.45-to-1.631 s span, fluid temperature changed only 0.00602 K RMS
+and density changed 0.0153% RMS. Powered-solid preheating is therefore physical
+but too small to materially move this initial fan operating point.
