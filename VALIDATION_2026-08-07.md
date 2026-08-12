@@ -2049,3 +2049,31 @@ Every new report now includes a JSON provenance file with the source case and
 exact time, device metadata path, mesh cells/faces, Schmidt number, convergence
 settings, per-source runtime, and final field change. This prevents attribution
 results from being silently associated with a stale endpoint or another mesh.
+
+### Recirculation settling from 18,000 to 80,000 seconds
+
+The driver now accepts `--time` as either the exact reconstructed directory
+name or a uniquely matching numeric value. This permits a preserved case to be
+compared across endpoints without renaming directories or allowing latest-time
+selection to hide which result was analyzed.
+
+The corrected strict tracer solve was applied to the same screening mesh at
+18,000.01 s and the formally coupled-converged 80,000.01 s endpoint:
+
+| Exhaust source / Intake | 18,000.01 s | 80,000.01 s | Change |
+|---|---:|---:|---:|
+| Eaton / Dell | 0.8244% | 1.1763% | +0.3519 pp |
+| Eaton / Trenton | 1.6340% | 2.1196% | +0.4856 pp |
+| Dell / Dell | 8.4276% | 9.2344% | +0.8068 pp |
+| Dell / Trenton | 12.3225% | 15.1860% | +2.8635 pp |
+| Trenton / Dell | 27.8979% | 25.4083% | -2.4896 pp |
+| Trenton / Trenton | 30.9407% | 32.4377% | +1.4970 pp |
+
+The intake mass flows changed by only +0.037% for Eaton, +0.088% for Dell,
+and -0.289% for Trenton. However, the summed contribution from the three known
+equipment exhausts changed from 37.15% to 35.82% at the Dell intake and from
+44.90% to 49.74% at the Trenton intake. The bulk airflow is therefore already
+an excellent engineering estimate at 18,000 s, while quantitative source
+attribution continues to respond to the slowly changing thermally coupled flow
+field. Use the coupled-converged endpoint for final recirculation fractions;
+use the 18,000 s matrix for early path detection and mitigation screening.

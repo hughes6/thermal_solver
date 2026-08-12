@@ -57,6 +57,28 @@ def numeric_times(case: Path) -> list[tuple[float, Path]]:
     return sorted(result)
 
 
+def select_time(times: list[tuple[float, Path]], requested: str | None) -> Path:
+    valid = [(value, path) for value, path in times if all(
+        (path / "fluid" / field).is_file() for field in ("rho", "phi", "nut"))]
+    if not valid:
+        raise ValueError("No reconstructed time contains fluid/rho, fluid/phi, and fluid/nut")
+    if requested is None:
+        return valid[-1][1]
+    exact = [path for _, path in valid if path.name == requested]
+    if exact:
+        return exact[0]
+    try:
+        target = float(requested)
+    except ValueError as error:
+        raise ValueError(f"Unknown reconstructed time: {requested}") from error
+    scale = max(1.0, abs(target))
+    matches = [path for value, path in valid if abs(value - target) <= 1e-9*scale]
+    if len(matches) != 1:
+        available = ", ".join(path.name for _, path in valid)
+        raise ValueError(f"Time {requested} did not uniquely match. Available: {available}")
+    return matches[0]
+
+
 def add_tracer_solver(solution: str) -> str:
     match = re.search(r"\bsolvers\s*\{", solution)
     if not match:
@@ -131,6 +153,7 @@ def main() -> int:
     parser.add_argument("--solver", default="steadyExhaustTracerFoam")
     parser.add_argument("--device-metadata", type=Path,
                         help="device CSV override for a legacy source case")
+    parser.add_argument("--time", help="reconstructed time name or numeric value (default latest)")
     parser.add_argument("--schmidt", type=float, default=0.7)
     parser.add_argument("--iterations", type=int, default=500)
     parser.add_argument("--tolerance", type=float, default=1e-9)
@@ -144,10 +167,10 @@ def main() -> int:
             f"Missing device metadata: {metadata}. Supply --device-metadata "
             "for a legacy exported case.")
     devices = load_devices(metadata)
-    times = [(value, path) for value, path in numeric_times(source) if all((path / "fluid" / field).is_file() for field in ("rho", "phi", "nut"))]
-    if not times:
-        raise SystemExit("No reconstructed time contains fluid/rho, fluid/phi, and fluid/nut")
-    _, latest = times[-1]
+    try:
+        latest = select_time(numeric_times(source), args.time)
+    except ValueError as error:
+        raise SystemExit(str(error)) from error
     copy_case(source, output, latest, metadata)
     matrix: dict[tuple[int, int], float] = {}
     intake_flows: dict[int, float] = {}

@@ -2,7 +2,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from tools.exhaust_recirculation_tracer import MESH_RE, copy_case, load_devices, parse_solver_output
+from tools.exhaust_recirculation_tracer import MESH_RE, copy_case, load_devices, parse_solver_output, select_time
 
 
 class ExhaustTracerTest(unittest.TestCase):
@@ -48,6 +48,22 @@ class ExhaustTracerTest(unittest.TestCase):
             self.assertIn('"tracer.*"', copied)
             self.assertIn("tolerance       1e-12", copied)
             self.assertIn("relTol          0", copied)
+
+    def test_selects_latest_exact_and_numeric_time(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            times = []
+            for name in ("18.0000000001", "80.01"):
+                path = root / name
+                (path / "fluid").mkdir(parents=True)
+                for field in ("rho", "phi", "nut"):
+                    (path / "fluid" / field).write_text(field)
+                times.append((float(name), path))
+            self.assertEqual(select_time(times, None).name, "80.01")
+            self.assertEqual(select_time(times, "18.0000000001").name, "18.0000000001")
+            self.assertEqual(select_time(times, "18").name, "18.0000000001")
+            with self.assertRaisesRegex(ValueError, "did not uniquely match"):
+                select_time(times, "99")
 
 
 if __name__ == "__main__":
