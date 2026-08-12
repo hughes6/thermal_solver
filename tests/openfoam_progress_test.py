@@ -1,5 +1,6 @@
 import tempfile
 import unittest
+from unittest import mock
 from pathlib import Path
 
 from tools.openfoam_progress import (
@@ -19,10 +20,21 @@ from tools.openfoam_progress import (
     read_samples,
     recent_slope,
     is_stale_run,
+    storage_usage,
 )
 
 
 class OpenFoamProgressTest(unittest.TestCase):
+    def test_fast_storage_usage_skips_recursive_case_walk(self):
+        fake_usage = mock.Mock(free=12345)
+        with mock.patch(
+            "tools.openfoam_progress.directory_size"
+        ) as case_size, mock.patch(
+            "tools.openfoam_progress.shutil.disk_usage", return_value=fake_usage
+        ):
+            self.assertEqual(storage_usage(Path("case"), fast=True), (None, 12345))
+            case_size.assert_not_called()
+
     def test_current_checkpoint_series_excludes_prior_stage_writes(self):
         checkpoints = [0.43, 0.44, 0.45, 3.205, 3.305, 3.405]
         self.assertEqual(

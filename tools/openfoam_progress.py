@@ -343,6 +343,12 @@ def format_bytes(byte_count: int) -> str:
     return f"{byte_count / (1024 ** 3):.2f} GiB"
 
 
+def storage_usage(path: Path, fast: bool = False) -> tuple[int | None, int]:
+    """Return case bytes and free bytes, optionally avoiding the tree walk."""
+    case_bytes = None if fast else directory_size(path)
+    return case_bytes, shutil.disk_usage(path).free
+
+
 def is_stale_run(
     log_age_seconds: float,
     current_time: float,
@@ -380,6 +386,12 @@ def main() -> int:
         default=300.0,
         help="warn when an incomplete run log is older than this many seconds",
     )
+    parser.add_argument(
+        "--fast",
+        action="store_true",
+        help=("skip the recursive case-size count; retain solver health, ETA, "
+              "free disk, workflow stage, and checkpoint validation"),
+    )
     args = parser.parse_args()
 
     case_directory = args.case.resolve()
@@ -402,8 +414,7 @@ def main() -> int:
     maximum_courant, cumulative_continuity, fatal_signatures = read_health(log_path)
     run_request = read_latest_run_request(case_directory)
     initial_airflow = read_initial_airflow_progress(case_directory)
-    case_bytes = directory_size(case_directory)
-    free_bytes = shutil.disk_usage(case_directory).free
+    case_bytes, free_bytes = storage_usage(case_directory, args.fast)
 
     print(f"Case: {case_directory}")
     print(f"Log: {log_path}")
@@ -463,10 +474,8 @@ def main() -> int:
             "WARNING: incomplete run log is stale; verify that the solver "
             "process is still active"
         )
-    print(
-        f"Storage: case {format_bytes(case_bytes)}, "
-        f"volume free {format_bytes(free_bytes)}"
-    )
+    case_size = "skipped (--fast)" if case_bytes is None else format_bytes(case_bytes)
+    print(f"Storage: case {case_size}, volume free {format_bytes(free_bytes)}")
     if checkpoints:
         print(
             f"Processor checkpoints: {len(checkpoints)} common across "
