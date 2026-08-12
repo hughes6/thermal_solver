@@ -4425,6 +4425,17 @@ functions
                     "                    fi\n"
                     "                    if ! awk -v elapsed=\"$initial_elapsed\" -v required=\"$exchange_horizon\" 'BEGIN { exit !(elapsed>=required) }'; then\n"
                     "                        echo \"Initial airflow device flows pass, but spatial settling requires $exchange_horizon s ($initial_elapsed s completed; air-exchange time $latest_air_exchange_time s).\"\n"
+                    "                        if ! awk -v required=\"$exchange_horizon\" -v maximum=\""
+                    << options.airflow_warmup_time
+                    << "\" 'BEGIN { exit !(required<=maximum) }'; then\n"
+                    "                            echo \"Initial airflow cannot satisfy minimum_initial_air_exchange_fraction within airflow_warmup_time: required $exchange_horizon s, configured limit "
+                    << options.airflow_warmup_time
+                    << " s. Increase airflow_warmup_time or explicitly revise the exchange fraction.\" >&2\n"
+                    "                            summary \"initial_air_exchange_infeasible current=$current requiredElapsed=$exchange_horizon configuredLimit="
+                    << options.airflow_warmup_time
+                    << "\"\n"
+                    "                            return 3\n"
+                    "                        fi\n"
                     "                        exchange_target=$(awk -v start=\"$initial_start\" -v required=\"$exchange_horizon\" -v limit=\"$initial_limit\" 'BEGIN { x=start+required; if(x>limit)x=limit; printf \"%.17g\", x }')\n"
                     "                        echo \"Advancing initial airflow directly to t=$exchange_target s before the next convergence check.\"\n"
                     "                        summary \"initial_air_exchange_advance current=$current target=$exchange_target requiredElapsed=$exchange_horizon\"\n"

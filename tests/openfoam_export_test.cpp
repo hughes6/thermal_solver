@@ -322,6 +322,12 @@ int main(int argc, char** argv) {
             "spatial settling requires $exchange_horizon s") !=
                std::string::npos);
         assert(text.str().find(
+            "Initial airflow cannot satisfy minimum_initial_air_exchange_fraction within airflow_warmup_time") !=
+               std::string::npos);
+        assert(text.str().find(
+            "summary \"initial_air_exchange_infeasible current=$current") !=
+               std::string::npos);
+        assert(text.str().find(
             "-v fraction=\"1\"") != std::string::npos);
         assert(text.str().find(
             "exchange<1e29?exchange*fraction:0") !=
