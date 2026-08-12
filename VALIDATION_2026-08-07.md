@@ -2550,3 +2550,10 @@ saving about 50-75 wall minutes at the current rate without reducing the one-
 volume requirement. This estimate is intentionally not applied retroactively
 to the running case. The exporter fixture passes its C++ assertions and the
 generated `run_parallel.sh` passes `bash -n`.
+
+The unchanged active case subsequently completed an aligned checkpoint at
+`2.51633143 s`. Equal-window velocity change fell to 5.854%, `alphat` to
+9.008%, fluid-temperature change to 0.000529 K RMS, and the localized maximum
+velocity-component change to 5.04 m/s. Exterior mass imbalance was 0.00205%,
+and the hottest solid cell was 293.6705 K. These results continue the settling
+trend independently of the future-export exchange-integral change.
