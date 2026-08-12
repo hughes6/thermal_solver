@@ -2646,3 +2646,27 @@ test verifies that every comparison-row key is serializable. An end-to-end
 self-comparison of the preserved `screening_dt10_controlled_20260810` endpoint
 at `2400.0100000000011 s` wrote eight U/T region rows with all 16 columns and
 finite maximum coordinates; all differences were exactly zero as expected.
+
+The active case's legacy `airflow_devices.txt` listed internal-zone cell counts
+but not requested or realized geometry, so it could not directly prove that an
+adaptive mesh placed fan centers and spans correctly. Future exports retain
+each internal fan/vent's requested global center, rectangular size or circular
+diameter, and write the realized cell-zone minimum/maximum bounds, volume-
+weighted centroid, and volume. A focused 0.1 m mesh fixture requested a
+0.2 x 0 x 0.2 m fan at `(0.25, 0.25, 0.25) m`; the report reproduced that
+center/size and showed nine cells spanning `(0.1, 0.2, 0.1)` to
+`(0.4, 0.3, 0.4) m`, centroid `(0.25, 0.25, 0.25) m`, and volume 0.009 m3.
+The test is part of `run_added_feature_tests.ps1`; it, the full exporter test,
+and the ambient-connected-volume test all pass. This metadata is diagnostic
+and does not change source-zone selection or the active production case.
+
+At the next aligned production checkpoint, `3.00831510 s`, whole-fluid
+velocity changed 7.798% volume-weighted over the retained 0.0983967 s interval
+and external rack air changed 7.701%. Dell internal air changed 12.843%, with
+the 4.509 m/s maximum at `(0.451257, 0.268950, 0.232500) m`, still in the Dell
+fan-bank neighborhood but downstream of the prior maximum. The external
+maximum moved to `(0.029165, 0.724535, 0.003750) m` at the lower rear-left of
+the rack, showing broader wake-phase motion rather than one fixed Eaton-side
+cell. Despite that field motion, intake magnitude changed only 0.00521%, the
+largest top-fan change was 0.3372%, all directions remained correct, reverse
+flow was zero, and fluid temperature changed only 0.000508 K RMS.

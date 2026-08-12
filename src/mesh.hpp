@@ -90,6 +90,10 @@ public:
         double curve_c = 0.0;
         double rated_density = 1.2;
         double reference_flow_m3s = 0.0;
+        std::array<double,3> requested_center{0.0,0.0,0.0};
+        std::array<double,3> requested_size{0.0,0.0,0.0};
+        bool circular = false;
+        double requested_diameter = 0.0;
     };
 
     struct WallFace {
@@ -718,7 +722,8 @@ public:
                     ? region.get_cd() : 0.0,
                  region.get_curve_a(),region.get_curve_b(),
                  region.get_curve_c(),region.get_fan_rho_rated(),
-                 region.flow_m3s()});
+                 region.flow_m3s(),center,size,region.is_circular(),
+                 region.get_diameter()});
         }
     }
 

@@ -606,14 +606,64 @@ private:
         }
         output << "\nINTERNAL DEVICES\n";
         for(const auto& device :
-            mesh.get_openfoam_internal_flow_devices())
+            mesh.get_openfoam_internal_flow_devices()) {
+            std::array<double,3> lower{
+                std::numeric_limits<double>::infinity(),
+                std::numeric_limits<double>::infinity(),
+                std::numeric_limits<double>::infinity()};
+            std::array<double,3> upper{
+                -std::numeric_limits<double>::infinity(),
+                -std::numeric_limits<double>::infinity(),
+                -std::numeric_limits<double>::infinity()};
+            std::array<double,3> centroid{0.0,0.0,0.0};
+            double zone_volume=0.0;
+            for(const std::size_t flat : device.cells) {
+                const int yz=mesh.get_ny()*mesh.get_nz();
+                const int i=static_cast<int>(flat)/yz;
+                const int remainder=static_cast<int>(flat)%yz;
+                const int j=remainder/mesh.get_nz();
+                const int k=remainder%mesh.get_nz();
+                const std::array<double,3> center{
+                    mesh.cell_center_x(i),mesh.cell_center_y(j),
+                    mesh.cell_center_z(k)};
+                const std::array<double,3> width{
+                    mesh.get_dx(i),mesh.get_dy(j),mesh.get_dz(k)};
+                const double cell_volume=width[0]*width[1]*width[2];
+                zone_volume+=cell_volume;
+                for(int axis=0;axis<3;++axis) {
+                    lower[axis]=std::min(
+                        lower[axis],center[axis]-0.5*width[axis]);
+                    upper[axis]=std::max(
+                        upper[axis],center[axis]+0.5*width[axis]);
+                    centroid[axis]+=center[axis]*cell_volume;
+                }
+            }
+            for(double& value : centroid)
+                value/=zone_volume;
             output<<"- "<<device.name<<" | "
                   <<(device.kind==
                          Mesh::OpenFoamInternalFlowDevice::Kind::Fan
                         ? "internal fan" : "internal passive vent")
                   <<" | cells="<<device.cells.size()
                   <<" | direction=("<<device.direction[0]<<' '
-                  <<device.direction[1]<<' '<<device.direction[2]<<")\n";
+                  <<device.direction[1]<<' '<<device.direction[2]<<')'
+                  <<" | requestedCenter=("<<device.requested_center[0]<<' '
+                  <<device.requested_center[1]<<' '
+                  <<device.requested_center[2]<<')'
+                  <<" | requestedSize=("<<device.requested_size[0]<<' '
+                  <<device.requested_size[1]<<' '
+                  <<device.requested_size[2]<<')'
+                  <<" | shape="<<(device.circular ? "circular" : "rectangular");
+            if(device.circular)
+                output<<" | requestedDiameter="<<device.requested_diameter<<" m";
+            output<<" | zoneBoundsMin=("<<lower[0]<<' '<<lower[1]<<' '
+                  <<lower[2]<<')'
+                  <<" | zoneBoundsMax=("<<upper[0]<<' '<<upper[1]<<' '
+                  <<upper[2]<<')'
+                  <<" | zoneCentroid=("<<centroid[0]<<' '<<centroid[1]<<' '
+                  <<centroid[2]<<')'
+                  <<" | zoneVolume="<<zone_volume<<" m3\n";
+        }
     }
 
     static std::string csv_field(std::string value) {
