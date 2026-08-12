@@ -1004,6 +1004,9 @@ struct ModelLoader {
                     value("airflow_refresh_maximum_time_step")
                         .value<double>().value_or(
                             cfg.airflow_maximum_time_step);
+                cfg.airflow_checkpoint_interval=
+                    value("airflow_checkpoint_interval")
+                        .value<double>().value_or(0.1);
                 cfg.thermal_only_maximum_time_step=
                     value("thermal_only_maximum_time_step")
                         .value<double>().value_or(1.0);
@@ -1562,6 +1565,8 @@ struct ModelLoader {
                     cfg.airflow_maximum_time_step,
                 .airflow_refresh_maximum_time_step=
                     cfg.airflow_refresh_maximum_time_step,
+                .airflow_checkpoint_interval=
+                    cfg.airflow_checkpoint_interval,
                 .frozen_flow_maximum_time_step=
                     cfg.thermal_only_maximum_time_step,
                 .frozen_flow_maximum_courant_number=

@@ -154,6 +154,7 @@ int main(int argc, char** argv) {
          .use_multirate_thermal=true,
          .minimum_initial_air_exchange_fraction=1.0,
          .airflow_refresh_maximum_time_step=0.005,
+         .airflow_checkpoint_interval=0.1,
          .airflow_refresh_duration=0.1,
          .stop_when_thermally_converged=true});
 
@@ -326,6 +327,12 @@ int main(int argc, char** argv) {
                std::string::npos);
         assert(text.str().find(
             "summary \"initial_air_exchange_infeasible current=$current") !=
+               std::string::npos);
+        assert(text.str().find(
+            "checkpoint_steps=$(awk -v duration=\"0.10000000000000001\"") !=
+               std::string::npos);
+        assert(text.str().find(
+            "stage_write_interval=\"$checkpoint_steps\"") !=
                std::string::npos);
         assert(text.str().find(
             "local candidate=\"$1\" rank_count=\"${2:-$processes}\"") !=

@@ -2150,3 +2150,20 @@ the coupled 0.05-to-0.06 s segment:
 
 Four ranks are retained for this case because they nearly halve coupled-flow
 wall time while preserving the monitored numerical behavior.
+
+### Resumable air-exchange advancement
+
+The same cold-start case exposed a durability problem before its full physical
+air-exchange horizon. Once device and spatial metrics first pass, the adaptive
+controller advances directly to the measured exchange target. With a roughly
+12.43 s exchange time and a 0.001 s live-flow timestep, that continuous solver
+stage takes about 40 hours on four ranks. The generated runner previously set
+`writeInterval` to the complete stage length, so an interruption near the end
+could discard nearly all of that work.
+
+The TOML/exporter option `airflow_checkpoint_interval` now defaults to 0.1 s.
+Live-flow stages remain continuous, but their timestep-based write interval is
+capped to the number of steps spanning that duration. `purgeWrite` continues to
+retain the configured rolling checkpoint count. Short convergence windows still
+write only their endpoint, while long air-exchange advances retain restartable
+processor checkpoints without repeated solver launches or postprocessing.

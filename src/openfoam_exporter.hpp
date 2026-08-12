@@ -50,6 +50,7 @@ struct OpenFoamExportOptions {
     double minimum_initial_air_exchange_fraction = 0.0;
     double airflow_maximum_time_step = 0.001;
     double airflow_refresh_maximum_time_step = 0.001;
+    double airflow_checkpoint_interval = 0.1;
     // Retain these names until the TOML schema is finalized. They control the
     // thermal-only stage, not OpenFOAM's native frozenFlow implementation.
     double frozen_flow_maximum_time_step = 1.0;
@@ -1333,6 +1334,9 @@ private:
             validate_positive_finite(
                 options.airflow_refresh_maximum_time_step,
                 "airflow_refresh_maximum_time_step");
+            validate_positive_finite(
+                options.airflow_checkpoint_interval,
+                "airflow_checkpoint_interval");
             if(options.minimum_initial_airflow_duration >
                options.airflow_warmup_time)
                 throw std::invalid_argument(
@@ -3939,7 +3943,7 @@ functions
                     "max_dt=\"$4\" label=\"$5\" live_dt_cap=\"$6\"\n"
                 "        local interval actual_time saved_time canonical_time restart_dt "
                     "saved_time_file rank stage_steps stage_dt stage_max_dt "
-                    "stage_write_control stage_write_interval field "
+                    "stage_write_control stage_write_interval checkpoint_steps field "
                     "source_field target_field courant_output observed_co "
                     "courant_safe_dt airflow_hard_cap postflight_output "
                     "postflight_co spatial_output spatial_status velocity_rms_delta "
@@ -4001,7 +4005,12 @@ functions
                 "            read -r stage_dt stage_steps <<<\"$stage_plan\"\n"
                 "            stage_max_dt=\"$stage_dt\"\n"
                 "            stage_write_control=timeStep\n"
-                "            stage_write_interval=\"$stage_steps\"\n"
+                "            checkpoint_steps=$(awk -v duration=\""
+                << options.airflow_checkpoint_interval
+                << "\" -v dt=\"$stage_dt\" -v steps=\"$stage_steps\" "
+                    "'BEGIN { n=int(duration/dt); if(n*dt<duration-1e-12)n++; "
+                    "if(n<1)n=1; if(n>steps)n=steps; print n }')\n"
+                "            stage_write_interval=\"$checkpoint_steps\"\n"
                 "        fi\n"
                 "        restart_dt=\"$stage_dt\"\n"
                 "        \"$foam_launcher\" foamDictionary -precision 17 "
@@ -4107,7 +4116,12 @@ functions
                     "if(n<1)n=1; printf \"%.17g %d\", remaining/n,n }')\n"
                 "                read -r stage_dt stage_steps <<<\"$stage_plan\"\n"
                 "                stage_max_dt=\"$stage_dt\"\n"
-                "                stage_write_interval=\"$stage_steps\"\n"
+                "                checkpoint_steps=$(awk -v duration=\""
+                << options.airflow_checkpoint_interval
+                << "\" -v dt=\"$stage_dt\" -v steps=\"$stage_steps\" "
+                    "'BEGIN { n=int(duration/dt); if(n*dt<duration-1e-12)n++; "
+                    "if(n<1)n=1; if(n>steps)n=steps; print n }')\n"
+                "                stage_write_interval=\"$checkpoint_steps\"\n"
                 "                restart_dt=\"$stage_dt\"\n"
                 "                \"$foam_launcher\" foamDictionary -precision 17 "
                     "\"$case_dir/system/controlDict\" -entry deltaT "
