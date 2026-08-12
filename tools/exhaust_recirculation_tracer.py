@@ -28,6 +28,20 @@ class Device:
     exhaust_zones: tuple[str, ...]
 
 
+def reconstruction_command(case: Path, time_name: str) -> str:
+    resolved = case.expanduser().resolve()
+    text = resolved.as_posix()
+    prefix = ""
+    if resolved.drive:
+        drive = resolved.drive.rstrip(":").lower()
+        text = f"/mnt/{drive}/{text.split(':', 1)[1].lstrip('/')}"
+        prefix = "wsl openfoam2606 "
+    return (
+        f"{prefix}reconstructPar -case '{text}' -region fluid "
+        f"-time '{time_name}'"
+    )
+
+
 def load_devices(path: Path) -> list[Device]:
     paired: dict[int, dict[str, list[str]]] = {}
     names: dict[int, str] = {}
@@ -60,6 +74,36 @@ def numeric_times(case: Path) -> list[tuple[float, Path]]:
     return sorted(result)
 
 
+def latest_common_decomposed_time(
+    case: Path, fields: tuple[str, ...] = ("rho", "phi", "nut")
+) -> tuple[float, str] | None:
+    processors = sorted(
+        (path for path in case.glob("processor*") if path.is_dir()),
+        key=lambda path: int(path.name[9:]),
+    )
+    if not processors:
+        return None
+    common: dict[float, str] | None = None
+    for processor in processors:
+        available: dict[float, str] = {}
+        for child in processor.iterdir():
+            if not child.is_dir() or not all(
+                (child / "fluid" / field).is_file() for field in fields
+            ):
+                continue
+            try:
+                available[float(child.name)] = child.name
+            except ValueError:
+                pass
+        common = available if common is None else {
+            value: name for value, name in common.items() if value in available
+        }
+    if not common:
+        return None
+    value = max(common)
+    return value, common[value]
+
+
 def select_time(times: list[tuple[float, Path]], requested: str | None) -> Path:
     valid = [(value, path) for value, path in times if all(
         (path / "fluid" / field).is_file() for field in ("rho", "phi", "nut"))]
@@ -80,6 +124,48 @@ def select_time(times: list[tuple[float, Path]], requested: str | None) -> Path:
         available = ", ".join(path.name for _, path in valid)
         raise ValueError(f"Time {requested} did not uniquely match. Available: {available}")
     return matches[0]
+
+
+def select_reconstructed_source_time(case: Path, requested: str | None) -> Path:
+    decomposed = latest_common_decomposed_time(case)
+    try:
+        reconstructed = select_time(numeric_times(case), requested)
+    except ValueError:
+        if decomposed is None:
+            raise
+        decomposed_value, decomposed_name = decomposed
+        if requested is not None:
+            try:
+                target = float(requested)
+            except ValueError:
+                raise
+            tolerance = 1.0e-9 * max(1.0, abs(target))
+            if abs(decomposed_value - target) > tolerance:
+                raise
+        raise ValueError(
+            "Newest requested airflow is decomposed at t="
+            f"{decomposed_name}, but the serial tracer requires reconstructed "
+            "rho, phi, and nut. Reconstruct that checkpoint first with: "
+            + reconstruction_command(case, decomposed_name)
+        ) from None
+    if decomposed is None:
+        return reconstructed
+    decomposed_value, decomposed_name = decomposed
+    selected_value = float(reconstructed.name)
+    target = decomposed_value if requested is None else float(requested)
+    tolerance = 1.0e-9 * max(1.0, abs(target))
+    if (requested is None and decomposed_value > selected_value + tolerance) or (
+        requested is not None
+        and abs(decomposed_value - target) <= tolerance
+        and abs(selected_value - target) > tolerance
+    ):
+        raise ValueError(
+            "Newest requested airflow is decomposed at t="
+            f"{decomposed_name}, but the serial tracer requires reconstructed "
+            "rho, phi, and nut. Reconstruct that checkpoint first with: "
+            + reconstruction_command(case, decomposed_name)
+        )
+    return reconstructed
 
 
 def add_tracer_solver(solution: str) -> str:
@@ -176,7 +262,7 @@ def main() -> int:
             "for a legacy exported case.")
     devices = load_devices(metadata)
     try:
-        latest = select_time(numeric_times(source), args.time)
+        latest = select_reconstructed_source_time(source, args.time)
     except ValueError as error:
         raise SystemExit(str(error)) from error
     copy_case(source, output, latest, metadata)

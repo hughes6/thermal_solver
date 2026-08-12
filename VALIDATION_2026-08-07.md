@@ -2420,3 +2420,18 @@ magnitude was low (0.477 m/s RMS), while its maximum component change was only
 their intended directions, maxCo remained about 2.59, and no fatal signature
 appeared. The combined evidence identifies bounded source/wake motion rather
 than a broad numerical instability.
+
+The source-attributed exhaust tracer also scanned only reconstructed root
+times. On the active case it would therefore have traced stale `0.06 s` flow
+instead of the complete `2.12274449 s` MPI checkpoint. The launcher now compares
+valid reconstructed and rank-common decomposed states. It accepts a genuinely
+newer reconstructed state, but refuses stale or missing reconstruction with an
+exact copyable command. On Windows the live diagnostic is:
+
+`wsl openfoam2606 reconstructPar -case '/mnt/c/OpenFOAM/thermal_sim_v2/model_current_snapspan_20260812' -region fluid -time '2.1227444897959704'`
+
+The guard runs before creating the tracer output case. Eight tracer tests and
+28 related recirculation/checkpoint tests pass. Reconstruction was deliberately
+not run during the active exchange stage; source-attributed tracing is useful
+after airflow acceptance and thermal exhaust rise, not on the present cold
+checkpoint.

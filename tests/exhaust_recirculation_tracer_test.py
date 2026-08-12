@@ -2,10 +2,30 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from tools.exhaust_recirculation_tracer import MESH_RE, copy_case, load_devices, parse_solver_output, select_time
+from tools.exhaust_recirculation_tracer import (
+    MESH_RE,
+    copy_case,
+    load_devices,
+    parse_solver_output,
+    reconstruction_command,
+    select_reconstructed_source_time,
+    select_time,
+)
 
 
 class ExhaustTracerTest(unittest.TestCase):
+    def test_reconstruction_command_converts_windows_case_for_wsl(self):
+        command = reconstruction_command(
+            Path(r"C:\OpenFOAM\thermal_sim_v2\rack case"), "2.12"
+        )
+        if Path.cwd().drive:
+            self.assertEqual(
+                command,
+                "wsl openfoam2606 reconstructPar -case "
+                "'/mnt/c/OpenFOAM/thermal_sim_v2/rack case' "
+                "-region fluid -time '2.12'",
+            )
+
     def test_loads_paired_devices_and_ignores_unpaired(self):
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "devices.csv"
@@ -69,6 +89,40 @@ class ExhaustTracerTest(unittest.TestCase):
             self.assertEqual(select_time(times, "18").name, "18.0000000001")
             with self.assertRaisesRegex(ValueError, "did not uniquely match"):
                 select_time(times, "99")
+
+    def test_refuses_stale_root_when_newer_decomposed_state_exists(self):
+        with tempfile.TemporaryDirectory() as directory:
+            case = Path(directory)
+            root_time = case / "0.06" / "fluid"
+            root_time.mkdir(parents=True)
+            for field in ("rho", "phi", "nut"):
+                (root_time / field).write_text(field)
+            for rank in range(2):
+                fluid = case / f"processor{rank}" / "2.12" / "fluid"
+                fluid.mkdir(parents=True)
+                for field in ("rho", "phi", "nut"):
+                    (fluid / field).write_text(field)
+            with self.assertRaisesRegex(
+                ValueError, r"reconstructPar .* -time '2.12'"
+            ):
+                select_reconstructed_source_time(case, None)
+
+    def test_reconstructed_latest_remains_valid_with_older_processors(self):
+        with tempfile.TemporaryDirectory() as directory:
+            case = Path(directory)
+            for name in ("1", "3"):
+                fluid = case / name / "fluid"
+                fluid.mkdir(parents=True)
+                for field in ("rho", "phi", "nut"):
+                    (fluid / field).write_text(field)
+            for rank in range(2):
+                fluid = case / f"processor{rank}" / "2" / "fluid"
+                fluid.mkdir(parents=True)
+                for field in ("rho", "phi", "nut"):
+                    (fluid / field).write_text(field)
+            self.assertEqual(
+                select_reconstructed_source_time(case, None).name, "3"
+            )
 
 
 if __name__ == "__main__":
