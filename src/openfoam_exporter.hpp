@@ -388,6 +388,15 @@ private:
 
     struct BoundaryDeviceGeometry {
         std::array<double,3> outward_normal{0.0,0.0,0.0};
+        std::array<double,3> minimum{
+            std::numeric_limits<double>::infinity(),
+            std::numeric_limits<double>::infinity(),
+            std::numeric_limits<double>::infinity()};
+        std::array<double,3> maximum{
+            -std::numeric_limits<double>::infinity(),
+            -std::numeric_limits<double>::infinity(),
+            -std::numeric_limits<double>::infinity()};
+        std::array<double,3> centroid{0.0,0.0,0.0};
         double gross_area = 0.0;
         std::size_t face_count = 0;
     };
@@ -423,6 +432,26 @@ private:
                                 axis==0 ? cell.get_dy()*cell.get_dz() :
                                 (axis==1 ? cell.get_dx()*cell.get_dz() :
                                            cell.get_dx()*cell.get_dy());
+                            const std::array<double,3> cell_center{
+                                mesh.cell_center_x(i),mesh.cell_center_y(j),
+                                mesh.cell_center_z(k)};
+                            const std::array<double,3> width{
+                                cell.get_dx(),cell.get_dy(),cell.get_dz()};
+                            std::array<double,3> face_center=cell_center;
+                            face_center[axis]+=
+                                (side==0 ? -0.5 : 0.5)*width[axis];
+                            for(int coordinate=0;coordinate<3;++coordinate) {
+                                const double half_extent=
+                                    coordinate==axis ? 0.0 : 0.5*width[coordinate];
+                                result.minimum[coordinate]=std::min(
+                                    result.minimum[coordinate],
+                                    face_center[coordinate]-half_extent);
+                                result.maximum[coordinate]=std::max(
+                                    result.maximum[coordinate],
+                                    face_center[coordinate]+half_extent);
+                                result.centroid[coordinate]+=
+                                    face_center[coordinate]*area;
+                            }
                             result.outward_normal[
                                 static_cast<std::size_t>(axis)] +=
                                 (side==0 ? -1.0 : 1.0)*area;
@@ -430,8 +459,10 @@ private:
                             ++result.face_count;
                         }
         if(result.gross_area>0.0)
-            for(double& value : result.outward_normal)
-                value/=result.gross_area;
+            for(int axis=0;axis<3;++axis) {
+                result.outward_normal[axis]/=result.gross_area;
+                result.centroid[axis]/=result.gross_area;
+            }
         return result;
     }
 
@@ -595,7 +626,22 @@ private:
                    <<geometry.outward_normal[1]<<' '
                    <<geometry.outward_normal[2]<<")"
                    <<" | direction=("<<patch.direction[0]<<' '
-                   <<patch.direction[1]<<' '<<patch.direction[2]<<")";
+                   <<patch.direction[1]<<' '<<patch.direction[2]<<')'
+                   <<" | requestedCenter=("<<patch.requested_center[0]<<' '
+                   <<patch.requested_center[1]<<' '
+                   <<patch.requested_center[2]<<')'
+                   <<" | requestedSize=("<<patch.requested_size[0]<<' '
+                   <<patch.requested_size[1]<<' '
+                   <<patch.requested_size[2]<<')'
+                   <<" | shape="<<(patch.circular ? "circular" : "rectangular");
+            if(patch.circular)
+                output<<" | requestedDiameter="<<patch.requested_diameter<<" m";
+            output<<" | faceBoundsMin=("<<geometry.minimum[0]<<' '
+                  <<geometry.minimum[1]<<' '<<geometry.minimum[2]<<')'
+                  <<" | faceBoundsMax=("<<geometry.maximum[0]<<' '
+                  <<geometry.maximum[1]<<' '<<geometry.maximum[2]<<')'
+                  <<" | faceCentroid=("<<geometry.centroid[0]<<' '
+                  <<geometry.centroid[1]<<' '<<geometry.centroid[2]<<')';
             if(patch.fan_has_curve && options.use_fan_curves)
                 output<<" | fanCurve=("<<patch.fan_curve_a<<' '
                       <<patch.fan_curve_b<<' '<<patch.fan_curve_c<<")";

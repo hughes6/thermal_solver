@@ -2650,9 +2650,13 @@ finite maximum coordinates; all differences were exactly zero as expected.
 The active case's legacy `airflow_devices.txt` listed internal-zone cell counts
 but not requested or realized geometry, so it could not directly prove that an
 adaptive mesh placed fan centers and spans correctly. Future exports retain
-each internal fan/vent's requested global center, rectangular size or circular
-diameter, and write the realized cell-zone minimum/maximum bounds, volume-
-weighted centroid, and volume. A focused 0.1 m mesh fixture requested a
+each ambient and internal fan/vent's requested global center, rectangular size
+or circular diameter. Ambient devices report realized patch-face bounds and
+area-weighted centroid; internal devices report cell-zone minimum/maximum
+bounds, volume-weighted centroid, and volume. A focused 0.1 m mesh fixture
+requested a centered top fan at `(0.25, 0.25, 0.5) m`; its nine faces spanned
+exactly `(0.1, 0.1, 0.5)` to `(0.4, 0.4, 0.5) m` with centroid
+`(0.25, 0.25, 0.5) m`. The same fixture requested a
 0.2 x 0 x 0.2 m fan at `(0.25, 0.25, 0.25) m`; the report reproduced that
 center/size and showed nine cells spanning `(0.1, 0.2, 0.1)` to
 `(0.4, 0.3, 0.4) m`, centroid `(0.25, 0.25, 0.25) m`, and volume 0.009 m3.

@@ -71,6 +71,10 @@ public:
         std::array<double,3> direction{0.0,0.0,0.0};
         std::vector<std::size_t> adjacent_cells;
         double source_zone_thickness = 0.0;
+        std::array<double,3> requested_center{0.0,0.0,0.0};
+        std::array<double,3> requested_size{0.0,0.0,0.0};
+        bool circular = false;
+        double requested_diameter = 0.0;
     };
 
     struct OpenFoamInternalFlowDevice {
@@ -648,6 +652,11 @@ public:
                      region.get_curve_a(),region.get_curve_b(),
                      region.get_curve_c(),region.get_fan_rho_rated(),
                      region.flow_m3s()});
+                auto& patch=openfoam_boundary_patches.back();
+                patch.requested_center=center;
+                patch.requested_size=size;
+                patch.circular=region.is_circular();
+                patch.requested_diameter=region.get_diameter();
                 const auto flow_direction =
                     fan ? region.get_velocity_direction() : direction;
                 const std::size_t marked=mark_openfoam_boundary_opening(
@@ -739,6 +748,11 @@ public:
              0.0, 0.0,
              fan.has_curve(), fan.get_curve_a(), fan.get_curve_b(),
              fan.get_curve_c(), fan.get_rho_rated(), fan.flow_m3s()});
+        auto& patch=openfoam_boundary_patches.back();
+        patch.requested_center=fan.get_center();
+        patch.requested_size=fan.get_size_m();
+        patch.circular=fan.get_shape_t()==ShapeType::Circular;
+        patch.requested_diameter=fan.get_diameter();
 
         stamp_fan(fan);
         const std::size_t marked = mark_openfoam_boundary_opening(
@@ -765,6 +779,11 @@ public:
             {patch_id, vent.get_name(),
              OpenFoamBoundaryPatch::Kind::Vent,
              vent.free_area(), vent.get_cd()});
+        auto& patch=openfoam_boundary_patches.back();
+        patch.requested_center=vent.get_center();
+        patch.requested_size=vent.get_size_m();
+        patch.circular=vent.get_shape()==VentShapeType::Circular;
+        patch.requested_diameter=vent.get_diameter();
 
         stamp_vent(vent);
         const std::size_t marked = mark_openfoam_boundary_opening(

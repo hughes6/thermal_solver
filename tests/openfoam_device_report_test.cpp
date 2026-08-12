@@ -28,6 +28,11 @@ int main() {
     component.add_region(InternalRegion(fan));
     component.order_internal_regions();
     mesh.stamp_component_for_openfoam(component);
+    Fan top_fan(
+        "centered top fan",20.0,0.0,{0.2,0.2,0.0},
+        {0.25,0.25,0.5},{0.0,0.0,1.0},
+        FlowType::Exhaust,ShapeType::Rectangular);
+    mesh.stamp_fan_for_openfoam(top_fan);
 
     const auto case_path=std::filesystem::temp_directory_path()/
         "thermal_solver_openfoam_device_report_test";
@@ -38,6 +43,15 @@ int main() {
     text << report.rdbuf();
     report.close();
     const std::string output=text.str();
+    assert(output.find("- centered top fan | exhaust fan | faces=9")!=
+           std::string::npos);
+    assert(output.find("requestedCenter=(0.25 0.25 0.5)")!=
+           std::string::npos);
+    assert(output.find("requestedSize=(0.2 0.2 0)")!=std::string::npos);
+    assert(output.find("faceBoundsMin=(0.1 0.1 0.5)")!=std::string::npos);
+    assert(output.find("faceBoundsMax=(0.4 0.4 0.5)")!=std::string::npos);
+    assert(output.find("faceCentroid=(0.25 0.25 0.5)")!=
+           std::string::npos);
     assert(output.find("- centered fixture fan | internal fan | cells=9")!=
            std::string::npos);
     assert(output.find("requestedCenter=(0.25 0.25 0.25)")!=
