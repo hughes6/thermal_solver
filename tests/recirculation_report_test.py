@@ -16,6 +16,7 @@ from plot.recirculation_report import (
     selected_time_path,
     selected_result_paths,
     solver_postprocess_command,
+    write_internal_device_csv,
 )
 
 
@@ -265,6 +266,23 @@ fluid_to_solid
             rows = internal_device_temperature_rows(case, ambient_k=293.0)
             self.assertEqual(len(rows), 1)
             self.assertEqual(rows[0][1], "Server A")
+
+    def test_selected_internal_csv_does_not_substitute_stale_time(self):
+        with tempfile.TemporaryDirectory() as directory:
+            output = Path(directory) / "report.png"
+            path, selected = write_internal_device_csv(
+                output,
+                [(0.45, "Server A", "Intake", "Fan", 293.0, 294.0, 0.0)],
+                [3.2],
+            )
+            self.assertEqual(selected, [])
+            self.assertEqual(
+                path.read_text(encoding="utf-8").splitlines(),
+                [
+                    "time_s,pair,intake_device,exhaust_device,intake_T_K,"
+                    "exhaust_T_K,equipment_air_rise_index"
+                ],
+            )
 
 
 if __name__ == "__main__":

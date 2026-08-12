@@ -500,8 +500,9 @@ def main() -> None:
     parser.add_argument("--output", type=Path, default=Path("recirculation_report.png"))
     parser.add_argument(
         "--snapshot-times", nargs="+", type=float,
-        help=("read only these reconstructed checkpoints, bypassing potentially "
-              "large function-object histories"),
+        help=("read only these reconstructed or rank-common decomposed "
+              "checkpoints, bypassing potentially large function-object "
+              "histories"),
     )
     parser.add_argument("--save", action="store_true")
     parser.add_argument(
@@ -533,15 +534,33 @@ def main() -> None:
     args.output.parent.mkdir(parents=True, exist_ok=True)
     if args.snapshot_times:
         run_checkpoint_report(args, plt, case, expected_heat_watts)
+        available_internal_rows = internal_device_temperature_rows(
+            case, args.ambient_temperature
+        )
         internal_path, internal_rows = write_internal_device_csv(
             args.output,
-            internal_device_temperature_rows(case, args.ambient_temperature),
+            available_internal_rows,
             args.snapshot_times,
         )
         print(f"Saved: {internal_path}")
         if internal_rows:
             print("Maximum selected equipment air-rise index: "
                   f"{max(row[6] for row in internal_rows):.6g}")
+        elif (case / "internal_airflow_devices.csv").is_file():
+            available_times = sorted({row[0] for row in available_internal_rows})
+            latest_text = (
+                f"; latest available internal report is t={available_times[-1]:g} s"
+                if available_times else "; no internal temperature reports exist"
+            )
+            print(
+                "WARNING: selected checkpoint boundary results are valid, but "
+                "internal equipment temperatures are unavailable at the "
+                f"requested time(s){latest_text}. The internal-air CSV contains "
+                "only its header. Internal cell-zone temperatures require "
+                "solver-backed post-processing; they are not inferred from "
+                "boundary or neighboring cells.",
+                file=sys.stderr,
+            )
         return
     try:
         histories = boundary_histories(case)

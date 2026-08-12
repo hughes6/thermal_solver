@@ -2713,3 +2713,38 @@ pressure drop remains measurable. Focused tests prove that a pure 500 Pa
 uniform shift produces zero error, a nonuniform perturbation remains nonzero,
 and opposite component/external pressure shifts are retained; velocity,
 temperature, and turbulence metrics are unchanged.
+
+The aligned `3.20510857 s` checkpoint was complete with 29 matching files on
+all four ranks, and the solver advanced beyond it without a fatal signature.
+Across the preceding `0.0983967 s`, whole-fluid velocity changed 8.763%
+volume-weighted and external rack air changed 8.558%; Dell internal air changed
+17.142%. The 9.777 m/s maximum remained at the Dell fan bank at
+`(0.431073, 0.285950, 0.229000) m`, while the external maximum was 2.048 m/s
+at `(0.019322, 0.683750, 0.702265) m`. Turbulence motion remained comparable
+to the prior interval: `k` changed 14.998%, `alphat` 10.221%, and `omega`
+5.428%. Gauge-invariant whole-fluid pressure-pattern change remained only
+0.117 Pa RMS (0.755%), although the Dell subset reached 0.528 Pa RMS (2.77%).
+
+The face-resolved operating point remained much steadier. Intake magnitude
+changed +0.01765%, and the largest individual top-fan change was Fan 3 at
+-0.10093%. Every fan remained outward, the main vent remained inward,
+bidirectional flow was zero, and exterior mass imbalance was 0.00294%.
+Connectivity passed with the legacy case's physically correct two connected
+fluid regions. The early-transient energy audit intentionally remained failed:
+the exhaust was 293.1377 K versus a 293.1500 K intake and sensible rejection
+was -3.68 W while the powered solids stored nearly all of the applied 1545 W.
+Thus the continuing spatial motion is again a wake/turbulence phase effect,
+not bulk flow, pressure, topology, or energy-solver divergence; the full
+initial air-exchange and spatial gates remain necessary.
+
+This snapshot audit also exposed a misleading empty-report behavior.
+`recirculation_report.py --snapshot-times` reads reconstructed or rank-common
+decomposed boundary fields directly, but internal equipment temperatures still
+require solver-generated cell-zone reports. In the active case those internal
+reports ended at `0.05 s`, so selecting `3.1067` and `3.2051 s` wrote only an
+internal-air CSV header without explaining why. Snapshot mode now emits an
+explicit warning that its boundary results are valid, identifies the latest
+available internal-report time (or their absence), and states that cell-zone
+temperatures are not inferred from boundary or neighboring cells. Its CLI help
+also correctly describes decomposed-checkpoint support. A focused regression
+test proves stale internal data is not substituted for a requested time.
