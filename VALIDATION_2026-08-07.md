@@ -2230,3 +2230,23 @@ landed exactly at `0.54839673469387784 s` on all four ranks. Every rank containe
 all required fluid, turbulence, and solid-temperature restart fields. The case
 grew from 0.709 to 0.768 GB, while the immutable velocity references remained
 byte-identical to the 0.45 s starting fields.
+
+### Production fluid-connectivity classification
+
+`checkMesh -allRegions` reports two disconnected fluid components in this
+494,039-cell production export: 413,193 cells in the rack-connected region and
+12,160 cells in a smaller region. An isolated `foamToVTK` export paired with
+OpenFOAM's binary `cellToRegion` labels measured the smaller region as
+0.00783697 m3, with cell-centre bounds `(0.03691, 0.00993, 0.63043)` to
+`(0.50048, 0.67618, 0.65905)` m. Those bounds match the configured KVM interior
+air volume within one local cell width.
+
+This is intentional sealed air inside the detailed fanless KVM, not an
+accidentally disconnected portion of the rack flow. The generated device
+metadata contains no KVM fan, intake, or exhaust zone; the KVM's two 10 W
+internal solids reject heat through its sealed internal air and conjugate solid
+interfaces. The live coupled solve remained finite and mass-balanced. Do not
+delete this region or invent a KVM exhaust merely to make `checkMesh` report one
+fluid component. Conversely, any additional disconnected fluid component, or
+one whose bounds do not match an intentionally sealed internal-air definition,
+remains a mesh defect requiring investigation.
