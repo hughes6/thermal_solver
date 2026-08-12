@@ -2687,3 +2687,26 @@ interpretation and provide specific targets for a future matched timestep or
 source-smoothing study. No profile limit is changed from these 0.0983967 s
 retained intervals because the generated runner evaluates shorter 0.01 s
 acceptance windows.
+
+The same `3.00831510` to `3.10671184 s` interval confirms that the continuing
+motion is turbulence/wake structure rather than a drifting bulk pressure
+operating point. Whole-fluid volume-weighted relative RMS changes were 14.21%
+for `k`, 10.13% for `alphat`, and 5.24% for `omega`. The largest `k` and
+`omega` changes remained at the Dell fan bank, while the largest external-air
+`alphat` change was at `(0.183742, 0.922850, 0.101045) m` in the upper rear
+wake. Pressure-pattern change was only 0.116 Pa RMS after removing its
+arbitrary uniform gauge offset, equal to 0.749% of the reference
+pressure-fluctuation RMS. The Dell internal-air subset was 0.448 Pa RMS and
+2.59%; regions with an almost uniform pressure field can have a large relative
+percentage despite a negligible absolute-Pa change, so both values must be
+read together.
+
+This audit exposed that `openfoam_field_convergence.py` previously normalized
+`p` and `p_rgh` by their approximately 82 kPa absolute stored level, reporting
+a misleading 0.000149% for the same interval. Pressure comparisons now remove
+each snapshot's volume-weighted uniform offset before calculating differences
+and the reference RMS. This is invariant to OpenFOAM's arbitrary pressure
+gauge while preserving real spatial pressure-pattern changes and reporting
+them in Pa. A focused test proves that a pure 500 Pa uniform shift produces
+zero error and that a nonuniform perturbation remains nonzero; velocity,
+temperature, and turbulence metrics are unchanged.

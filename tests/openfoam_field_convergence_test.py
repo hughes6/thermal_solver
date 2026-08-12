@@ -52,6 +52,42 @@ class OpenFoamFieldConvergenceTest(unittest.TestCase):
             (4.0, 5.0, 6.0),
         )
 
+    def test_pressure_error_removes_only_uniform_gauge_offset(self):
+        reference = {
+            "fluid/internalMesh": {
+                "volume": np.array([1.0, 1.0, 2.0]),
+                "center": np.array([
+                    [0.0, 0.0, 0.0],
+                    [1.0, 0.0, 0.0],
+                    [2.0, 0.0, 0.0],
+                ]),
+                "p_rgh": np.array([100000.0, 100010.0, 100020.0]),
+            },
+        }
+        gauge_shifted = {
+            "fluid/internalMesh": {
+                **reference["fluid/internalMesh"],
+                "p_rgh": np.array([100500.0, 100510.0, 100520.0]),
+            },
+        }
+        shifted_row = compare_snapshots(
+            reference, gauge_shifted, ("p_rgh",)
+        )[0]
+        self.assertAlmostEqual(shifted_row["rms"], 0.0)
+        self.assertAlmostEqual(shifted_row["maximum"], 0.0)
+
+        pattern_changed = {
+            "fluid/internalMesh": {
+                **reference["fluid/internalMesh"],
+                "p_rgh": np.array([100500.0, 100512.0, 100519.0]),
+            },
+        }
+        changed_row = compare_snapshots(
+            reference, pattern_changed, ("p_rgh",)
+        )[0]
+        self.assertGreater(changed_row["rms"], 0.0)
+        self.assertGreater(changed_row["relative_rms"], 0.0)
+
     def test_vector_norm_and_aggregate(self):
         reference = {
             "fluid/internalMesh": {

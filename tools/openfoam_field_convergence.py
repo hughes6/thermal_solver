@@ -21,7 +21,9 @@ def iter_named_leaves(dataset, path=()):
         yield path, dataset
 
 
-def field_error(reference, sample, volumes, centers=None):
+def field_error(
+    reference, sample, volumes, centers=None, *, remove_uniform_offset=False
+):
     """Return volume-weighted error metrics for scalar or vector cell data."""
     import numpy as np
 
@@ -38,6 +40,16 @@ def field_error(reference, sample, volumes, centers=None):
         raise ValueError("Field and volume cell counts differ")
     if centers is not None and centers.shape != (volumes.size, 3):
         raise ValueError("Cell centers must have shape (cell count, 3)")
+    total_volume = float(np.sum(volumes))
+    if not math.isfinite(total_volume) or total_volume <= 0.0:
+        raise ValueError("Cell volumes must have a positive finite sum")
+    if remove_uniform_offset:
+        if reference.ndim != 1:
+            raise ValueError("Uniform-offset removal requires a scalar field")
+        reference_mean = float(np.sum(volumes * reference) / total_volume)
+        sample_mean = float(np.sum(volumes * sample) / total_volume)
+        reference = reference - reference_mean
+        sample = sample - sample_mean
     if reference.ndim == 1:
         difference = np.abs(sample - reference)
         reference_magnitude = np.abs(reference)
@@ -46,9 +58,6 @@ def field_error(reference, sample, volumes, centers=None):
         reference_magnitude = np.linalg.norm(reference, axis=1)
     else:
         raise ValueError(f"Unsupported field rank: {reference.ndim}")
-    total_volume = float(np.sum(volumes))
-    if not math.isfinite(total_volume) or total_volume <= 0.0:
-        raise ValueError("Cell volumes must have a positive finite sum")
     mean_absolute = float(np.sum(volumes * difference) / total_volume)
     rms = float(np.sqrt(np.sum(volumes * difference**2) / total_volume))
     reference_rms = float(
@@ -204,6 +213,7 @@ def compare_snapshots(reference, sample, fields):
             metrics = field_error(
                 reference[region][field], sample[region][field],
                 reference[region]["volume"], reference[region]["center"],
+                remove_uniform_offset=field in ("p", "p_rgh"),
             )
             rows.append({"region": region, "field": field, **metrics})
             all_reference.append(reference[region][field])
@@ -216,6 +226,7 @@ def compare_snapshots(reference, sample, fields):
             **field_error(
                 np.concatenate(all_reference), np.concatenate(all_sample),
                 np.concatenate(all_volume), np.concatenate(all_center),
+                remove_uniform_offset=field in ("p", "p_rgh"),
             ),
         })
     return rows
@@ -262,6 +273,7 @@ def append_fluid_partition_rows(rows, reference, sample, fields, components):
                 **field_error(
                     values[field][mask], sample[region][field][mask],
                     values["volume"][mask], values["center"][mask],
+                    remove_uniform_offset=field in ("p", "p_rgh"),
                 ),
             })
 
@@ -294,7 +306,8 @@ def main() -> None:
     )
     parser.add_argument(
         "--fields", nargs="+", default=("U", "T"),
-        help="cell fields to compare (default: U T)",
+        help=("cell fields to compare (default: U T); p and p_rgh are "
+              "compared after removing their arbitrary uniform gauge offset"),
     )
     parser.add_argument(
         "--reference", choices=("final", "previous"), default="final",
