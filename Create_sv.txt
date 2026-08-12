@@ -1,428 +1,176 @@
-from openpyxl import load_workbook
-import time
-import pyodbc
-import win32com.client as win32
-import tkinter as tk
+connector1, pin, connector2, mating_pin = pinouts[idx]
 
+WIRES.append((
+    wire_type,
+    "1",
+    connector1,
+    pin,
+    connector2,
+    mating_pin,
+    assy_no,
+    pins_per_wire,
+    j + 1
+))
 
-# ================================================
-# HELPER FXN
-# ================================================
 
 
-def make_gui(body):
-    root = tk.Tk()
-    root.title("Commit changes to database")
 
-    choice = {"value": None}
-
-    def pressed(value):
-        choice["value"] = value
-        root.quit()
-
-    # Frame with scrollbar
-    frame = tk.Frame(root)
-    frame.pack(padx=10, pady=10)
-
-    scrollbar = tk.Scrollbar(frame)
-    scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
-
-    text = tk.Text(frame, height=20, width=80, wrap="word",
-                   yscrollcommand=scrollbar.set)
-    text.pack(side=tk.LEFT, fill=tk.BOTH)
-
-    scrollbar.config(command=text.yview)
-
-    text.insert("1.0", body)
-    text.config(state="disabled")
-
-    tk.Button(root, text="COMMIT", width=50,
-              command=lambda: pressed("YES")).pack(pady=5)
-    tk.Button(root, text="ROLLBACK", width=50,
-              command=lambda: pressed("NO")).pack(pady=5)
-
-    root.mainloop()
-    return choice["value"]
-
-
-
-def ask_save_path(default_full_path=""):
-    import os
-    import tkinter as tk
-    from tkinter import filedialog
-
-    default_folder = os.path.dirname(default_full_path)
-
-    # Create Tk root
-    root = tk.Tk()
-    root.withdraw()
-    root.attributes("-topmost", True)
-    root.update()
-
-    try:
-        # Let user PICK an existing Excel file
-        selected_path = filedialog.askopenfilename(
-            initialdir=default_folder,
-            filetypes=[("Excel Files", "*.xlsx"), ("All Files", "*.*")]
-        )
-    except Exception:
-        return None
-
-    # Cancel or X
-    if not selected_path:
-        return None
-
-    # Return ONLY the file name (not full path)
-    return os.path.abspath(selected_path)
-
-
-# ================================================
-# PARSE EXCEL
-# ================================================
-output_path = ask_save_path()
-wb = load_workbook(output_path, data_only=True)
-ws = wb.active
-
-ASSY_NAME = ws["B1"].value
-CONNECTOR_P1 = ws["B3"].value
-CONNECTOR_P2 = ws["B4"].value
-
-NO_WIRES = ws["B6"].value
-NO_SECTIONS = ws["B7"].value
-
-MODEL_CHECK = ws["F12"].value
-print(MODEL_CHECK)
-
-if MODEL_CHECK != "Pass":
-    raise Exception("Model check is failing, fix it")
-print(output_path)
-
-
-wire_definitions = []  # now a list, not a dict
-
-for r in range(10, 10 + NO_SECTIONS):
-    wire_type = ws[r][1].value
-    wire_no = ws[r][3].value
-    wires = ws[r][2].value
-
-    entry = {
-        "type": str(wire_type),
-        "value": int(wire_no),
-        "wires": int(wires),
-    }
-
-    wire_definitions.append(entry)
-
-
-pinouts = []
-for r in range(5, 5+NO_WIRES):
-    p1 = ws[r][8].value
-    p2 = ws[r][9].value
-    pinouts.append([p1,p2])
-
-wb.close()
-
-# ================================================
-# PARSE DATA
-# ================================================
-WIRES = []
-idx = 0 
-assy_no = 3
-for entry in wire_definitions:
-    wire_type = entry["type"]
-    count = entry["value"]         # how many wires of this type
-    pins_per_wire = entry["wires"] # how many pins each wire consumes
-
-    for i in range(count):
-        for j in range(pins_per_wire):
-            pin, mating_pin = pinouts[idx]
-            WIRES.append((wire_type, "1", pin, mating_pin, assy_no, pins_per_wire, j+1))
-            idx += 1
-        assy_no += 1
-
-print(wire_definitions, '\n')
-print(WIRES, '\n')
-
-# ================================================
-# CREATE PART IN DBE EDITOR
-# ================================================
-CONNECTION_STRING = (
-    "DRIVER={SQL Server};"
-    "SERVER=sql-zuken-prd;"
-    "DATABASE=Zuken_E3Library;"
-    "Trusted_Connection=yes;"
-)
-
-app = win32.gencache.EnsureDispatch("CT.DBEApplication")
-
-app.PutMessage("Creating through DBE APPLICATION...")
-result = app.NewComponent(ASSY_NAME, "1", "TEMPLATE_CABLE_ASSY", "1", 0)
-app.PutMessage("app.NewComponent():", result)
-if result != 0:
-    app.PutMessage("\nCOMPONENT NEEDS A DIFFERENT NAME, THIS ONE ALREADY USED IN DATABASE SOMEHWERE")
-    raise Exception
-
-time.sleep(1)
-
-
-# ================================================
-# GET LPNTR
-# ================================================
-cid = app.GetActiveComponentId()
-print("Active ID:", cid)
-
-if cid > 0:
-    comp = app.CreateDbeComponentObject()
-    comp.SetId(cid)
-
-    print("Name:", comp.GetName())
-    print("Version:", comp.GetVersion())
-    print("Type:", comp.GetComponentType())
-    print("Save:", comp.Save())
-
-time.sleep(2)
-
-conn = pyodbc.connect(CONNECTION_STRING, autocommit=False)
-cur = conn.cursor()
-
-CURRENT_NAME = comp.GetName()
-CURRENT_VERSION = comp.GetVersion()
-
-cur.execute("""
-SELECT ID, ENTRY, VERSION, LPNTR
-FROM dbo.ComponentData
-WHERE ENTRY = ?
-AND VERSION = ?
-""", CURRENT_NAME, CURRENT_VERSION)
-
-row = cur.fetchone()
-
-print("\nDATABASE ROW:")
-print(tuple(row) if row else None)
-print('LPNTR: ', row[-1])
-print('DB_ID: ', row[0])
-DB_ID = row[0]
-LPNTR = row[-1]
-
-
-# ============================================================
-# HELPERS
-# ============================================================
-
-def add_member(copy_no, part, version):
-    cur.execute("""
-    INSERT INTO dbo.Assembly
-    (LPNTR, COPY, FLAGS, NAME, SUBENTRY, SUBVERSION)
-    VALUES (?, ?, 2, '%.#', ?, ?)
-    """, LPNTR, copy_no, part, version)
-
-    cur.execute("""
-    INSERT INTO dbo.GatePinRelation
-    (ENTRY, GateNumber, PinNumber, Representation, NodeNumber)
-    VALUES (?, ?, 0, 0, 0)
-    """, LPNTR, copy_no)
-
-
-def connect_wire(wire_copy, end1_copy, pin1, end2_copy, pin2):
-    print(wire_copy, end1_copy, pin1, end2_copy, pin2)
-    cur.execute("""
-    INSERT INTO dbo.WIRTYP_CONNECT_INFOS
-    (LPNTR, FLAGS, COPY, NODENO, COPYEND1, PINCOPYEND1, COPYEND2, PINCOPYEND2)
-    VALUES (?, 0, ?, 4, ?, ?, ?, ?)
-    """, LPNTR, wire_copy, end1_copy, pin1, end2_copy, pin2)
-
-def connect_wire(wire_copy, node_no, end1_copy, pin1, end2_copy, pin2):
-    print("Wire:", wire_copy, "Node:", node_no, "End1:", end1_copy,  "Pin1:", pin1,   "End2:", end2_copy, "Pin2:", pin2)
-
-    cur.execute("""
-    INSERT INTO dbo.WIRTYP_CONNECT_INFOS
-    (LPNTR, FLAGS, COPY, NODENO, COPYEND1, PINCOPYEND1, COPYEND2, PINCOPYEND2)
-    VALUES (?, 0, ?, ?, ?, ?, ?, ?)
-    """,
-    LPNTR,
-    wire_copy,  node_no, end1_copy, pin1, end2_copy, pin2)
-
-def mark_component_updated():
-    cur.execute("""
-    UPDATE dbo.ComponentData
-    SET LASTUPDT = GETDATE()
-    WHERE ID = ?
-    """, DB_ID)
-
-def remove_template_member(part_name):
-    cur.execute("""
-    SELECT COPY
-    FROM dbo.Assembly
-    WHERE LPNTR = ?
-    AND SUBENTRY = ?
-    """, LPNTR, part_name)
-
-    rows = cur.fetchall()
-
-    if not rows:
-        print(f"Template member not found: {part_name}")
-        return
-
-    for row in rows:
-        copy_no = row[0]
-
-        print(f"Removing template member COPY {copy_no}: {part_name}")
-
-        # Remove any wire connections involving this member
-        cur.execute("""
-        DELETE FROM dbo.WIRTYP_CONNECT_INFOS
-        WHERE LPNTR = ?
-        AND (COPY = ? OR COPYEND1 = ? OR COPYEND2 = ?)
-        """, LPNTR, copy_no, copy_no, copy_no)
-
-        # Remove corresponding gate
-        cur.execute("""
-        DELETE FROM dbo.GatePinRelation
-        WHERE ENTRY = ?
-        AND GateNumber = ?
-        """, LPNTR, copy_no)
-
-        # Remove member from assembly
-        cur.execute("""
-        DELETE FROM dbo.Assembly
-        WHERE LPNTR = ?
-        AND COPY = ?
-        """, LPNTR, copy_no)
-
-    app.PutMessage("Template member removed.")
-
-def get_pin_copy(connector_name, connector_version, physical_pin):
-    cur.execute("""
-    SELECT LPNTR
-    FROM dbo.ComponentData
-    WHERE ENTRY = ?
-    AND VERSION = ?
-    """, connector_name, connector_version)
-
-    row = cur.fetchone()
-
-    if not row:
-        raise RuntimeError(f"Connector not found: {connector_name}")
-
-    connector_lpntr = row[0]
-
-    cur.execute("""
-    SELECT COPY
-    FROM dbo.Pin
-    WHERE ENTRY = ?
-    AND PHYSPIN = ?
-    """, connector_lpntr, str(physical_pin))
-
-    row = cur.fetchone()
-
-    if not row:
-        raise RuntimeError(f"Pin {physical_pin} not found on {connector_name}")
-
-    return row[0]
-
-# ============================================================
-# CONNECTORS
-# ============================================================
-remove_template_member("TEMPLATE_COMPONENT_DONT_DELETE")
-
-app.PutMessage("\nAdding Connector 1")
-add_member(1, CONNECTOR_P1, 1)
-
-app.PutMessage("Adding Connector 2")
-add_member(2, CONNECTOR_P2, 1)
 
 # ============================================================
 # WIRES + PIN ASSIGNMENTS
 # ============================================================
+
 added_wire_copies = set()
 
 for wire_data in WIRES:
-    (wire_part, wire_version, pin1, pin2, wire_copy, no_wires, conductor_no) = wire_data
 
-    # --------------------------------------------------------
-    # Add the physical wire/cable to the assembly only once
-    # --------------------------------------------------------
+    (
+        wire_part,
+        wire_version,
+        connector1,
+        pin1,
+        connector2,
+        pin2,
+        wire_copy,
+        no_wires,
+        conductor_no
+    ) = wire_data
+
+    # Add physical wire/cable only once
     if wire_copy not in added_wire_copies:
-        app.PutMessage(f"Adding wire COPY {wire_copy}: {wire_part} ({no_wires} conductor(s))")
-        add_member(wire_copy,  wire_part,  wire_version)
+
+        app.PutMessage(
+            f"Adding wire COPY {wire_copy}: "
+            f"{wire_part} ({no_wires} conductor(s))"
+        )
+
+        add_member(wire_copy, wire_part, wire_version)
+
         added_wire_copies.add(wire_copy)
 
-    # --------------------------------------------------------
-    # Resolve connector physical pins -> database pin COPYs
-    # --------------------------------------------------------
-    pin1_copy = get_pin_copy(CONNECTOR_P1, 1, pin1)
-    pin2_copy = get_pin_copy(CONNECTOR_P2, 1, pin2)
+    # Get connector part numbers
+    connector1_part = CONNECTORS[connector1]
+    connector2_part = CONNECTORS[connector2]
 
-    # --------------------------------------------------------
-    # Determine the node for this conductor
-    # --------------------------------------------------------
+    # Convert physical pins to Zuken pin COPY numbers
+    pin1_copy = get_pin_copy(
+        connector1_part,
+        1,
+        pin1
+    )
+
+    pin2_copy = get_pin_copy(
+        connector2_part,
+        1,
+        pin2
+    )
+
+    # Determine internal conductor node
     if no_wires == 1:
         node_no = 4
     else:
         node_no = 4 + (conductor_no - 1)
 
-    app.PutMessage( f"Wire COPY {wire_copy}, Conductor {conductor_no}: {wire_part} | Connector 1 Pin {pin1} -> Connector 2 Pin {pin2} | Node {node_no}")
-    connect_wire(wire_copy, node_no, 1,  pin1_copy, 2,pin2_copy)
+    app.PutMessage(
+        f"Wire COPY {wire_copy}, "
+        f"Conductor {conductor_no}: "
+        f"{wire_part} | "
+        f"Connector {connector1} Pin {pin1} -> "
+        f"Connector {connector2} Pin {pin2} | "
+        f"Node {node_no}"
+    )
+
+    connect_wire(
+        wire_copy,
+        node_no,
+        connector1,
+        pin1_copy,
+        connector2,
+        pin2_copy
+    )
 
 
-mark_component_updated()
 
 
-# ============================================================
-# ASK USER TO CONFIRM
-# ============================================================
-app.PutMessage("\nASSEMBLY:")
+
 
 cur.execute("""
-SELECT COPY, SUBENTRY, SUBVERSION
-FROM dbo.Assembly
-WHERE LPNTR = ?
-ORDER BY COPY
-""", LPNTR)
+SELECT
+    c.ENTRY,
+    c.VERSION,
+    c.LPNTR,
+    COUNT(p.COPY) AS INTERNAL_WIRES
+FROM dbo.ComponentData c
+
+LEFT JOIN dbo.Pin p
+    ON p.ENTRY = c.LPNTR
+
+GROUP BY
+    c.ENTRY,
+    c.VERSION,
+    c.LPNTR
+
+ORDER BY
+    c.ENTRY
+""")
+
+print("\nCOMPONENTS / INTERNAL WIRE COUNT")
 
 for row in cur.fetchall():
-    app.PutMessage(str(tuple(row)))
+    print(
+        f"Part: {row[0]} | "
+        f"Version: {row[1]} | "
+        f"LPNTR: {row[2]} | "
+        f"Internal wires: {row[3]}"
+    )
 
 
-app.PutMessage("\nSee script prompt to committ changes to database.")
-
-cur.execute("""
-SELECT COPY, COPYEND1, PINCOPYEND1, COPYEND2, PINCOPYEND2
-FROM dbo.WIRTYP_CONNECT_INFOS
-WHERE LPNTR = ?
-ORDER BY COPY
-""", LPNTR)
 
 
-# ============================================================
-# SIMPLE GUI
-# ============================================================
-rows = cur.fetchall()
-to_commit = "Do you want to add these connections to database?\n"
-to_commit += "CONNECTIONS:\n"
 
-to_commit += "\n".join(
-    f"Assembly number: {row[0]}, End 1 number: {row[1]}, End 1 pin: {row[2]}, End 2 number: {row[3]}, End 2 pin: {row[4]}"
-    for row in rows
-)
 
-answer = make_gui(to_commit)
 
-if answer == "YES":
-    conn.commit()
-    app.PutMessage("Committed.")
-else:
-    conn.rollback()
-    app.PutMessage("Rolled back.")
+pinouts = []
 
-# ============================================================
-# CLEANUP
-# ============================================================
-if answer == "YES":
-    app.PutMessage("From the component viewer -> right click -> delete -> reopen / edit new assembly to see changes.")
+for r in range(5, 5 + NO_WIRES):
+    connector1 = ws[r][8].value
+    pin1 = ws[r][9].value
+    connector2 = ws[r][10].value
+    pin2 = ws[r][11].value
 
-cur.close()
-conn.close()
+    pinouts.append([
+        int(connector1),
+        pin1,
+        int(connector2),
+        pin2
+    ])
 
-del comp
-del app
+
+WIRES = []
+idx = 0
+assy_no = 3
+
+for entry in wire_definitions:
+    wire_type = entry["type"]
+    count = entry["value"]
+    pins_per_wire = entry["wires"]
+
+    for i in range(count):
+        for j in range(pins_per_wire):
+            connector1, pin, connector2, mating_pin = pinouts[idx]
+
+            WIRES.append((
+                wire_type,
+                "1",
+                connector1,
+                pin,
+                connector2,
+                mating_pin,
+                assy_no,
+                pins_per_wire,
+                j + 1
+            ))
+
+            idx += 1
+
+        assy_no += 1
