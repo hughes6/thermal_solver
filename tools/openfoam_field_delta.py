@@ -116,16 +116,57 @@ def processor_field_paths(
     return paths
 
 
+def latest_common_time_names(case: Path, rank: int | None = None) -> tuple[str, str]:
+    processors = sorted(
+        (path for path in case.glob("processor*") if path.is_dir()),
+        key=lambda path: int(path.name[9:]),
+    )
+    if rank is not None:
+        processors = [path for path in processors if path.name == f"processor{rank}"]
+    if not processors:
+        suffix = f" for processor{rank}" if rank is not None else ""
+        raise FileNotFoundError(f"no processor directories found{suffix} in {case}")
+    common: set[float] | None = None
+    names: dict[float, str] = {}
+    for processor in processors:
+        values: set[float] = set()
+        for child in processor.iterdir():
+            if not child.is_dir():
+                continue
+            try:
+                value = float(child.name)
+            except ValueError:
+                continue
+            values.add(value)
+            names.setdefault(value, child.name)
+        common = values if common is None else common & values
+    ordered = sorted(common or ())
+    if len(ordered) < 2:
+        raise ValueError("fewer than two numeric checkpoint times are common to all ranks")
+    return names[ordered[-2]], names[ordered[-1]]
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("case", type=Path)
-    parser.add_argument("before")
-    parser.add_argument("after")
+    parser.add_argument("before", nargs="?")
+    parser.add_argument("after", nargs="?")
+    parser.add_argument(
+        "--latest-pair",
+        action="store_true",
+        help="compare the latest two checkpoint times common to all selected ranks",
+    )
     parser.add_argument("--region", default="fluid")
     parser.add_argument("--field", default="U")
     parser.add_argument("--rank", type=int, help="compare only one processor rank")
     args = parser.parse_args()
     case = args.case.resolve()
+    if args.latest_pair:
+        if args.before is not None or args.after is not None:
+            parser.error("--latest-pair cannot be combined with before/after times")
+        args.before, args.after = latest_common_time_names(case, args.rank)
+    elif args.before is None or args.after is None:
+        parser.error("before and after times are required unless --latest-pair is used")
     before = processor_field_paths(
         case, args.before, args.region, args.field, args.rank
     )

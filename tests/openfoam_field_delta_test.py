@@ -5,6 +5,7 @@ from pathlib import Path
 
 from tools.openfoam_field_delta import (
     compare_fields,
+    latest_common_time_names,
     processor_field_paths,
     read_internal_field,
     resolve_time_directory,
@@ -52,6 +53,25 @@ class OpenFoamFieldDeltaTest(unittest.TestCase):
                 processor_field_paths(case, "1", "fluid", "U", rank=1),
                 [case / "processor1" / "1" / "fluid" / "U"],
             )
+
+    def test_selects_latest_pair_common_to_all_ranks(self):
+        with tempfile.TemporaryDirectory() as directory:
+            case = Path(directory)
+            for rank in (0, 1):
+                for time in ("1.0", "2.000000000000001"):
+                    (case / f"processor{rank}" / time).mkdir(parents=True)
+            (case / "processor0" / "3.0").mkdir()
+            self.assertEqual(
+                latest_common_time_names(case), ("1.0", "2.000000000000001")
+            )
+
+    def test_latest_pair_requires_two_common_times(self):
+        with tempfile.TemporaryDirectory() as directory:
+            case = Path(directory)
+            (case / "processor0" / "1").mkdir(parents=True)
+            (case / "processor1" / "1").mkdir(parents=True)
+            with self.assertRaisesRegex(ValueError, "fewer than two"):
+                latest_common_time_names(case)
 
     def test_reads_binary_vector_field(self):
         with tempfile.TemporaryDirectory() as directory:
