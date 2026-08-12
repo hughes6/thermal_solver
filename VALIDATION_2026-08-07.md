@@ -1906,3 +1906,50 @@ formal two-checkpoint coupled-convergence proof. The equipment air-rise index
 continues to show meaningful internal hot-air exposure, especially for the
 Trenton, but remains a temperature indicator rather than exhaust-source
 attribution.
+
+The converged screening endpoint also remains close to the independently
+converged 284,396-fluid-cell in-depth endpoint:
+
+| Metric | Screening 80,000.01 s | In-depth 16,800.01 s | Screening difference |
+|---|---:|---:|---:|
+| Fluid volume-average temperature | 299.1309 K | 299.2920 K | -0.1611 K |
+| Fluid internal maximum temperature | 323.0964 K | 322.5547 K | +0.5417 K |
+| External exhaust mass flow | 0.295190 kg/s | 0.297315 kg/s | -0.7147% |
+| Aggregate exhaust temperature | 298.3302 K | 298.3045 K | +0.0257 K |
+| Net sensible heat rejection | 1536.79 W | 1540.17 W | -0.2194% |
+| Heat-rejection fraction | 99.4686% | 99.6872% | -0.2186 percentage points |
+| UPS equipment air-rise index | 0.06530 | 0.06201 | +0.00329 |
+| Dell equipment air-rise index | 0.30672 | 0.27998 | +0.02674 |
+| Trenton equipment air-rise index | 0.52835 | 0.54036 | -0.01201 |
+
+These differences support screening for rack-level airflow, heat rejection,
+and temperature ranking. The in-depth mesh remains preferable when local hot
+spots and component-scale recirculation differences of roughly 0.5 K or a few
+hundredths in the air-rise index matter.
+
+The checkpoint-reference correction was also exercised on the preserved
+in-depth case. Its legacy accepted reference used a different two-rank cell
+partition: rank 1 stored 62,077 velocity values while the current decomposition
+expected 134,309. The first drift post-process therefore failed with an
+OpenFOAM field-size error even though local refresh metrics passed. Current
+generated runners already compare per-rank internal-field counts and rebuild
+an incompatible reference; the preserved runner was updated with that guard
+and its reference was rebuilt from its current partition.
+
+The strict 284,396-fluid-cell continuation from 16,800.01 s produced:
+
+| Metric | In-depth result |
+|---|---:|
+| 16,800→18,000 s thermal stage wall time | 289.1 s |
+| Peak / average thermal drift at 18,000 s | 0.04023 / 0.01103 K/300 s |
+| First 0.01 s strict airflow-window wall time | 494.2 s |
+| Second 0.01 s strict airflow-window wall time | 458.6 s |
+| Repaired-reference accepted drift at 18,000.03 s | 0.72480% |
+| Boundary mass imbalance | about 0.003% |
+| Maximum device-flow change | below 0.035% |
+
+The repaired strict reference passed its in-depth threshold and the refresh
+converged. The case was stopped at that completed checkpoint before another
+thermal interval. The result confirms that screening's speed advantage is
+large: strict live-flow windows are several times slower even though both
+profiles already agree closely on the engineering outputs.
