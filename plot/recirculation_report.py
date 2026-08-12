@@ -858,7 +858,11 @@ def main() -> None:
                     abs(fields["flow"][time]) <= flow_floors[time]):
                 ignored_temperature_samples += 1
     if plt is not None:
-        fig, axes = plt.subplots(4, 1, figsize=(11, 13), sharex=True)
+        panel_count = 5 if internal_rows else 4
+        figure_height = 16 if internal_rows else 13
+        fig, axes = plt.subplots(
+            panel_count, 1, figsize=(11, figure_height), sharex=True
+        )
         for patch, fields in sorted(histories.items()):
             times = sorted(fields["flow"])
             axes[0].plot(times, [fields["flow"][t] for t in times], label=patch)
@@ -891,8 +895,27 @@ def main() -> None:
                             label=f"Applied heat: {expected_heat_watts:g} W")
             axes[3].legend(fontsize=8)
         axes[3].set_ylabel("Heat rejection (W)")
-        axes[3].set_xlabel("Simulation time (s)")
         axes[3].set_title("Net sensible heat rejected relative to ambient")
+        if internal_rows:
+            components = sorted({row[1] for row in internal_rows})
+            for component in components:
+                samples = [row for row in internal_rows if row[1] == component]
+                axes[4].plot(
+                    [row[0] for row in samples], [row[4] for row in samples],
+                    marker="o", linestyle="--", label=f"{component} intake",
+                )
+                axes[4].plot(
+                    [row[0] for row in samples], [row[5] for row in samples],
+                    marker="o", label=f"{component} rear outlet",
+                )
+            axes[4].axhline(
+                args.ambient_temperature, color="black", linestyle=":",
+                label="Ambient",
+            )
+            axes[4].set_ylabel("Equipment air T (K)")
+            axes[4].set_title("Internal intake and rear-outlet zone averages")
+            axes[4].legend(fontsize=7, ncol=2)
+        axes[-1].set_xlabel("Simulation time (s)")
         for axis in axes:
             axis.grid(True, alpha=0.3)
         fig.tight_layout()

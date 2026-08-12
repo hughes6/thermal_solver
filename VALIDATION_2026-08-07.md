@@ -2818,3 +2818,13 @@ component plus ambient. Cases without readable internal data retain the
 original four panels and the explicit warning. A real two-checkpoint production
 render produced a 252,708-byte PNG; visual inspection confirmed readable
 legends, scales, all three equipment pairs, and the Dell warming trend.
+
+Normal function-object history figures now use the same conditional fifth
+panel. They plot only internal times that actually exist; they do not extend a
+stale equipment value to a newer direct boundary endpoint. The active legacy
+history contains one internal sample at `0.05 s`, which exposed that a line
+without markers was invisible even though its legend appeared. Both history
+and snapshot equipment traces now use point markers, so single-sample data is
+visible. A second real render produced a 291,993-byte PNG; visual inspection
+confirmed all six honest intake/outlet points at `0.05 s` and no fabricated
+internal continuation through the later boundary endpoint.
