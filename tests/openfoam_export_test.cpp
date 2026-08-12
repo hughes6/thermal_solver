@@ -329,10 +329,13 @@ int main(int argc, char** argv) {
             "summary \"initial_air_exchange_infeasible current=$current") !=
                std::string::npos);
         assert(text.str().find(
-            "checkpoint_steps=$(awk -v duration=\"0.10000000000000001\"") !=
+            "-v checkpoint=\"0.10000000000000001\"") !=
                std::string::npos);
         assert(text.str().find(
             "stage_write_interval=\"$checkpoint_steps\"") !=
+               std::string::npos);
+        assert(text.str().find(
+            "read -r stage_dt stage_steps checkpoint_steps") !=
                std::string::npos);
         assert(text.str().find(
             "local candidate=\"$1\" rank_count=\"${2:-$processes}\"") !=

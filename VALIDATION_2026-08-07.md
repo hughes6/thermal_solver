@@ -2166,4 +2166,9 @@ Live-flow stages remain continuous, but their timestep-based write interval is
 capped to the number of steps spanning that duration. `purgeWrite` continues to
 retain the configured rolling checkpoint count. Short convergence windows still
 write only their endpoint, while long air-exchange advances retain restartable
-processor checkpoints without repeated solver launches or postprocessing.
+processor checkpoints without repeated solver launches or postprocessing. The
+live-flow planner rounds its total step count upward to an integer number of
+checkpoint blocks and recomputes a no-larger timestep, ensuring the final write
+also lands exactly on the requested stage endpoint. A 12.379 s example at the
+0.001 s cap produces 12,400 steps, writes every 100 steps, uses
+`deltaT=0.00099830645 s`, and lands exactly at 12.379 s.
