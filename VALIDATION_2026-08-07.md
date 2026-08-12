@@ -2435,3 +2435,16 @@ The guard runs before creating the tracer output case. Eight tracer tests and
 not run during the active exchange stage; source-attributed tracing is useful
 after airflow acceptance and thermal exhaust rise, not on the present cold
 checkpoint.
+
+The `2.22114122 s` checkpoint remained complete and restartable. Equal-window
+velocity and `alphat` changes rebounded only slightly, from 7.062% to 7.178%
+and from 11.443% to 11.491%, while fluid-temperature movement decreased to
+0.000617 K RMS. This confirms a bounded transient floor rather than monotonic
+cellwise freezing. Boundary behavior is substantially steadier: relative to
+the `2.02434776 s` report, the largest individual fan-flow change was about
+0.55% (Fan 4), intake flow changed about 0.10%, all nine fans remained exhausts,
+the main vent remained an intake, and no opening had bidirectional flow.
+Current inflow was 0.29757656 kg/s, outflow was 0.29757799 kg/s, giving only
+0.00048% mass imbalance. Device flows and mass balance are therefore already
+inside their 1% screening gates; the runner must still complete one physical
+air exchange and its consecutive spatial checks before accepting airflow.
