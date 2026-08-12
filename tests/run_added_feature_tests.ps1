@@ -7,6 +7,7 @@ $tests = @(
     "advection_subcycling_test",
     "face_wall_test",
     "model_config_test"
+    "model_runner_tracer_commands_test"
 )
 
 $tempBase = [IO.Path]::GetFullPath([IO.Path]::GetTempPath())

@@ -1640,6 +1640,14 @@ struct ModelLoader {
                 std::filesystem::absolute("plot/heat_animation.py");
             const std::filesystem::path recirculation_script=
                 std::filesystem::absolute("plot/recirculation_report.py");
+            const std::filesystem::path attribution_script=
+                std::filesystem::absolute(
+                    "tools/exhaust_recirculation_tracer.py");
+            const std::filesystem::path attribution_plot_script=
+                std::filesystem::absolute(
+                    "plot/exhaust_recirculation_matrix.py");
+            const std::filesystem::path attribution_build_script=
+                std::filesystem::absolute("tools/build_openfoam_tracer.sh");
             const std::filesystem::path visualization_output=
                 absolute_case_directory/"temperature_latest_full_rack.png";
             const std::filesystem::path animation_output=
@@ -1656,6 +1664,21 @@ struct ModelLoader {
 #endif
                 return value;
             };
+            const auto wsl_display_path=[](
+                const std::filesystem::path& path) {
+                std::string value=path.string();
+#ifdef _WIN32
+                if(value.size()>=3 &&
+                   std::isalpha(static_cast<unsigned char>(value[0])) &&
+                   value[1]==':') {
+                    const char drive=static_cast<char>(std::tolower(
+                        static_cast<unsigned char>(value[0])));
+                    value="/mnt/"+std::string(1,drive)+value.substr(2);
+                }
+                std::replace(value.begin(),value.end(),'\\','/');
+#endif
+                return value;
+            };
             const std::string visualization_script_display=
                 shell_display_path(visualization_script);
             const std::string case_directory_display=
@@ -1668,6 +1691,16 @@ struct ModelLoader {
                 shell_display_path(convergence_output);
             const std::string recirculation_script_display=
                 shell_display_path(recirculation_script);
+            const std::string attribution_script_display=
+                shell_display_path(attribution_script);
+            const std::string attribution_plot_script_display=
+                shell_display_path(attribution_plot_script);
+            const std::string attribution_build_script_display=
+                shell_display_path(attribution_build_script);
+            const std::string attribution_script_wsl=
+                wsl_display_path(attribution_script);
+            const std::string attribution_build_script_wsl=
+                wsl_display_path(attribution_build_script);
             const std::string recirculation_output_display=
                 shell_display_path(recirculation_output);
             const auto command_quote=[](const std::string& value) {
@@ -1796,6 +1829,49 @@ struct ModelLoader {
                 << " --output "
                 << command_quote(recirculation_output_display)
                 << " --save\n";
+            std::map<int,unsigned> internal_device_kinds;
+            for(const auto& device : mesh.get_openfoam_internal_flow_devices()) {
+                internal_device_kinds[device.component_id] |=
+                    device.kind==Mesh::OpenFoamInternalFlowDevice::Kind::Fan
+                        ? 1u : 2u;
+            }
+            const bool has_paired_internal_airflow=std::any_of(
+                internal_device_kinds.begin(),internal_device_kinds.end(),
+                [](const auto& entry) { return entry.second==3u; });
+            if(has_paired_internal_airflow) {
+                const std::string attribution_case_display=
+                    case_directory_display+"_tracer_RUN_ID";
+                const std::string attribution_csv_display=
+                    attribution_case_display+
+                    "/exhaust_recirculation_matrix.csv";
+                const std::string attribution_png_display=
+                    attribution_case_display+
+                    "/exhaust_recirculation_matrix.png";
+                std::cout
+                    << "Build the source-attributed exhaust tracer once "
+                       "(WSL):\n  bash "
+                    << command_quote(attribution_build_script_wsl)
+                    << "\nGenerate a mass-weighted exhaust-to-intake "
+                       "recirculation matrix from saved fields (WSL):\n  "
+                       "cd /tmp && python3 "
+                    << command_quote(attribution_script_wsl) << ' '
+                    << command_quote(launch_directory) << ' '
+                    << command_quote(launch_directory+"_tracer_RUN_ID")
+                    << " --solver "
+                       "/mnt/c/OpenFOAM/thermal_sim_v2_tools/bin/"
+                       "steadyExhaustTracerFoam\n"
+                    << "Plot that saved matrix without rerunning OpenFOAM "
+                       "(PowerShell or Git Bash):\n  "
+#ifdef _WIN32
+                    << "python "
+#else
+                    << "python3 "
+#endif
+                    << command_quote(attribution_plot_script_display) << ' '
+                    << command_quote(attribution_csv_display)
+                    << " --output "
+                    << command_quote(attribution_png_display) << "\n";
+            }
             return;
         }
 

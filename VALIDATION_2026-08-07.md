@@ -2082,3 +2082,20 @@ use the 18,000 s matrix for early path detection and mitigation screening.
 
 Use `python plot/exhaust_recirculation_matrix.py MATRIX.csv --output matrix.png` to plot an old report without rerunning OpenFOAM. Add `--compare OTHER.csv` for aligned screening, comparison, and percentage-point difference panels. Both absolute panels use a fixed 0--100% scale so separate cases remain visually comparable.
 
+### Model-runner tracer commands
+
+OpenFOAM exports containing at least one component with both an internal intake
+vent and internal exhaust fan now print the complete source-attribution
+workflow after the existing thermal and signed-flow plotting commands. The
+output includes a one-time WSL build command, a unique `_tracer_RUN_ID`
+derivative-case command, and a Python command that plots the saved matrix
+without rerunning OpenFOAM. Exports with only an unpaired internal vent or fan
+do not print the workflow.
+
+`tools/build_openfoam_tracer.sh` sources OpenFOAM before enabling strict shell
+error handling, overrides the space-sensitive OpenFOAM user directory, cleans
+the solver's generated objects, and installs `steadyExhaustTracerFoam` under
+`C:/OpenFOAM/thermal_sim_v2_tools/bin`. A focused model-runner regression
+executes both paired and unpaired exports and verifies that WSL commands use
+`/mnt/<drive>/...` paths rather than invalid Windows paths.
+
