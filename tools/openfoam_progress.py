@@ -1,0 +1,141 @@
+#!/usr/bin/env python3
+"""Report progress and ETA for a generated thermal-solver OpenFOAM case."""
+
+from __future__ import annotations
+
+import argparse
+import re
+from pathlib import Path
+
+
+TIME_RE = re.compile(r"^Time = ([0-9.eE+-]+)$")
+EXECUTION_RE = re.compile(r"^ExecutionTime = ([0-9.eE+-]+) s")
+CONTROL_TIME_RE = re.compile(
+    r"^\s*(startTime|endTime)\s+([0-9.eE+-]+)\s*;"
+)
+
+
+def read_samples(log_path: Path) -> list[tuple[float, float]]:
+    samples: list[tuple[float, float]] = []
+    current_time: float | None = None
+    with log_path.open("r", encoding="utf-8", errors="ignore") as stream:
+        for raw_line in stream:
+            line = raw_line.strip()
+            match = TIME_RE.match(line)
+            if match:
+                current_time = float(match.group(1))
+                continue
+            match = EXECUTION_RE.match(line)
+            if match and current_time is not None:
+                samples.append((current_time, float(match.group(1))))
+    return samples
+
+
+def recent_slope(samples: list[tuple[float, float]], window: int) -> float:
+    points = samples[-max(2, window) :]
+    count = len(points)
+    if count < 2:
+        raise ValueError("need at least two completed timestep samples")
+    sum_x = sum(point[0] for point in points)
+    sum_y = sum(point[1] for point in points)
+    sum_xx = sum(point[0] * point[0] for point in points)
+    sum_xy = sum(point[0] * point[1] for point in points)
+    denominator = count * sum_xx - sum_x * sum_x
+    if denominator <= 0:
+        raise ValueError("simulation time did not advance in the selected window")
+    slope = (count * sum_xy - sum_x * sum_y) / denominator
+    if slope <= 0:
+        raise ValueError("calculated wall-time rate is not positive")
+    return slope
+
+
+def read_control_times(case_directory: Path) -> tuple[float, float]:
+    control = case_directory / "system" / "controlDict"
+    values: dict[str, float] = {}
+    for line in control.read_text(encoding="utf-8", errors="ignore").splitlines():
+        match = CONTROL_TIME_RE.match(line)
+        if match:
+            values[match.group(1)] = float(match.group(2))
+    missing = [name for name in ("startTime", "endTime") if name not in values]
+    if missing:
+        raise ValueError(f"{', '.join(missing)} was not found in {control}")
+    return values["startTime"], values["endTime"]
+
+
+def numeric_directories(path: Path) -> list[float]:
+    values: list[float] = []
+    if not path.is_dir():
+        return values
+    for child in path.iterdir():
+        if not child.is_dir():
+            continue
+        try:
+            values.append(float(child.name))
+        except ValueError:
+            pass
+    return sorted(values)
+
+
+def format_duration(seconds: float) -> str:
+    seconds = max(0.0, seconds)
+    hours, remainder = divmod(int(round(seconds)), 3600)
+    minutes, seconds = divmod(remainder, 60)
+    return f"{hours:d}h {minutes:02d}m {seconds:02d}s"
+
+
+def choose_log(case_directory: Path, explicit: Path | None) -> Path:
+    if explicit is not None:
+        return explicit
+    candidates = list(case_directory.glob("*.stdout.log"))
+    if not candidates:
+        raise FileNotFoundError(
+            f"no *.stdout.log files found in {case_directory}; use --log"
+        )
+    return max(candidates, key=lambda path: path.stat().st_mtime)
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("case", type=Path, help="OpenFOAM case directory")
+    parser.add_argument("--log", type=Path, help="solver stdout log")
+    parser.add_argument(
+        "--window",
+        type=int,
+        default=100,
+        help="recent completed timesteps used for the rate fit (default: 100)",
+    )
+    parser.add_argument("--end-time", type=float, help="override controlDict endTime")
+    args = parser.parse_args()
+
+    case_directory = args.case.resolve()
+    log_path = choose_log(case_directory, args.log.resolve() if args.log else None)
+    samples = read_samples(log_path)
+    slope = recent_slope(samples, args.window)
+    current_time, execution_time = samples[-1]
+    start_time, configured_end_time = read_control_times(case_directory)
+    end_time = args.end_time if args.end_time is not None else configured_end_time
+    remaining_simulated = max(0.0, end_time - current_time)
+    checkpoints = numeric_directories(case_directory / "processor0")
+
+    print(f"Case: {case_directory}")
+    print(f"Log: {log_path}")
+    print(f"Simulation: {current_time:.9g} / {end_time:.9g} s")
+    stage_span = end_time - start_time
+    if stage_span > 0:
+        stage_fraction = min(1.0, max(0.0, (current_time - start_time) / stage_span))
+        print(f"Stage progress: {100.0 * stage_fraction:.2f}%")
+    print(f"Recent rate: {slope:.1f} wall s / simulated s")
+    print(f"Solver execution time: {format_duration(execution_time)}")
+    print(f"Estimated remaining wall time: {format_duration(remaining_simulated * slope)}")
+    if checkpoints:
+        print(
+            f"Processor checkpoints: {len(checkpoints)} "
+            f"(latest {checkpoints[-1]:.9g} s)"
+        )
+    else:
+        print("Processor checkpoints: none")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

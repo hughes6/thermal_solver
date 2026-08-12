@@ -151,6 +151,11 @@ if ($LASTEXITCODE -ne 0) {
     throw "OpenFOAM profile policy tests failed"
 }
 
+& python -m unittest "tests.openfoam_progress_test"
+if ($LASTEXITCODE -ne 0) {
+    throw "OpenFOAM progress reporting tests failed"
+}
+
 & python -m unittest "tests.exhaust_recirculation_tracer_test"
 if ($LASTEXITCODE -ne 0) {
     throw "Exhaust recirculation tracer tests failed"
