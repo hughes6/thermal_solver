@@ -7,7 +7,7 @@ from plot.outlet_mass_weighted_temperature import (
     read_surface_report,
     select_report_time,
 )
-from plot_outlet_flow import read_samples
+from plot_outlet_flow import append_newer_direct_sample, read_samples
 
 
 class SurfaceReportTest(unittest.TestCase):
@@ -71,6 +71,24 @@ class SurfaceReportTest(unittest.TestCase):
             )
 
             self.assertEqual(read_samples(report), ([16800.01], [0.29655068]))
+
+    def test_flow_history_appends_newer_direct_checkpoint(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            case = Path(temporary)
+            fluid = case / "processor0" / "20" / "fluid"
+            fluid.mkdir(parents=True)
+            (fluid / "phi").write_text(
+                "FoamFile { format ascii; }\n"
+                "boundaryField { outlet { value nonuniform List<scalar> 2 "
+                "(0.1 0.2); } }\n"
+            )
+            times = [10.0]
+            flows = [0.25]
+            self.assertTrue(
+                append_newer_direct_sample(case, "outlet", times, flows)
+            )
+            self.assertEqual(times, [10.0, 20.0])
+            self.assertAlmostEqual(flows[-1], 0.3)
 
 
 if __name__ == "__main__":

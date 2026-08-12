@@ -2460,3 +2460,12 @@ faces; explicit `--time 0.06` still returns the historical 0.01102924 kg/s and
 293.148700 K report. This also avoids the VTK missing-`T`/`phi` failure mode.
 Twenty-five related tests pass, including corrected bounded parsing of ASCII
 OpenFOAM lists.
+
+The signed mass-flow plot retained correct signs but labeled the newest report
+file as the latest result even when rank checkpoints were newer. It now keeps
+the function-object history and appends one direct all-rank `phi` endpoint when
+the latest complete checkpoint is newer, explicitly identifying that source.
+For live `Fan_1`, report history ended at `0.45 s` and 0.02756503 kg/s; the
+updated endpoint is `2.22114122 s` and +0.033209906 kg/s. Positive still means
+out of the domain, so no sign inversion was reintroduced. Thirteen focused
+outlet/validation tests pass.

@@ -5,6 +5,8 @@ from __future__ import annotations
 import argparse
 from pathlib import Path
 
+from tools.validate_openfoam_case import latest_result_paths, patch_values
+
 
 def report_directories(case: Path) -> list[Path]:
     post = case / "postProcessing"
@@ -62,6 +64,31 @@ def read_samples(report: Path) -> tuple[list[float], list[float]]:
     return times, [samples[time] for time in times]
 
 
+def latest_direct_flow(case: Path, patch: str) -> tuple[float, float]:
+    """Sum signed boundary phi over the latest complete result on every rank."""
+    time_s, result_paths = latest_result_paths(case)
+    flow = sum(
+        sum(patch_values(result_path / "fluid" / "phi", patch))
+        for result_path in result_paths
+    )
+    return time_s, flow
+
+
+def append_newer_direct_sample(
+    case: Path, patch: str, times: list[float], flows: list[float]
+) -> bool:
+    try:
+        direct_time, direct_flow = latest_direct_flow(case, patch)
+    except (FileNotFoundError, ValueError):
+        return False
+    tolerance = 1.0e-8 * max(1.0, abs(direct_time))
+    if times and direct_time <= times[-1] + tolerance:
+        return False
+    times.append(direct_time)
+    flows.append(direct_flow)
+    return True
+
+
 def main() -> None:
     try:
         import matplotlib.pyplot as plt
@@ -84,8 +111,11 @@ def main() -> None:
     parser.add_argument("--expected-kg-s", type=float)
     args = parser.parse_args()
 
-    report = select_report(args.case.resolve(), args.report)
+    case = args.case.resolve()
+    report = select_report(case, args.report)
     times, mass_flow = read_samples(report)
+    patch = report.name.removesuffix("_mass_flow")
+    appended_direct = append_newer_direct_sample(case, patch, times, mass_flow)
     volume_flow = [value / args.rho for value in mass_flow]
     cfm = [value * 2118.880003 for value in volume_flow]
 
@@ -95,6 +125,8 @@ def main() -> None:
     print(f"Signed volume flow:         {volume_flow[-1]:.8g} m^3/s")
     print(f"Signed flow:                {cfm[-1]:.4f} CFM")
     print("Sign convention:            positive = out of domain")
+    if appended_direct:
+        print("Latest sample source:        direct all-rank OpenFOAM phi")
 
     fig, left = plt.subplots(figsize=(9, 5))
     left.plot(times, mass_flow, color="tab:blue", linewidth=2)
