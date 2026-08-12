@@ -328,13 +328,20 @@ int main(int argc, char** argv) {
         assert(text.str().find("mapped_state_marker=") !=
                std::string::npos);
         assert(text.str().find(
-            "spatial settling requires $exchange_horizon s") !=
+            "initial_exchange_state=\"$case_dir/.initial_air_exchange_state\"") !=
                std::string::npos);
         assert(text.str().find(
-            "Initial airflow cannot satisfy minimum_initial_air_exchange_fraction within airflow_warmup_time") !=
+            "Cumulative initial air exchange: fraction=$air_exchange_fraction") !=
                std::string::npos);
         assert(text.str().find(
-            "summary \"initial_air_exchange_infeasible current=$current") !=
+            "increment=0.5*(previous_flow+flow)*dt/(volume*rho)") !=
+               std::string::npos);
+        assert(text.str().find(
+            "latest_one_way_boundary_mass_flow=\"\"") !=
+               std::string::npos);
+        assert(text.str().find(
+            "\"$case_dir/.initial_air_exchange_state\"\n"
+            "    echo \"Warm start invalidated") !=
                std::string::npos);
         assert(text.str().find(
             "lead=minimum-2*interval; if(lead<0)lead=0") !=
@@ -375,9 +382,9 @@ int main(int argc, char** argv) {
             "latest_complete_processor_time \"$existing_processes\"") !=
                std::string::npos);
         assert(text.str().find(
-            "-v fraction=\"1\"") != std::string::npos);
+            "-v required=\"1\"") != std::string::npos);
         assert(text.str().find(
-            "exchange<1e29?exchange*fraction:0") !=
+            "mv -f \"$air_exchange_state_tmp\" \"$initial_exchange_state\"") !=
                std::string::npos);
         assert(text.str().find(
             "tol=1e-9*s; exit !(a<b-tol) }'; do") !=
@@ -507,14 +514,13 @@ int main(int argc, char** argv) {
             "summary \"airflow_reference_rebased time=$current") !=
                std::string::npos);
         assert(text.str().find(
-            "exchange_target=\"$exchange_target\"") !=
+            "completed>=required") !=
                std::string::npos);
         assert(text.str().find(
-            "Advancing initial airflow directly to t=$exchange_target s") !=
+            "completedFraction=$air_exchange_fraction") !=
                std::string::npos);
         assert(text.str().find(
-            "summary \"initial_air_exchange_advance current=$current") !=
-               std::string::npos);
+            "now+interval") != std::string::npos);
         assert(text.str().find(
             "summary \"run_paused mode=$mode reconstructedTime=$reconstruct_time reason=airflow_refresh_pending\"") !=
                std::string::npos);

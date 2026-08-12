@@ -2524,3 +2524,29 @@ airflow cap could theoretically reduce coupled-flow wall time by roughly 35%,
 but no default is changed until an identical-checkpoint continuation compares
 the larger step against the current field, fan-flow, mass-balance, and
 direction criteria. Seventeen progress tests pass.
+
+### Cumulative initial air exchange
+
+The active runner froze its cold-start exchange target after the `0.45 s`
+check, when estimated exchange time was 5.22144 s, then launched one continuous
+stage to `5.27144 s`. Boundary flow subsequently rose from about 0.248 kg/s to
+about 0.298 kg/s, but that increase could not shorten the already launched
+stage. Using elapsed time against one early flow estimate is conservative but
+is not the physical exchanged-air quantity.
+
+Future exports now integrate cumulative one-way boundary mass with the
+trapezoidal rule and divide by ambient-connected rack air mass. The state stores
+`last_time`, `last_one_way_mass_flow`, and `cumulative_exchange_fraction`
+atomically in `.initial_air_exchange_state`; it survives an interrupted initial
+stage, rejects malformed/future/negative state, resets on a new observation or
+warm start, clears fresh-flow output before every measurement, and is removed
+after acceptance. Once device/spatial gates pass but exchanged fraction remains
+low, the runner advances only one existing airflow-checkpoint interval before
+rechecking. Mapped airflow retains its validated horizon skip.
+
+The active flow history suggests the integrated criterion would reach one rack
+volume around 4.7-4.9 s instead of the frozen 5.27144 s target, potentially
+saving about 50-75 wall minutes at the current rate without reducing the one-
+volume requirement. This estimate is intentionally not applied retroactively
+to the running case. The exporter fixture passes its C++ assertions and the
+generated `run_parallel.sh` passes `bash -n`.
