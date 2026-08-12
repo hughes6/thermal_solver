@@ -328,6 +328,17 @@ int main(int argc, char** argv) {
             "summary \"initial_air_exchange_infeasible current=$current") !=
                std::string::npos);
         assert(text.str().find(
+            "local candidate=\"$1\" rank_count=\"${2:-$processes}\"") !=
+               std::string::npos);
+        assert(text.str().find(
+            "for ((rank=0; rank<rank_count; ++rank)); do") !=
+               std::string::npos);
+        assert(text.str().find(
+            "existing_processes=0") != std::string::npos);
+        assert(text.str().find(
+            "latest_complete_processor_time \"$existing_processes\"") !=
+               std::string::npos);
+        assert(text.str().find(
             "-v fraction=\"1\"") != std::string::npos);
         assert(text.str().find(
             "exchange<1e29?exchange*fraction:0") !=

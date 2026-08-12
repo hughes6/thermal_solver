@@ -2127,3 +2127,26 @@ paired/unpaired model-runner, Python grouping, plotting, and OpenFOAM-v2606
 compilation regressions pass. The long detailed-model run must use an export
 created after this metadata fix.
 
+## Rank-change restart and scaling validation (2026-08-12)
+
+A 494,039-cell production-rack screening case exposed a restart defect while
+changing an active case from two to four MPI ranks. The generated runner tested
+the old processor checkpoint against the newly requested rank count. A complete
+two-rank checkpoint was therefore rejected because `processor2` and
+`processor3` did not yet exist; the runner skipped reconstruction, deleted the
+old partitions, and redecomposed the older root checkpoint. Processor checkpoint
+validation now accepts an explicit rank count and uses the detected existing
+partition count before reconstruction or deletion. The exporter regression test
+covers the generated rank-count-aware path.
+
+The preserved 0.05 s root state also provided a matched scaling benchmark for
+the coupled 0.05-to-0.06 s segment:
+
+| Metric | 2 ranks | 4 ranks | Difference |
+|---|---:|---:|---:|
+| Segment wall time | 238.321 s | 128.809 s | -45.95% |
+| Maximum Courant number | 2.54044 | 2.54045 | +0.00001 |
+| Spatial velocity relative RMS change | 15.4164% | 15.4246% | +0.0082 percentage points |
+
+Four ranks are retained for this case because they nearly halve coupled-flow
+wall time while preserving the monitored numerical behavior.
