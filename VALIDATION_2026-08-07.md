@@ -2514,3 +2514,13 @@ change dropped to 5.18 m/s. Exterior mass imbalance remained only 0.00255%.
 `Fan_1` delivered +0.033220511 kg/s at 293.136195 K from 53 all-rank faces.
 The hottest solid cell was 293.6520 K; cold-stage sensible rejection remained
 intentionally unconverged at -4.24 W.
+
+The progress tool now reports diagnostic Courant timestep headroom without
+changing the active stage. At approximately `2.447 s`, the production case used
+`dt=0.000993906411 s`, observed maxCo 2.5803 against maxCo 5, and therefore had
+an 80%-margin Courant estimate of `0.00154077 s` (1.55 times the current step).
+The generated stage cap remains `0.000993906411 s`. Raising the screening
+airflow cap could theoretically reduce coupled-flow wall time by roughly 35%,
+but no default is changed until an identical-checkpoint continuation compares
+the larger step against the current field, fan-flow, mass-balance, and
+direction criteria. Seventeen progress tests pass.

@@ -4,6 +4,7 @@ from pathlib import Path
 
 from tools.openfoam_progress import (
     choose_log,
+    courant_timestep_headroom,
     directory_size,
     format_bytes,
     format_duration,
@@ -20,6 +21,21 @@ from tools.openfoam_progress import (
 
 
 class OpenFoamProgressTest(unittest.TestCase):
+    def test_reports_diagnostic_courant_timestep_headroom(self):
+        with tempfile.TemporaryDirectory() as directory:
+            case = Path(directory)
+            (case / "system").mkdir()
+            (case / "system" / "controlDict").write_text(
+                "deltaT 0.001;\nmaxCo 5;\nmaxDeltaT 0.001;\n"
+            )
+            current, cap, safe, multiplier = courant_timestep_headroom(
+                case, 2.5
+            )
+            self.assertEqual(current, 0.001)
+            self.assertEqual(cap, 0.001)
+            self.assertAlmostEqual(safe, 0.0016)
+            self.assertAlmostEqual(multiplier, 1.6)
+
     def test_reads_samples_and_recent_rate(self):
         with tempfile.TemporaryDirectory() as directory:
             log = Path(directory) / "run.stdout.log"

@@ -18,7 +18,7 @@ CONTROL_TIME_RE = re.compile(
     r"^\s*(startTime|endTime)\s+([0-9.eE+-]+)\s*;"
 )
 CONTROL_STEP_RE = re.compile(
-    r"^\s*(deltaT|writeInterval)\s+([0-9.eE+-]+)\s*;"
+    r"^\s*(deltaT|maxCo|maxDeltaT|writeInterval)\s+([0-9.eE+-]+)\s*;"
 )
 WRITE_CONTROL_RE = re.compile(r"^\s*writeControl\s+([A-Za-z]+)\s*;")
 COURANT_RE = re.compile(
@@ -135,6 +135,29 @@ def read_checkpoint_stride(case_directory: Path) -> float | None:
     else:
         return None
     return stride if stride > 0 else None
+
+
+def courant_timestep_headroom(
+    case_directory: Path,
+    observed_maximum_courant: float,
+    safety_fraction: float = 0.8,
+) -> tuple[float, float, float, float] | None:
+    """Estimate a safe diagnostic dt without changing the configured stage."""
+    if observed_maximum_courant <= 0 or not 0 < safety_fraction <= 1:
+        return None
+    control = case_directory / "system" / "controlDict"
+    values: dict[str, float] = {}
+    for line in control.read_text(encoding="utf-8", errors="ignore").splitlines():
+        match = CONTROL_STEP_RE.match(line)
+        if match and match.group(1) in ("deltaT", "maxCo", "maxDeltaT"):
+            values[match.group(1)] = float(match.group(2))
+    if any(name not in values for name in ("deltaT", "maxCo", "maxDeltaT")):
+        return None
+    current = values["deltaT"]
+    if current <= 0 or values["maxCo"] <= 0:
+        return None
+    safe = current * values["maxCo"] / observed_maximum_courant * safety_fraction
+    return current, values["maxDeltaT"], safe, safe / current
 
 
 def read_latest_run_request(case_directory: Path) -> tuple[str, float] | None:
@@ -323,6 +346,14 @@ def main() -> int:
     print(f"Estimated remaining wall time: {format_duration(remaining_simulated * slope)}")
     if maximum_courant is not None:
         print(f"Latest fluid max Courant: {maximum_courant:.6g}")
+        headroom = courant_timestep_headroom(case_directory, maximum_courant)
+        if headroom is not None:
+            current_dt, stage_cap, safe_dt, multiplier = headroom
+            print(
+                "Diagnostic Courant-safe timestep (80% margin): "
+                f"{safe_dt:.9g} s ({multiplier:.3g}x current "
+                f"{current_dt:.9g} s; stage cap {stage_cap:.9g} s)"
+            )
     if cumulative_continuity is not None:
         print(f"Latest cumulative continuity error: {cumulative_continuity:.6g}")
     print(
