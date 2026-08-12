@@ -10,8 +10,11 @@ from plot.recirculation_report import (
     boundary_histories,
     combined_samples,
     directional_patch_sample,
+    equipment_air_rise_index,
     exported_heat_watts,
+    exact_center_alignment,
     internal_device_temperature_rows,
+    maximum_finite_equipment_index,
     read_report,
     selected_time_path,
     selected_result_paths,
@@ -21,6 +24,25 @@ from plot.recirculation_report import (
 
 
 class RecirculationReportTest(unittest.TestCase):
+    def test_equipment_air_rise_requires_hotter_exhaust(self):
+        self.assertTrue(math.isnan(
+            equipment_air_rise_index(294.0, 293.5, 293.0)
+        ))
+        self.assertTrue(math.isnan(
+            equipment_air_rise_index(293.0, 293.0, 293.0)
+        ))
+        self.assertAlmostEqual(
+            equipment_air_rise_index(295.0, 303.0, 293.0), 0.2
+        )
+
+    def test_equipment_maximum_ignores_undefined_components(self):
+        rows = [
+            (1.0, "A", "in", "out", 294.0, 293.5, float("nan")),
+            (1.0, "B", "in", "out", 294.0, 303.0, 0.1),
+            (1.0, "C", "in", "out", 295.0, 303.0, 0.2),
+        ]
+        self.assertAlmostEqual(maximum_finite_equipment_index(rows), 0.2)
+
     def test_stale_history_appends_latest_direct_external_endpoint(self):
         with tempfile.TemporaryDirectory() as directory:
             case = Path(directory)
@@ -111,6 +133,17 @@ fluid_to_solid
             value, paths = selected_result_paths(case, 24000.01)
             self.assertAlmostEqual(value, 24000.01)
             self.assertEqual(paths, expected)
+
+    def test_explicit_reconstructed_time_survives_newer_processors(self):
+        with tempfile.TemporaryDirectory() as directory:
+            case = Path(directory)
+            reconstructed = case / "0.05"
+            reconstructed.mkdir()
+            for rank in range(2):
+                (case / f"processor{rank}" / "3.2").mkdir(parents=True)
+            value, paths = selected_result_paths(case, 0.05)
+            self.assertEqual(value, 0.05)
+            self.assertEqual(paths, [reconstructed])
 
     def test_reingestion_and_net_sensible_heat(self):
         histories = {
@@ -266,6 +299,55 @@ fluid_to_solid
             rows = internal_device_temperature_rows(case, ambient_k=293.0)
             self.assertEqual(len(rows), 1)
             self.assertEqual(rows[0][1], "Server A")
+
+    def test_internal_device_metadata_accepts_downstream_outlet(self):
+        with tempfile.TemporaryDirectory() as directory:
+            case = Path(directory)
+            fluid = case / "postProcessing" / "fluid"
+            intake = fluid / "internal_Intake_8_temperature_average" / "0"
+            outlet = fluid / "internal_Outlet_9_temperature_average" / "0"
+            fan = fluid / "internal_Fan_10_temperature_average" / "0"
+            for path, value in ((intake, 296), (outlet, 306), (fan, 310)):
+                path.mkdir(parents=True)
+                (path / "volFieldValue.dat").write_text(
+                    f"10 {value}\n", encoding="utf-8"
+                )
+            (case / "internal_airflow_devices.csv").write_text(
+                "zone,component_id,component,kind,device\n"
+                'internal_Intake_8,4,"Server A",intake,"Intake"\n'
+                'internal_Outlet_9,4,"Server A",outlet,"Rear outlet"\n'
+                'internal_Fan_10,4,"Server A",exhaust,"Fan"\n',
+                encoding="utf-8",
+            )
+            rows = internal_device_temperature_rows(case, ambient_k=293.0)
+            self.assertEqual(len(rows), 1)
+            self.assertEqual(rows[0][3], "Outlet")
+            self.assertAlmostEqual(rows[0][5], 306.0)
+
+    def test_exact_center_alignment_maps_reordered_cells(self):
+        import numpy as np
+
+        reference = np.array([
+            [0.0, 0.0, 0.0], [2.0, 0.0, 0.0], [1.0, 0.0, 0.0]
+        ])
+        target = reference[[2, 0, 1]]
+        alignment = exact_center_alignment(reference, target)
+        np.testing.assert_array_equal(
+            np.array([10, 20, 30])[alignment], [30, 10, 20]
+        )
+
+    def test_exact_center_alignment_rejects_mismatch_and_duplicates(self):
+        import numpy as np
+
+        with self.assertRaisesRegex(ValueError, "do not match"):
+            exact_center_alignment(
+                np.array([[0.0, 0.0, 0.0]]),
+                np.array([[1.0, 0.0, 0.0]]),
+            )
+        with self.assertRaisesRegex(ValueError, "not unique"):
+            exact_center_alignment(
+                np.zeros((2, 3)), np.zeros((2, 3))
+            )
 
     def test_selected_internal_csv_does_not_substitute_stale_time(self):
         with tempfile.TemporaryDirectory() as directory:

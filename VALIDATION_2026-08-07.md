@@ -2738,13 +2738,35 @@ not bulk flow, pressure, topology, or energy-solver divergence; the full
 initial air-exchange and spatial gates remain necessary.
 
 This snapshot audit also exposed a misleading empty-report behavior.
-`recirculation_report.py --snapshot-times` reads reconstructed or rank-common
-decomposed boundary fields directly, but internal equipment temperatures still
-require solver-generated cell-zone reports. In the active case those internal
-reports ended at `0.05 s`, so selecting `3.1067` and `3.2051 s` wrote only an
-internal-air CSV header without explaining why. Snapshot mode now emits an
-explicit warning that its boundary results are valid, identifies the latest
-available internal-report time (or their absence), and states that cell-zone
-temperatures are not inferred from boundary or neighboring cells. Its CLI help
-also correctly describes decomposed-checkpoint support. A focused regression
-test proves stale internal data is not substituted for a requested time.
+`recirculation_report.py --snapshot-times` already read reconstructed or
+rank-common decomposed boundary fields directly, but internal equipment
+temperatures still came only from solver-generated cell-zone reports. In the
+active case those reports ended at `0.05 s`, so selecting `3.1067` and
+`3.2051 s` wrote only an internal-air CSV header without explaining why.
+
+Snapshot mode now reads the exported time-zero `internal_*_mask` fields and
+maps them to each selected result using exact, unique physical cell centers.
+The active reconstructed and decomposed fluid meshes contain the same 425,353
+centers bit-for-bit after sorting, although their storage order differs; any
+duplicate, missing, or changed center causes an explicit failure rather than
+an unsafe assignment. Temperatures are volume averaged over each zone. A
+cross-check at `0.05 s` matched OpenFOAM's own rounded zone reports within
+0.0000183 K for every Eaton, Dell, and Trenton intake/outlet value.
+
+Metadata pairing now accepts a downstream device of kind `outlet` as well as
+`exhaust`. The old report skipped Trenton entirely and paired Eaton/Dell with
+an internal fan plane instead of their rear outlet. At `3.20510857 s`, the
+correct direct pairs were Eaton 293.1580/293.1544 K, Dell
+293.1534/293.2144 K, and Trenton 293.1512/293.1543 K for intake/rear outlet.
+Eaton's reversed cold-stage rise now produces an undefined (`NaN`) equipment
+re-ingestion index instead of the previous false clipped value of 1.0; an index
+is defined only when the outlet is warmer than both ambient and intake.
+Trenton's 27.3% ratio is mathematically defined but rests on only a 0.0043 K
+outlet rise and is not yet a useful thermal result. Dell's intake rise was
+5.34% of its 0.0644 K rear-outlet rise.
+If masks or optional readers are unavailable, snapshot mode retains the valid
+boundary results but now warns explicitly instead of silently implying that
+an empty internal CSV is complete. Explicit historical reconstructed times
+also remain selectable when newer processor checkpoints exist. The CLI help
+correctly describes both storage layouts, and focused tests cover exact center
+mapping, mismatch rejection, outlet pairing, and stale-time non-substitution.

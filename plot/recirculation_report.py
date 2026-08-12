@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import csv
+import math
 import re
 import sys
 from pathlib import Path
@@ -55,6 +56,20 @@ def directional_patch_sample(fluxes, temperatures):
             min(inward_mass, outward_mass) / gross if gross else 0.0)
 
 
+def equipment_air_rise_index(intake_t: float, exhaust_t: float, ambient_k: float):
+    """Return re-ingested exhaust fraction only for a physically heated outlet."""
+    rise = exhaust_t - ambient_k
+    if rise <= 1.0e-12 or exhaust_t <= intake_t:
+        return float("nan")
+    return max(0.0, min(1.0, (intake_t - ambient_k) / rise))
+
+
+def maximum_finite_equipment_index(rows):
+    """Return the largest defined equipment index, ignoring NaN values."""
+    values = [row[6] for row in rows if math.isfinite(row[6])]
+    return max(values) if values else float("nan")
+
+
 def latest_face_resolved_samples(case: Path, patches):
     """Read latest complete boundary faces so bidirectional flow is not hidden."""
     time_s, result_paths = latest_result_paths(case)
@@ -94,15 +109,7 @@ def boundary_patch_names(case: Path) -> list[str]:
 
 
 def selected_result_paths(case: Path, requested: float) -> tuple[float, list[Path]]:
-    processors = sorted(
-        (path for path in case.glob("processor*") if path.is_dir()),
-        key=lambda path: int(path.name[9:]),
-    )
-    if processors:
-        paths = [resolve_time_directory(processor, str(requested))
-                 for processor in processors]
-        return float(paths[0].name), paths
-    candidates = []
+    reconstructed = []
     for path in case.iterdir():
         if not path.is_dir():
             continue
@@ -112,11 +119,20 @@ def selected_result_paths(case: Path, requested: float) -> tuple[float, list[Pat
             continue
         scale = max(1.0, abs(requested))
         if abs(value - requested) <= 1.0e-9 * scale:
-            candidates.append((abs(value - requested), value, path))
-    if not candidates:
-        raise ValueError(f"No reconstructed checkpoint matches t={requested:g} s")
-    _, value, path = min(candidates)
-    return value, [path]
+            reconstructed.append((abs(value - requested), value, path))
+    if reconstructed:
+        _, value, path = min(reconstructed)
+        return value, [path]
+
+    processors = sorted(
+        (path for path in case.glob("processor*") if path.is_dir()),
+        key=lambda path: int(path.name[9:]),
+    )
+    if processors:
+        paths = [resolve_time_directory(processor, str(requested))
+                 for processor in processors]
+        return float(paths[0].name), paths
+    raise ValueError(f"No reconstructed checkpoint matches t={requested:g} s")
 
 
 def selected_time_path(case: Path, requested: float) -> tuple[float, Path]:
@@ -178,6 +194,187 @@ def checkpoint_face_rows(case: Path, requested_times, ambient_k: float,
                      reingestion, sensible,
                      bidirectional_mass / gross if gross else 0.0))
     return rows, face_rows
+
+
+def exact_center_alignment(reference_centers, target_centers):
+    """Map target cells to reference cells using exact unique centers."""
+    import numpy as np
+
+    reference = np.asarray(reference_centers, dtype=float)
+    target = np.asarray(target_centers, dtype=float)
+    if reference.shape != target.shape or reference.ndim != 2 or reference.shape[1] != 3:
+        raise ValueError(
+            "Reference and target cell centers must have matching (N, 3) shapes"
+        )
+    reference_order = np.lexsort(
+        (reference[:, 2], reference[:, 1], reference[:, 0])
+    )
+    target_order = np.lexsort((target[:, 2], target[:, 1], target[:, 0]))
+    sorted_reference = reference[reference_order]
+    sorted_target = target[target_order]
+    if (np.any(np.all(np.diff(sorted_reference, axis=0) == 0.0, axis=1)) or
+            np.any(np.all(np.diff(sorted_target, axis=0) == 0.0, axis=1))):
+        raise ValueError("Cell centers are not unique; exact zone mapping is unsafe")
+    if not np.array_equal(sorted_reference, sorted_target):
+        raise ValueError(
+            "Reconstructed mask and decomposed result cell centers do not match exactly"
+        )
+    target_to_reference = np.empty(reference.shape[0], dtype=int)
+    target_to_reference[target_order] = reference_order
+    return target_to_reference
+
+
+def _named_leaves(dataset, path=()):
+    if dataset is None:
+        return
+    if hasattr(dataset, "n_blocks"):
+        names = list(dataset.keys()) if hasattr(dataset, "keys") else []
+        for index, block in enumerate(dataset):
+            name = names[index] if index < len(names) else f"block_{index}"
+            yield from _named_leaves(block, path + (str(name),))
+    elif getattr(dataset, "n_cells", 0):
+        yield path, dataset
+
+
+def _fluid_internal_block(dataset):
+    blocks = [
+        block for path, block in _named_leaves(dataset)
+        if "/".join(path).endswith("fluid/internalMesh")
+    ]
+    if len(blocks) != 1:
+        raise ValueError(
+            f"Expected one fluid internal mesh, found {len(blocks)}"
+        )
+    return blocks[0]
+
+
+def direct_internal_device_temperature_rows(
+    case: Path, requested_times, ambient_k: float
+):
+    """Read volume-average internal-zone temperatures at retained checkpoints."""
+    import numpy as np
+    import pyvista as pv
+    import vtk
+
+    metadata_path = case / "internal_airflow_devices.csv"
+    if not metadata_path.is_file():
+        return []
+    with metadata_path.open("r", newline="", encoding="utf-8") as stream:
+        metadata = list(csv.DictReader(stream))
+    mask_names = [row.get("zone", "") + "_mask" for row in metadata]
+    marker = case / f"{case.name}.foam"
+    marker.touch(exist_ok=True)
+    warning_state = vtk.vtkObject.GetGlobalWarningDisplay()
+    vtk.vtkObject.GlobalWarningDisplayOff()
+    try:
+        mask_reader = pv.POpenFOAMReader(str(marker))
+        mask_reader.case_type = "reconstructed"
+        mask_reader.set_active_time_value(0.0)
+        mask_reader.disable_all_patch_arrays()
+        for patch in mask_reader.patch_array_names:
+            if str(patch).endswith("fluid/internalMesh"):
+                mask_reader.enable_patch_array(patch)
+        mask_reader.disable_all_cell_arrays()
+        for name in mask_names:
+            if name in mask_reader.cell_array_names:
+                mask_reader.enable_cell_array(name)
+        mask_block = _fluid_internal_block(mask_reader.read())
+        reference_centers = np.asarray(
+            mask_block.cell_centers().points, dtype=float
+        ).copy()
+        masks = {
+            name: np.asarray(mask_block.cell_data[name], dtype=float).copy()
+            for name in mask_names if name in mask_block.cell_data
+        }
+        missing_masks = sorted(set(mask_names) - set(masks))
+        if missing_masks:
+            raise ValueError(
+                "Time-zero internal device masks are unavailable: "
+                + ", ".join(missing_masks)
+            )
+
+        result_readers = {}
+        alignments = {}
+        target_centers_by_type = {}
+        actual_by_requested = {}
+        zone_temperatures = {}
+        for requested in requested_times:
+            selected_time, result_paths = selected_result_paths(case, requested)
+            case_type = "decomposed" if len(result_paths) > 1 else "reconstructed"
+            if case_type not in result_readers:
+                result_reader = pv.POpenFOAMReader(str(marker))
+                result_reader.case_type = case_type
+                result_reader.disable_all_patch_arrays()
+                for patch in result_reader.patch_array_names:
+                    if str(patch).endswith("fluid/internalMesh"):
+                        result_reader.enable_patch_array(patch)
+                result_reader.disable_all_cell_arrays()
+                result_reader.enable_cell_array("T")
+                result_readers[case_type] = result_reader
+            result_reader = result_readers[case_type]
+            available = [float(value) for value in result_reader.time_values]
+            actual = min(available, key=lambda value: abs(value - requested))
+            if (abs(actual - selected_time) >
+                    1.0e-8 * max(1.0, abs(selected_time))):
+                raise ValueError(
+                    f"Internal temperature time {requested:g} is unavailable"
+                )
+            actual_by_requested[requested] = actual
+            result_reader.set_active_time_value(actual)
+            block = _fluid_internal_block(result_reader.read())
+            centers = np.asarray(block.cell_centers().points, dtype=float)
+            if case_type not in alignments:
+                alignments[case_type] = exact_center_alignment(
+                    reference_centers, centers
+                )
+                target_centers_by_type[case_type] = centers.copy()
+            elif not np.array_equal(target_centers_by_type[case_type], centers):
+                raise ValueError(
+                    f"{case_type.capitalize()} cell ordering changed between checkpoints"
+                )
+            alignment = alignments[case_type]
+            sized = block.compute_cell_sizes(
+                length=False, area=False, volume=True, vertex_count=False
+            )
+            volumes = np.asarray(sized.cell_data["Volume"], dtype=float)
+            temperatures = np.asarray(block.cell_data["T"], dtype=float)
+            for row, mask_name in zip(metadata, mask_names):
+                mask = masks[mask_name][alignment] > 0.5
+                volume = float(np.sum(volumes[mask]))
+                if volume <= 0.0:
+                    raise ValueError(f"Internal device mask {mask_name} is empty")
+                zone_temperatures[(actual, row.get("zone", ""))] = float(
+                    np.sum(volumes[mask] * temperatures[mask]) / volume
+                )
+    finally:
+        if warning_state:
+            vtk.vtkObject.GlobalWarningDisplayOn()
+
+    rows = []
+    component_ids = sorted({row.get("component_id", "") for row in metadata})
+    for component_id in component_ids:
+        devices = [row for row in metadata if row.get("component_id", "") == component_id]
+        intakes = [row for row in devices if row.get("kind") == "intake"]
+        exhausts = [
+            row for row in devices if row.get("kind") in ("outlet", "exhaust")
+        ]
+        if not intakes or not exhausts:
+            continue
+        intake, exhaust = intakes[0], exhausts[0]
+        for requested in requested_times:
+            actual = actual_by_requested[requested]
+            intake_t = zone_temperatures[(actual, intake["zone"])]
+            exhaust_t = zone_temperatures[(actual, exhaust["zone"])]
+            index_value = equipment_air_rise_index(
+                intake_t, exhaust_t, ambient_k
+            )
+            rows.append((
+                actual, intake.get("component", ""),
+                intake.get("device", intake["zone"]),
+                exhaust.get("device", exhaust["zone"]),
+                intake_t, exhaust_t, index_value,
+            ))
+    return rows
 
 
 def append_latest_checkpoint_row(
@@ -362,13 +559,17 @@ def internal_device_temperature_rows(case: Path, ambient_k: float):
                 if device.get("component_id") == component_id
             ]
             intakes = [d for d in component_devices if d["kind"] == "intake"]
-            exhausts = [d for d in component_devices if d["kind"] == "exhaust"]
+            exhausts = [
+                d for d in component_devices
+                if d["kind"] in ("outlet", "exhaust")
+            ]
             if intakes and exhausts:
                 pairs.append((intakes[0], exhausts[0]))
     else:
         pairs = list(zip(devices, devices[1:]))
     for intake, exhaust in pairs:
-        if intake["kind"] != "intake" or exhaust["kind"] != "exhaust":
+        if (intake["kind"] != "intake" or
+                exhaust["kind"] not in ("outlet", "exhaust")):
             continue
         common_times = sorted(
             set(intake["temperature"]) & set(exhaust["temperature"])
@@ -379,10 +580,8 @@ def internal_device_temperature_rows(case: Path, ambient_k: float):
         for time in common_times:
             intake_t = intake["temperature"][time]
             exhaust_t = exhaust["temperature"][time]
-            rise = exhaust_t - ambient_k
-            index_value = (
-                max(0.0, min(1.0, (intake_t - ambient_k) / rise))
-                if rise > 1.0e-12 else float("nan")
+            index_value = equipment_air_rise_index(
+                intake_t, exhaust_t, ambient_k
             )
             rows.append((
                 time, pair, intake["name"], exhaust["name"],
@@ -537,15 +736,24 @@ def main() -> None:
         available_internal_rows = internal_device_temperature_rows(
             case, args.ambient_temperature
         )
+        direct_error = None
+        try:
+            selected_internal_rows = direct_internal_device_temperature_rows(
+                case, args.snapshot_times, args.ambient_temperature
+            )
+        except (ImportError, ValueError) as exc:
+            selected_internal_rows = []
+            direct_error = str(exc)
+        rows_to_write = selected_internal_rows or available_internal_rows
         internal_path, internal_rows = write_internal_device_csv(
             args.output,
-            available_internal_rows,
+            rows_to_write,
             args.snapshot_times,
         )
         print(f"Saved: {internal_path}")
         if internal_rows:
             print("Maximum selected equipment air-rise index: "
-                  f"{max(row[6] for row in internal_rows):.6g}")
+                  f"{maximum_finite_equipment_index(internal_rows):.6g}")
         elif (case / "internal_airflow_devices.csv").is_file():
             available_times = sorted({row[0] for row in available_internal_rows})
             latest_text = (
@@ -557,8 +765,9 @@ def main() -> None:
                 "internal equipment temperatures are unavailable at the "
                 f"requested time(s){latest_text}. The internal-air CSV contains "
                 "only its header. Internal cell-zone temperatures require "
-                "solver-backed post-processing; they are not inferred from "
-                "boundary or neighboring cells.",
+                "solver-backed post-processing or readable time-zero zone "
+                "masks; they are not inferred from boundary or neighboring "
+                f"cells. Direct-read diagnostic: {direct_error or 'no rows'}.",
                 file=sys.stderr,
             )
         return
@@ -683,7 +892,7 @@ def main() -> None:
             row for row in internal_rows if row[0] == latest_internal_time
         ]
         print("Latest maximum equipment air-rise index: "
-              f"{max(row[6] for row in latest_internal):.6g}")
+              f"{maximum_finite_equipment_index(latest_internal):.6g}")
     print("Note: this temperature index indicates hot intake air but does not identify "
           "which exhaust produced it; source attribution requires a passive tracer.")
 
