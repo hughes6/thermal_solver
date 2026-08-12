@@ -3,9 +3,11 @@ import unittest
 import numpy as np
 
 from tools.openfoam_cross_case_comparison import (
+    CSV_HEADINGS,
     maximum_difference,
     validate_geometry,
 )
+from tools.openfoam_field_convergence import compare_snapshots
 
 
 class OpenFoamCrossCaseComparisonTest(unittest.TestCase):
@@ -41,6 +43,17 @@ class OpenFoamCrossCaseComparisonTest(unittest.TestCase):
         )
         with self.assertRaisesRegex(ValueError, "ordering or geometry"):
             validate_geometry(reference, sample)
+
+    def test_csv_schema_covers_comparison_metrics(self):
+        reference, sample = self.snapshots()
+        row = {
+            "sample_case": "sample",
+            "sample_time": 1.0,
+            "reference_case": "reference",
+            "reference_time": 2.0,
+            **compare_snapshots(reference, sample, ("U",))[0],
+        }
+        self.assertLessEqual(set(row), set(CSV_HEADINGS))
 
 
 if __name__ == "__main__":

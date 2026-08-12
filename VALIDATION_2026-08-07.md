@@ -2636,3 +2636,13 @@ fan-source/wake maximum and an external UPS-side wake from changing top-fan or
 vent operating points. Cross-mesh comparisons now pass their available sample
 cell centers into the same metric, so their CSVs also contain finite maximum-
 error locations.
+
+Adding maximum locations exposed a downstream CSV-only regression before
+release. `openfoam_cross_case_comparison.py` used a fixed field list, so
+`csv.DictWriter` would reject the new `maximum_x`, `maximum_y`, and
+`maximum_z` keys when `--csv` was requested even though console comparisons
+continued to work. Its schema now includes the three coordinates and a focused
+test verifies that every comparison-row key is serializable. An end-to-end
+self-comparison of the preserved `screening_dt10_controlled_20260810` endpoint
+at `2400.0100000000011 s` wrote eight U/T region rows with all 16 columns and
+finite maximum coordinates; all differences were exactly zero as expected.

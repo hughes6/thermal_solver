@@ -23,6 +23,14 @@ except ImportError:  # Direct execution: python tools/openfoam_cross_case_compar
     )
 
 
+CSV_HEADINGS = (
+    "sample_case", "sample_time", "reference_case", "reference_time",
+    "region", "field", "cells", "volume", "mean_absolute", "rms",
+    "maximum", "reference_rms", "relative_rms", "maximum_x", "maximum_y",
+    "maximum_z",
+)
+
+
 def reconstructed_snapshot(case: Path, requested_time: float, fields):
     """Read one root checkpoint without depending on processor partitioning."""
     import pyvista as pv
@@ -124,11 +132,6 @@ def main() -> None:
     except (ImportError, ValueError) as exc:
         raise SystemExit(str(exc)) from exc
 
-    headings = (
-        "sample_case", "sample_time", "reference_case", "reference_time",
-        "region", "field", "cells", "volume", "mean_absolute", "rms",
-        "maximum", "reference_rms", "relative_rms",
-    )
     output_rows = [
         {
             "sample_case": str(args.sample_case.resolve()),
@@ -142,7 +145,7 @@ def main() -> None:
     if args.csv:
         args.csv.parent.mkdir(parents=True, exist_ok=True)
         with args.csv.open("w", newline="", encoding="utf-8") as stream:
-            writer = csv.DictWriter(stream, fieldnames=headings)
+            writer = csv.DictWriter(stream, fieldnames=CSV_HEADINGS)
             writer.writeheader()
             writer.writerows(output_rows)
         print(f"Saved: {args.csv}")
