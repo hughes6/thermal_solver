@@ -111,7 +111,9 @@ def sampled_error(reference, sample, field):
         ).cell_data["Volume"],
         dtype=float,
     )[valid]
-    return coverage, field_error(sampled_reference, sample_values, volumes)
+    return coverage, field_error(
+        sampled_reference, sample_values, volumes, sample_centres[valid]
+    )
 
 
 def main() -> None:

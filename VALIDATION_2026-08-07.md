@@ -2569,9 +2569,14 @@ was 0.00086%. A connectivity audit passed when supplied the physically correct
 legacy expectation of two fluid regions (rack ambient plus the sealed fanless
 KVM); future exports store that expectation in case metadata automatically.
 The energy audit still intentionally failed at -4.02 W transported versus
-1545 W applied because fluid heat sources remain disabled throughout the cold
-airflow stage. This checkpoint reinforces that stable bulk/device flow alone
-must not bypass the spatial and one-air-exchange startup gates.
+1545 W applied because this early transient is storing nearly all applied heat
+in the solids instead of rejecting it at the exhaust. The flow-only fluid
+options suppress air-region heat sources during cold-start airflow, but this
+detailed model's 1545 W load is defined in four solid-region `fvOptions` files
+and remains active, as confirmed by the ordered solid warming above. This
+checkpoint reinforces that stable bulk/device flow alone must not bypass the
+spatial and one-air-exchange startup gates or be mistaken for thermal steady
+state.
 
 The apparent late-stage runtime regression was traced to the workstation, not
 to deteriorating linear convergence. Over successive 0.10 s windows from
@@ -2609,3 +2614,25 @@ and explicitly warns that they are not the runner's volume-weighted vector-
 magnitude convergence-gate metric. The
 volume-aware `openfoam_field_convergence.py` remains authoritative when
 assessing or localizing runner-gate behavior.
+
+At `2.90991837 s`, the following retained 0.0983967 s interval increased to
+7.463% volume-weighted whole-fluid velocity change and 6.845% in external rack
+air. Dell internal air changed 23.144%, while Eaton and Trenton internal air
+changed 0.985% and 6.790%. Boundary operating points remained stable: intake
+changed only 0.00134% in magnitude, the largest individual exhaust-fan change
+was 0.4133%, all directions were correct, and reverse flow remained zero.
+Fluid temperature moved only 0.000505 K RMS. These retained intervals diagnose
+cumulative flow motion but remain longer than the runner's eventual 0.01 s
+acceptance windows.
+
+The volume-aware convergence tool now reports the cell-center coordinates of
+each maximum field difference in both console and CSV output. The 11.902 m/s
+maximum velocity difference was at `(0.439957, 0.285950, 0.229000) m`, aligned
+with the Dell's sixth/rightmost internal fan plane after applying its component
+offset. The external-rack maximum was 2.373 m/s at
+`(0.044900, 0.268950, 0.079875) m`, immediately outside the Eaton's left side
+(`x = 0.048895 m`) and within its depth/height span. This distinguishes a Dell
+fan-source/wake maximum and an external UPS-side wake from changing top-fan or
+vent operating points. Cross-mesh comparisons now pass their available sample
+cell centers into the same metric, so their CSVs also contain finite maximum-
+error locations.

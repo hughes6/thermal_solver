@@ -21,19 +21,23 @@ def iter_named_leaves(dataset, path=()):
         yield path, dataset
 
 
-def field_error(reference, sample, volumes):
+def field_error(reference, sample, volumes, centers=None):
     """Return volume-weighted error metrics for scalar or vector cell data."""
     import numpy as np
 
     reference = np.asarray(reference, dtype=float)
     sample = np.asarray(sample, dtype=float)
     volumes = np.asarray(volumes, dtype=float).reshape(-1)
+    if centers is not None:
+        centers = np.asarray(centers, dtype=float)
     if reference.shape != sample.shape:
         raise ValueError(
             f"Field shape changed from {reference.shape} to {sample.shape}"
         )
     if reference.shape[0] != volumes.size:
         raise ValueError("Field and volume cell counts differ")
+    if centers is not None and centers.shape != (volumes.size, 3):
+        raise ValueError("Cell centers must have shape (cell count, 3)")
     if reference.ndim == 1:
         difference = np.abs(sample - reference)
         reference_magnitude = np.abs(reference)
@@ -50,12 +54,21 @@ def field_error(reference, sample, volumes):
     reference_rms = float(
         np.sqrt(np.sum(volumes * reference_magnitude**2) / total_volume)
     )
+    maximum_index = int(np.argmax(difference)) if difference.size else None
+    maximum_center = (
+        centers[maximum_index]
+        if centers is not None and maximum_index is not None
+        else (math.nan, math.nan, math.nan)
+    )
     return {
         "cells": int(volumes.size),
         "volume": total_volume,
         "mean_absolute": mean_absolute,
         "rms": rms,
         "maximum": float(np.max(difference)) if difference.size else 0.0,
+        "maximum_x": float(maximum_center[0]),
+        "maximum_y": float(maximum_center[1]),
+        "maximum_z": float(maximum_center[2]),
         "reference_rms": reference_rms,
         "relative_rms": rms / reference_rms if reference_rms > 1.0e-30 else math.nan,
     }
@@ -175,6 +188,7 @@ def compare_snapshots(reference, sample, fields):
         all_reference = []
         all_sample = []
         all_volume = []
+        all_center = []
         reference_regions = {
             region for region, values in reference.items() if field in values
         }
@@ -189,18 +203,19 @@ def compare_snapshots(reference, sample, fields):
         for region in sorted(reference_regions):
             metrics = field_error(
                 reference[region][field], sample[region][field],
-                reference[region]["volume"],
+                reference[region]["volume"], reference[region]["center"],
             )
             rows.append({"region": region, "field": field, **metrics})
             all_reference.append(reference[region][field])
             all_sample.append(sample[region][field])
             all_volume.append(reference[region]["volume"])
+            all_center.append(reference[region]["center"])
         rows.append({
             "region": "all",
             "field": field,
             **field_error(
                 np.concatenate(all_reference), np.concatenate(all_sample),
-                np.concatenate(all_volume),
+                np.concatenate(all_volume), np.concatenate(all_center),
             ),
         })
     return rows
@@ -246,7 +261,7 @@ def append_fluid_partition_rows(rows, reference, sample, fields, components):
                 "field": field,
                 **field_error(
                     values[field][mask], sample[region][field][mask],
-                    values["volume"][mask],
+                    values["volume"][mask], values["center"][mask],
                 ),
             })
 
@@ -375,7 +390,7 @@ def main() -> None:
     headings = (
         "sample_time", "reference_time", "region", "field", "cells",
         "volume", "mean_absolute", "rms", "maximum", "reference_rms",
-        "relative_rms",
+        "relative_rms", "maximum_x", "maximum_y", "maximum_z",
     )
     if args.csv:
         args.csv.parent.mkdir(parents=True, exist_ok=True)
@@ -385,7 +400,10 @@ def main() -> None:
             writer.writerows(comparisons)
         print(f"Saved: {args.csv}")
 
-    print("sample -> reference | region | field | RMS | max | relative RMS")
+    print(
+        "sample -> reference | region | field | RMS | max | "
+        "max location (m) | relative RMS"
+    )
     for row in comparisons:
         if row["region"] != "all" and not (
             args.geometry and row["region"].startswith("fluid/")
@@ -395,6 +413,8 @@ def main() -> None:
             f"{row['sample_time']:.12g} -> "
             f"{row['reference_time']:.12g} | {row['region']} | "
             f"{row['field']} | {row['rms']:.8g} | {row['maximum']:.8g} | "
+            f"({row['maximum_x']:.6g}, {row['maximum_y']:.6g}, "
+            f"{row['maximum_z']:.6g}) | "
             f"{row['relative_rms']:.6%}"
         )
 

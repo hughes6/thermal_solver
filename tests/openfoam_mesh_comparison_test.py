@@ -35,6 +35,9 @@ class OpenFoamMeshComparisonTest(unittest.TestCase):
         self.assertEqual(coverage, 1.0)
         self.assertAlmostEqual(error["rms"], 0.0)
         self.assertAlmostEqual(error["maximum"], 0.0)
+        self.assertTrue(self.np.isfinite(error["maximum_x"]))
+        self.assertTrue(self.np.isfinite(error["maximum_y"]))
+        self.assertTrue(self.np.isfinite(error["maximum_z"]))
 
 
 if __name__ == "__main__":

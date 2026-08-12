@@ -42,34 +42,55 @@ class OpenFoamFieldConvergenceTest(unittest.TestCase):
             np.array([10.0, 20.0]),
             np.array([12.0, 16.0]),
             np.array([1.0, 3.0]),
+            np.array([[1.0, 2.0, 3.0], [4.0, 5.0, 6.0]]),
         )
         self.assertAlmostEqual(metrics["mean_absolute"], 3.5)
         self.assertAlmostEqual(metrics["rms"], np.sqrt(13.0))
         self.assertEqual(metrics["maximum"], 4.0)
+        self.assertEqual(
+            (metrics["maximum_x"], metrics["maximum_y"], metrics["maximum_z"]),
+            (4.0, 5.0, 6.0),
+        )
 
     def test_vector_norm_and_aggregate(self):
         reference = {
             "fluid/internalMesh": {
                 "volume": np.array([1.0]),
+                "center": np.array([[0.1, 0.2, 0.3]]),
                 "U": np.array([[3.0, 4.0, 0.0]]),
             },
             "solid/internalMesh": {
                 "volume": np.array([1.0]),
+                "center": np.array([[0.4, 0.5, 0.6]]),
             },
         }
         sample = {
             "fluid/internalMesh": {
                 "volume": np.array([1.0]),
+                "center": np.array([[0.1, 0.2, 0.3]]),
                 "U": np.array([[0.0, 0.0, 0.0]]),
             },
             "solid/internalMesh": {
                 "volume": np.array([1.0]),
+                "center": np.array([[0.4, 0.5, 0.6]]),
             },
         }
         rows = compare_snapshots(reference, sample, ("U",))
         aggregate = next(row for row in rows if row["region"] == "all")
         self.assertAlmostEqual(aggregate["rms"], 5.0)
         self.assertAlmostEqual(aggregate["relative_rms"], 1.0)
+        self.assertEqual(
+            (aggregate["maximum_x"], aggregate["maximum_y"],
+             aggregate["maximum_z"]),
+            (0.1, 0.2, 0.3),
+        )
+
+    def test_rejects_mismatched_cell_centers(self):
+        with self.assertRaisesRegex(ValueError, "Cell centers"):
+            field_error(
+                np.array([1.0]), np.array([2.0]), np.array([1.0]),
+                np.array([[0.0, 0.0]]),
+            )
 
     def test_exact_time_rejects_unwritten_value(self):
         self.assertEqual(exact_time([0.0, 1.0], 1.0), 1.0)
