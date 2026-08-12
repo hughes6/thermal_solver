@@ -1,50 +1,109 @@
-# ============================================================
-# UPDATE COMPONENT DATA
-# ============================================================
-
-cur.execute("""
-UPDATE dbo.ComponentData
-SET DeviceLetterCode = ?,
-    Class = ?,
-    Description = ?,
-    VersionText = ?
-WHERE ID = ?
-""", DEVICE_LETTER_CODE, COMPONENT_CLASS, VERSION_TEXT, VERSION_TEXT, component_db_id)
-
-print("Updated ComponentData.")
+import tkinter as tk
+from tkinter import scrolledtext
 
 
-# ============================================================
-# ADD COMPONENT ATTRIBUTES
-# ============================================================
+def convert():
+    # Get text from input box
+    input_text = input_box.get("1.0", tk.END)
 
-cur.execute("""
-INSERT INTO dbo.ComponentAttribute
-(ID, ENTRY, VERSION, BundleID, NODENO, Flags, AttributeName, Copy, AttributeValue)
-VALUES (?, ?, ?, 0, 0, 0, 'AdditionalPart_ID', 1, ?)
-""", component_db_id, COMPONENT_NAME, COMPONENT_VERSION, ADDITIONAL_PART_ID)
+    # Split on any whitespace: spaces, tabs, newlines, etc.
+    values = input_text.split()
 
-print("Added AdditionalPart_ID.")
+    # Put each value on its own line
+    output_text = "\n".join(values)
+
+    # Clear old output
+    output_box.delete("1.0", tk.END)
+
+    # Insert converted output
+    output_box.insert(tk.END, output_text)
 
 
-def set_attribute(name, value):
-    cur.execute("""
-    SELECT COUNT(*)
-    FROM dbo.ComponentAttribute
-    WHERE ID = ?
-    AND AttributeName = ?
-    """, component_db_id, name)
+def copy_output():
+    output_text = output_box.get("1.0", tk.END).strip()
 
-    if cur.fetchone()[0]:
-        cur.execute("""
-        UPDATE dbo.ComponentAttribute
-        SET AttributeValue = ?
-        WHERE ID = ?
-        AND AttributeName = ?
-        """, value, component_db_id, name)
-    else:
-        cur.execute("""
-        INSERT INTO dbo.ComponentAttribute
-        (ID, ENTRY, VERSION, BundleID, NODENO, Flags, AttributeName, Copy, AttributeValue)
-        VALUES (?, ?, ?, 0, 0, 0, ?, 1, ?)
-        """, component_db_id, COMPONENT_NAME, COMPONENT_VERSION, name, value)
+    root.clipboard_clear()
+    root.clipboard_append(output_text)
+    root.update()
+
+
+def clear_all():
+    input_box.delete("1.0", tk.END)
+    output_box.delete("1.0", tk.END)
+
+
+# =========================================
+# GUI
+# =========================================
+
+root = tk.Tk()
+root.title("Excel Column Formatter")
+root.geometry("600x550")
+
+
+# Input label
+tk.Label(
+    root,
+    text="Paste numbers here:",
+    font=("Arial", 12, "bold")
+).pack(pady=(15, 5))
+
+
+# Small input window
+input_box = scrolledtext.ScrolledText(
+    root,
+    width=65,
+    height=6,
+    font=("Consolas", 11)
+)
+input_box.pack(padx=15)
+
+
+# Convert button
+tk.Button(
+    root,
+    text="Convert",
+    command=convert,
+    width=20,
+    height=2
+).pack(pady=10)
+
+
+# Output label
+tk.Label(
+    root,
+    text="Excel-ready output:",
+    font=("Arial", 12, "bold")
+).pack(pady=(5, 5))
+
+
+# Large output window
+output_box = scrolledtext.ScrolledText(
+    root,
+    width=65,
+    height=15,
+    font=("Consolas", 11)
+)
+output_box.pack(padx=15)
+
+
+# Buttons
+button_frame = tk.Frame(root)
+button_frame.pack(pady=12)
+
+tk.Button(
+    button_frame,
+    text="Copy to Clipboard",
+    command=copy_output,
+    width=20
+).pack(side=tk.LEFT, padx=5)
+
+tk.Button(
+    button_frame,
+    text="Clear",
+    command=clear_all,
+    width=12
+).pack(side=tk.LEFT, padx=5)
+
+
+root.mainloop()
