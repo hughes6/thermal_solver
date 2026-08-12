@@ -68,6 +68,7 @@ Write-Host "Checking Python plotting scripts"
     "tools/openfoam_field_convergence.py" `
     "tools/openfoam_cross_case_comparison.py" `
     "tools/openfoam_mesh_comparison.py" `
+    "tools/openfoam_progress.py" `
     "tools/map_openfoam_case.py" `
     "tools/exhaust_recirculation_tracer.py" `
     "plot/exhaust_recirculation_matrix.py" `

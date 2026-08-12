@@ -1653,6 +1653,8 @@ struct ModelLoader {
                     "plot/exhaust_recirculation_matrix.py");
             const std::filesystem::path attribution_build_script=
                 std::filesystem::absolute("tools/build_openfoam_tracer.sh");
+            const std::filesystem::path progress_script=
+                std::filesystem::absolute("tools/openfoam_progress.py");
             const std::filesystem::path visualization_output=
                 absolute_case_directory/"temperature_latest_full_rack.png";
             const std::filesystem::path animation_output=
@@ -1702,6 +1704,8 @@ struct ModelLoader {
                 shell_display_path(attribution_plot_script);
             const std::string attribution_build_script_display=
                 shell_display_path(attribution_build_script);
+            const std::string progress_script_display=
+                shell_display_path(progress_script);
             const std::string attribution_script_wsl=
                 wsl_display_path(attribution_script);
             const std::string attribution_build_script_wsl=
@@ -1754,6 +1758,15 @@ struct ModelLoader {
                        "between stages.\n\n";
             }
             std::cout
+                << "Report live simulation progress and ETA without modifying "
+                   "the case (PowerShell or Git Bash):\n  "
+#ifdef _WIN32
+                << "python "
+#else
+                << "python3 "
+#endif
+                << command_quote(progress_script_display)
+                << ' ' << command_quote(case_directory_display) << "\n"
                 << "Plot the latest temperature cut plane interactively "
                    "(PowerShell or Git Bash):\n  "
 #ifdef _WIN32

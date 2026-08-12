@@ -23,6 +23,10 @@ int main() {
     unpaired_loader.run();
     std::cout.rdbuf(original);
     assert(unpaired_captured.str().find(
+        "Report live simulation progress and ETA") != std::string::npos);
+    assert(unpaired_captured.str().find("tools/openfoam_progress.py") !=
+           std::string::npos);
+    assert(unpaired_captured.str().find(
         "Build the source-attributed exhaust tracer once") ==
         std::string::npos);
 
@@ -61,6 +65,7 @@ int main() {
            std::string::npos);
     assert(output.find("plot/exhaust_recirculation_matrix.py") !=
            std::string::npos);
+    assert(output.find("tools/openfoam_progress.py") != std::string::npos);
     assert(output.find("steadyExhaustTracerFoam") != std::string::npos);
     assert(output.find("_tracer_RUN_ID") != std::string::npos);
 #ifdef _WIN32
