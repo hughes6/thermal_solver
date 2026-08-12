@@ -3,6 +3,7 @@ import unittest
 from pathlib import Path
 
 from plot.outlet_mass_weighted_temperature import (
+    direct_patch_temperature,
     read_surface_report,
     select_report_time,
 )
@@ -10,6 +11,29 @@ from plot_outlet_flow import read_samples
 
 
 class SurfaceReportTest(unittest.TestCase):
+    def test_direct_boundary_fields_avoid_vtk(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            case = Path(temporary)
+            fluid = case / "12.5" / "fluid"
+            fluid.mkdir(parents=True)
+            (fluid / "phi").write_text(
+                "FoamFile { format ascii; }\n"
+                "boundaryField { outlet { type calculated; "
+                "value nonuniform List<scalar> 2 (0.1 0.2); } }\n"
+            )
+            (fluid / "T").write_text(
+                "FoamFile { format ascii; }\n"
+                "boundaryField { outlet { type calculated; "
+                "value uniform 300; } }\n"
+            )
+            time, flow, temperature, faces = direct_patch_temperature(
+                case, "outlet", "latest"
+            )
+            self.assertEqual(time, 12.5)
+            self.assertAlmostEqual(flow, 0.3)
+            self.assertAlmostEqual(temperature, 300.0)
+            self.assertEqual(faces, 2)
+
     def test_selects_latest_report_without_vtk(self):
         samples = {12000.0: 298.0, 16800.01: 299.0}
         self.assertEqual(select_report_time(samples, "latest"), 16800.01)

@@ -5,6 +5,15 @@ from __future__ import annotations
 import argparse
 from pathlib import Path
 
+try:
+    from tools.openfoam_field_delta import resolve_time_directory
+    from tools.validate_openfoam_case import latest_result_paths, patch_values
+except ModuleNotFoundError:
+    import sys
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+    from tools.openfoam_field_delta import resolve_time_directory
+    from tools.validate_openfoam_case import latest_result_paths, patch_values
+
 
 def iter_named_leaves(dataset, path=()):
     """Yield ``(block path, leaf)`` pairs from a nested PyVista dataset."""
@@ -78,6 +87,64 @@ def select_time(reader, requested: str) -> float:
     return selected
 
 
+def direct_result_paths(case: Path, requested: str) -> tuple[float, list[Path]]:
+    if requested.lower() == "latest":
+        return latest_result_paths(case)
+    target = float(requested)
+    processors = sorted(
+        (path for path in case.glob("processor*") if path.is_dir()),
+        key=lambda path: int(path.name[9:]),
+    )
+    if processors:
+        paths = [resolve_time_directory(processor, requested)
+                 for processor in processors]
+        return float(paths[0].name), paths
+    matches = []
+    for path in case.iterdir():
+        if not path.is_dir():
+            continue
+        try:
+            value = float(path.name)
+        except ValueError:
+            continue
+        if abs(value - target) <= 1.0e-8 * max(1.0, abs(target)):
+            matches.append((abs(value - target), value, path))
+    if not matches:
+        raise ValueError(f"Time {target:g} is unavailable")
+    _, value, path = min(matches)
+    return value, [path]
+
+
+def direct_patch_temperature(
+    case: Path, patch: str, requested: str
+) -> tuple[float, float, float, int]:
+    time_s, result_paths = direct_result_paths(case, requested)
+    mass_flow = 0.0
+    weighted_temperature = 0.0
+    faces = 0
+    for result_path in result_paths:
+        fluid = result_path / "fluid"
+        fluxes = patch_values(fluid / "phi", patch)
+        temperatures = patch_values(fluid / "T", patch)
+        if len(temperatures) == 1:
+            weighted_temperature += temperatures[0] * sum(fluxes)
+        elif len(temperatures) == len(fluxes):
+            weighted_temperature += sum(
+                temperature * flux
+                for temperature, flux in zip(temperatures, fluxes)
+            )
+        else:
+            raise ValueError(
+                f"Patch {patch!r} has {len(temperatures)} T values but "
+                f"{len(fluxes)} phi values in {result_path}"
+            )
+        mass_flow += sum(fluxes)
+        faces += len(fluxes)
+    if not faces:
+        raise ValueError(f"Patch {patch!r} has no faces at t={time_s:g} s")
+    return time_s, mass_flow, weighted_temperature / mass_flow, faces
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(
         description=(
@@ -118,9 +185,25 @@ def main() -> None:
         / "fluid"
         / f"{args.outlet}_mass_weighted_temperature"
     )
+    try:
+        direct_time, direct_flow, direct_temperature, direct_faces = (
+            direct_patch_temperature(case, args.outlet, args.time)
+        )
+        direct_failure = None
+    except (FileNotFoundError, ValueError) as direct_error:
+        direct_failure = str(direct_error)
     exact_samples = read_surface_report(report_root)
     selected_report_time = select_report_time(exact_samples, args.time)
-    if selected_report_time is not None:
+    report_is_current = (
+        selected_report_time is not None
+        and (
+            args.time.lower() != "latest"
+            or direct_failure is not None
+            or abs(selected_report_time - direct_time)
+               <= 1.0e-8 * max(1.0, abs(direct_time))
+        )
+    )
+    if report_is_current:
         mass_samples = read_surface_report(
             case
             / "postProcessing"
@@ -149,12 +232,32 @@ def main() -> None:
             print("Weighting source:              OpenFOAM weightedAverage(T, phi)")
             return
 
+    if direct_failure is None:
+        if abs(direct_flow) <= args.minimum_mass_flow:
+            raise SystemExit(
+                f"Net mass flow through patch {args.outlet!r} is "
+                f"{direct_flow:.8g} kg/s; its mass-weighted temperature is "
+                "undefined."
+            )
+        print(f"Result time:                  {direct_time:g} s")
+        print(f"Outlet patch:                 {args.outlet}")
+        print(f"Outlet faces:                 {direct_faces}")
+        print(f"Net outlet mass flow:         {direct_flow:.8g} kg/s")
+        print(f"Mass-weighted temperature:    {direct_temperature:.6f} K")
+        print(
+            "Mass-weighted temperature:    "
+            f"{direct_temperature - 273.15:.6f} C"
+        )
+        print("Weighting source:              direct OpenFOAM boundary T and phi")
+        return
+
     try:
         import numpy as np
         import pyvista as pv
     except ImportError as exc:
         raise SystemExit(
-            "No matching complete OpenFOAM report was found. VTK fallback "
+            "No matching complete OpenFOAM report or direct boundary fields "
+            f"were found ({direct_failure}). VTK fallback "
             "requires NumPy and PyVista:\n"
             "  python -m pip install numpy pyvista"
         ) from exc

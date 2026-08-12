@@ -2448,3 +2448,15 @@ Current inflow was 0.29757656 kg/s, outflow was 0.29757799 kg/s, giving only
 0.00048% mass imbalance. Device flows and mass balance are therefore already
 inside their 1% screening gates; the runner must still complete one physical
 air exchange and its consecutive spatial checks before accepting airflow.
+
+The standalone outlet mass-weighted-temperature utility had a separate stale
+precedence defect: `--time latest` returned an old function-object report before
+checking newer decomposed fields. It now trusts a report for `latest` only when
+its time matches the latest complete result, otherwise reading face-resolved
+`T` and `phi` directly across every rank before considering VTK. Explicit
+historical requests still use exact reports. On the live case, `Fan_1 latest`
+now reports `2.22114122 s`, 0.033209906 kg/s, and 293.135813 K from 53 all-rank
+faces; explicit `--time 0.06` still returns the historical 0.01102924 kg/s and
+293.148700 K report. This also avoids the VTK missing-`T`/`phi` failure mode.
+Twenty-five related tests pass, including corrected bounded parsing of ASCII
+OpenFOAM lists.

@@ -143,14 +143,21 @@ def _list_payload(
     while data[position : position + 1] in b"\r\n \t":
         position += 1
 
-    # ASCII fields have printable numeric text after the opening parenthesis.
-    probe = data[position : position + min(32, len(data) - position)]
-    if probe and all(byte in b"0123456789+-.eE \t\r\n" for byte in probe):
-        end = data.find(b")", position)
-        values = data[position:end].decode("ascii").split()
+    end = data.find(b")", position)
+    if end < 0:
+        raise ValueError(f"ASCII list following {marker!r} is unterminated")
+    values = data[position:end].decode("ascii").split()
+    if len(values) != count:
+        raise ValueError(
+            f"ASCII list following {marker!r} declares {count} values but "
+            f"contains {len(values)}"
+        )
+    try:
         return [float(value) if width == 8 else int(value) for value in values]
-
-    raise ValueError(f"ASCII list following {marker!r} has non-numeric data")
+    except ValueError as error:
+        raise ValueError(
+            f"ASCII list following {marker!r} has non-numeric data"
+        ) from error
 
 
 def patch_values(field: Path, patch: str) -> list[float]:
