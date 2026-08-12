@@ -2077,3 +2077,8 @@ an excellent engineering estimate at 18,000 s, while quantitative source
 attribution continues to respond to the slowly changing thermally coupled flow
 field. Use the coupled-converged endpoint for final recirculation fractions;
 use the 18,000 s matrix for early path detection and mitigation screening.
+
+### Saved attribution visualization
+
+Use `python plot/exhaust_recirculation_matrix.py MATRIX.csv --output matrix.png` to plot an old report without rerunning OpenFOAM. Add `--compare OTHER.csv` for aligned screening, comparison, and percentage-point difference panels. Both absolute panels use a fixed 0--100% scale so separate cases remain visually comparable.
+
