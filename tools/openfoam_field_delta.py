@@ -91,11 +91,21 @@ def resolve_time_directory(processor: Path, requested: str) -> Path:
     return path
 
 
-def processor_field_paths(case: Path, time: str, region: str, field: str) -> list[Path]:
+def processor_field_paths(
+    case: Path,
+    time: str,
+    region: str,
+    field: str,
+    rank: int | None = None,
+) -> list[Path]:
     processors = sorted(
         (path for path in case.glob("processor*") if path.is_dir()),
         key=lambda path: int(path.name[9:]),
     )
+    if rank is not None:
+        processors = [path for path in processors if path.name == f"processor{rank}"]
+        if not processors:
+            raise FileNotFoundError(f"processor{rank} was not found in {case}")
     paths = [
         resolve_time_directory(processor, time) / region / field
         for processor in processors
@@ -113,15 +123,20 @@ def main() -> int:
     parser.add_argument("after")
     parser.add_argument("--region", default="fluid")
     parser.add_argument("--field", default="U")
+    parser.add_argument("--rank", type=int, help="compare only one processor rank")
     args = parser.parse_args()
     case = args.case.resolve()
-    before = processor_field_paths(case, args.before, args.region, args.field)
-    after = processor_field_paths(case, args.after, args.region, args.field)
+    before = processor_field_paths(
+        case, args.before, args.region, args.field, args.rank
+    )
+    after = processor_field_paths(case, args.after, args.region, args.field, args.rank)
     count, rms_delta, maximum_delta, rms_field, relative = compare_fields(
         before, after
     )
     print(f"Field: {args.region}/{args.field}")
     print(f"Checkpoints: {args.before} -> {args.after}")
+    if args.rank is not None:
+        print(f"Processor rank: {args.rank}")
     print(f"Scalar values compared: {count}")
     print(f"RMS delta: {rms_delta:.9g}")
     print(f"Maximum component delta: {maximum_delta:.9g}")

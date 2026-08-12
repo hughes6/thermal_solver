@@ -5,6 +5,7 @@ from pathlib import Path
 
 from tools.openfoam_field_delta import (
     compare_fields,
+    processor_field_paths,
     read_internal_field,
     resolve_time_directory,
 )
@@ -37,6 +38,20 @@ class OpenFoamFieldDeltaTest(unittest.TestCase):
             (processor / "1.0").mkdir()
             with self.assertRaisesRegex(FileNotFoundError, "nearest is 1.0"):
                 resolve_time_directory(processor, "1.1")
+
+    def test_selects_one_processor_rank(self):
+        with tempfile.TemporaryDirectory() as directory:
+            case = Path(directory)
+            for rank in (0, 1):
+                write_field(
+                    case / f"processor{rank}" / "1" / "fluid" / "U",
+                    "vector",
+                    [1.0, 2.0, 3.0],
+                )
+            self.assertEqual(
+                processor_field_paths(case, "1", "fluid", "U", rank=1),
+                [case / "processor1" / "1" / "fluid" / "U"],
+            )
 
     def test_reads_binary_vector_field(self):
         with tempfile.TemporaryDirectory() as directory:
