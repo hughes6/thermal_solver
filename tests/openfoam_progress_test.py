@@ -124,6 +124,18 @@ class OpenFoamProgressTest(unittest.TestCase):
                 processor_checkpoints(case), ([1.5], 2, True, [1, 1])
             )
 
+    def test_detects_mismatched_parallel_checkpoint_file_counts(self):
+        with tempfile.TemporaryDirectory() as directory:
+            case = Path(directory)
+            for rank in (0, 1):
+                latest = case / f"processor{rank}" / "1.5"
+                latest.mkdir(parents=True)
+                (latest / "T").write_text("field")
+            (case / "processor0" / "1.5" / "U").write_text("field")
+            self.assertEqual(
+                processor_checkpoints(case), ([1.5], 2, False, [2, 1])
+            )
+
     def test_selects_latest_log_and_formats_duration(self):
         with tempfile.TemporaryDirectory() as directory:
             case = Path(directory)

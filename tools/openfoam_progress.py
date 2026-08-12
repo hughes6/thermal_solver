@@ -161,22 +161,30 @@ def processor_checkpoints(
     if not processors:
         return [], 0, True, []
     time_sets = [numeric_directories(processor) for processor in processors]
-    aligned = all(times == time_sets[0] for times in time_sets[1:])
+    time_sets_aligned = all(times == time_sets[0] for times in time_sets[1:])
     latest_file_counts: list[int] = []
     for processor, times in zip(processors, time_sets):
         if not times:
             latest_file_counts.append(0)
             continue
-        latest_name = max(
-            (child for child in processor.iterdir() if child.is_dir()),
-            key=lambda child: float(child.name)
-            if _is_float(child.name)
-            else float("-inf"),
+        latest_time = times[-1]
+        latest_name = next(
+            child
+            for child in processor.iterdir()
+            if child.is_dir()
+            and _is_float(child.name)
+            and float(child.name) == latest_time
         )
         latest_file_counts.append(
             sum(1 for child in latest_name.rglob("*") if child.is_file())
         )
-    return time_sets[0], len(processors), aligned, latest_file_counts
+    file_counts_aligned = len(set(latest_file_counts)) <= 1
+    return (
+        time_sets[0],
+        len(processors),
+        time_sets_aligned and file_counts_aligned,
+        latest_file_counts,
+    )
 
 
 def _is_float(value: str) -> bool:
@@ -283,7 +291,7 @@ def main() -> int:
             + (
                 f"aligned; latest files/rank {latest_file_counts}"
                 if checkpoints_aligned
-                else "MISMATCHED TIME SETS ACROSS RANKS"
+                else f"MISMATCHED RANK OUTPUT; latest files/rank {latest_file_counts}"
             )
         )
         if checkpoint_stride is not None:
