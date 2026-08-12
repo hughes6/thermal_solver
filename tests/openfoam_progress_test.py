@@ -14,6 +14,7 @@ from tools.openfoam_progress import (
     read_health,
     read_samples,
     recent_slope,
+    is_stale_run,
 )
 
 
@@ -169,6 +170,11 @@ class OpenFoamProgressTest(unittest.TestCase):
             (root / "nested" / "second").write_bytes(b"56789")
             self.assertEqual(directory_size(root), 9)
             self.assertEqual(format_bytes(3 * 1024 ** 3), "3.00 GiB")
+
+    def test_stale_warning_requires_incomplete_old_log(self):
+        self.assertTrue(is_stale_run(301.0, 5.0, 10.0, 300.0))
+        self.assertFalse(is_stale_run(299.0, 5.0, 10.0, 300.0))
+        self.assertFalse(is_stale_run(301.0, 10.0, 10.0, 300.0))
 
 
 if __name__ == "__main__":

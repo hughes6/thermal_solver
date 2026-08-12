@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import re
 import shutil
+import time
 from pathlib import Path
 
 
@@ -227,6 +228,15 @@ def format_bytes(byte_count: int) -> str:
     return f"{byte_count / (1024 ** 3):.2f} GiB"
 
 
+def is_stale_run(
+    log_age_seconds: float,
+    current_time: float,
+    end_time: float,
+    stale_after_seconds: float,
+) -> bool:
+    return current_time < end_time and log_age_seconds > stale_after_seconds
+
+
 def choose_log(case_directory: Path, explicit: Path | None) -> Path:
     if explicit is not None:
         return explicit
@@ -249,6 +259,12 @@ def main() -> int:
         help="recent completed timesteps used for the rate fit (default: 100)",
     )
     parser.add_argument("--end-time", type=float, help="override controlDict endTime")
+    parser.add_argument(
+        "--stale-after",
+        type=float,
+        default=300.0,
+        help="warn when an incomplete run log is older than this many seconds",
+    )
     args = parser.parse_args()
 
     case_directory = args.case.resolve()
@@ -256,6 +272,7 @@ def main() -> int:
     samples = read_samples(log_path)
     slope = recent_slope(samples, args.window)
     current_time, logged_wall_time = samples[-1]
+    log_age_seconds = max(0.0, time.time() - log_path.stat().st_mtime)
     start_time, configured_end_time = read_control_times(case_directory)
     end_time = args.end_time if args.end_time is not None else configured_end_time
     remaining_simulated = max(0.0, end_time - current_time)
@@ -269,6 +286,7 @@ def main() -> int:
 
     print(f"Case: {case_directory}")
     print(f"Log: {log_path}")
+    print(f"Log last updated: {format_duration(log_age_seconds)} ago")
     print(f"Simulation: {current_time:.9g} / {end_time:.9g} s")
     stage_span = end_time - start_time
     if stage_span > 0:
@@ -285,6 +303,13 @@ def main() -> int:
         "Fatal signatures: "
         + (", ".join(fatal_signatures) if fatal_signatures else "none")
     )
+    if is_stale_run(
+        log_age_seconds, current_time, end_time, args.stale_after
+    ):
+        print(
+            "WARNING: incomplete run log is stale; verify that the solver "
+            "process is still active"
+        )
     print(
         f"Storage: case {format_bytes(case_bytes)}, "
         f"volume free {format_bytes(free_bytes)}"
