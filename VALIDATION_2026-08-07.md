@@ -3384,3 +3384,25 @@ device change, 0.918972% spatial RMS, 0.12395% mass imbalance, and valid
 directions, after which thermal-only evolution resumed.  This confirms that
 the adaptive refresh continues rather than freezing the first disturbed
 heated-airflow sample.
+
+Continued screening evolution improved energy closure while showing that the
+thermal state was not yet converged.  At 4800.01 s the numerical validator
+reported 0.04648% mass error and 1.4070% energy error (1523.26 W sensible
+transport versus 1545 W applied).  The mass-weighted outlet was 298.2284 K,
+only 0.0725 K below the analytical `Q/(m_dot Cp)` value.  At 7200 s energy
+error improved to 0.6958% (1534.25 W transported), and outlet temperature was
+298.2650 K versus 298.3009 K analytical.  The 7200 s normalized convergence
+rates remained above their limits: 0.424413 K/300 s peak fluid change versus
+0.25, and 0.111125 K/300 s component-average change versus 0.10.
+
+The lightweight binary-field diagnostic was extended to report cell-vector
+delta percentiles and squared-delta concentration.  For the corrected
+4.67--4.77 s full-window pair, the runner measured 4.8204% volume-weighted
+RMS change and again retained the physical-settling marker.  The equal-cell
+diagnostic measured a 5.21375% relative RMS.  Median, 90th, 95th, and 99th
+percentile cell delta magnitudes were 0.0221, 0.1217, 0.1861, and 0.3798 m/s.
+The top 1% of cells contributed 68.79% of squared velocity change; the top 5%
+contributed 84.48%.  This establishes that the persistent global RMS is
+strongly wake/source dominated.  The conservative gate remains unchanged
+until those cells are mapped against fan zones and recirculation-sensitive
+rack volume; percentile evidence alone is not sufficient to relax acceptance.

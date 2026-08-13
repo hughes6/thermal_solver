@@ -80,6 +80,57 @@ def compare_fields(
     return value_count, rms_delta, maximum_delta, rms_after, relative
 
 
+def vector_delta_distribution(
+    before_paths: list[Path], after_paths: list[Path]
+) -> tuple[int, dict[str, float], dict[str, float]]:
+    """Summarize cell-vector changes and concentration of squared change."""
+    if len(before_paths) != len(after_paths):
+        raise ValueError("checkpoint rank counts differ")
+    magnitudes: list[float] = []
+    for before_path, after_path in zip(before_paths, after_paths):
+        before_type, before = read_internal_field(before_path)
+        after_type, after = read_internal_field(after_path)
+        if before_type != "vector" or after_type != "vector":
+            raise ValueError("vector delta distribution requires vector fields")
+        if len(before) != len(after):
+            raise ValueError(f"field layout differs: {before_path} vs {after_path}")
+        for index in range(0, len(before), 3):
+            dx = after[index] - before[index]
+            dy = after[index + 1] - before[index + 1]
+            dz = after[index + 2] - before[index + 2]
+            magnitudes.append(math.sqrt(dx * dx + dy * dy + dz * dz))
+    if not magnitudes:
+        raise ValueError("fields contain no internal vectors")
+    ordered = sorted(magnitudes)
+
+    def percentile(fraction: float) -> float:
+        position = fraction * (len(ordered) - 1)
+        lower = int(math.floor(position))
+        upper = int(math.ceil(position))
+        if lower == upper:
+            return ordered[lower]
+        weight = position - lower
+        return ordered[lower] * (1.0 - weight) + ordered[upper] * weight
+
+    percentiles = {
+        "p50": percentile(0.50),
+        "p90": percentile(0.90),
+        "p95": percentile(0.95),
+        "p99": percentile(0.99),
+        "maximum": ordered[-1],
+    }
+    squared_descending = sorted((value * value for value in magnitudes), reverse=True)
+    total_squared = sum(squared_descending)
+    concentration: dict[str, float] = {}
+    for fraction in (0.01, 0.05, 0.10):
+        count = max(1, math.ceil(fraction * len(squared_descending)))
+        contribution = sum(squared_descending[:count])
+        concentration[f"top_{int(fraction * 100)}pct"] = (
+            contribution / total_squared if total_squared else 0.0
+        )
+    return len(magnitudes), percentiles, concentration
+
+
 def resolve_time_directory(processor: Path, requested: str) -> Path:
     exact = processor / requested
     if exact.is_dir():
@@ -200,6 +251,21 @@ def main() -> int:
     print(f"Maximum component delta: {maximum_delta:.9g}")
     print(f"Component-weighted RMS field value: {rms_field:.9g}")
     print(f"Component-weighted relative RMS delta: {100.0 * relative:.6g}%")
+    if read_internal_field(before[0])[0] == "vector":
+        cells, percentiles, concentration = vector_delta_distribution(before, after)
+        print(f"Cell vectors compared: {cells}")
+        print(
+            "Delta-magnitude percentiles (m/s): "
+            f"p50={percentiles['p50']:.9g}, p90={percentiles['p90']:.9g}, "
+            f"p95={percentiles['p95']:.9g}, p99={percentiles['p99']:.9g}, "
+            f"max={percentiles['maximum']:.9g}"
+        )
+        print(
+            "Squared-delta concentration: "
+            f"top 1%={100.0 * concentration['top_1pct']:.6g}%, "
+            f"top 5%={100.0 * concentration['top_5pct']:.6g}%, "
+            f"top 10%={100.0 * concentration['top_10pct']:.6g}%"
+        )
     return 0
 
 

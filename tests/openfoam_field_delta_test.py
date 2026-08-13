@@ -9,6 +9,7 @@ from tools.openfoam_field_delta import (
     processor_field_paths,
     read_internal_field,
     resolve_time_directory,
+    vector_delta_distribution,
 )
 
 
@@ -127,6 +128,37 @@ class OpenFoamFieldDeltaTest(unittest.TestCase):
             self.assertEqual(maximum, 2.0)
             self.assertAlmostEqual(rms_field, (10.0) ** 0.5)
             self.assertAlmostEqual(relative, 0.5)
+
+    def test_reports_vector_delta_distribution_and_concentration(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            before = root / "before"
+            after = root / "after"
+            write_field(before, "vector", [0.0] * 12)
+            write_field(
+                after,
+                "vector",
+                [1.0, 0.0, 0.0, 2.0, 0.0, 0.0,
+                 3.0, 0.0, 0.0, 4.0, 0.0, 0.0],
+            )
+            count, percentiles, concentration = vector_delta_distribution(
+                [before], [after]
+            )
+            self.assertEqual(count, 4)
+            self.assertEqual(percentiles["p50"], 2.5)
+            self.assertEqual(percentiles["maximum"], 4.0)
+            self.assertAlmostEqual(concentration["top_1pct"], 16.0 / 30.0)
+            self.assertAlmostEqual(concentration["top_10pct"], 16.0 / 30.0)
+
+    def test_vector_distribution_rejects_scalar_fields(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            before = root / "before"
+            after = root / "after"
+            write_field(before, "scalar", [1.0])
+            write_field(after, "scalar", [2.0])
+            with self.assertRaisesRegex(ValueError, "requires vector"):
+                vector_delta_distribution([before], [after])
 
 
 if __name__ == "__main__":
