@@ -3545,3 +3545,55 @@ weighting. Cross-case mode now requires byte-identical `cellProcAddressing`
 for every selected processor and region before pairing field values; different
 partitions or reordered cells fail explicitly and must use a mapped-field
 comparison instead.
+
+## Current 12.5 mm in-depth mesh refinement (2026-08-13)
+
+A fresh refinement case,
+`model_generic_airside_mesh125_current_20260813`, was exported from the same
+current model, component library, fan curves, and in-depth profile as the
+validated 15 mm control, changing only `fine_dx` from 0.015 to 0.0125 m. The
+case contained 477,456 total and 405,414 fluid cells, 42.6% more fluid cells
+than the 15 mm case. All five regions were mapped from the converged 15 mm
+8,400.01 s control and passed the mandatory coupled warm start. Strict mapped
+airflow settling reached two adjacent passing windows at 0.04 and 0.05 s.
+Periodic 1,200 s refreshes then produced the required 2/2 convergence streak
+and stopped cleanly at 4,800.01 s.
+
+The independent audit passed with 0.04128% mass error and 0.1955% energy
+error. Its inlet/outlet mass-weighted temperatures were 293.1500/298.3411 K
+versus 298.3512 K analytical. Solid average temperature was 303.1183 K, the
+solid range was 294.3148--314.4263 K, and outlet reverse flow was zero.
+
+| Metric | Current 15 mm control | Current 12.5 mm | 12.5 mm minus 15 mm |
+|---|---:|---:|---:|
+| Fluid cells | 284,396 | 405,414 | +42.6% |
+| Outlet mass flow | 0.296809 kg/s | 0.295567 kg/s | -0.419% |
+| Mass-weighted outlet T | 298.3175 K | 298.3411 K | +0.0236 K |
+| Analytical outlet T | 298.3295 K | 298.3512 K | +0.0217 K |
+| Solid average T | 303.3156 K | 303.1183 K | -0.1973 K |
+| Hottest solid | 315.3678 K | 314.4263 K | -0.9414 K |
+| Energy error | 0.2304% | 0.1955% | -0.0349 pp |
+
+The fixed-flow `Sc_t=0.7` tracer preserved every source-path ranking. The
+largest absolute refinement change was Dell exhaust entering the Trenton
+intake, 17.1940% at 15 mm versus 18.2716% at 12.5 mm (+1.0776 percentage
+points). Trenton exhaust into Dell changed from 23.2508% to 22.2874%
+(-0.9634 points), and Trenton self-recirculation changed from 30.9690% to
+30.1673% (-0.8017 points). All other paths changed by at most 0.2450 points.
+
+A settled 12.5 mm cycle cost approximately 580--600 wall seconds (156--183 s
+thermal plus 423--445 s airflow) versus about 388--393 seconds at 15 mm. The
+refinement is therefore roughly 1.5 times slower per cycle. The 15 mm profile
+remains the justified default for in-depth rack work: it preserves bulk
+temperatures within 0.2 K on average, outlet temperature within 0.024 K, and
+all recirculation rankings while materially reducing runtime. Use 12.5 mm for
+final hotspot magnitude or mitigation decisions when a roughly 1 K hottest-
+solid and 1.1-point recirculation discretization uncertainty is consequential.
+
+The tracer run also exposed a generated-command environment edge case. Even
+after sourcing OpenFOAM, `WM_PROJECT_USER_DIR` inherited the repository path
+containing `Thermal Sim`; OpenFOAM debug-level filename validation rejected
+that path before solving. Generated tracer commands now export the same
+space-free `/tmp/thermal_sim_foam_user` directory used by the build script,
+then run from `/tmp` with the explicit installed solver path. The dedicated
+C++ command regression and all eight Python tracer tests pass.

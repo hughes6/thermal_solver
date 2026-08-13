@@ -78,7 +78,8 @@ int main() {
     assert(output.find("tools/openfoam_progress.py") != std::string::npos);
     assert(output.find("steadyExhaustTracerFoam") != std::string::npos);
     assert(output.find(
-        "source /usr/lib/openfoam/openfoam2606/etc/bashrc && cd /tmp && "
+        "source /usr/lib/openfoam/openfoam2606/etc/bashrc && export "
+        "WM_PROJECT_USER_DIR=/tmp/thermal_sim_foam_user && cd /tmp && "
         "python3") != std::string::npos);
     assert(output.find("_tracer_RUN_ID") != std::string::npos);
 #ifdef _WIN32

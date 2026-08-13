@@ -1928,6 +1928,7 @@ struct ModelLoader {
                     << "\nGenerate a mass-weighted exhaust-to-intake "
                        "recirculation matrix from saved fields (WSL):\n  "
                        "source /usr/lib/openfoam/openfoam2606/etc/bashrc && "
+                       "export WM_PROJECT_USER_DIR=/tmp/thermal_sim_foam_user && "
                        "cd /tmp && python3 "
                     << command_quote(attribution_script_wsl) << ' '
                     << command_quote(launch_directory) << ' '
