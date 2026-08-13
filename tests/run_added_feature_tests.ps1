@@ -62,6 +62,7 @@ try {
 Write-Host "Checking Python plotting scripts"
 & python -m py_compile `
     "plot/heat_animation.py" `
+    "plot/fluid_results.py" `
     "plot/coarse_heat_animation.py" `
     "plot/coarse_heat_io.py" `
     "plot/plot.py" `
@@ -82,6 +83,7 @@ Write-Host "Checking Python plotting scripts"
     "tests/engineering_tools_test.py" `
     "tests/plot_geometry_test.py" `
     "tests/openfoam_animation_test.py" `
+    "tests/fluid_results_test.py" `
     "tests/openfoam_field_convergence_test.py" `
     "tests/openfoam_field_delta_test.py" `
     "tests/openfoam_cross_case_comparison_test.py" `
@@ -121,6 +123,11 @@ if ($LASTEXITCODE -ne 0) {
 & python "tests/openfoam_animation_test.py"
 if ($LASTEXITCODE -ne 0) {
     throw "OpenFOAM animation tests failed"
+}
+
+& python "tests/fluid_results_test.py"
+if ($LASTEXITCODE -ne 0) {
+    throw "OpenFOAM fluid-results viewer tests failed"
 }
 
 & python -m unittest "tests.recirculation_report_test"

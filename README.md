@@ -2292,7 +2292,57 @@ The script creates a harmless `.foam` reader marker in the case directory when
 needed and supports reconstructed or decomposed cases. OpenFOAM mode reads
 fields directly; no CSV conversion step is required.
 
-### 17.3 Native-solver plotting
+### 17.3 Python fluid-results viewer
+
+`plot/fluid_results.py` is the focused viewer for the OpenFOAM fluid volume. It
+reads both reconstructed cases and live decomposed `processor*` results, ignores
+solid regions, prints the selected field's minimum/mean/maximum, and opens an
+interactive PyVista window by default.
+
+View the latest fluid temperature with velocity arrows on a front-to-rear
+slice:
+
+```powershell
+python .\plot\fluid_results.py `
+  --case "C:\OpenFOAM\thermal_sim_v2\model_generic_airside_screening_20260813" `
+  --time latest `
+  --field temperature `
+  --slice-axis y `
+  --vectors
+```
+
+View velocity magnitude on a horizontal plane and save it without opening a
+window:
+
+```powershell
+python .\plot\fluid_results.py `
+  --case "C:\OpenFOAM\thermal_sim_v2\model_generic_airside_screening_20260813" `
+  --field speed `
+  --slice-axis z `
+  --slice-position 1.0 `
+  --vectors `
+  --save `
+  --output .\fluid_speed_z1m.png
+```
+
+View the complete fluid-volume surface colored by pressure:
+
+```powershell
+python .\plot\fluid_results.py `
+  --case "C:\OpenFOAM\thermal_sim_v2\model_generic_airside_screening_20260813" `
+  --field p_rgh `
+  --slice-axis none
+```
+
+Accepted convenient field names are `temperature`, `speed`, `pressure`,
+`p_rgh`, `k`, `omega`, `nut`, and `alphat`. An exact OpenFOAM field name can
+also be supplied. Use `--clim MIN MAX` to hold a common color scale across
+screenshots, `--vector-factor` to reduce arrow density, `--vector-scale` to
+change arrow length, `--opacity` to see through the plotted volume, and
+`--no-geometry` to hide the rack/component wireframe. If a requested field is
+not present at the selected time, the tool prints every available fluid field.
+
+### 17.4 Native-solver plotting
 
 The original CSV workflow remains available:
 
