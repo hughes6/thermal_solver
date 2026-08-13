@@ -22,6 +22,7 @@ from tools.openfoam_progress import (
     is_stale_run,
     storage_usage,
     low_space_warning,
+    format_initial_airflow_stage,
 )
 
 
@@ -290,6 +291,15 @@ class OpenFoamProgressTest(unittest.TestCase):
                 read_initial_airflow_progress(case),
                 (0.05, 1.35, None, 0.42),
             )
+
+    def test_initial_exchange_stage_distinguishes_reached_target(self):
+        progress = (0.05, 5.27144, 5.22144, None)
+        self.assertNotIn(
+            "target reached", format_initial_airflow_stage(progress, 5.0)
+        )
+        self.assertIn(
+            "target reached", format_initial_airflow_stage(progress, 5.27144)
+        )
 
 
 if __name__ == "__main__":

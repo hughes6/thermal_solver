@@ -218,6 +218,40 @@ def read_initial_airflow_progress(
     return observation_start, latest_target, required_elapsed, completed_fraction
 
 
+def format_initial_airflow_stage(
+    progress: tuple[float, float | None, float | None, float | None],
+    current_time: float,
+) -> str:
+    observation_start, exchange_target, required_elapsed, completed_fraction = progress
+    tolerance = 1.0e-9 * max(1.0, abs(current_time))
+    target_reached = (
+        exchange_target is not None
+        and current_time >= exchange_target - tolerance
+    )
+    if exchange_target is not None and required_elapsed is not None:
+        detail = (
+            "initial airflow physical exchange "
+            f"(observation start {observation_start:.9g} s, required elapsed "
+            f"{required_elapsed:.9g} s, target {exchange_target:.9g} s)"
+        )
+    elif exchange_target is not None and completed_fraction is not None:
+        detail = (
+            "initial airflow cumulative physical exchange "
+            f"(observation start {observation_start:.9g} s, completed fraction "
+            f"{completed_fraction:.6g}, next check {exchange_target:.9g} s)"
+        )
+    else:
+        return (
+            "Workflow stage: adaptive initial airflow observation "
+            f"(started {observation_start:.9g} s)"
+        )
+    suffix = (
+        "; exchange target reached, convergence recheck or continued settling pending"
+        if target_reached else ""
+    )
+    return f"Workflow stage: {detail}{suffix}"
+
+
 def numeric_directories(path: Path) -> list[float]:
     values: list[float] = []
     if not path.is_dir():
@@ -466,27 +500,7 @@ def main() -> int:
                 f"{100.0 * overall_fraction:.2f}% toward {requested_end:.9g} s"
             )
     if initial_airflow is not None:
-        (observation_start, exchange_target, required_elapsed,
-         completed_fraction) = initial_airflow
-        if exchange_target is not None and required_elapsed is not None:
-            print(
-                "Workflow stage: initial airflow physical exchange "
-                f"(observation start {observation_start:.9g} s, required "
-                f"elapsed {required_elapsed:.9g} s, target "
-                f"{exchange_target:.9g} s)"
-            )
-        elif exchange_target is not None and completed_fraction is not None:
-            print(
-                "Workflow stage: initial airflow cumulative physical exchange "
-                f"(observation start {observation_start:.9g} s, completed "
-                f"fraction {completed_fraction:.6g}, next check "
-                f"{exchange_target:.9g} s)"
-            )
-        else:
-            print(
-                "Workflow stage: adaptive initial airflow observation "
-                f"(started {observation_start:.9g} s)"
-            )
+        print(format_initial_airflow_stage(initial_airflow, current_time))
     print(f"Recent rate: {slope:.1f} wall s / simulated s")
     print(f"Solver logged wall time: {format_duration(logged_wall_time)}")
     print(f"Estimated remaining wall time: {format_duration(remaining_simulated * slope)}")
