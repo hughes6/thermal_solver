@@ -1,45 +1,31 @@
 cur.execute("""
 SELECT
-    COPY,
-    BundleID,
-    ParentID,
-    Name,
-    NODENO,
-    SUBENTRY,
-    SUBVERSION
-FROM dbo.Cable
-WHERE ENTRY = ?
-ORDER BY COPY
-""", wire_lpntr)
+    c.ENTRY,
+    c.VERSION,
+    c.Description,
+    COUNT(cb.COPY) AS NumberOfWires
+FROM dbo.ComponentData c
 
-for row in cur.fetchall():
-    print(tuple(row))
+LEFT JOIN dbo.Cable cb
+    ON cb.ENTRY = c.LPNTR
+    AND cb.BundleID = 0
+    AND cb.NODENO > 0
 
+WHERE c.ENTRYTYP = 22
 
+GROUP BY
+    c.ENTRY,
+    c.VERSION,
+    c.Description
 
+ORDER BY
+    c.ENTRY,
+    c.VERSION
+""")
 
-cur.execute("""
-SELECT LPNTR
-FROM dbo.ComponentData
-WHERE ENTRY = ?
-AND ENTRYTYP = 22
-""", "Twisted 5 Wire - 24AWG")
-
-five_wire_lpntr = cur.fetchone()[0]
-
-cur.execute("""
-SELECT
-    COPY,
-    BundleID,
-    ParentID,
-    Name,
-    NODENO,
-    SUBENTRY,
-    SUBVERSION
-FROM dbo.Cable
-WHERE ENTRY = ?
-ORDER BY COPY
-""", five_wire_lpntr)
-
-for row in cur.fetchall():
-    print(tuple(row))
+for entry, version, description, number_of_wires in cur.fetchall():
+    print(
+        f"{entry} | "
+        f"Wires: {number_of_wires} | "
+        f"desc: {description}"
+    )
