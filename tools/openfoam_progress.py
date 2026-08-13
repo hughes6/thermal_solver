@@ -175,6 +175,13 @@ def recent_slope_or_none(
         return None
 
 
+def current_stage_samples(
+    samples: list[tuple[float, float]], start_time: float
+) -> list[tuple[float, float]]:
+    tolerance = 1.0e-9 * max(1.0, abs(start_time))
+    return [sample for sample in samples if sample[0] > start_time + tolerance]
+
+
 def read_control_times(case_directory: Path) -> tuple[float, float]:
     control = case_directory / "system" / "controlDict"
     values: dict[str, float] = {}
@@ -628,10 +635,12 @@ def main() -> int:
     case_directory = args.case.resolve()
     log_path = choose_log(case_directory, args.log.resolve() if args.log else None)
     samples = read_samples(log_path)
-    slope = recent_slope_or_none(samples, args.window)
     current_time, logged_wall_time = samples[-1]
     log_age_seconds = max(0.0, time.time() - log_path.stat().st_mtime)
     start_time, configured_end_time = read_control_times(case_directory)
+    slope = recent_slope_or_none(
+        current_stage_samples(samples, start_time), args.window
+    )
     end_time = args.end_time if args.end_time is not None else configured_end_time
     remaining_simulated = max(0.0, end_time - current_time)
     (checkpoints, processor_count, checkpoints_aligned, latest_file_counts,
