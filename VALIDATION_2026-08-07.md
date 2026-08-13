@@ -3127,3 +3127,16 @@ direction diagnostic for passive equipment whose flow is not controlled by an
 internal fan. Quantitative mass flow still requires a face/flux-based audit;
 the volume-average vector is a direction and velocity indicator, not a mass
 balance.
+
+The physical concern became clearer after 9600 s. Trenton's component-average
+temperature was 411.01 K and its local maximum continued above 490 K; by about
+10560 s the latest completed timestep reported a 503.98 K (230.83 C) Trenton
+maximum. Dell's 9600 s component average was 372.21 K, Eaton's 321.17 K, and
+the passive KVM's 301.15 K. There were no solver fatal signatures. This is a
+model-validity failure signal: the active Trenton template applies 425 W to
+four internal solid blocks but has only passive front and rear vents; all
+three candidate internal fans are commented out. Long numerical convergence
+cannot make that abstraction representative of a normally fan-cooled server.
+The progress monitor now extracts the latest completed timestep's region
+temperature ranges from the solver log and reports the hottest region in K
+and C so this condition is visible during a run rather than only afterward.

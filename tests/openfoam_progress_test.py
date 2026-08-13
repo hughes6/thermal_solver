@@ -16,6 +16,7 @@ from tools.openfoam_progress import (
     read_checkpoint_stride,
     read_thermal_only_flow,
     read_health,
+    read_latest_temperature_ranges,
     read_latest_run_request,
     read_latest_thermal_metrics,
     read_initial_airflow_progress,
@@ -29,6 +30,25 @@ from tools.openfoam_progress import (
 
 
 class OpenFoamProgressTest(unittest.TestCase):
+    def test_reads_temperature_ranges_from_latest_completed_timestep(self):
+        with tempfile.TemporaryDirectory() as directory:
+            log = Path(directory) / "run.stdout.log"
+            log.write_text(
+                "Time = 10\nSolving thermal-only fluid region fluid\n"
+                "Min/max T:293.15 350\nSolving for solid region server\n"
+                "Min/max T:300 400\nExecutionTime = 3 s ClockTime = 4 s\n"
+                "Time = 20\nSolving thermal-only fluid region fluid\n"
+                "Min/max T:293.15 360\nSolving for solid region server\n"
+                "Min/max T:301 410\nExecutionTime = 5 s ClockTime = 6 s\n"
+                "Time = 30\nSolving thermal-only fluid region fluid\n"
+                "Min/max T:293.15 999\n",
+                encoding="utf-8",
+            )
+            self.assertEqual(
+                read_latest_temperature_ranges(log),
+                {"fluid": (293.15, 360.0), "server": (301.0, 410.0)},
+            )
+
     def test_reads_normalized_thermal_metrics_and_runner_limits(self):
         with tempfile.TemporaryDirectory() as directory:
             case = Path(directory)

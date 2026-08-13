@@ -31,6 +31,11 @@ COURANT_RE = re.compile(
 CONTINUITY_RE = re.compile(
     r"time step continuity errors \(fluid\):.*cumulative = ([0-9.eE+-]+)"
 )
+SOLID_REGION_RE = re.compile(r"^Solving for solid region (\S+)$")
+FLUID_REGION_RE = re.compile(r"^Solving (?:thermal-only )?fluid region (\S+)$")
+TEMPERATURE_RANGE_RE = re.compile(
+    r"^Min/max T:([0-9.eE+-]+)\s+([0-9.eE+-]+)$"
+)
 FATAL_SIGNATURES = (
     "--> FOAM FATAL ERROR",
     "Foam::sigFpe::sigHandler",
@@ -105,6 +110,33 @@ def read_health(log_path: Path) -> tuple[float | None, float | None, list[str]]:
                 if signature in line and signature not in signatures:
                     signatures.append(signature)
     return maximum_courant, cumulative_continuity, signatures
+
+
+def read_latest_temperature_ranges(log_path: Path) -> dict[str, tuple[float, float]]:
+    """Read region temperature ranges from the latest completed timestep."""
+    current_region: str | None = None
+    current_ranges: dict[str, tuple[float, float]] = {}
+    completed_ranges: dict[str, tuple[float, float]] = {}
+    with log_path.open("r", encoding="utf-8", errors="ignore") as stream:
+        for raw_line in stream:
+            line = raw_line.strip()
+            if TIME_RE.match(line):
+                current_ranges = {}
+                current_region = None
+                continue
+            match = SOLID_REGION_RE.match(line) or FLUID_REGION_RE.match(line)
+            if match:
+                current_region = match.group(1)
+                continue
+            match = TEMPERATURE_RANGE_RE.match(line)
+            if match and current_region is not None:
+                current_ranges[current_region] = (
+                    float(match.group(1)), float(match.group(2))
+                )
+                continue
+            if EXECUTION_RE.match(line) and current_ranges:
+                completed_ranges = dict(current_ranges)
+    return completed_ranges
 
 
 def recent_slope(samples: list[tuple[float, float]], window: int) -> float:
@@ -581,6 +613,7 @@ def main() -> int:
         checkpoints, checkpoint_stride
     )
     maximum_courant, cumulative_continuity, fatal_signatures = read_health(log_path)
+    temperature_ranges = read_latest_temperature_ranges(log_path)
     run_request = read_latest_run_request(case_directory)
     thermal_metrics = read_latest_thermal_metrics(case_directory)
     initial_airflow = read_initial_airflow_progress(case_directory)
@@ -642,6 +675,15 @@ def main() -> int:
                 )
     if cumulative_continuity is not None:
         print(f"Latest cumulative continuity error: {cumulative_continuity:.6g}")
+    if temperature_ranges:
+        hottest_region, (_, hottest_temperature) = max(
+            temperature_ranges.items(), key=lambda item: item[1][1]
+        )
+        print(
+            "Latest hottest region: "
+            f"{hottest_region} {hottest_temperature:.6g} K "
+            f"({hottest_temperature - 273.15:.6g} C)"
+        )
     print(
         "Fatal signatures: "
         + (", ".join(fatal_signatures) if fatal_signatures else "none")
