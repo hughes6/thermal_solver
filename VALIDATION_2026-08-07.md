@@ -3436,3 +3436,57 @@ This does not relax component hotspot, component thermal-mass, airflow,
 energy-balance, or re-ingestion validation. The exported script passed an
 actual WSL `bash -n` check; the C++ exporter regression and 68 focused Python
 tests also passed.
+
+## Converged long screening and matched in-depth validation (2026-08-13)
+
+The fresh 208,772-cell screening case
+`model_generic_airside_screening_20260813` was continued from its preserved
+18,000.01 s result with a requested 100,000 s endpoint and 10,000 s airflow
+refresh interval. The revised per-component convergence state intentionally
+rejected the legacy state shape and recorded a new baseline at 20,000 s. At
+30,000 and 40,000 s, respectively, the controlling solid-maximum rates were
+0.007839 and 0.005892 K/300 s, while component-average rates were 0.002331 and
+0.003303 K/300 s. The moving fluid-maximum diagnostics were 0.077520 and
+0.071688 K/300 s but did not control acceptance. Both refreshed-airflow
+checkpoints passed, so the runner stopped early and cleanly at 40,000.01 s
+with the required 2/2 streak instead of wasting the full requested horizon.
+
+The final screening audit passed with 0.00550% mass error and 0.3024% energy
+error (1540.3284 of 1545 W transported). Its mass-weighted inlet/outlet were
+293.1500/298.2894 K versus 298.3050 K analytical, its solid range was
+294.5204--315.8095 K, and outlet reverse flow was zero.
+
+A fresh uniquely named in-depth case,
+`model_generic_airside_indepth_20260813_match`, was exported from the current
+model, profile, fan curves, and component templates. It contained 335,580
+total and 284,396 fluid cells plus immutable provenance snapshots. All five
+regions from screening 40,000.01 s were mapped into this untouched target and
+completed the mandatory coupled warm start. Strict mapped-flow settling took
+five 0.01 s windows after the warm start: spatial RMS fell from 1.9447% to
+0.8812%, after which two adjacent passing windows certified the mapped field
+without requiring a cold full-volume exchange. Periodic 1,200 s in-depth
+refreshes subsequently passed on their first windows. Thermal and anchored
+airflow gates produced a 2/2 streak and stopped cleanly at 4,800.01 s.
+
+| Metric | Screening 40,000.01 s | In-depth 4,800.01 s | Screening minus in-depth |
+|---|---:|---:|---:|
+| Outlet mass flow | 0.298217 kg/s | 0.296176 kg/s | +0.689% |
+| Mass-weighted outlet T | 298.2894 K | 298.3296 K | -0.0402 K |
+| Analytical outlet T | 298.3050 K | 298.3405 K | -0.0355 K |
+| Solid average T | 303.2919 K | 303.3540 K | -0.0620 K |
+| Hottest solid | 315.8095 K | 315.6034 K | +0.2060 K |
+| Energy error | 0.3024% | 0.2107% | +0.0917 pp |
+
+The rack-scale screening result is therefore validated for throughput, bulk
+temperature, component ranking, and energy closure. Local passive-tracer
+fractions retain mesh sensitivity. At `Sc_t=0.7`, screening versus in-depth
+was 26.0705% versus 23.4640% for Trenton exhaust into Dell intake, 35.5505%
+versus 31.0939% for Trenton self-recirculation, and 15.6862% versus 17.2019%
+for Dell exhaust into Trenton intake. Both meshes agree on the dominant paths,
+but final quantitative mitigation decisions should use the in-depth result.
+
+The tracer execution also exposed that the generated WSL command launched the
+dynamically linked utility without loading OpenFOAM, producing a missing
+`libfiniteVolume.so` error in a fresh shell. Generated commands now source the
+OpenFOAM v2606 bash environment before invoking the Python driver; the command
+regression asserts that complete sequence.

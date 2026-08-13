@@ -1927,6 +1927,7 @@ struct ModelLoader {
                     << command_quote(attribution_build_script_wsl)
                     << "\nGenerate a mass-weighted exhaust-to-intake "
                        "recirculation matrix from saved fields (WSL):\n  "
+                       "source /usr/lib/openfoam/openfoam2606/etc/bashrc && "
                        "cd /tmp && python3 "
                     << command_quote(attribution_script_wsl) << ' '
                     << command_quote(launch_directory) << ' '

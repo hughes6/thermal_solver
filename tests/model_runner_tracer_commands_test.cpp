@@ -16,6 +16,7 @@ int main() {
 
     ModelLoader unpaired_loader;
     unpaired_loader.load_model("library/tests/openfoam_model.toml");
+    unpaired_loader.load_fan_curves("library/fan_curves/fan_curves.toml");
     unpaired_loader.model.openfoam_solver.case_directory = case_directory;
     unpaired_loader.model.openfoam_solver.overwrite = true;
     std::ostringstream unpaired_captured;
@@ -40,6 +41,7 @@ int main() {
 
     ModelLoader loader;
     loader.load_model("library/tests/openfoam_model.toml");
+    loader.load_fan_curves("library/fan_curves/fan_curves.toml");
     FanInput exhaust;
     exhaust.name = "Test rear exhaust";
     exhaust.shape = FanShape::Rectangular;
@@ -75,6 +77,9 @@ int main() {
            std::string::npos);
     assert(output.find("tools/openfoam_progress.py") != std::string::npos);
     assert(output.find("steadyExhaustTracerFoam") != std::string::npos);
+    assert(output.find(
+        "source /usr/lib/openfoam/openfoam2606/etc/bashrc && cd /tmp && "
+        "python3") != std::string::npos);
     assert(output.find("_tracer_RUN_ID") != std::string::npos);
 #ifdef _WIN32
     assert(output.find("'/mnt/c/") != std::string::npos);
