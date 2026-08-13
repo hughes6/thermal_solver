@@ -3597,3 +3597,46 @@ that path before solving. Generated tracer commands now export the same
 space-free `/tmp/thermal_sim_foam_user` directory used by the build script,
 then run from `/tmp` with the explicit installed solver path. The dedicated
 C++ command regression and all eight Python tracer tests pass.
+
+## Recirculation temporal-sampling uncertainty (2026-08-13)
+
+The 15 versus 12.5 mm comparison above used one converged transient-RANS
+snapshot from each mesh. To separate mesh sensitivity from ordinary wake
+motion, the same fixed-flow `Sc_t=0.7` tracer was run at two adjacent accepted
+airflow checkpoints on each mesh: 7,200.01 and 8,400.01 s for 15 mm, and
+3,600.01 and 4,800.01 s for 12.5 mm. Each of the six source solves converged
+to less than `2.5e-12` maximum tracer-field change.
+
+| Variation source | Maximum path change | Mean absolute path change | Path-change RMS |
+|---|---:|---:|---:|
+| 15 mm, adjacent 1,200 s snapshots | 0.0748 pp | 0.0197 pp | 0.0312 pp |
+| 12.5 mm, adjacent 1,200 s snapshots | 0.1612 pp | 0.0349 pp | 0.0585 pp |
+| 15 mm versus 12.5 mm latest snapshots | 1.0776 pp | 0.3688 pp | 0.5588 pp |
+
+The largest temporal change was Trenton exhaust entering Dell at 12.5 mm,
+22.4486% to 22.2874%. Every path ranking remained unchanged. The measured
+mesh RMS is 9.6 times the larger temporal RMS, and the maximum mesh shift is
+6.7 times the maximum temporal shift. A single accepted in-depth snapshot is
+therefore adequate for path ranking and normal design iteration. For final
+reported percentages, average at least two adjacent accepted checkpoints and
+publish the observed spread; further global mesh refinement remains more
+important than collecting many additional snapshots.
+
+`plot/exhaust_recirculation_matrix.py` now supports repeatable snapshot
+aggregation. Pass each additional aligned matrix with `--sample`; plotted
+cells show the mean and maximum deviation from that mean. `--stats-csv`
+writes the mean, minimum, maximum, maximum deviation, and sample count for
+every exhaust-to-intake path. Source and target ordering must match exactly,
+so unrelated or incomplete matrices fail instead of being silently paired.
+For example:
+
+```powershell
+python plot/exhaust_recirculation_matrix.py snapshot_1.csv `
+  --sample snapshot_2.csv `
+  --stats-csv recirculation_temporal_statistics.csv `
+  --output recirculation_temporal_mean.png
+```
+
+The real 15 and 12.5 mm plots and statistics were generated beside their
+source OpenFOAM cases. Five focused aggregation/plot tests pass, including
+mean and spread calculation, CSV output, and misaligned-order rejection.

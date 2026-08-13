@@ -15,6 +15,15 @@ class MatrixData:
     values: tuple[tuple[float, ...], ...]
 
 
+@dataclass(frozen=True)
+class MatrixAggregate:
+    mean: MatrixData
+    maximum_deviation: MatrixData
+    minima: MatrixData
+    maxima: MatrixData
+    sample_count: int
+
+
 def short_name(name: str) -> str:
     for prefix in ("Generic ",):
         if name.startswith(prefix):
@@ -52,9 +61,65 @@ def difference(first: MatrixData, second: MatrixData) -> MatrixData:
     return MatrixData(first.sources, first.targets, values)
 
 
+def aggregate(samples: list[MatrixData]) -> MatrixAggregate:
+    if not samples:
+        raise ValueError("At least one attribution matrix is required")
+    reference = samples[0]
+    for sample in samples[1:]:
+        if (sample.sources != reference.sources or
+                sample.targets != reference.targets):
+            raise ValueError(
+                "Attribution matrices have different source/target ordering")
+    means = []
+    deviations = []
+    minima = []
+    maxima = []
+    for i in range(len(reference.sources)):
+        mean_row = []
+        deviation_row = []
+        minimum_row = []
+        maximum_row = []
+        for j in range(len(reference.targets)):
+            values = [sample.values[i][j] for sample in samples]
+            mean = sum(values) / len(values)
+            mean_row.append(mean)
+            deviation_row.append(max(abs(value - mean) for value in values))
+            minimum_row.append(min(values))
+            maximum_row.append(max(values))
+        means.append(tuple(mean_row))
+        deviations.append(tuple(deviation_row))
+        minima.append(tuple(minimum_row))
+        maxima.append(tuple(maximum_row))
+    shape = (reference.sources, reference.targets)
+    return MatrixAggregate(
+        MatrixData(*shape, tuple(means)),
+        MatrixData(*shape, tuple(deviations)),
+        MatrixData(*shape, tuple(minima)),
+        MatrixData(*shape, tuple(maxima)),
+        len(samples))
+
+
+def write_aggregate_csv(aggregate_data: MatrixAggregate, output: Path) -> None:
+    output.parent.mkdir(parents=True, exist_ok=True)
+    with output.open("w", newline="", encoding="utf-8") as handle:
+        writer = csv.writer(handle)
+        writer.writerow(("source_component", "target_component",
+                         "mean_percent", "minimum_percent", "maximum_percent",
+                         "maximum_deviation_pp", "sample_count"))
+        for i, source in enumerate(aggregate_data.mean.sources):
+            for j, target in enumerate(aggregate_data.mean.targets):
+                writer.writerow((
+                    source, target, aggregate_data.mean.values[i][j],
+                    aggregate_data.minima.values[i][j],
+                    aggregate_data.maxima.values[i][j],
+                    aggregate_data.maximum_deviation.values[i][j],
+                    aggregate_data.sample_count))
+
+
 def plot_matrix(data: MatrixData, output: Path, title: str,
                 comparison: MatrixData | None = None,
-                comparison_title: str = "Comparison") -> None:
+                comparison_title: str = "Comparison",
+                uncertainty: MatrixData | None = None) -> None:
     import matplotlib.pyplot as plt
     import numpy as np
 
@@ -78,7 +143,13 @@ def plot_matrix(data: MatrixData, output: Path, title: str,
         for i in range(array.shape[0]):
             for j in range(array.shape[1]):
                 value = array[i, j]
-                label = f"{value:+.2f} pp" if vmin < 0 else f"{value:.2f}%"
+                if vmin < 0:
+                    label = f"{value:+.2f} pp"
+                elif uncertainty is not None and matrix is data:
+                    label = (f"{value:.2f}%\n"
+                             f"±{uncertainty.values[i][j]:.2f} pp")
+                else:
+                    label = f"{value:.2f}%"
                 normalized = (value - vmin) / (vmax - vmin) if vmax > vmin else 0.5
                 axis.text(j, i, label, ha="center", va="center",
                           color="white" if normalized < 0.35 or normalized > 0.75 else "black",
@@ -97,11 +168,29 @@ def main() -> int:
     parser.add_argument("--title", default="Exhaust recirculation attribution")
     parser.add_argument("--compare", type=Path)
     parser.add_argument("--compare-title", default="Comparison")
+    parser.add_argument(
+        "--sample", action="append", type=Path, default=[],
+        help="additional aligned snapshot matrix to average with matrix_csv; "
+             "repeat for more snapshots")
+    parser.add_argument(
+        "--stats-csv", type=Path,
+        help="write per-path mean, range, and maximum snapshot deviation")
     args = parser.parse_args()
     output = args.output or args.matrix_csv.with_suffix(".png")
-    first = read_matrix(args.matrix_csv)
+    aggregate_data = aggregate(
+        [read_matrix(args.matrix_csv),
+         *(read_matrix(path) for path in args.sample)])
+    first = aggregate_data.mean
     second = read_matrix(args.compare) if args.compare else None
-    plot_matrix(first, output, args.title, second, args.compare_title)
+    title = args.title
+    uncertainty = None
+    if aggregate_data.sample_count > 1:
+        title = f"{title} (mean of {aggregate_data.sample_count} snapshots)"
+        uncertainty = aggregate_data.maximum_deviation
+    if args.stats_csv:
+        write_aggregate_csv(aggregate_data, args.stats_csv)
+        print(args.stats_csv.resolve())
+    plot_matrix(first, output, title, second, args.compare_title, uncertainty)
     print(output.resolve())
     return 0
 
