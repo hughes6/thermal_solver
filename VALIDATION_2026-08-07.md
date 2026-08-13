@@ -2970,3 +2970,14 @@ The maximum long-lag difference was 3.152 m/s in the Dell at
 `(0.345249, 0.333200, 0.229000) m`. This provides stronger evidence that the
 cold field is still drifting coherently and that the physical air-exchange
 gate is doing necessary work.
+
+The preserved production case predates the current integrated exchanged-mass
+controller. Its generated runner uses the legacy instantaneous air-exchange
+time measured at each convergence check and targets 5.27144 s from the 0.05 s
+observation start. Current v2.2 exports instead trapezoidally integrate actual
+one-way boundary mass flow, persist `.initial_air_exchange_state` across
+restarts, and require the configured cumulative exchange fraction. The active
+case is intentionally not modified mid-run; its full-exchange result remains a
+useful legacy validation, while new cases receive the more physically robust
+controller. `openfoam_progress.py` now recognizes both summary formats: legacy
+`requiredElapsed` and current `completedFraction`.

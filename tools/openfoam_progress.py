@@ -45,6 +45,10 @@ INITIAL_EXCHANGE_RE = re.compile(
     r"\|\s+initial_air_exchange_advance\s+current=([0-9.eE+-]+)\s+"
     r"target=([0-9.eE+-]+)\s+requiredElapsed=([0-9.eE+-]+)"
 )
+INITIAL_EXCHANGE_FRACTION_RE = re.compile(
+    r"\|\s+initial_air_exchange_advance\s+current=([0-9.eE+-]+)\s+"
+    r"target=([0-9.eE+-]+)\s+completedFraction=([0-9.eE+-]+)"
+)
 
 
 def read_samples(log_path: Path) -> list[tuple[float, float]]:
@@ -179,7 +183,7 @@ def read_latest_run_request(case_directory: Path) -> tuple[str, float] | None:
 
 def read_initial_airflow_progress(
     case_directory: Path,
-) -> tuple[float, float | None, float | None] | None:
+) -> tuple[float, float | None, float | None, float | None] | None:
     """Read the restart-safe initial-airflow observation and exchange target."""
     if (case_directory / ".initial_airflow_converged").is_file():
         return None
@@ -194,6 +198,7 @@ def read_initial_airflow_progress(
         return None
     latest_target: float | None = None
     required_elapsed: float | None = None
+    completed_fraction: float | None = None
     summary = case_directory / "run_summary.log"
     if summary.is_file():
         for line in summary.read_text(
@@ -203,7 +208,14 @@ def read_initial_airflow_progress(
             if match:
                 latest_target = float(match.group(2))
                 required_elapsed = float(match.group(3))
-    return observation_start, latest_target, required_elapsed
+                completed_fraction = None
+                continue
+            match = INITIAL_EXCHANGE_FRACTION_RE.search(line)
+            if match:
+                latest_target = float(match.group(2))
+                required_elapsed = None
+                completed_fraction = float(match.group(3))
+    return observation_start, latest_target, required_elapsed, completed_fraction
 
 
 def numeric_directories(path: Path) -> list[float]:
@@ -435,12 +447,20 @@ def main() -> int:
                 f"{100.0 * overall_fraction:.2f}% toward {requested_end:.9g} s"
             )
     if initial_airflow is not None:
-        observation_start, exchange_target, required_elapsed = initial_airflow
+        (observation_start, exchange_target, required_elapsed,
+         completed_fraction) = initial_airflow
         if exchange_target is not None and required_elapsed is not None:
             print(
                 "Workflow stage: initial airflow physical exchange "
                 f"(observation start {observation_start:.9g} s, required "
                 f"elapsed {required_elapsed:.9g} s, target "
+                f"{exchange_target:.9g} s)"
+            )
+        elif exchange_target is not None and completed_fraction is not None:
+            print(
+                "Workflow stage: initial airflow cumulative physical exchange "
+                f"(observation start {observation_start:.9g} s, completed "
+                f"fraction {completed_fraction:.6g}, next check "
                 f"{exchange_target:.9g} s)"
             )
         else:
