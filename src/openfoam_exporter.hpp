@@ -725,7 +725,9 @@ private:
         const Mesh& mesh, const std::filesystem::path& path) {
         std::ofstream output(path);
         require_stream(output,path);
-        output << "zone,component_id,component,kind,device\n";
+        output << "zone,component_id,component,kind,device,"
+                  "expected_direction_x,expected_direction_y,"
+                  "expected_direction_z\n";
         std::map<int,std::array<double,3>> component_flow_direction;
         std::map<int,double> minimum_vent_projection;
         const auto projection=[&mesh](
@@ -785,7 +787,10 @@ private:
                    << device.component_id << ','
                    << csv_field(device.component_name) << ','
                    << kind << ','
-                   << csv_field(device.name) << '\n';
+                   << csv_field(device.name) << ','
+                   << device.direction[0] << ','
+                   << device.direction[1] << ','
+                   << device.direction[2] << '\n';
         }
     }
 
@@ -1790,6 +1795,19 @@ private:
                 "        operation volAverage;\n"
                 "        writeFields false;\n"
                 "        fields (T);\n"
+                "    }\n"
+                "    " << name << "_velocity_average\n"
+                "    {\n"
+                "        type volFieldValue;\n"
+                "        libs (fieldFunctionObjects);\n"
+                "        region fluid;\n"
+                "        writeControl adjustableRunTime;\n"
+                "        writeInterval " << options.report_interval << ";\n"
+                "        regionType cellZone;\n"
+                "        name " << name << ";\n"
+                "        operation volAverage;\n"
+                "        writeFields false;\n"
+                "        fields (U);\n"
                 "    }\n";
         }
         for(const auto& patch : mesh.get_openfoam_boundary_patches()) {

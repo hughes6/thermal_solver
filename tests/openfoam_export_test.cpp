@@ -172,6 +172,8 @@ int main(int argc, char** argv) {
         text << metadata.rdbuf();
         assert(text.str().find(
             "zone,component_id,component,kind,device") != std::string::npos);
+        assert(text.str().find("expected_direction_x,expected_direction_y,") !=
+               std::string::npos);
     }
     std::ifstream control_file(case_path/"system"/"controlDict");
     std::ostringstream control_text;

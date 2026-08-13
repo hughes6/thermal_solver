@@ -43,6 +43,24 @@ int main() {
     text << report.rdbuf();
     report.close();
     const std::string output=text.str();
+    {
+        std::ifstream metadata(case_path/"internal_airflow_devices.csv");
+        std::ostringstream metadata_text;
+        metadata_text << metadata.rdbuf();
+        assert(metadata_text.str().find(
+            "expected_direction_x,expected_direction_y,expected_direction_z") !=
+            std::string::npos);
+        assert(metadata_text.str().find(",0,1,0") != std::string::npos);
+    }
+    {
+        std::ifstream control(case_path/"system"/"controlDict");
+        std::ostringstream control_text;
+        control_text << control.rdbuf();
+        assert(control_text.str().find(
+            "internal_centered_fixture_fan_0_velocity_average") !=
+            std::string::npos);
+        assert(control_text.str().find("fields (U);") != std::string::npos);
+    }
     assert(output.find("- centered top fan | exhaust fan | faces=9")!=
            std::string::npos);
     assert(output.find("requestedCenter=(0.25 0.25 0.5)")!=

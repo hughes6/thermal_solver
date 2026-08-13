@@ -3100,3 +3100,30 @@ both `fluid/U` and `fluid/T`, and prune only those restartable times. The
 progress monitor applies the same restart-field requirement. This protects
 crash recovery even if an old or third-party function object leaves a newer
 diagnostic-only time directory.
+
+At `7200 s`, normalized thermal-change rates remained far above the active
+case's generated convergence gates. The Trenton controlled both metrics:
+`5.83854 K/300s` peak-cell change versus a `0.25 K/300s` limit and
+`3.47870 K/300s` component-average change versus a `0.10 K/300s` limit. The
+preceding 4800 s rates were `6.16440` and `3.90149 K/300s`, respectively.
+The progress monitor now reads these values and the actual limits from the
+generated case and labels their normalization interval and units explicitly.
+
+The 7200 s airflow refresh required two 0.01 s stages. The first failed only
+the device-flow criterion: 0.0796% mass imbalance, 1.2887% maximum change at
+Dell internal fan 2, 0.6979% spatial velocity RMS change, and correct external
+directions. The second passed with 0.0303% imbalance, 0.9040% maximum fan
+change, 0.6840% velocity change, and correct directions, after which the run
+entered the 7200-to-9600 s thermal interval.
+
+The same endpoint exposed an equipment-flow observability gap. Trenton's
+nominal front-intake cell-zone temperature was 318.31 K while its rear-outlet
+zone was 300.89 K. This does not by itself distinguish heat-source placement
+from reverse passive flow, and the old export recorded only temperature in
+internal vent zones. New exports therefore record volume-average `U` for every
+internal intake, outlet, and fan zone and add each device's expected direction
+vector to `internal_airflow_devices.csv`. This provides a direct, low-cost
+direction diagnostic for passive equipment whose flow is not controlled by an
+internal fan. Quantitative mass flow still requires a face/flux-based audit;
+the volume-average vector is a direction and velocity indicator, not a mass
+balance.
