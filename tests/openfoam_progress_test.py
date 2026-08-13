@@ -22,6 +22,7 @@ from tools.openfoam_progress import (
     read_initial_airflow_progress,
     read_samples,
     recent_slope,
+    recent_slope_or_none,
     is_stale_run,
     storage_usage,
     low_space_warning,
@@ -148,6 +149,10 @@ class OpenFoamProgressTest(unittest.TestCase):
             (5.274, 30.0),
         ]
         self.assertAlmostEqual(recent_slope(samples, 100), 10000.0, places=3)
+
+    def test_rate_warms_up_with_one_sample_after_solver_restart(self):
+        samples = [(5.26, 46000.0), (5.271, 46088.0), (5.272, 10.0)]
+        self.assertIsNone(recent_slope_or_none(samples, 100))
 
     def test_health_parser_ignores_trap_banner(self):
         with tempfile.TemporaryDirectory() as directory:
