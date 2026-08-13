@@ -1706,6 +1706,9 @@ struct ModelLoader {
                 std::filesystem::absolute("tools/build_openfoam_tracer.sh");
             const std::filesystem::path progress_script=
                 std::filesystem::absolute("tools/openfoam_progress.py");
+            const std::filesystem::path component_report_script=
+                std::filesystem::absolute(
+                    "tools/openfoam_component_report.py");
             const std::filesystem::path visualization_output=
                 absolute_case_directory/"temperature_latest_full_rack.png";
             const std::filesystem::path animation_output=
@@ -1714,6 +1717,10 @@ struct ModelLoader {
                 absolute_case_directory/"temperature_convergence.png";
             const std::filesystem::path recirculation_output=
                 absolute_case_directory/"recirculation_report.png";
+            const std::filesystem::path component_report_csv=
+                absolute_case_directory/"component_thermal_report.csv";
+            const std::filesystem::path component_report_markdown=
+                absolute_case_directory/"component_thermal_report.md";
             const auto shell_display_path=[](
                 const std::filesystem::path& path) {
                 std::string value=path.string();
@@ -1757,12 +1764,18 @@ struct ModelLoader {
                 shell_display_path(attribution_build_script);
             const std::string progress_script_display=
                 shell_display_path(progress_script);
+            const std::string component_report_script_display=
+                shell_display_path(component_report_script);
             const std::string attribution_script_wsl=
                 wsl_display_path(attribution_script);
             const std::string attribution_build_script_wsl=
                 wsl_display_path(attribution_build_script);
             const std::string recirculation_output_display=
                 shell_display_path(recirculation_output);
+            const std::string component_report_csv_display=
+                shell_display_path(component_report_csv);
+            const std::string component_report_markdown_display=
+                shell_display_path(component_report_markdown);
             const auto command_quote=[](const std::string& value) {
                 std::string quoted="'";
                 for(const char character : value) {
@@ -1902,7 +1915,19 @@ struct ModelLoader {
                 << model.environment.T_ambient + 273.15
                 << " --output "
                 << command_quote(recirculation_output_display)
-                << " --save\n";
+                << " --save\n"
+                << "Generate volume-weighted component solid temperatures "
+                   "and heat-allocation CSV/Markdown (PowerShell or Git Bash):\n  "
+#ifdef _WIN32
+                << "python "
+#else
+                << "python3 "
+#endif
+                << command_quote(component_report_script_display) << ' '
+                << command_quote(case_directory_display)
+                << " --csv " << command_quote(component_report_csv_display)
+                << " --markdown "
+                << command_quote(component_report_markdown_display) << "\n";
             std::map<int,unsigned> internal_device_kinds;
             for(const auto& device : mesh.get_openfoam_internal_flow_devices()) {
                 internal_device_kinds[device.component_id] |=

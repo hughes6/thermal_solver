@@ -3473,7 +3473,7 @@ airflow gates produced a 2/2 streak and stopped cleanly at 4,800.01 s.
 | Outlet mass flow | 0.298217 kg/s | 0.296176 kg/s | +0.689% |
 | Mass-weighted outlet T | 298.2894 K | 298.3296 K | -0.0402 K |
 | Analytical outlet T | 298.3050 K | 298.3405 K | -0.0355 K |
-| Solid average T | 303.2919 K | 303.3540 K | -0.0620 K |
+| Solid cell-weighted average T | 303.2919 K | 303.3540 K | -0.0620 K |
 | Hottest solid | 315.8095 K | 315.6034 K | +0.2060 K |
 | Energy error | 0.3024% | 0.2107% | +0.0917 pp |
 
@@ -3561,7 +3561,7 @@ and stopped cleanly at 4,800.01 s.
 
 The independent audit passed with 0.04128% mass error and 0.1955% energy
 error. Its inlet/outlet mass-weighted temperatures were 293.1500/298.3411 K
-versus 298.3512 K analytical. Solid average temperature was 303.1183 K, the
+versus 298.3512 K analytical. Solid cell-weighted average temperature was 303.1183 K, the
 solid range was 294.3148--314.4263 K, and outlet reverse flow was zero.
 
 | Metric | Current 15 mm control | Current 12.5 mm | 12.5 mm minus 15 mm |
@@ -3570,7 +3570,7 @@ solid range was 294.3148--314.4263 K, and outlet reverse flow was zero.
 | Outlet mass flow | 0.296809 kg/s | 0.295567 kg/s | -0.419% |
 | Mass-weighted outlet T | 298.3175 K | 298.3411 K | +0.0236 K |
 | Analytical outlet T | 298.3295 K | 298.3512 K | +0.0217 K |
-| Solid average T | 303.3156 K | 303.1183 K | -0.1973 K |
+| Solid cell-weighted average T | 303.3156 K | 303.1183 K | -0.1973 K |
 | Hottest solid | 315.3678 K | 314.4263 K | -0.9414 K |
 | Energy error | 0.2304% | 0.1955% | -0.0349 pp |
 
@@ -3677,14 +3677,15 @@ stopped cleanly at 4,800.01 s rather than the requested 12,000 s ceiling.
 | Outlet mass flow | 0.296809 kg/s | 0.295567 kg/s | 0.296576 kg/s |
 | Mass-weighted outlet T | 298.3175 K | 298.3411 K | 298.3235 K |
 | Analytical outlet T | 298.3295 K | 298.3512 K | 298.3335 K |
-| Solid average T | 303.3156 K | 303.1183 K | 302.6789 K |
+| Solid cell-weighted average T | 303.3156 K | 303.1183 K | 302.6789 K |
 | Hottest solid | 315.3678 K | 314.4263 K | 313.3669 K |
 | Mass error | 0.0165% | 0.0413% | 0.0228% |
 | Energy error | 0.2304% | 0.1955% | 0.1938% |
 
 Bulk flow and outlet temperature are effectively grid-converged: the 10 mm
 endpoint differs from 12.5 mm by +0.341% outlet flow and -0.0176 K outlet
-temperature. Solid average changes another -0.439 K, however, and the hottest
+temperature. The solid cell-weighted average changes another -0.439 K,
+however, and the hottest
 solid changes another -1.059 K. A 15 mm or 12.5 mm result is therefore valid
 for rack heat rejection and equipment ranking, but an uncalibrated volumetric
 block's individual peak-cell temperature must carry at least the observed
@@ -3718,3 +3719,49 @@ marks metadata with `compacted_output: true`, and retains every source log.
 The generated model-runner tracer command now uses this mode. A real 405,414-
 cell compact run produced a byte-identical matrix to the original full output;
 ten focused tracer tests and the generated-command C++ regression pass.
+
+## Component heat-allocation and volume-weighted temperature audit (2026-08-13)
+
+The 10 mm hotspot trend exposed an interpretation defect in the validation
+report rather than a solver-energy defect. `validate_openfoam_case.py` had
+labeled the arithmetic mean of all solid cells as the "solid average." An
+adaptive mesh has unequal cell volumes, so that quantity changes when a fixed
+physical volume is subdivided differently. Across the current cases, the cell-
+weighted value understates individual component volume averages by 0.074 to
+0.517 K. The legacy aggregate remains available for compatibility, but its
+report label now explicitly identifies it as a cell-weighted mesh diagnostic,
+not a physical volume average.
+
+`openfoam_component_report.py` now invokes OpenFOAM's authoritative
+`volFieldValue`/`volAverage` operation for every solid region at the latest
+complete reconstructed time. It pairs those results with each exported heat
+source's exact watts, selected source volume, volumetric power, solver region,
+cell count, and temperature extrema. It writes CSV, JSON, and Markdown and is
+included in every generated model-runner command list. The post-processing
+function uses `writeToFile false`, so reading an old case does not add result
+fields or overwrite its data.
+
+| Component | 15 mm volume avg T | 12.5 mm volume avg T | 10 mm volume avg T | 15 mm max T | 12.5 mm max T | 10 mm max T | Applied heat |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| Eaton 2U UPS | 297.443 K | 297.295 K | 297.192 K | 301.631 K | 301.407 K | 301.918 K | 150 W |
+| Dell R470 1U | 306.404 K | 305.987 K | 305.068 K | 315.368 K | 314.426 K | 313.367 K | 950 W |
+| Trenton 3U | 304.968 K | 304.776 K | 304.688 K | 310.515 K | 310.476 K | 311.086 K | 425 W |
+| KVM 1U | 304.501 K | 304.269 K | 303.933 K | 308.069 K | 307.800 K | 307.507 K | 20 W |
+
+Heat allocation is not causing the grid trend. Each mesh applies exactly
+150/950/425/20 W. The selected source volumes agree across all three exports
+to better than `9e-12` relative, and volumetric power is calculated from those
+same exact watts and volumes. These airside templates intentionally inject
+heat into their named internal fluid volumes; the listed solid temperatures
+are the coupled chassis response, not the imposed source temperature or an
+electronics junction limit.
+
+The remaining local-temperature behavior is therefore spatial/interface
+resolution. Eaton and Trenton peak temperatures are non-monotonic at 10 mm,
+and Dell's volume average changes -0.919 K from 12.5 to 10 mm despite identical
+power allocation. Bulk rack energy closure remains valid, but neither a peak
+cell nor an uncalibrated chassis average should be presented as a component
+temperature prediction without mesh uncertainty and calibration against a
+measured intake/exhaust or chassis temperature. Three focused parser/report
+tests and the generated-command regression pass; the real 12-row comparison
+is saved in the 10 mm case directory.

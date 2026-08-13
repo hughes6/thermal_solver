@@ -72,6 +72,7 @@ Write-Host "Checking Python plotting scripts"
     "tools/openfoam_cross_case_comparison.py" `
     "tools/openfoam_mesh_comparison.py" `
     "tools/openfoam_progress.py" `
+    "tools/openfoam_component_report.py" `
     "tools/map_openfoam_case.py" `
     "tools/exhaust_recirculation_tracer.py" `
     "plot/exhaust_recirculation_matrix.py" `
@@ -85,6 +86,7 @@ Write-Host "Checking Python plotting scripts"
     "tests/openfoam_mesh_comparison_test.py" `
     "tests/map_openfoam_case_test.py" `
     "tests/openfoam_profile_policy_test.py" `
+    "tests/openfoam_component_report_test.py" `
     "tests/exhaust_recirculation_tracer_test.py" `
     "tests/exhaust_recirculation_matrix_plot_test.py" `
     "tools/validate_openfoam_case.py" `

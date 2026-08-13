@@ -439,7 +439,7 @@ Overall result: **{status}**
 - Inlet signed mass-weighted temperature: {result.inlet_temperature_k:.4f} K
 - Outlet signed mass-weighted temperature: {result.outlet_temperature_k:.4f} K
 - Analytical outlet temperature from Q/(m_dot Cp): {result.expected_outlet_temperature_k:.4f} K
-- Solid average temperature: {result.solid_average_temperature_k if result.solid_average_temperature_k is not None else 'not available'} K
+- Solid cell-weighted average temperature (adaptive-mesh diagnostic, not a physical volume average): {result.solid_average_temperature_k if result.solid_average_temperature_k is not None else 'not available'} K
 - Solid temperature range: {result.solid_min_temperature_k if result.solid_min_temperature_k is not None else 'not available'} to {result.solid_max_temperature_k if result.solid_max_temperature_k is not None else 'not available'} K
 - Outlet gross bidirectional flow: {result.outlet_gross_mass_flow_kg_s:.6g} kg/s
 - Reverse-flow share of gross outlet traffic: {100*result.outlet_reverse_flow_fraction:.2f}%

@@ -76,6 +76,10 @@ int main() {
     assert(output.find("plot/exhaust_recirculation_matrix.py") !=
            std::string::npos);
     assert(output.find("tools/openfoam_progress.py") != std::string::npos);
+    assert(output.find("tools/openfoam_component_report.py") !=
+           std::string::npos);
+    assert(output.find("component_thermal_report.csv") !=
+           std::string::npos);
     assert(output.find("steadyExhaustTracerFoam") != std::string::npos);
     assert(output.find("steadyExhaustTracerFoam --compact") !=
            std::string::npos);
