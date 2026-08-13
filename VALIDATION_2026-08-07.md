@@ -2981,3 +2981,27 @@ case is intentionally not modified mid-run; its full-exchange result remains a
 useful legacy validation, while new cases receive the more physically robust
 controller. `openfoam_progress.py` now recognizes both summary formats: legacy
 `requiredElapsed` and current `completedFraction`.
+
+At `3.99228245 s`, adjacent whole-fluid velocity movement plateaued at 6.620%
+after the prior 6.549% window; external rack-air movement was 6.707%. Dell
+internal-air movement continued to improve to 1.332%, while Trenton's
+low-speed relative movement was 10.254% (0.00617 m/s RMS absolute). The
+maximum local velocity difference was 1.983 m/s at
+`(0.044900, 0.121950, 0.071625) m` in external rack air. Fluid temperature
+moved 0.000367 K RMS and all regions moved 0.000776 K RMS. `omega` and
+`alphat` remained on their downward trends at 3.461% and 9.777%, but `k`
+rebounded to 12.159%. Gauge-invariant pressure stayed small at 0.089 Pa RMS
+(0.573%). The dominant residual motion has shifted out of the Dell and into
+the external rack air rather than disappearing.
+
+Intake magnitude changed -0.02011%; Fan 4 was the largest exhaust change at
++0.36033%, still below the 1% device-flow gate. All nine fans remained
+outward, the intake remained inward, and bidirectional flow remained zero.
+Dell's intake/rear-outlet averages reached 293.1539/293.2321 K and its index
+was 4.81%. Eaton remained reversed and undefined at 293.1583/293.1560 K.
+Trenton reached 293.1517/293.1556 K; its 30.68% ratio still rests on only a
+0.0039 K outlet rise. Net sensible rejection was -3.33 W during the expected
+early transient. A temporary free-space dip to 7.55 GiB was not retained-case
+growth: the case remained 0.91 GiB, the new analysis CSVs totaled 15.5 KB, and
+free space recovered to 7.73 GiB. The 6.62% spatial plateau remains the failed
+startup criterion.
