@@ -2342,6 +2342,30 @@ change arrow length, `--opacity` to see through the plotted volume, and
 `--no-geometry` to hide the rack/component wireframe. If a requested field is
 not present at the selected time, the tool prints every available fluid field.
 
+Overlay long airflow streamlines and explicit temperature contour lines:
+
+```powershell
+python .\plot\fluid_results.py `
+  --case "C:\OpenFOAM\thermal_sim_v2\model_generic_airside_screening_20260813" `
+  --field temperature `
+  --slice-axis y `
+  --contours 15 `
+  --streamlines `
+  --seed vents `
+  --streamline-direction both `
+  --streamline-color speed
+```
+
+Streamlines are integrated through the saved OpenFOAM `U` field. `--seed auto`
+uses rack vents when geometry metadata are available and otherwise uses a plane;
+select `plane`, `fans`, or `vents` explicitly when needed. Plane seeds use
+`--seed-axis` and `--seed-position`. Control density with `--seed-count`, maximum
+path length with `--streamline-length`, and tube thickness with
+`--streamline-radius 0.002`; use a zero radius for thin lines. Streamlines can
+be colored by `speed`, `temperature`, the displayed `field`, or a solid color.
+Contour lines are calculated on the selected scalar slice; `--contours 15`
+draws fifteen levels across the active or explicitly supplied `--clim` range.
+
 ### 17.4 Native-solver plotting
 
 The original CSV workflow remains available:
