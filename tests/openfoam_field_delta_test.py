@@ -12,6 +12,7 @@ from tools.openfoam_field_delta import (
     scalar_delta_distribution,
     top_scalar_delta_locations,
     vector_delta_distribution,
+    verify_processor_topology_identity,
 )
 
 
@@ -76,6 +77,36 @@ class OpenFoamFieldDeltaTest(unittest.TestCase):
             )
             self.assertEqual(result[0], 2)
             self.assertEqual(result[2], 1.0)
+
+    def test_cross_case_topology_requires_identical_cell_addressing(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            first = root / "first"
+            second = root / "second"
+            relative = Path("processor0/constant/fluid/polyMesh/cellProcAddressing")
+            (first / relative).parent.mkdir(parents=True)
+            (second / relative).parent.mkdir(parents=True)
+            (first / relative).write_bytes(b"same-addressing")
+            (second / relative).write_bytes(b"same-addressing")
+            self.assertEqual(
+                verify_processor_topology_identity(first, second, "fluid"), 1
+            )
+            (second / relative).write_bytes(b"reordered")
+            with self.assertRaisesRegex(ValueError, "cell ordering differs"):
+                verify_processor_topology_identity(first, second, "fluid")
+
+    def test_cross_case_topology_rejects_partition_mismatch(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            first = root / "first"
+            second = root / "second"
+            for case, ranks in ((first, (0, 1)), (second, (0,))):
+                for rank in ranks:
+                    path = case / f"processor{rank}/constant/fluid/polyMesh/cellProcAddressing"
+                    path.parent.mkdir(parents=True)
+                    path.write_bytes(b"same")
+            with self.assertRaisesRegex(ValueError, "processor partitions differ"):
+                verify_processor_topology_identity(first, second, "fluid")
 
     def test_selects_latest_pair_common_to_all_ranks(self):
         with tempfile.TemporaryDirectory() as directory:

@@ -3541,4 +3541,7 @@ retains 1,200 s; screening already provides the cheaper exploratory workflow.
 `openfoam_field_delta.py` now accepts `--after-case` for dependency-free
 same-topology cross-case comparisons. This avoids requiring optional PyVista
 for controlled cadence branches while retaining explicit equal-component
-weighting and layout checks.
+weighting. Cross-case mode now requires byte-identical `cellProcAddressing`
+for every selected processor and region before pairing field values; different
+partitions or reordered cells fail explicitly and must use a mapped-field
+comparison instead.

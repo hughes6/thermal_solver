@@ -11,6 +11,7 @@ different cases via ``--after-case``.
 from __future__ import annotations
 
 import argparse
+import hashlib
 import math
 import re
 import struct
@@ -237,6 +238,51 @@ def processor_field_paths(
     return paths
 
 
+def verify_processor_topology_identity(
+    before_case: Path, after_case: Path, region: str, rank: int | None = None
+) -> int:
+    """Require byte-identical cell addressing before cross-case value pairing."""
+    before_processors = sorted(
+        (path for path in before_case.glob("processor*") if path.is_dir()),
+        key=lambda path: int(path.name[9:]),
+    )
+    after_processors = sorted(
+        (path for path in after_case.glob("processor*") if path.is_dir()),
+        key=lambda path: int(path.name[9:]),
+    )
+    if rank is not None:
+        before_processors = [
+            path for path in before_processors if path.name == f"processor{rank}"
+        ]
+        after_processors = [
+            path for path in after_processors if path.name == f"processor{rank}"
+        ]
+    before_names = [path.name for path in before_processors]
+    after_names = [path.name for path in after_processors]
+    if not before_names or before_names != after_names:
+        raise ValueError(
+            "processor partitions differ; cross-case fields cannot be paired safely"
+        )
+    for before_processor, after_processor in zip(
+        before_processors, after_processors
+    ):
+        relative = Path("constant") / region / "polyMesh" / "cellProcAddressing"
+        before_addressing = before_processor / relative
+        after_addressing = after_processor / relative
+        if not before_addressing.is_file() or not after_addressing.is_file():
+            raise ValueError(
+                f"missing cellProcAddressing for {before_processor.name}/{region}"
+            )
+        before_digest = hashlib.sha256(before_addressing.read_bytes()).digest()
+        after_digest = hashlib.sha256(after_addressing.read_bytes()).digest()
+        if before_digest != after_digest:
+            raise ValueError(
+                "processor cell ordering differs for "
+                f"{before_processor.name}/{region}; use a mapped-field comparator"
+            )
+    return len(before_processors)
+
+
 def latest_common_time_names(case: Path, rank: int | None = None) -> tuple[str, str]:
     processors = sorted(
         (path for path in case.glob("processor*") if path.is_dir()),
@@ -292,6 +338,8 @@ def main() -> int:
     args = parser.parse_args()
     case = args.case.resolve()
     after_case = args.after_case.resolve() if args.after_case else case
+    if after_case != case:
+        verify_processor_topology_identity(case, after_case, args.region, args.rank)
     if args.latest_pair:
         if args.after_case is not None:
             parser.error("--latest-pair cannot be combined with --after-case")
@@ -312,6 +360,7 @@ def main() -> int:
     print(f"Field: {args.region}/{args.field}")
     if after_case != case:
         print(f"Cases: {case} -> {after_case}")
+        print("Topology: byte-identical processor cell addressing verified")
     print(f"Checkpoints: {args.before} -> {args.after}")
     if args.rank is not None:
         print(f"Processor rank: {args.rank}")
