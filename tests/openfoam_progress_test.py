@@ -21,6 +21,7 @@ from tools.openfoam_progress import (
     read_latest_run_request,
     read_latest_run_state,
     read_latest_air_exchange_time,
+    read_recent_exchange_wall_rate,
     read_latest_thermal_metrics,
     read_initial_airflow_progress,
     read_samples,
@@ -499,6 +500,28 @@ class OpenFoamProgressTest(unittest.TestCase):
                 encoding="utf-8",
             )
             self.assertEqual(read_latest_air_exchange_time(case), 4.96662)
+
+    def test_exchange_eta_rate_uses_only_completed_exchange_stages(self):
+        with tempfile.TemporaryDirectory() as directory:
+            case = Path(directory)
+            (case / "run_summary.log").write_text(
+                "now | stage label=Adaptive initial airflow thermalOnly=false "
+                "start=0.35 target=0.36 seconds=80\n"
+                "now | initial_air_exchange_advance current=0.36 "
+                "target=0.46 completedFraction=0.05\n"
+                "now | stage label=Adaptive initial airflow thermalOnly=false "
+                "start=0.36 target=0.46 seconds=500\n"
+                "now | stage label=Adaptive initial airflow thermalOnly=false "
+                "start=0.46 target=0.47 seconds=70\n"
+                "now | initial_air_exchange_advance current=0.47 "
+                "target=0.57 completedFraction=0.08\n"
+                "now | stage label=Adaptive initial airflow thermalOnly=false "
+                "start=0.47 target=0.57 seconds=460\n",
+                encoding="utf-8",
+            )
+            self.assertAlmostEqual(
+                read_recent_exchange_wall_rate(case), 4800.0
+            )
 
     def test_initial_exchange_stage_distinguishes_reached_target(self):
         progress = (0.05, 5.27144, 5.22144, None)

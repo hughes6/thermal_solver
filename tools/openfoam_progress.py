@@ -75,6 +75,11 @@ AIRFLOW_EXCHANGE_TIME_RE = re.compile(
     r"\|\s+airflow\s+time=[0-9.eE+-]+.*"
     r"estimatedAirExchangeTime=([0-9.eE+-]+)"
 )
+AIRFLOW_STAGE_RE = re.compile(
+    r"\|\s+stage\s+label=Adaptive initial airflow\s+thermalOnly=false\s+"
+    r"start=([0-9.eE+-]+)\s+target=([0-9.eE+-]+)\s+"
+    r"seconds=([0-9.eE+-]+)"
+)
 THERMAL_PEAK_LIMIT_RE = re.compile(
     r'if ! awk -v v="\$scaled_delta" -v limit="([0-9.eE+-]+)"'
 )
@@ -376,6 +381,33 @@ def read_latest_air_exchange_time(case_directory: Path) -> float | None:
         if match:
             latest = float(match.group(1))
     return latest
+
+
+def read_recent_exchange_wall_rate(
+    case_directory: Path, window: int = 3
+) -> float | None:
+    """Use only stages launched by cumulative-exchange advances."""
+    summary = case_directory / "run_summary.log"
+    if not summary.is_file():
+        return None
+    awaiting_stage = False
+    samples: list[tuple[float, float]] = []
+    for line in summary.read_text(encoding="utf-8", errors="ignore").splitlines():
+        if INITIAL_EXCHANGE_FRACTION_RE.search(line):
+            awaiting_stage = True
+            continue
+        match = AIRFLOW_STAGE_RE.search(line)
+        if awaiting_stage and match:
+            span = float(match.group(2)) - float(match.group(1))
+            seconds = float(match.group(3))
+            if span > 0.0 and seconds > 0.0:
+                samples.append((span, seconds))
+            awaiting_stage = False
+    selected = samples[-max(1, window):]
+    total_span = sum(span for span, _ in selected)
+    if total_span <= 0.0:
+        return None
+    return sum(seconds for _, seconds in selected) / total_span
 
 
 def format_initial_airflow_stage(
@@ -711,6 +743,7 @@ def main() -> int:
     thermal_metrics = read_latest_thermal_metrics(case_directory)
     initial_airflow = read_initial_airflow_progress(case_directory)
     latest_air_exchange_time = read_latest_air_exchange_time(case_directory)
+    exchange_wall_rate = read_recent_exchange_wall_rate(case_directory)
     case_bytes, free_bytes = storage_usage(case_directory, args.fast)
 
     print(f"Case: {case_directory}")
@@ -778,9 +811,14 @@ def main() -> int:
                 max(0.0, 1.0 - initial_airflow[3])
                 * latest_air_exchange_time
             )
+            physical_rate = (
+                exchange_wall_rate
+                if exchange_wall_rate is not None
+                else slope
+            )
             print(
                 "Estimated remaining physical-exchange wall time: "
-                f"{format_duration(exchange_remaining * slope)} "
+                f"{format_duration(exchange_remaining * physical_rate)} "
                 "(before final convergence rechecks)"
             )
     if maximum_courant is not None:
