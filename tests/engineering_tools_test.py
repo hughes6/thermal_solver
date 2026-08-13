@@ -15,21 +15,20 @@ from tools.generic_server_characterizer import component_toml
 
 
 class EngineeringToolsTest(unittest.TestCase):
-    def test_generic_airside_export_horizons_exceed_airflow_warmup(self) -> None:
+    def test_openfoam_export_horizons_exceed_airflow_warmup(self) -> None:
         root = Path(__file__).resolve().parents[1]
-        for filename in (
-            "model_generic_airside.toml",
-            "model_generic_airside_screening.toml",
-        ):
-            with (root / "library/models" / filename).open("rb") as stream:
+        for model_path in (root / "library/models").glob("*.toml"):
+            with model_path.open("rb") as stream:
                 model = tomllib.load(stream)
+            if not model.get("openfoam_solver", {}).get("enabled", False):
+                continue
             profile_path = root / model["openfoam_solver"]["template"]
             with profile_path.open("rb") as stream:
                 profile = tomllib.load(stream)
             self.assertGreater(
                 model["simulation"]["duration"],
                 profile["openfoam_solver"]["airflow_warmup_time"],
-                filename,
+                model_path.name,
             )
 
     def test_fan_curve_exact_recovery(self) -> None:
