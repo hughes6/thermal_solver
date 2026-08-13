@@ -101,6 +101,10 @@ AIRFLOW_DEVICE_LIMIT_RE = re.compile(
 AIRFLOW_VELOCITY_LIMIT_RE = re.compile(
     r'-v v="\$latest_velocity_relative_rms" -v limit="([0-9.eE+-]+)"'
 )
+INITIAL_EXCHANGE_REQUIREMENT_RE = re.compile(
+    r'-v completed="\$air_exchange_fraction" '
+    r'-v required="([0-9.eE+-]+)"'
+)
 
 
 def read_samples(log_path: Path) -> list[tuple[float, float]]:
@@ -491,6 +495,20 @@ def read_airflow_limits(
     return tuple(float(match.group(1)) for match in matches)
 
 
+def read_initial_exchange_requirement(case_directory: Path) -> float:
+    """Read the required exchanged-air fraction, defaulting legacy cases to one."""
+    runner = case_directory / "run_parallel.sh"
+    if runner.is_file():
+        match = INITIAL_EXCHANGE_REQUIREMENT_RE.search(
+            runner.read_text(encoding="utf-8", errors="ignore")
+        )
+        if match:
+            value = float(match.group(1))
+            if math.isfinite(value) and value >= 0.0:
+                return value
+    return 1.0
+
+
 def format_airflow_gates(label: str, metrics, limits) -> str:
     (airflow_time, imbalance, flow_change, flow_device,
      directions_ok, velocity_change) = metrics
@@ -540,6 +558,7 @@ def airflow_gate_reports(metrics, exchange_metrics, limits) -> list[str]:
 def format_initial_airflow_stage(
     progress: tuple[float, float | None, float | None, float | None],
     current_time: float,
+    exchange_requirement: float = 1.0,
 ) -> str:
     observation_start, exchange_target, required_elapsed, completed_fraction = progress
     tolerance = 1.0e-9 * max(1.0, abs(current_time))
@@ -548,7 +567,7 @@ def format_initial_airflow_stage(
     # Reaching an incremental check is not the same as completing one full
     # physical air exchange.
     if completed_fraction is not None:
-        target_reached = completed_fraction >= 1.0 - tolerance
+        target_reached = completed_fraction >= exchange_requirement - tolerance
     else:
         target_reached = (
             exchange_target is not None
@@ -887,6 +906,7 @@ def main() -> int:
     airflow_metrics = read_latest_airflow_metrics(case_directory)
     exchange_airflow_metrics = read_latest_exchange_airflow_metrics(case_directory)
     airflow_limits = read_airflow_limits(case_directory)
+    exchange_requirement = read_initial_exchange_requirement(case_directory)
     case_bytes, free_bytes = storage_usage(case_directory, args.fast)
 
     print(f"Case: {case_directory}")
@@ -913,7 +933,9 @@ def main() -> int:
                 f"{100.0 * overall_fraction:.2f}% toward {requested_end:.9g} s"
             )
     if initial_airflow is not None:
-        print(format_initial_airflow_stage(initial_airflow, current_time))
+        print(format_initial_airflow_stage(
+            initial_airflow, current_time, exchange_requirement
+        ))
         for report in airflow_gate_reports(
             airflow_metrics, exchange_airflow_metrics, airflow_limits
         ):
@@ -955,7 +977,7 @@ def main() -> int:
             and latest_air_exchange_time is not None
         ):
             exchange_remaining = (
-                max(0.0, 1.0 - initial_airflow[3])
+                max(0.0, exchange_requirement - initial_airflow[3])
                 * latest_air_exchange_time
             )
             physical_rate = (

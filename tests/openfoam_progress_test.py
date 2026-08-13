@@ -26,6 +26,7 @@ from tools.openfoam_progress import (
     read_latest_exchange_airflow_metrics,
     read_airflow_limits,
     airflow_gate_reports,
+    read_initial_exchange_requirement,
     read_latest_thermal_metrics,
     read_initial_airflow_progress,
     read_samples,
@@ -555,6 +556,17 @@ class OpenFoamProgressTest(unittest.TestCase):
             )
             self.assertEqual(read_airflow_limits(case), (0.01, 0.02, 0.03))
 
+    def test_reads_generated_exchange_requirement_with_legacy_fallback(self):
+        with tempfile.TemporaryDirectory() as directory:
+            case = Path(directory)
+            self.assertEqual(read_initial_exchange_requirement(case), 1.0)
+            (case / "run_parallel.sh").write_text(
+                'if ! awk -v completed="$air_exchange_fraction" '
+                '-v required="1.5"\n',
+                encoding="utf-8",
+            )
+            self.assertEqual(read_initial_exchange_requirement(case), 1.5)
+
     def test_reads_latest_completed_exchange_checkpoint_metrics(self):
         with tempfile.TemporaryDirectory() as directory:
             case = Path(directory)
@@ -611,6 +623,10 @@ class OpenFoamProgressTest(unittest.TestCase):
         complete = (0.05, 4.55, None, 1.0)
         self.assertIn(
             "target reached", format_initial_airflow_stage(complete, 4.55)
+        )
+        self.assertNotIn(
+            "target reached",
+            format_initial_airflow_stage(complete, 4.55, 1.5),
         )
 
 
