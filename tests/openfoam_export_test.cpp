@@ -373,6 +373,9 @@ int main(int argc, char** argv) {
             "eligibility_target=\"$eligibility_target\"") !=
                std::string::npos);
         assert(text.str().find(
+            "cap=a+checkpoint; if(x>cap)x=cap") !=
+               std::string::npos);
+        assert(text.str().find(
             "-v checkpoint=\"0.10000000000000001\"") !=
                std::string::npos);
         assert(text.str().find(

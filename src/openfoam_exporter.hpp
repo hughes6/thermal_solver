@@ -4712,9 +4712,12 @@ functions
                         "tol=1e-9*s; exit !(a<b-tol) }'; do\n"
                     "            initial_target=$(awk -v a=\"$current\" -v d=\""
                     << options.initial_airflow_check_interval
+                    << "\" -v checkpoint=\""
+                    << options.airflow_checkpoint_interval
                     << "\" -v eligibility_target=\"$eligibility_target\" "
                         "-v exchange_target=\"$exchange_target\" -v limit=\"$initial_limit\" "
                         "'BEGIN { x=a+d; if(eligibility_target!=\"\" && eligibility_target>x)x=eligibility_target; "
+                        "if(eligibility_target!=\"\") { cap=a+checkpoint; if(x>cap)x=cap; } "
                         "if(exchange_target!=\"\" && exchange_target>x)x=exchange_target; if(x>limit)x=limit; "
                         "printf \"%.17g\", x }')\n"
                     "            stage false \"$initial_target\" "
