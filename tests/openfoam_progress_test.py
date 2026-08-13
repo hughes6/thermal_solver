@@ -470,6 +470,24 @@ class OpenFoamProgressTest(unittest.TestCase):
                 (0.05, 1.35, None, 0.42),
             )
 
+    def test_reads_newer_exchange_progress_after_advance_target(self):
+        with tempfile.TemporaryDirectory() as directory:
+            case = Path(directory)
+            (case / ".initial_airflow_pending").write_text(
+                "0.05\n", encoding="utf-8"
+            )
+            (case / "run_summary.log").write_text(
+                "now | initial_air_exchange_advance current=0.61 "
+                "target=0.71 completedFraction=0.078925\n"
+                "now | initial_air_exchange_progress current=0.72 "
+                "fraction=0.102621 oneWayMassFlow=0.27894\n",
+                encoding="utf-8",
+            )
+            self.assertEqual(
+                read_initial_airflow_progress(case),
+                (0.05, 0.71, None, 0.102621),
+            )
+
     def test_reads_latest_measured_air_exchange_time(self):
         with tempfile.TemporaryDirectory() as directory:
             case = Path(directory)

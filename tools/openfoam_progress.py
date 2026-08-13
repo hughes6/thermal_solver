@@ -60,6 +60,10 @@ INITIAL_EXCHANGE_FRACTION_RE = re.compile(
     r"\|\s+initial_air_exchange_advance\s+current=([0-9.eE+-]+)\s+"
     r"target=([0-9.eE+-]+)\s+completedFraction=([0-9.eE+-]+)"
 )
+INITIAL_EXCHANGE_PROGRESS_RE = re.compile(
+    r"\|\s+initial_air_exchange_progress\s+current=[0-9.eE+-]+\s+"
+    r"fraction=([0-9.eE+-]+)"
+)
 THERMAL_METRICS_RE = re.compile(
     r"\|\s+thermal\s+time=([0-9.eE+-]+)\s+"
     r"maxInternalCellChange=([0-9.eE+-]+)\s+"
@@ -354,6 +358,11 @@ def read_initial_airflow_progress(
                 latest_target = float(match.group(2))
                 required_elapsed = None
                 completed_fraction = float(match.group(3))
+                continue
+            match = INITIAL_EXCHANGE_PROGRESS_RE.search(line)
+            if match:
+                required_elapsed = None
+                completed_fraction = float(match.group(1))
     return observation_start, latest_target, required_elapsed, completed_fraction
 
 
