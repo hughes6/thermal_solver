@@ -3149,3 +3149,50 @@ equipment devices. Legacy cases without direction columns or velocity
 histories continue to produce the established thermal and boundary reports
 with an empty internal-velocity CSV. All 22 recirculation-report tests pass
 with the bundled scientific Python runtime.
+
+## Completed 18,000 s production workflow audit (2026-08-13)
+
+The preserved four-rank run completed normally at reconstructed time
+`18000.010000000024 s`. Its final airflow refresh passed every active gate:
+mass imbalance was 0.0104%, maximum device-flow change was 0.6869%, spatial
+velocity relative RMS change was 0.7566%, all external directions were
+correct, and the measured rack-air exchange time was 4.35125 s. No fatal
+solver signature was present and all retained processor checkpoints were
+restartable and aligned.
+
+The final field audit found inlet and outlet mass flows of -0.29726503 and
+0.29729663 kg/s, respectively (0.01063% imbalance), a mass-weighted inlet
+temperature of 293.15 K, and a mass-weighted outlet temperature of 297.7427 K.
+The 1545 W applied load predicts 298.3210 K if all input power is rejected at
+the outlet. The measured sensible rejection was 1372.2241 W, leaving an
+11.1829% energy deficit. This is expected for a thermally unconverged case:
+energy is still accumulating in its solids rather than disappearing from the
+calculation.
+
+The controlling Trenton region reached 591.7853 K (318.635 C), with a final
+component-average temperature of 341.54983 K. Its normalized peak and average
+temperature-change rates remained 2.75315 and 1.71050 K/300s, far above the
+0.25 and 0.10 K/300s convergence limits. The detailed Trenton abstraction
+applies 425 W to four blocks but has only passive front and rear openings; its
+three candidate fans are commented out. Consequently this run validates the
+multirate workflow and airflow solution, but it does not validate that
+uncalibrated component as a production thermal prediction. Extending this
+same physically incomplete model to 100,000 s would only converge an
+unrepresentative boundary condition. The measured-airside generic component
+model should be used for the next long thermal comparison.
+
+The connectivity audit reported two fluid regions containing 413,193 and
+12,160 cells. Inspection identified the smaller region as the intentionally
+sealed internal air cavity in the fanless KVM model. Current exports compute
+and write this topology as `expectedConnectedFluidRegions 2`; the preserved
+case contains legacy metadata expecting one region and therefore produces a
+false validation failure. A centered sealed-equipment regression test now
+asserts that the exporter counts rack air and the internal cavity separately.
+No exhaust fan or artificial opening was added to the KVM.
+
+Finally, completed runners restore the template `controlDict` end time after
+reconstruction. The progress monitor previously interpreted that restored
+10 s value as the active target and displayed `18000 / 10 s`. It now pairs the
+latest `run_start` and `run_complete` records, reports the requested 18,000 s
+target and reconstructed completion explicitly, and clears the completion
+state when a newer run begins. All 37 progress-monitor tests pass.

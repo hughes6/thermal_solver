@@ -49,6 +49,9 @@ STAGE_MARKER_RE = re.compile(
 RUN_REQUEST_RE = re.compile(
     r"\|\s+run_start\s+mode=(\S+)\s+processes=\d+\s+requestedEnd=([0-9.eE+-]+)"
 )
+RUN_COMPLETE_RE = re.compile(
+    r"\|\s+run_complete\s+mode=(\S+)\s+reconstructedTime=([0-9.eE+-]+)"
+)
 INITIAL_EXCHANGE_RE = re.compile(
     r"\|\s+initial_air_exchange_advance\s+current=([0-9.eE+-]+)\s+"
     r"target=([0-9.eE+-]+)\s+requiredElapsed=([0-9.eE+-]+)"
@@ -262,6 +265,25 @@ def read_latest_run_request(case_directory: Path) -> tuple[str, float] | None:
         match = RUN_REQUEST_RE.search(line)
         if match:
             latest = match.group(1), float(match.group(2))
+    return latest
+
+
+def read_latest_run_state(
+    case_directory: Path,
+) -> tuple[str, float, float | None] | None:
+    """Return the latest requested run and its completion, if it completed."""
+    summary = case_directory / "run_summary.log"
+    if not summary.is_file():
+        return None
+    latest: tuple[str, float, float | None] | None = None
+    for line in summary.read_text(encoding="utf-8", errors="ignore").splitlines():
+        request = RUN_REQUEST_RE.search(line)
+        if request:
+            latest = request.group(1), float(request.group(2)), None
+            continue
+        complete = RUN_COMPLETE_RE.search(line)
+        if complete and latest is not None and complete.group(1) == latest[0]:
+            latest = latest[0], latest[1], float(complete.group(2))
     return latest
 
 
@@ -653,7 +675,14 @@ def main() -> int:
     )
     maximum_courant, cumulative_continuity, fatal_signatures = read_health(log_path)
     temperature_ranges = read_latest_temperature_ranges(log_path)
-    run_request = read_latest_run_request(case_directory)
+    run_state = read_latest_run_state(case_directory)
+    run_request = (
+        (run_state[0], run_state[1]) if run_state is not None else None
+    )
+    run_completion = run_state[2] if run_state is not None else None
+    if args.end_time is None and run_completion is not None:
+        end_time = run_state[1]
+        remaining_simulated = max(0.0, end_time - current_time)
     thermal_metrics = read_latest_thermal_metrics(case_directory)
     initial_airflow = read_initial_airflow_progress(case_directory)
     case_bytes, free_bytes = storage_usage(case_directory, args.fast)
@@ -662,6 +691,11 @@ def main() -> int:
     print(f"Log: {log_path}")
     print(f"Log last updated: {format_duration(log_age_seconds)} ago")
     print(f"Simulation: {current_time:.9g} / {end_time:.9g} s")
+    if run_completion is not None:
+        print(
+            f"Requested run complete: reconstructed through "
+            f"{run_completion:.9g} s"
+        )
     stage_span = end_time - start_time
     if stage_span > 0:
         stage_fraction = min(1.0, max(0.0, (current_time - start_time) / stage_span))

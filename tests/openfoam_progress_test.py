@@ -19,6 +19,7 @@ from tools.openfoam_progress import (
     read_health,
     read_latest_temperature_ranges,
     read_latest_run_request,
+    read_latest_run_state,
     read_latest_thermal_metrics,
     read_initial_airflow_progress,
     read_samples,
@@ -403,6 +404,36 @@ class OpenFoamProgressTest(unittest.TestCase):
     def test_missing_run_summary_has_no_overall_request(self):
         with tempfile.TemporaryDirectory() as directory:
             self.assertIsNone(read_latest_run_request(Path(directory)))
+
+    def test_completed_run_state_survives_restored_control_end_time(self):
+        with tempfile.TemporaryDirectory() as directory:
+            case = Path(directory)
+            (case / "run_summary.log").write_text(
+                "2026-01-01T00:00:00Z | run_start mode=--multirate "
+                "processes=4 requestedEnd=18000 airflowRefreshInterval=2400\n"
+                "2026-01-02T00:00:00Z | run_complete mode=--multirate "
+                "reconstructedTime=18000.010000000024\n",
+                encoding="utf-8",
+            )
+            self.assertEqual(
+                read_latest_run_state(case),
+                ("--multirate", 18000.0, 18000.010000000024),
+            )
+
+    def test_new_run_clears_previous_completion(self):
+        with tempfile.TemporaryDirectory() as directory:
+            case = Path(directory)
+            (case / "run_summary.log").write_text(
+                "now | run_start mode=--multirate processes=4 requestedEnd=18000\n"
+                "now | run_complete mode=--multirate reconstructedTime=18000.01\n"
+                "now | run_start mode=--thermal-only processes=4 "
+                "requestedEnd=100000\n",
+                encoding="utf-8",
+            )
+            self.assertEqual(
+                read_latest_run_state(case),
+                ("--thermal-only", 100000.0, None),
+            )
 
     def test_reads_pending_initial_air_exchange_stage(self):
         with tempfile.TemporaryDirectory() as directory:

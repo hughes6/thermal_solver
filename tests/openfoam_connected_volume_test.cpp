@@ -40,4 +40,21 @@ int main() {
     assert(std::abs(ambient_connected-0.034)<1e-12);
     assert(OpenFoamExporter::connected_fluid_region_count(mesh)==2);
     assert(mesh.at(3,2,2).is_fluid());
+
+    // A fanless enclosed component can intentionally contain a sealed air
+    // cavity. The exported expectation must count it separately from rack air.
+    Rack component_rack=Rack::from_meters(0.5,0.5,0.5);
+    Mesh component_mesh=Mesh().build_mesh(
+        component_rack,0.05,0.05,0.05,environment,workload);
+    Component enclosure=Component::from_meters(
+        0.3,0.3,0.3,"sealed fanless equipment");
+    enclosure.set_coords_m(0.1,0.1,0.1);
+    enclosure.set_rho_solid(2700.0);
+    enclosure.set_cp(900.0);
+    enclosure.set_k_solid(150.0);
+    enclosure.add_region(InternalRegion(
+        "sealed interior air",{0.2,0.2,0.2},{0.05,0.05,0.05}));
+    enclosure.order_internal_regions();
+    component_mesh.stamp_component_for_openfoam(enclosure);
+    assert(OpenFoamExporter::connected_fluid_region_count(component_mesh)==2);
 }
