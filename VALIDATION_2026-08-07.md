@@ -3299,3 +3299,13 @@ before thermal-only evolution begins; mapped starts still require live gates
 before skipping the cold horizon. This removes about 23% of the observed
 cold-start wall time without relaxing final acceptance. The preserved live
 case was not modified mid-run.
+
+The direct-advance review also exposed that `airflow_metrics_converged`
+previously returned the same status for an ordinary gate miss and for failed
+OpenFOAM post-processing or missing flow output. Both initial airflow and
+loaded refresh callers therefore treated a broken metric evaluation as more
+settling. Metric-evaluation failures now return a distinct status and abort
+the workflow immediately with context; valid mass/device/direction/spatial
+gate misses continue normally. This prevents the optimized path from spending
+an entire warmup window after a reporting failure and improves the existing
+refresh path as well.

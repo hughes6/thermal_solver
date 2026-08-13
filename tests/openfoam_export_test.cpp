@@ -342,6 +342,15 @@ int main(int argc, char** argv) {
             "Initial airflow gates pass, but cumulative air exchange") ==
                std::string::npos);
         assert(text.str().find(
+            "airflow_metrics_converged || airflow_metrics_status=$?") !=
+               std::string::npos);
+        assert(text.str().find(
+            "Airflow metrics evaluation failed; aborting initial airflow.") !=
+               std::string::npos);
+        assert(text.str().find(
+            "Airflow metrics evaluation failed; aborting refresh.") !=
+               std::string::npos);
+        assert(text.str().find(
             "minimum_observation=\"0.01\"") != std::string::npos);
         assert(text.str().find(
             "t>=minimum-tolerance") != std::string::npos);
