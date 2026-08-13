@@ -3765,3 +3765,73 @@ temperature prediction without mesh uncertainty and calibration against a
 measured intake/exhaust or chassis temperature. Three focused parser/report
 tests and the generated-command regression pass; the real 12-row comparison
 is saved in the 10 mm case directory.
+
+## Active heat-source and zone audit (2026-08-13)
+
+Export metadata alone does not prove that OpenFOAM actually applies each load
+to the intended cells. The new `openfoam_heat_source_audit.py` independently
+reads the active region `fvOptions` and the exported heat-source cell sets. It
+requires an active `scalarSemiImplicitSource`, `selectionMode cellZone`, the
+exact expected zone name, and `volumeMode absolute`; compares the active `h`
+source against metadata watts; rejects empty or internally duplicated sets;
+and rejects overlap between any two heat-source zones in the same solver
+region. Nested fan and vent zones are allowed because they do not duplicate
+heat allocation.
+
+All 12 real source/mesh combinations passed:
+
+| Mesh | Eaton cells / W | Dell cells / W | Trenton cells / W | KVM cells / W |
+|---|---:|---:|---:|---:|
+| 15 mm | 8,418 / 150 | 12,004 / 950 | 8,464 / 425 | 9,512 / 20 |
+| 12.5 mm | 12,242 / 150 | 16,746 / 950 | 12,272 / 425 | 13,518 / 20 |
+| 10 mm | 17,424 / 150 | 22,896 / 950 | 22,329 / 425 | 18,486 / 20 |
+
+The full 10 mm `checkMesh -allTopology -allGeometry` audit also reported the
+correct heat-zone bounds and volumes. Its 81,947 multi-zone cells are expected
+fan/vent zones nested inside component-air zones, not overlapping heat
+sources. The second disconnected fluid volume contains exactly the 18,486
+KVM internal-air cells. This matches the deliberate fanless, no-rear-exhaust
+KVM model. It rejects its 20 W conductively through the coupled chassis rather
+than by equipment through-flow. From 3,600.01 to 4,800.01 s the KVM solid
+cooled by 0.0526 K on a cell-weighted mean basis (0.0614 K RMS, 0.1390 K
+maximum cell change), so it is settling rather than accumulating heat without
+limit.
+
+The audit command is now printed by Model Runner beside the component thermal
+report command. Three focused failure-mode tests cover a valid source, an
+active-watt mismatch, and overlapping heat zones; the generated-command C++
+regression also passes. The real 15/12.5/10 mm JSON and Markdown audit is saved
+beside the 10 mm case.
+
+## Converged screening versus 15 mm in-depth (2026-08-13)
+
+The existing current screening case was allowed to thermally converge at
+40,000.01 s. Over its final 10,000 s thermal leg the largest component-average
+change was only 0.00330 K. It was compared with the current 15 mm in-depth
+endpoint at 8,400.01 s, which had already passed repeated strict airflow and
+thermal convergence checks.
+
+| Metric | Screening | 15 mm in-depth | Screening difference |
+|---|---:|---:|---:|
+| Fluid cells | 177,064 | 284,396 | -37.7% |
+| Outlet mass flow | 0.298217 kg/s | 0.296809 kg/s | +0.474% |
+| Outlet temperature | 298.2894 K | 298.3175 K | -0.0281 K |
+| Energy closure error | 0.3024% | 0.2304% | +0.0720 points |
+| Eaton volume-average T | 297.655 K | 297.443 K | +0.212 K |
+| Dell volume-average T | 306.156 K | 306.404 K | -0.248 K |
+| Trenton volume-average T | 304.959 K | 304.968 K | -0.009 K |
+| KVM volume-average T | 304.715 K | 304.501 K | +0.214 K |
+| Hottest component cell | 315.809 K | 315.368 K | +0.442 K |
+
+The converged screening continuation advanced 22,000 simulated seconds in
+23.3 wall minutes. The comparable in-depth continuation advanced 3,600
+simulated seconds in 20.6 wall minutes. This is not a cold-start benchmark,
+but it shows the intended late-stage advantage of the less frequent screening
+airflow refreshes.
+
+Screening is therefore validated for heat-load, fan-curve, vent-resistance,
+and layout iteration when roughly 0.25 K component-average and 0.45 K local-
+peak differences are acceptable. It is not a substitute for final
+source-attributed recirculation percentages or grid-sensitive hotspot claims;
+those still use the 15 mm in-depth profile, with 10 mm escalation for final
+local magnitudes.
