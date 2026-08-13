@@ -3064,3 +3064,39 @@ early transient. A temporary free-space dip to 7.55 GiB was not retained-case
 growth: the case remained 0.91 GiB, the new analysis CSVs totaled 15.5 KB, and
 free space recovered to 7.73 GiB. The 6.62% spatial plateau remains the failed
 startup criterion.
+
+## Production transition through 2400 s (2026-08-12)
+
+The preserved four-rank production run completed its legacy cold-airflow
+exchange horizon at `5.27144 s`. The first convergence recheck correctly
+failed (`imbalance=2.01546e-05`, maximum fan-flow change 21.476%, and spatial
+velocity relative RMS 71.263%). Two 0.01 s settling stages followed. At
+`5.28144 s`, velocity passed but a 6.168% internal-fan change still failed.
+At `5.29144 s`, all gates passed: imbalance was `2.01552e-05`, maximum device
+flow change was 0.0521%, spatial velocity relative RMS was 0.6067%, and all
+boundary directions were correct. This demonstrates that the exchange target
+is a minimum observation horizon rather than an unconditional acceptance.
+
+The first implicit thermal-only interval advanced from `5.29144` to `2400 s`
+in 832.947 wall seconds. Fluid and solid temperatures evolved throughout; at
+the end of the interval the fluid maximum was about 392.08 K and the hottest
+Dell solid was about 392.10 K. The adaptive live-flow refresh then required
+three 0.01 s stages. Its spatial velocity relative RMS decreased from 1.0969%
+to 0.7124% to 0.6788%; final imbalance was 0.1298%, maximum device-flow change
+was 0.7737%, and directions remained correct. The workflow then correctly
+entered the next implicit thermal-only interval to 4800 s. This is the
+intended cadence: long fast thermal evolution separated by short, physically
+validated airflow corrections.
+
+This transition also exposed a restart-integrity defect in the old generated
+runner. The `yPlus` function object wrote independent 300 s numeric processor
+directories containing only `fluid/yPlus`. OpenFOAM's `foamListTimes
+-processor -latestTime`, the rolling-prune routine, and the progress monitor
+could mistake these diagnostic directories for solver checkpoints. The live
+case was not edited mid-run, but its log confirmed the old prune routine
+counted and removed these directories. New exports now write `yPlus` only at
+normal solver write times, select restart times only when every MPI rank has
+both `fluid/U` and `fluid/T`, and prune only those restartable times. The
+progress monitor applies the same restart-field requirement. This protects
+crash recovery even if an old or third-party function object leaves a newer
+diagnostic-only time directory.

@@ -14,6 +14,7 @@ from tools.openfoam_progress import (
     processor_checkpoints,
     read_control_times,
     read_checkpoint_stride,
+    read_thermal_only_flow,
     read_health,
     read_latest_run_request,
     read_initial_airflow_progress,
@@ -89,6 +90,16 @@ class OpenFoamProgressTest(unittest.TestCase):
             )
             self.assertEqual(read_samples(log), [(1.0, 10.0), (2.0, 30.0)])
 
+    def test_rate_uses_newest_clock_segment_after_solver_restart(self):
+        samples = [
+            (5.26, 46000.0),
+            (5.271, 46088.0),
+            (5.272, 10.0),
+            (5.273, 20.0),
+            (5.274, 30.0),
+        ]
+        self.assertAlmostEqual(recent_slope(samples, 100), 10000.0, places=3)
+
     def test_health_parser_ignores_trap_banner(self):
         with tempfile.TemporaryDirectory() as directory:
             log = Path(directory) / "run.stdout.log"
@@ -149,12 +160,29 @@ class OpenFoamProgressTest(unittest.TestCase):
             )
             self.assertEqual(read_checkpoint_stride(case), 30.0)
 
+    def test_reads_thermal_only_solver_mode(self):
+        with tempfile.TemporaryDirectory() as directory:
+            case = Path(directory)
+            solution = case / "system" / "fluid" / "fvSolution"
+            solution.parent.mkdir(parents=True)
+            solution.write_text(
+                "PIMPLE\n{\n    thermalOnlyFlow true;\n}\n",
+                encoding="utf-8",
+            )
+            self.assertTrue(read_thermal_only_flow(case))
+            solution.write_text(
+                "PIMPLE\n{\n    thermalOnlyFlow false;\n}\n",
+                encoding="utf-8",
+            )
+            self.assertFalse(read_thermal_only_flow(case))
+
     def test_detects_mismatched_parallel_checkpoints(self):
         with tempfile.TemporaryDirectory() as directory:
             case = Path(directory)
             for rank in (0, 1):
                 (case / f"processor{rank}" / "1").mkdir(parents=True)
                 (case / f"processor{rank}" / "1" / "T").write_text("field")
+                (case / f"processor{rank}" / "1" / "U").write_text("field")
             (case / "processor0" / "2").mkdir()
             (case / "processor0" / "2" / "T").write_text("field")
             self.assertEqual(
@@ -168,8 +196,20 @@ class OpenFoamProgressTest(unittest.TestCase):
                 latest = case / f"processor{rank}" / "1.5"
                 latest.mkdir(parents=True)
                 (latest / "T").write_text("field")
+                (latest / "U").write_text("field")
             self.assertEqual(
-                processor_checkpoints(case), ([1.5], 2, True, [1, 1], [])
+                processor_checkpoints(case), ([1.5], 2, True, [2, 2], [])
+            )
+
+    def test_rejects_aligned_yplus_only_diagnostic_times(self):
+        with tempfile.TemporaryDirectory() as directory:
+            case = Path(directory)
+            for rank in (0, 1):
+                diagnostic = case / f"processor{rank}" / "300" / "fluid"
+                diagnostic.mkdir(parents=True)
+                (diagnostic / "yPlus").write_text("diagnostic")
+            self.assertEqual(
+                processor_checkpoints(case), ([], 2, False, [1, 1], [300.0])
             )
 
     def test_rejects_equal_rank_partial_checkpoint_manifest(self):

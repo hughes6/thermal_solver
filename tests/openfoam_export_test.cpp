@@ -186,6 +186,11 @@ int main(int argc, char** argv) {
     assert(control_text.str().find("writeControl    adjustableRunTime;") !=
            std::string::npos);
     assert(control_text.str().find("type yPlus;") != std::string::npos);
+    const auto y_plus_position=control_text.str().find("type yPlus;");
+    const auto y_plus_end=control_text.str().find("    }", y_plus_position);
+    assert(control_text.str().substr(
+        y_plus_position, y_plus_end-y_plus_position).find(
+            "writeControl writeTime;") != std::string::npos);
     assert(control_text.str().find("fluid_temperature_average") !=
            std::string::npos);
     assert(control_text.str().find(
@@ -244,6 +249,14 @@ int main(int argc, char** argv) {
         assert(text.str().find(
             "semiFrozenChtMultiRegionFoam -case \"$case_dir\" -parallel "
             "-postProcess -latestTime") != std::string::npos);
+        assert(text.str().find("is_restartable_processor_time()") !=
+               std::string::npos);
+        assert(text.str().find(
+            "[[ -f \"$root/U\" && -f \"$root/T\" ]]") !=
+               std::string::npos);
+        assert(text.str().find(
+            "actual_time=$(latest_processor_restart_time)") !=
+               std::string::npos);
     }
     assert(std::filesystem::is_regular_file(
         case_path/"system"/"decomposeParDict"));

@@ -22,6 +22,9 @@ CONTROL_STEP_RE = re.compile(
     r"^\s*(deltaT|maxCo|maxDeltaT|writeInterval)\s+([0-9.eE+-]+)\s*;"
 )
 WRITE_CONTROL_RE = re.compile(r"^\s*writeControl\s+([A-Za-z]+)\s*;")
+THERMAL_ONLY_RE = re.compile(
+    r"^\s*thermalOnlyFlow\s+(true|false)\s*;", re.IGNORECASE
+)
 COURANT_RE = re.compile(
     r"Region: fluid Courant Number mean: ([0-9.eE+-]+) max: ([0-9.eE+-]+)"
 )
@@ -92,10 +95,19 @@ def read_health(log_path: Path) -> tuple[float | None, float | None, list[str]]:
 
 
 def recent_slope(samples: list[tuple[float, float]], window: int) -> float:
-    points = samples[-max(2, window) :]
+    if len(samples) < 2:
+        raise ValueError("need at least two completed timestep samples")
+    segment_start = 0
+    for index in range(1, len(samples)):
+        if samples[index][1] < samples[index - 1][1]:
+            segment_start = index
+    points = samples[segment_start:][-max(2, window) :]
     count = len(points)
     if count < 2:
-        raise ValueError("need at least two completed timestep samples")
+        raise ValueError(
+            "need at least two completed timestep samples in the current "
+            "solver clock segment"
+        )
     sum_x = sum(point[0] for point in points)
     sum_y = sum(point[1] for point in points)
     sum_xx = sum(point[0] * point[0] for point in points)
@@ -144,6 +156,17 @@ def read_checkpoint_stride(case_directory: Path) -> float | None:
     else:
         return None
     return stride if stride > 0 else None
+
+
+def read_thermal_only_flow(case_directory: Path) -> bool:
+    solution = case_directory / "system" / "fluid" / "fvSolution"
+    if not solution.is_file():
+        return False
+    for line in solution.read_text(encoding="utf-8", errors="ignore").splitlines():
+        match = THERMAL_ONLY_RE.match(line)
+        if match:
+            return match.group(1).lower() == "true"
+    return False
 
 
 def courant_timestep_headroom(
@@ -307,9 +330,13 @@ def processor_checkpoints(
                 for child in directory.rglob("*") if child.is_file()
             })
         manifests_by_time[value] = manifests
+    def restartable(manifest: set[str]) -> bool:
+        basenames = {Path(name).name for name in manifest}
+        return {"T", "U"}.issubset(basenames)
+
     complete_times = [
         value for value, manifests in manifests_by_time.items()
-        if manifests and manifests[0]
+        if manifests and restartable(manifests[0])
         and all(item == manifests[0] for item in manifests[1:])
     ]
     all_times = sorted(set().union(*(set(times) for times in raw_time_sets)))
@@ -473,6 +500,7 @@ def main() -> int:
         case_directory, current_time
     )
     checkpoint_stride = read_checkpoint_stride(case_directory)
+    thermal_only_flow = read_thermal_only_flow(case_directory)
     current_series_count = current_checkpoint_series_count(
         checkpoints, checkpoint_stride
     )
@@ -505,15 +533,22 @@ def main() -> int:
     print(f"Solver logged wall time: {format_duration(logged_wall_time)}")
     print(f"Estimated remaining wall time: {format_duration(remaining_simulated * slope)}")
     if maximum_courant is not None:
-        print(f"Latest fluid max Courant: {maximum_courant:.6g}")
-        headroom = courant_timestep_headroom(case_directory, maximum_courant)
-        if headroom is not None:
-            current_dt, stage_cap, safe_dt, multiplier = headroom
+        if thermal_only_flow:
             print(
-                "Diagnostic Courant-safe timestep (80% margin): "
-                f"{safe_dt:.9g} s ({multiplier:.3g}x current "
-                f"{current_dt:.9g} s; stage cap {stage_cap:.9g} s)"
+                "Latest fluid max Courant: "
+                f"{maximum_courant:.6g} (diagnostic only during implicit "
+                "thermal-only flow; timestep controlled by maxDeltaT)"
             )
+        else:
+            print(f"Latest fluid max Courant: {maximum_courant:.6g}")
+            headroom = courant_timestep_headroom(case_directory, maximum_courant)
+            if headroom is not None:
+                current_dt, stage_cap, safe_dt, multiplier = headroom
+                print(
+                    "Diagnostic Courant-safe timestep (80% margin): "
+                    f"{safe_dt:.9g} s ({multiplier:.3g}x current "
+                    f"{current_dt:.9g} s; stage cap {stage_cap:.9g} s)"
+                )
     if cumulative_continuity is not None:
         print(f"Latest cumulative continuity error: {cumulative_continuity:.6g}")
     print(
