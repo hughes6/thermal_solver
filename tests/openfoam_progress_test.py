@@ -21,6 +21,7 @@ from tools.openfoam_progress import (
     recent_slope,
     is_stale_run,
     storage_usage,
+    low_space_warning,
 )
 
 
@@ -34,6 +35,12 @@ class OpenFoamProgressTest(unittest.TestCase):
         ):
             self.assertEqual(storage_usage(Path("case"), fast=True), (None, 12345))
             case_size.assert_not_called()
+
+    def test_low_disk_warning_threshold(self):
+        self.assertIsNone(low_space_warning(5 * 1024 ** 3, 5.0))
+        warning = low_space_warning(4 * 1024 ** 3, 5.0)
+        self.assertIn("4.00 GiB available", warning)
+        self.assertIn("threshold 5 GiB", warning)
 
     def test_current_checkpoint_series_excludes_prior_stage_writes(self):
         checkpoints = [0.43, 0.44, 0.45, 3.205, 3.305, 3.405]

@@ -361,6 +361,17 @@ def storage_usage(path: Path, fast: bool = False) -> tuple[int | None, int]:
     return case_bytes, shutil.disk_usage(path).free
 
 
+def low_space_warning(free_bytes: int, minimum_free_gib: float) -> str | None:
+    minimum_free_bytes = minimum_free_gib * 1024 ** 3
+    if free_bytes >= minimum_free_bytes:
+        return None
+    return (
+        "WARNING: low free space for continued checkpoint writes: "
+        f"{format_bytes(free_bytes)} available, configured warning "
+        f"threshold {minimum_free_gib:.3g} GiB"
+    )
+
+
 def is_stale_run(
     log_age_seconds: float,
     current_time: float,
@@ -404,7 +415,15 @@ def main() -> int:
         help=("skip the recursive case-size count; retain solver health, ETA, "
               "free disk, workflow stage, and checkpoint validation"),
     )
+    parser.add_argument(
+        "--minimum-free-gib",
+        type=float,
+        default=5.0,
+        help="warn below this free-space threshold in GiB (default: 5)",
+    )
     args = parser.parse_args()
+    if not math.isfinite(args.minimum_free_gib) or args.minimum_free_gib < 0:
+        parser.error("--minimum-free-gib must be finite and nonnegative")
 
     case_directory = args.case.resolve()
     log_path = choose_log(case_directory, args.log.resolve() if args.log else None)
@@ -496,6 +515,9 @@ def main() -> int:
         )
     case_size = "skipped (--fast)" if case_bytes is None else format_bytes(case_bytes)
     print(f"Storage: case {case_size}, volume free {format_bytes(free_bytes)}")
+    storage_warning = low_space_warning(free_bytes, args.minimum_free_gib)
+    if storage_warning:
+        print(storage_warning)
     if checkpoints:
         print(
             f"Processor checkpoints: {len(checkpoints)} common across "
