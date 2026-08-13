@@ -393,7 +393,29 @@ def processor_checkpoints(
     )
     if not processors:
         return [], 0, True, [], []
-    raw_time_sets = [numeric_directories(processor) for processor in processors]
+    time_paths = []
+    for processor in processors:
+        snapshot = {}
+        try:
+            children = list(processor.iterdir())
+        except OSError:
+            children = []
+        for child in children:
+            if child.is_dir() and _is_float(child.name):
+                snapshot[float(child.name)] = child
+        time_paths.append(snapshot)
+    raw_time_sets = [sorted(snapshot) for snapshot in time_paths]
+
+    def manifest(directory: Path) -> set[str]:
+        try:
+            return {
+                child.relative_to(directory).as_posix()
+                for child in directory.rglob("*") if child.is_file()
+            }
+        except OSError:
+            # A legacy runner may prune a directory while this read-only
+            # monitor is walking it. Treat that snapshot entry as incomplete.
+            return set()
 
     def eligible(value: float) -> bool:
         if maximum_completed_time is None:
@@ -411,16 +433,8 @@ def processor_checkpoints(
     manifests_by_time = {}
     for value in common_times:
         manifests = []
-        for processor in processors:
-            directory = next(
-                child for child in processor.iterdir()
-                if child.is_dir() and _is_float(child.name)
-                and float(child.name) == value
-            )
-            manifests.append({
-                child.relative_to(directory).as_posix()
-                for child in directory.rglob("*") if child.is_file()
-            })
+        for snapshot in time_paths:
+            manifests.append(manifest(snapshot[value]))
         manifests_by_time[value] = manifests
     def restartable(manifest: set[str]) -> bool:
         basenames = {Path(name).name for name in manifest}
@@ -432,19 +446,10 @@ def processor_checkpoints(
         and all(item == manifests[0] for item in manifests[1:])
     ]
     restart_time_sets = []
-    for processor, times in zip(processors, time_sets):
+    for snapshot, times in zip(time_paths, time_sets):
         restart_times = []
         for value in times:
-            directory = next(
-                child for child in processor.iterdir()
-                if child.is_dir() and _is_float(child.name)
-                and float(child.name) == value
-            )
-            manifest = {
-                child.relative_to(directory).as_posix()
-                for child in directory.rglob("*") if child.is_file()
-            }
-            if restartable(manifest):
+            if restartable(manifest(snapshot[value])):
                 restart_times.append(value)
         restart_time_sets.append(restart_times)
     restart_times_aligned = all(
@@ -457,18 +462,11 @@ def processor_checkpoints(
     inspected_time = all_times[-1] if all_times else None
     latest_file_counts = []
     if inspected_time is not None:
-        for processor, times in zip(processors, raw_time_sets):
+        for snapshot, times in zip(time_paths, raw_time_sets):
             if inspected_time not in times:
                 latest_file_counts.append(0)
                 continue
-            directory = next(
-                child for child in processor.iterdir()
-                if child.is_dir() and _is_float(child.name)
-                and float(child.name) == inspected_time
-            )
-            latest_file_counts.append(sum(
-                1 for child in directory.rglob("*") if child.is_file()
-            ))
+            latest_file_counts.append(len(manifest(snapshot[inspected_time])))
     common_restart_times = sorted(
         set.intersection(*(set(times) for times in restart_time_sets))
     )
@@ -476,7 +474,8 @@ def processor_checkpoints(
         len(complete_times) == len(common_restart_times)
     )
     common_manifests_aligned = all(
-        manifests and all(item == manifests[0] for item in manifests[1:])
+        manifests and manifests[0]
+        and all(item == manifests[0] for item in manifests[1:])
         for manifests in manifests_by_time.values()
     )
     state_aligned = (

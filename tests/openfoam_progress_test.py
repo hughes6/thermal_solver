@@ -253,6 +253,18 @@ class OpenFoamProgressTest(unittest.TestCase):
                 processor_checkpoints(case), ([1.0], 2, True, [1, 0], [2.0])
             )
 
+    def test_checkpoint_scan_tolerates_concurrent_legacy_prune(self):
+        with tempfile.TemporaryDirectory() as directory:
+            case = Path(directory)
+            for rank in (0, 1):
+                checkpoint = case / f"processor{rank}" / "1" / "fluid"
+                checkpoint.mkdir(parents=True)
+                (checkpoint / "T").write_text("field")
+                (checkpoint / "U").write_text("field")
+            with mock.patch.object(Path, "rglob", side_effect=FileNotFoundError):
+                result = processor_checkpoints(case)
+            self.assertEqual(result, ([], 2, False, [0, 0], [1.0]))
+
     def test_reports_aligned_parallel_checkpoint_file_counts(self):
         with tempfile.TemporaryDirectory() as directory:
             case = Path(directory)
