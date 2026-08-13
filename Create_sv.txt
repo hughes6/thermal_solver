@@ -1,30 +1,32 @@
+wire_lpntr = "LC-CD6DBA76-E2EB-4DBC-93AE-712B63B85274"
+
 cur.execute("""
-SELECT ID, COPY
-FROM dbo.CABLE_ELEMENTS
-WHERE COMPONENT_ID = ?
+SELECT *
+FROM dbo.Cable
+WHERE ENTRY = ?
+ORDER BY COPY
+""", wire_lpntr)
+
+columns = [col[0] for col in cur.description]
+rows = cur.fetchall()
+
+print("Rows:", len(rows))
+
+for row in rows:
+    print("\n" + "-" * 60)
+
+    for name, value in zip(columns, row):
+        print(f"{name} = {value}")
+
+
+
+component_id = "ADB52ED8-D987-40A2-A8A2-28CFBC23A4A0"
+
+cur.execute("""
+SELECT *
+FROM dbo.Cable
+WHERE ENTRY = ?
 ORDER BY COPY
 """, component_id)
 
-elements = cur.fetchall()
-
-for element_id, copy_no in elements:
-    print("\nELEMENT COPY:", copy_no)
-    print("ELEMENT ID:", element_id)
-
-    cur.execute("""
-    SELECT *
-    FROM dbo.Cable
-    WHERE ParentID = ?
-       OR ENTRY = ?
-    """, element_id, element_id)
-
-    rows = cur.fetchall()
-
-    print("Cable matches:", len(rows))
-
-    if rows:
-        columns = [col[0] for col in cur.description]
-
-        for row in rows:
-            for name, value in zip(columns, row):
-                print(f"{name} = {value}")
+print("Rows:", len(cur.fetchall()))
