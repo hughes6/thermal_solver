@@ -91,7 +91,8 @@ Write-Host "Checking Python plotting scripts"
     "plot_outlet_flow.py" `
     "plot/recirculation_report.py" `
     "tests/recirculation_report_test.py" `
-    "tests/openfoam_validation_test.py"
+    "tests/openfoam_validation_test.py" `
+    "tests/semifrozen_solver_policy_test.py"
 if ($LASTEXITCODE -ne 0) {
     throw "Python plotting syntax check failed"
 }
@@ -174,6 +175,11 @@ if ($LASTEXITCODE -ne 0) {
 & python -m unittest "tests.openfoam_validation_test"
 if ($LASTEXITCODE -ne 0) {
     throw "OpenFOAM numerical validation tests failed"
+}
+
+& python -m unittest "tests.semifrozen_solver_policy_test"
+if ($LASTEXITCODE -ne 0) {
+    throw "Semi-frozen solver policy tests failed"
 }
 }
 finally {

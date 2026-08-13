@@ -2860,6 +2860,16 @@ at step 120. The 0.1 s alignment logic is confined to live-flow stages. This
 confirms that a successful initial-airflow transition will enter the intended
 fast implicit thermal workflow rather than continuing at CFD-scale timesteps.
 
+The custom solver's thermal-only semantics were also audited directly. With
+`thermalOnlyFlow=true`, it solves the fluid energy equation without the full
+momentum/pressure/turbulence path; all solid conduction and heat-generation
+equations remain active; the coupled-region energy matrix and thermodynamic
+correction remain active; and fluid density plus the hydrostatic `p_rgh` split
+update as temperature changes. Velocity, mass flux, absolute pressure, and
+turbulence remain at the last pressure-corrected airflow state until refresh.
+A new three-test solver-policy suite protects these invariants and is included
+in `run_added_feature_tests.ps1`.
+
 The direct internal checkpoint data was initially present only in CSV and
 console output. Saved `--snapshot-times --save` figures now add a fifth panel
 with dashed intake and solid rear-outlet temperature traces for every paired
