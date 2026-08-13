@@ -105,9 +105,12 @@ class EngineeringToolsTest(unittest.TestCase):
             estimate_methods(Namespace(**values))
 
     def test_generic_component_has_connected_air_tunnel_and_inset_fan(self) -> None:
-        document = tomllib.loads(component_toml(
+        generated = component_toml(
             "Test server", 1, 482.0, 700.0, 500.0, 0.05,
-            "test_curve"))
+            "test_curve")
+        self.assertIn("Target mass-flow input:", generated)
+        self.assertNotIn("Target measured mass flow:", generated)
+        document = tomllib.loads(generated)
         regions = {region["name"]: region for region in document["internal_regions"]}
         air = regions["Interior air"]
         fan = regions["Rear exhaust fan"]

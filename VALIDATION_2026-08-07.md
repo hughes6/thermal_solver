@@ -3233,3 +3233,17 @@ controller therefore rejected early acceptance and continued live airflow.
 This is direct confirmation that the physical exchange gate prevents a
 numerically settled short window from certifying a still-young rack flow
 field.
+
+The component-definition audit confirmed that the air-side variant applies
+the intended 1545 W exactly once: 150 W Eaton, 950 W Dell, 425 W Trenton, and
+20 W passive KVM. It also exposed a calibration distinction that the previous
+rack-level validation did not resolve. The example mass-flow inputs were
+inferred from a 10 K rise and the equivalent curves use an assumed 80 Pa
+operating point; they are not measurements. A prior converged in-depth state
+reported two-sample-mean internal fan flows of 0.015334, 0.057753, and
+0.042860 kg/s against Eaton, Dell, and Trenton inputs of 0.014918, 0.094480,
+and 0.042268 kg/s. The Dell is 38.87% below its input and would produce an
+ideal 16.36 K rise at 950 W. The rack can conserve energy while an individual
+device remains miscalibrated. Generated template comments now say
+`Target mass-flow input` instead of claiming the value was measured, and no
+fan curve was retuned without physical pressure-flow or installed-flow data.

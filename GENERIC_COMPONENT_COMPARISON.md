@@ -696,7 +696,7 @@ air-side option intentionally predicts rack intake/exhaust behavior without
 claiming chip, heat-sink, or chassis surface temperatures. Keep a calibrated
 solid/resistance model when those temperatures are validation targets.
 
-#### Validated air-side rack variant
+#### Rack-energy-validated air-side variant
 
 `library/models/model_generic_airside.toml` is the controlled in-depth model.
 It references the `_airside.toml` Eaton, Dell, Trenton, and passive KVM
@@ -723,6 +723,18 @@ and 10800 s each passed in one 0.01 s window. For this semi-steady rack,
 Use the air-side variant when measured mass flow and intake/exhaust
 temperatures are the calibration evidence. Use a solid/resistance model only
 when calibrated component surface or hotspot temperatures are required.
+
+The supplied Eaton, Dell, and Trenton examples remain provisional because
+their flow inputs were inferred from a 10 K rise and their fan curves were
+fitted through an assumed 80 Pa operating point. A converged in-depth rack
+state produced two-sample-mean internal flows of 0.015334, 0.057753, and
+0.042860 kg/s against inputs of 0.014918, 0.094480, and 0.042268 kg/s. Eaton
+and Trenton were within +2.79% and +1.40%; Dell was 38.87% low, implying a
+16.36 K ideal air rise for its 950 W rather than the assumed 10 K. Rack energy
+conservation and outlet-temperature convergence do not calibrate each device's
+fan curve. Replace the assumed curve with measured pressure-flow data, or tune
+it against a measured installed mass flow, before claiming component-level
+intake/exhaust agreement.
 
 ## Air-side screening validation (2026-08-09)
 
