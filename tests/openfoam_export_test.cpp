@@ -134,6 +134,13 @@ int main(int argc, char** argv) {
             ? std::filesystem::path(argv[1])
             : std::filesystem::temp_directory_path() /
                 "thermal_solver_openfoam_export_test";
+    std::filesystem::create_directories(case_path);
+    {
+        std::ofstream(case_path/"validation_4800.json") << "stale\n";
+        std::ofstream(case_path/"component_thermal_report.csv") << "stale\n";
+        std::ofstream(case_path/"multirate_18000.stdout.log") << "stale\n";
+        std::ofstream(case_path/"engineering_notes.md") << "preserve\n";
+    }
     OpenFoamExporter::export_mesh(
         mesh,
         {.case_directory=case_path,
@@ -157,6 +164,13 @@ int main(int argc, char** argv) {
          .airflow_checkpoint_interval=0.1,
          .airflow_refresh_duration=0.1,
          .stop_when_thermally_converged=true});
+
+    assert(!std::filesystem::exists(case_path/"validation_4800.json"));
+    assert(!std::filesystem::exists(
+        case_path/"component_thermal_report.csv"));
+    assert(!std::filesystem::exists(
+        case_path/"multirate_18000.stdout.log"));
+    assert(std::filesystem::is_regular_file(case_path/"engineering_notes.md"));
 
     for(const char* file :
         {"points","faces","owner","neighbour","boundary","cellZones"})

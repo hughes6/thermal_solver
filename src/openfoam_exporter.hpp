@@ -359,8 +359,13 @@ private:
         if(!std::filesystem::is_directory(case_directory)) return;
         for(const auto& entry :
             std::filesystem::directory_iterator(case_directory)) {
-            if(!entry.is_directory()) continue;
             const std::string name=entry.path().filename().string();
+            if(entry.is_regular_file() &&
+               is_generated_solution_artifact(name)) {
+                std::filesystem::remove(entry.path());
+                continue;
+            }
+            if(!entry.is_directory()) continue;
             const bool processor=
                 name.rfind("processor",0)==0 &&
                 name.size()>9 &&
@@ -371,6 +376,40 @@ private:
                is_openfoam_time_name(name))
                 std::filesystem::remove_all(entry.path());
         }
+    }
+
+    static bool has_suffix(
+        const std::string& value,const std::string& suffix) {
+        return value.size()>=suffix.size() &&
+            value.compare(value.size()-suffix.size(),suffix.size(),suffix)==0;
+    }
+
+    static bool is_generated_solution_artifact(const std::string& name) {
+        // These files are emitted by the generated runner or by commands that
+        // Model Runner prints for its case. Clear them only for an explicit
+        // overwrite export; unrecognized notes and user files are preserved.
+        static const std::array<const char*,14> exact={
+            "run_summary.log",
+            "thermal_solver.stdout.log",
+            "thermal_solver.stderr.log",
+            "component_thermal_report.csv",
+            "component_thermal_report.json",
+            "component_thermal_report.md",
+            "heat_source_audit.json",
+            "heat_source_audit.md",
+            "temperature_latest_full_rack.png",
+            "temperature_full_rack.mp4",
+            "temperature_convergence.png",
+            "recirculation_report.png",
+            "outlet_flow.png",
+            "outlet_temperature.png"};
+        if(std::find(exact.begin(),exact.end(),name)!=exact.end()) return true;
+        if(name.rfind("multirate_",0)==0 &&
+           (has_suffix(name,".stdout.log") ||
+            has_suffix(name,".stderr.log"))) return true;
+        if(name.rfind("validation_",0)==0 &&
+           (has_suffix(name,".json") || has_suffix(name,".md"))) return true;
+        return false;
     }
 
     struct FaceRecord {

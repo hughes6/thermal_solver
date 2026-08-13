@@ -3835,3 +3835,22 @@ peak differences are acceptable. It is not a substitute for final
 source-attributed recirculation percentages or grid-sensitive hotspot claims;
 those still use the 15 mm in-depth profile, with 10 mm escalation for final
 local magnitudes.
+
+## Explicit-overwrite provenance cleanup (2026-08-13)
+
+Inspection of a renamed 15 mm study found a stale `validation_4800.json` whose
+embedded case path still named the source case, even though the target had
+later advanced to 8,400 s. The exporter already removed processor partitions,
+nonzero time directories, and `postProcessing` during an explicit
+`overwrite=true` export, but root-level generated reports and run logs could
+survive and appear to describe the new mesh.
+
+Explicit overwrite now also removes only recognized generated artifacts:
+standard validation JSON/Markdown, component and heat-source reports, standard
+temperature/recirculation/outlet plots, runner logs, and multirate stdout and
+stderr logs. Arbitrary files are not matched. A regression seeds stale
+validation, component-report, and multirate files plus an unrelated
+`engineering_notes.md`; re-export removes the three generated artifacts and
+preserves the note. The full OpenFOAM exporter test and generated-command test
+both pass. This does not change `overwrite=false`, which remains the safe mode
+for inspecting or plotting an existing case without deleting its solution.
