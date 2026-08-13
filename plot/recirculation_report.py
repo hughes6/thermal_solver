@@ -506,6 +506,68 @@ def read_report(root: Path) -> dict[float, float]:
     return samples
 
 
+def read_vector_report(root: Path) -> dict[float, tuple[float, float, float]]:
+    samples = {}
+    for path in root.glob("*/*FieldValue*.dat"):
+        for line in path.read_text(encoding="utf-8", errors="replace").splitlines():
+            columns = line.replace("(", " ").replace(")", " ").split()
+            if not columns or columns[0].startswith("#"):
+                continue
+            try:
+                samples[float(columns[0])] = tuple(
+                    float(columns[index]) for index in (1, 2, 3)
+                )
+            except (ValueError, IndexError):
+                continue
+    return samples
+
+
+def internal_device_velocity_rows(case: Path):
+    """Project internal-zone mean velocity onto its expected flow direction."""
+    metadata_path = case / "internal_airflow_devices.csv"
+    fluid = case / "postProcessing" / "fluid"
+    if not metadata_path.is_file() or not fluid.is_dir():
+        return []
+    rows = []
+    with metadata_path.open("r", newline="", encoding="utf-8") as stream:
+        for device in csv.DictReader(stream):
+            try:
+                direction = tuple(float(device[f"expected_direction_{axis}"])
+                                  for axis in "xyz")
+            except (KeyError, TypeError, ValueError):
+                continue
+            magnitude = math.sqrt(sum(value * value for value in direction))
+            if magnitude <= 0.0:
+                continue
+            unit = tuple(value / magnitude for value in direction)
+            history = read_vector_report(
+                fluid / f"{device.get('zone', '')}_velocity_average"
+            )
+            for time, velocity in sorted(history.items()):
+                projected = sum(a * b for a, b in zip(velocity, unit))
+                speed = math.sqrt(sum(value * value for value in velocity))
+                rows.append((
+                    time, device.get("component", ""),
+                    device.get("device", ""), device.get("kind", ""),
+                    velocity[0], velocity[1], velocity[2], projected, speed,
+                    projected < 0.0,
+                ))
+    return rows
+
+
+def write_internal_velocity_csv(output: Path, rows):
+    path = output.with_name(output.stem + "_internal_velocity.csv")
+    with path.open("w", newline="", encoding="utf-8") as stream:
+        writer = csv.writer(stream)
+        writer.writerow((
+            "time_s", "component", "device", "kind", "Ux_m_s", "Uy_m_s",
+            "Uz_m_s", "expected_direction_velocity_m_s", "speed_m_s",
+            "reversed",
+        ))
+        writer.writerows(rows)
+    return path
+
+
 def boundary_histories(case: Path) -> dict[str, dict[str, dict[float, float]]]:
     fluid = case / "postProcessing" / "fluid"
     result: dict[str, dict[str, dict[float, float]]] = {}
@@ -774,10 +836,14 @@ def main() -> None:
             rows_to_write,
             args.snapshot_times,
         )
+        velocity_path = write_internal_velocity_csv(
+            args.output, internal_device_velocity_rows(case)
+        )
         run_checkpoint_report(
             args, plt, case, expected_heat_watts, internal_rows
         )
         print(f"Saved: {internal_path}")
+        print(f"Saved: {velocity_path}")
         if internal_rows:
             print("Maximum selected equipment air-rise index: "
                   f"{maximum_finite_equipment_index(internal_rows):.6g}")
@@ -848,6 +914,8 @@ def main() -> None:
         args.output,
         internal_device_temperature_rows(case, args.ambient_temperature),
     )
+    velocity_rows = internal_device_velocity_rows(case)
+    velocity_path = write_internal_velocity_csv(args.output, velocity_rows)
 
     flow_floors = boundary_flow_floors(
         histories, args.minimum_flow_fraction)
@@ -926,6 +994,15 @@ def main() -> None:
             plt.show()
     print(f"Saved: {csv_path}")
     print(f"Saved: {face_csv_path}")
+    print(f"Saved: {velocity_path}")
+    if velocity_rows:
+        reversed_devices = sorted({
+            (row[1], row[2]) for row in velocity_rows if row[9]
+        })
+        if reversed_devices:
+            print("WARNING: reversed internal equipment flow detected: " + ", ".join(
+                f"{component} / {device}" for component, device in reversed_devices
+            ))
     print(f"Saved: {internal_path}")
     print(f"Latest thermal re-ingestion index: {rows[-1][5]:.6g}")
     print(f"Latest net sensible heat rejection: {rows[-1][6]:.6g} W")

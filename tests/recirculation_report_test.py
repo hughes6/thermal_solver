@@ -14,6 +14,8 @@ from plot.recirculation_report import (
     exported_heat_watts,
     exact_center_alignment,
     internal_device_temperature_rows,
+    internal_device_velocity_rows,
+    write_internal_velocity_csv,
     maximum_finite_equipment_index,
     read_report,
     selected_time_path,
@@ -24,6 +26,29 @@ from plot.recirculation_report import (
 
 
 class RecirculationReportTest(unittest.TestCase):
+    def test_internal_velocity_projects_expected_direction_and_flags_reverse(self):
+        with tempfile.TemporaryDirectory() as directory:
+            case = Path(directory)
+            report = (case / "postProcessing" / "fluid" /
+                      "internal_Intake_8_velocity_average" / "0")
+            report.mkdir(parents=True)
+            (report / "volFieldValue.dat").write_text(
+                "# Time volAverage(U)\n10 (0 -2 0)\n", encoding="utf-8"
+            )
+            (case / "internal_airflow_devices.csv").write_text(
+                "zone,component_id,component,kind,device,expected_direction_x,"
+                "expected_direction_y,expected_direction_z\n"
+                'internal_Intake_8,4,"Server A",intake,"Intake",0,1,0\n',
+                encoding="utf-8",
+            )
+            rows = internal_device_velocity_rows(case)
+            self.assertEqual(rows[0][0:4], (10.0, "Server A", "Intake", "intake"))
+            self.assertEqual(rows[0][7], -2.0)
+            self.assertTrue(rows[0][9])
+            output = Path(directory) / "report.png"
+            path = write_internal_velocity_csv(output, rows)
+            self.assertIn("expected_direction_velocity_m_s", path.read_text())
+
     def test_equipment_air_rise_requires_hotter_exhaust(self):
         self.assertTrue(math.isnan(
             equipment_air_rise_index(294.0, 293.5, 293.0)

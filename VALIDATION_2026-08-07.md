@@ -3140,3 +3140,12 @@ cannot make that abstraction representative of a normally fan-cooled server.
 The progress monitor now extracts the latest completed timestep's region
 temperature ranges from the solver log and reports the hottest region in K
 and C so this condition is visible during a run rather than only afterward.
+
+The recirculation report consumes the new internal velocity histories. It
+projects each mean velocity onto the corresponding expected-direction vector,
+writes `*_internal_velocity.csv` with vector components, projected speed,
+total speed, and a reversal flag, and prints a warning naming reversed
+equipment devices. Legacy cases without direction columns or velocity
+histories continue to produce the established thermal and boundary reports
+with an empty internal-velocity CSV. All 22 recirculation-report tests pass
+with the bundled scientific Python runtime.
