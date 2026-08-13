@@ -444,6 +444,35 @@ def read_latest_airflow_metrics(case_directory: Path):
     return latest
 
 
+def read_latest_exchange_airflow_metrics(case_directory: Path):
+    """Return metrics at the latest completed cumulative-exchange target."""
+    summary = case_directory / "run_summary.log"
+    if not summary.is_file():
+        return None
+    pending_target: float | None = None
+    latest = None
+    for line in summary.read_text(encoding="utf-8", errors="ignore").splitlines():
+        advance = INITIAL_EXCHANGE_FRACTION_RE.search(line)
+        if advance:
+            pending_target = float(advance.group(2))
+            continue
+        metrics = AIRFLOW_METRICS_RE.search(line)
+        if metrics and pending_target is not None:
+            airflow_time = float(metrics.group(1))
+            tolerance = 1.0e-6 * max(1.0, abs(pending_target))
+            if airflow_time >= pending_target - tolerance:
+                latest = (
+                    airflow_time,
+                    float(metrics.group(2)),
+                    float(metrics.group(3)),
+                    metrics.group(4),
+                    metrics.group(5) == "1",
+                    float(metrics.group(6)),
+                )
+                pending_target = None
+    return latest
+
+
 def read_airflow_limits(
     case_directory: Path,
 ) -> tuple[float, float, float] | None:
@@ -460,6 +489,28 @@ def read_airflow_limits(
     if any(match is None for match in matches):
         return None
     return tuple(float(match.group(1)) for match in matches)
+
+
+def format_airflow_gates(label: str, metrics, limits) -> str:
+    (airflow_time, imbalance, flow_change, flow_device,
+     directions_ok, velocity_change) = metrics
+    if limits is None:
+        imbalance_limit = flow_limit = velocity_limit = None
+    else:
+        imbalance_limit, flow_limit, velocity_limit = limits
+
+    def threshold(value: float | None) -> str:
+        return f" / {100.0 * value:.4f}%" if value is not None else ""
+
+    return (
+        f"{label} at {airflow_time:.9g} s: "
+        f"mass imbalance {100.0 * imbalance:.4f}%"
+        f"{threshold(imbalance_limit)}, device change "
+        f"{100.0 * flow_change:.4f}%{threshold(flow_limit)} "
+        f"[{flow_device}], spatial velocity change "
+        f"{100.0 * velocity_change:.4f}%{threshold(velocity_limit)}, "
+        f"directions {'valid' if directions_ok else 'INVALID'}"
+    )
 
 
 def format_initial_airflow_stage(
@@ -810,6 +861,7 @@ def main() -> int:
     latest_air_exchange_time = read_latest_air_exchange_time(case_directory)
     exchange_wall_rate = read_recent_exchange_wall_rate(case_directory)
     airflow_metrics = read_latest_airflow_metrics(case_directory)
+    exchange_airflow_metrics = read_latest_exchange_airflow_metrics(case_directory)
     airflow_limits = read_airflow_limits(case_directory)
     case_bytes, free_bytes = storage_usage(case_directory, args.fast)
 
@@ -839,32 +891,21 @@ def main() -> int:
     if initial_airflow is not None:
         print(format_initial_airflow_stage(initial_airflow, current_time))
         if airflow_metrics is not None:
-            (airflow_time, imbalance, flow_change, flow_device,
-             directions_ok, velocity_change) = airflow_metrics
-            if airflow_limits is None:
-                imbalance_limit = flow_limit = velocity_limit = None
-            else:
-                imbalance_limit, flow_limit, velocity_limit = airflow_limits
-            imbalance_gate = (
-                f" / {100.0 * imbalance_limit:.4f}%"
-                if imbalance_limit is not None else ""
+            print(format_airflow_gates(
+                "Latest local airflow gates", airflow_metrics, airflow_limits
+            ))
+        if (
+            exchange_airflow_metrics is not None
+            and (
+                airflow_metrics is None
+                or abs(exchange_airflow_metrics[0] - airflow_metrics[0]) > 1.0e-9
             )
-            flow_gate = (
-                f" / {100.0 * flow_limit:.4f}%"
-                if flow_limit is not None else ""
-            )
-            velocity_gate = (
-                f" / {100.0 * velocity_limit:.4f}%"
-                if velocity_limit is not None else ""
-            )
-            print(
-                f"Latest airflow gates at {airflow_time:.9g} s: "
-                f"mass imbalance {100.0 * imbalance:.4f}%{imbalance_gate}, "
-                f"device change {100.0 * flow_change:.4f}%{flow_gate} "
-                f"[{flow_device}], spatial velocity change "
-                f"{100.0 * velocity_change:.4f}%{velocity_gate}, directions "
-                f"{'valid' if directions_ok else 'INVALID'}"
-            )
+        ):
+            print(format_airflow_gates(
+                "Latest physical-exchange checkpoint",
+                exchange_airflow_metrics,
+                airflow_limits,
+            ))
     if thermal_metrics is not None:
         (thermal_time, peak_rate, average_rate, peak_region, average_region,
          thermal_elapsed, peak_limit, average_limit) = thermal_metrics
