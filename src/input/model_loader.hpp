@@ -1118,7 +1118,8 @@ struct ModelLoader {
                      << std::filesystem::absolute(source).string() << '\n';
         };
         snapshot(model_source_path,"model.toml");
-        snapshot(fan_curve_source_path,"fan_curves.toml");
+        if(!fan_curve_source_path.empty())
+            snapshot(fan_curve_source_path,"fan_curves.toml");
         if(model.openfoam_solver.template_file &&
            *model.openfoam_solver.template_file!="NULL")
             snapshot(*model.openfoam_solver.template_file,

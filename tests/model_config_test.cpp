@@ -186,7 +186,7 @@ int main() {
     assert(screening.mesh.fine_dx > indepth.mesh.fine_dx);
     assert(screening.mesh.coarse_dx == indepth.mesh.coarse_dx);
     assert(screening.mesh.refinement_margin == indepth.mesh.refinement_margin);
-    assert(indepth.openfoam_solver.thermal_only_maximum_time_step == 20.0);
+    assert(indepth.openfoam_solver.thermal_only_maximum_time_step == 30.0);
     assert(indepth.openfoam_solver.minimum_initial_airflow_duration == 0.30);
     assert(
         indepth.openfoam_solver.maximum_device_flow_change_fraction == 0.01);
@@ -334,6 +334,10 @@ int main() {
         case_directory/"prepare_regions.sh"));
     assert(std::filesystem::is_regular_file(
         case_directory/"geometry.txt"));
+    assert(std::filesystem::is_regular_file(
+        case_directory/"provenance/model.toml"));
+    assert(!std::filesystem::exists(
+        case_directory/"provenance/fan_curves.toml"));
     const std::string geometry=
         read_file(case_directory/"geometry.txt");
     assert(geometry.find("Rack dimensions:") != std::string::npos);
@@ -357,7 +361,7 @@ int main() {
     assert(prepare_regions.find(
         "Failed [1-9][0-9]* mesh checks") != std::string::npos);
     assert(prepare_regions.find(
-        "before treating results as validated") != std::string::npos);
+        "the solver will not run") != std::string::npos);
     const std::string run_serial=
         read_file(case_directory/"run_cht.sh");
     assert(run_parallel.find(
