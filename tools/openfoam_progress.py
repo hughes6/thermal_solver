@@ -459,10 +459,16 @@ def format_initial_airflow_stage(
             f"{required_elapsed:.9g} s, target {exchange_target:.9g} s)"
         )
     elif exchange_target is not None and completed_fraction is not None:
+        checkpoint_label = (
+            "last exchange checkpoint"
+            if current_time >= exchange_target - tolerance
+            else "next check"
+        )
         detail = (
             "initial airflow cumulative physical exchange "
             f"(observation start {observation_start:.9g} s, completed fraction "
-            f"{completed_fraction:.6g}, next check {exchange_target:.9g} s)"
+            f"{completed_fraction:.6g}, {checkpoint_label} "
+            f"{exchange_target:.9g} s)"
         )
     else:
         return (

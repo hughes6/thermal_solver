@@ -551,9 +551,11 @@ class OpenFoamProgressTest(unittest.TestCase):
 
     def test_incremental_exchange_check_is_not_full_exchange(self):
         progress = (0.05, 0.95, None, 0.15393)
-        self.assertNotIn(
-            "target reached", format_initial_airflow_stage(progress, 0.95)
-        )
+        reached_check = format_initial_airflow_stage(progress, 0.95)
+        self.assertNotIn("target reached", reached_check)
+        self.assertIn("last exchange checkpoint 0.95 s", reached_check)
+        pending_check = format_initial_airflow_stage(progress, 0.94)
+        self.assertIn("next check 0.95 s", pending_check)
         complete = (0.05, 4.55, None, 1.0)
         self.assertIn(
             "target reached", format_initial_airflow_stage(complete, 4.55)
