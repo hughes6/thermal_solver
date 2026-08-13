@@ -120,6 +120,23 @@ int main() {
     assert(manifest.find("fan_curves.toml <- ")!=std::string::npos);
     assert(!std::filesystem::exists(
         provenance/"stale_component.toml"));
+    {
+        std::ofstream sentinel(provenance/"complete_snapshot.marker");
+        sentinel << "preserve on failure\n";
+    }
+    fallback_loader.fan_curve_source_path=
+        root/"missing_fan_curves.toml";
+    bool provenance_failed=false;
+    try {
+        fallback_loader.write_openfoam_provenance(provenance_case);
+    } catch(const std::runtime_error&) {
+        provenance_failed=true;
+    }
+    assert(provenance_failed);
+    assert(std::filesystem::is_regular_file(
+        provenance/"complete_snapshot.marker"));
+    assert(std::filesystem::is_regular_file(
+        provenance/"manifest.txt"));
     ModelLoader component_loader;
     component_loader.load_fan_curves(
         "library/fan_curves/fan_curves.toml");

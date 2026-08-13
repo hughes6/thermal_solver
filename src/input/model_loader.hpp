@@ -1097,9 +1097,11 @@ struct ModelLoader {
     void write_openfoam_provenance(
         const std::filesystem::path& case_directory) const {
         const std::filesystem::path directory=case_directory/"provenance";
-        std::filesystem::remove_all(directory);
-        std::filesystem::create_directories(directory);
-        std::ofstream manifest(directory/"manifest.txt");
+        const std::filesystem::path staging=
+            case_directory/"provenance.tmp";
+        std::filesystem::remove_all(staging);
+        std::filesystem::create_directories(staging);
+        std::ofstream manifest(staging/"manifest.txt");
         if(!manifest)
             throw std::runtime_error(
                 "Unable to write OpenFOAM provenance manifest.");
@@ -1110,7 +1112,7 @@ struct ModelLoader {
                     "OpenFOAM provenance source is missing: " +
                     source.string());
             std::filesystem::copy_file(
-                source,directory/snapshot_name,
+                source,staging/snapshot_name,
                 std::filesystem::copy_options::overwrite_existing);
             manifest << snapshot_name << " <- "
                      << std::filesystem::absolute(source).string() << '\n';
@@ -1130,6 +1132,12 @@ struct ModelLoader {
                 "component_" + std::to_string(component_index++) + "_" +
                 source.filename().string());
         }
+        manifest.close();
+        if(!manifest)
+            throw std::runtime_error(
+                "Unable to finalize OpenFOAM provenance manifest.");
+        std::filesystem::remove_all(directory);
+        std::filesystem::rename(staging,directory);
     }
 
     const ComponentInput& get_component_template(const std::string& path, PositionInput pos) {
