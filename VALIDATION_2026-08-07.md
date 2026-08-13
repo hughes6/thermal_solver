@@ -2811,6 +2811,33 @@ Eaton remained reversed and undefined during the cold stage; Trenton reached
 The retained-window spatial oscillation therefore remains the sole failed
 startup criterion.
 
+The run subsequently advanced to `4.9355 s`, 93.0% of the legacy physical
+air-exchange target, without fatal signatures or rank inconsistency. A reduced
+comparison of retained checkpoints `4.77945633 -> 4.87785306 s` found 6.801%
+whole-fluid and 6.894% external-air velocity movement. In contrast, Dell
+internal air had settled to 0.331% and Eaton to 0.887%. Trenton remained a
+low-speed relative outlier at 10.533%, or only 0.00612 m/s RMS absolute. The
+maximum change was 2.824 m/s at `(0.044900, 0.217950, 0.076625) m` in external
+rack air. Fluid temperature moved 0.000335 K RMS and all regions moved
+0.000759 K RMS. The remaining cold-start transient is therefore predominantly
+external rack wake circulation, not unstable component throughflow.
+
+The boundary operating point remained stable over the same interval. Intake
+magnitude changed -0.00325%; Fan 4 was the largest exhaust change at -0.36318%;
+all nine fans remained outward, the intake inward, and bidirectional flow zero.
+Dell's intake/rear-outlet averages reached 293.1543/293.2495 K and its index
+decreased to 4.29%. Eaton remained reversed and undefined at
+293.1582/293.1575 K. Trenton reached 293.1532/293.1561 K; its 51.70% ratio is
+still based on only a 0.0030 K outlet rise. Net sensible rejection was -2.87 W
+during the expected early transient.
+
+Host I/O became heavily contended late in the cold stage: even narrow directory
+enumeration and the low-contention monitor slowed materially. The solver itself
+continued advancing with healthy Courant and continuity values. Free volume
+space was approximately 4.00 GiB at the 4.9355 s check; no deletion or
+reconstruction was attempted, and the rolling processor retention remained six
+common checkpoints with three in the current cadence series.
+
 The direct internal checkpoint data was initially present only in CSV and
 console output. Saved `--snapshot-times --save` figures now add a fifth panel
 with dashed intake and solid rear-outlet temperature traces for every paired
