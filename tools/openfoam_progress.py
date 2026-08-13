@@ -441,10 +441,17 @@ def format_initial_airflow_stage(
 ) -> str:
     observation_start, exchange_target, required_elapsed, completed_fraction = progress
     tolerance = 1.0e-9 * max(1.0, abs(current_time))
-    target_reached = (
-        exchange_target is not None
-        and current_time >= exchange_target - tolerance
-    )
+    # Legacy runners log one final physical-exchange target. Current runners
+    # log the next incremental check plus a cumulative exchanged fraction.
+    # Reaching an incremental check is not the same as completing one full
+    # physical air exchange.
+    if completed_fraction is not None:
+        target_reached = completed_fraction >= 1.0 - tolerance
+    else:
+        target_reached = (
+            exchange_target is not None
+            and current_time >= exchange_target - tolerance
+        )
     if exchange_target is not None and required_elapsed is not None:
         detail = (
             "initial airflow physical exchange "

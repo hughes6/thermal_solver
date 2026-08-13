@@ -3266,3 +3266,17 @@ that maps each snapshot to its original absolute path. A regression test
 verifies both inline-component and four-template generic models. This makes a
 later screening/in-depth comparison attributable to case-local inputs instead
 of the repository's potentially newer working state.
+
+At the 0.95 s cumulative checkpoint, mass imbalance had fallen to 0.03217%
+and flow directions remained valid, but the 0.1 s spatial velocity change was
+still 15.1701%. Only 15.3930% of one measured physical air exchange had
+passed. The long-window sequence at 0.47, 0.59, 0.71, 0.83, and 0.95 s was
+22.2849%, 19.1851%, 17.2689%, 15.9519%, and 15.1701%, respectively. This
+monotonic decay confirms progress, while also showing that the cold airflow
+is not yet converged and must continue through the full-exchange gate.
+
+This checkpoint also exposed a display-only monitor defect: cumulative-mode
+status treated arrival at the next incremental check as completion of the
+full exchange. The monitor now uses cumulative fraction >= 1 for current
+runners while retaining absolute-target behavior for legacy runners. The
+solver controller was unaffected. All 42 progress-monitor tests pass.
