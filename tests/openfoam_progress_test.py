@@ -212,6 +212,19 @@ class OpenFoamProgressTest(unittest.TestCase):
                 processor_checkpoints(case), ([], 2, False, [1, 1], [300.0])
             )
 
+    def test_accepts_restart_checkpoint_just_above_nominal_log_time(self):
+        with tempfile.TemporaryDirectory() as directory:
+            case = Path(directory)
+            for rank in (0, 1):
+                checkpoint = case / f"processor{rank}" / "4800.0000000000045" / "fluid"
+                checkpoint.mkdir(parents=True)
+                (checkpoint / "T").write_text("field")
+                (checkpoint / "U").write_text("field")
+            self.assertEqual(
+                processor_checkpoints(case, maximum_completed_time=4800.0),
+                ([4800.000000000005], 2, True, [2, 2], []),
+            )
+
     def test_rejects_equal_rank_partial_checkpoint_manifest(self):
         with tempfile.TemporaryDirectory() as directory:
             case = Path(directory)

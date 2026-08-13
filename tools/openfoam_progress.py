@@ -308,8 +308,11 @@ def processor_checkpoints(
     def eligible(value: float) -> bool:
         if maximum_completed_time is None:
             return True
+        # OpenFOAM directory names can land a few ulps beyond a nominal stage
+        # endpoint (for example 4800.0000000000045). Restart-field validation
+        # below, rather than strict timestamp ordering, establishes completion.
         tolerance = 1.0e-9 * max(1.0, abs(maximum_completed_time))
-        return value < maximum_completed_time - tolerance
+        return value <= maximum_completed_time + tolerance
 
     time_sets = [
         [value for value in times if eligible(value)] for times in raw_time_sets
