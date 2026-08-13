@@ -8,6 +8,7 @@ from tools.openfoam_progress import (
     courant_timestep_headroom,
     current_checkpoint_series_count,
     current_stage_samples,
+    eta_remaining_simulated,
     directory_size,
     format_bytes,
     format_duration,
@@ -191,6 +192,32 @@ class OpenFoamProgressTest(unittest.TestCase):
         ]
         self.assertEqual(
             current_stage_samples(samples, 16800.01), samples[-2:]
+        )
+
+    def test_eta_applies_refresh_rate_only_to_current_stage(self):
+        remaining, stage_only = eta_remaining_simulated(
+            2400.00306, 18000.0, 2400.01
+        )
+        self.assertTrue(stage_only)
+        self.assertAlmostEqual(remaining, 0.00694, places=8)
+
+    def test_eta_uses_overall_horizon_for_single_stage(self):
+        self.assertEqual(
+            eta_remaining_simulated(25.0, 100.0, 100.0),
+            (75.0, False),
+        )
+
+    def test_eta_uses_terminal_refresh_beyond_requested_horizon(self):
+        remaining, stage_only = eta_remaining_simulated(
+            8400.00032, 8400.0, 8400.01
+        )
+        self.assertTrue(stage_only)
+        self.assertAlmostEqual(remaining, 0.00968, places=8)
+
+    def test_eta_is_zero_after_early_completion_and_control_reset(self):
+        self.assertEqual(
+            eta_remaining_simulated(4800.01, 18000.0, 30.0, True),
+            (0.0, False),
         )
 
     def test_health_parser_ignores_trap_banner(self):

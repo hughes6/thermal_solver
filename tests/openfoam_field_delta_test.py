@@ -57,6 +57,26 @@ class OpenFoamFieldDeltaTest(unittest.TestCase):
                 [case / "processor1" / "1" / "fluid" / "U"],
             )
 
+    def test_cross_case_paths_can_feed_identical_layout_comparison(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            before_case = root / "before_case"
+            after_case = root / "after_case"
+            write_field(
+                before_case / "processor0" / "1" / "fluid" / "T",
+                "scalar", [300.0, 301.0],
+            )
+            write_field(
+                after_case / "processor0" / "2" / "fluid" / "T",
+                "scalar", [300.5, 302.0],
+            )
+            result = compare_fields(
+                processor_field_paths(before_case, "1", "fluid", "T"),
+                processor_field_paths(after_case, "2", "fluid", "T"),
+            )
+            self.assertEqual(result[0], 2)
+            self.assertEqual(result[2], 1.0)
+
     def test_selects_latest_pair_common_to_all_ranks(self):
         with tempfile.TemporaryDirectory() as directory:
             case = Path(directory)

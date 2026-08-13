@@ -3490,3 +3490,55 @@ dynamically linked utility without loading OpenFOAM, producing a missing
 `libfiniteVolume.so` error in a fresh shell. Generated commands now source the
 OpenFOAM v2606 bash environment before invoking the Python driver; the command
 regression asserts that complete sequence.
+
+## In-depth refresh-cadence and progress-monitor boundary study (2026-08-13)
+
+The completed matched cases exposed a progress-display defect at solver-stage
+boundaries. During a 0.01 s strict airflow refresh, the monitor measured the
+correct expensive live-flow rate but multiplied it by the entire remaining
+thermal horizon, briefly reporting more than 118,000 hours. Early-converged
+runs were also shown as stale, at 0% stage progress, with a nonexistent next
+checkpoint after production controls were restored. The monitor now applies a
+rate only to the active configured solver stage, including terminal refreshes
+that intentionally extend 0.01 s beyond the requested thermal horizon. A
+recorded `run_complete` suppresses stale and next-checkpoint warnings and
+explicitly reports the early convergence fraction. Fifty-two focused monitor
+tests cover thermal stages, ordinary refreshes, terminal refreshes, and early
+completion.
+
+The matched 284,396-fluid-cell endpoint also permitted a current controlled
+test of the in-depth profile's dominant cost. From the same preserved
+4,800.01 s state, one derivative used normal 1,200 s refreshes through
+8,400.01 s, while a second held airflow for exactly 3,600 s and then performed
+the identical strict Co=1 refresh. The control's convergence streak was made
+negative only in its disposable copy to prevent early termination; physics,
+mesh, sources, and solver dictionaries were unchanged. The 3,600 s thermal
+leg took 220.3 wall seconds and its single refresh took 313.1 seconds. The
+1,200 s control paid three thermal legs of 88.7--90.7 seconds and three
+refreshes of 298.7--302.0 seconds.
+
+Both same-time endpoints passed topology, mass, energy, thermal, local-flow,
+anchored-flow, and direction gates. The long-hold branch versus the control
+was -0.134% in outlet mass flow, +0.0066 K in outlet temperature, +0.0156 K in
+solid average, and +0.159 K at the hottest solid. Identical-topology binary
+field comparison found 0.1098 K fluid-temperature RMS difference and 1.6335%
+velocity-component RMS difference. The temperature 99th percentile was
+0.4732 K. Velocity differences were wake-localized: the top 1% of cells
+contributed 61.08% of squared change. Solid-temperature RMS differences were
+0.0481 K Eaton, 0.0436 K Dell, 0.0190 K Trenton, and 0.0606 K KVM; no solid
+cell differed by more than 0.249 K.
+
+Passive-tracer source rankings were identical. The largest fraction change
+was Trenton exhaust into Dell intake, 23.3968% long-hold versus 23.2508%
+control (+0.1460 percentage points). Trenton self-recirculation changed by
++0.0915 points and all other paths by at most 0.0528 points. Thus a 3,600 s
+cadence is justified for thermally settled rack-level throughput, temperature,
+energy, and recirculation path-ranking studies. It is not adopted as the
+in-depth default because the 1.6335% field difference exceeds the profile's
+1% local velocity standard. Final local-field and source-fraction validation
+retains 1,200 s; screening already provides the cheaper exploratory workflow.
+
+`openfoam_field_delta.py` now accepts `--after-case` for dependency-free
+same-topology cross-case comparisons. This avoids requiring optional PyVista
+for controlled cadence branches while retaining explicit equal-component
+weighting and layout checks.

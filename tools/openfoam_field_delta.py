@@ -4,7 +4,8 @@
 This lightweight reader weights every stored scalar component equally.  It
 does not read mesh volumes, so its RMS values are not the volume-weighted
 vector-magnitude metric used by the generated OpenFOAM runner's airflow-
-convergence gate.
+convergence gate. Identical-topology checkpoints may be in one case or in two
+different cases via ``--after-case``.
 """
 
 from __future__ import annotations
@@ -278,6 +279,10 @@ def main() -> int:
     )
     parser.add_argument("--region", default="fluid")
     parser.add_argument("--field", default="U")
+    parser.add_argument(
+        "--after-case", type=Path,
+        help="case containing the after checkpoint; requires identical topology",
+    )
     parser.add_argument("--rank", type=int, help="compare only one processor rank")
     parser.add_argument(
         "--top-cells", type=int, default=0,
@@ -286,7 +291,10 @@ def main() -> int:
     )
     args = parser.parse_args()
     case = args.case.resolve()
+    after_case = args.after_case.resolve() if args.after_case else case
     if args.latest_pair:
+        if args.after_case is not None:
+            parser.error("--latest-pair cannot be combined with --after-case")
         if args.before is not None or args.after is not None:
             parser.error("--latest-pair cannot be combined with before/after times")
         args.before, args.after = latest_common_time_names(case, args.rank)
@@ -295,11 +303,15 @@ def main() -> int:
     before = processor_field_paths(
         case, args.before, args.region, args.field, args.rank
     )
-    after = processor_field_paths(case, args.after, args.region, args.field, args.rank)
+    after = processor_field_paths(
+        after_case, args.after, args.region, args.field, args.rank
+    )
     count, rms_delta, maximum_delta, rms_field, relative = compare_fields(
         before, after
     )
     print(f"Field: {args.region}/{args.field}")
+    if after_case != case:
+        print(f"Cases: {case} -> {after_case}")
     print(f"Checkpoints: {args.before} -> {args.after}")
     if args.rank is not None:
         print(f"Processor rank: {args.rank}")
@@ -345,7 +357,7 @@ def main() -> int:
         )
         if args.top_cells > 0:
             centres = processor_field_paths(
-                case, args.after, args.region, "C", args.rank
+                after_case, args.after, args.region, "C", args.rank
             )
             rows = top_scalar_delta_locations(
                 before, after, centres, args.top_cells

@@ -218,6 +218,27 @@ def current_stage_samples(
     return [sample for sample in samples if sample[0] > start_time + tolerance]
 
 
+def eta_remaining_simulated(
+    current_time: float,
+    overall_end_time: float,
+    configured_stage_end: float,
+    run_complete: bool = False,
+) -> tuple[float, bool]:
+    """Return simulated seconds for the applicable rate and whether it is stage-only."""
+    if run_complete:
+        return 0.0, False
+    overall_remaining = max(0.0, overall_end_time - current_time)
+    tolerance = 1.0e-9 * max(
+        1.0, abs(current_time), abs(configured_stage_end)
+    )
+    if (
+        abs(configured_stage_end - overall_end_time) > tolerance
+        and configured_stage_end >= current_time - tolerance
+    ):
+        return max(0.0, configured_stage_end - current_time), True
+    return overall_remaining, False
+
+
 def read_control_times(case_directory: Path) -> tuple[float, float]:
     control = case_directory / "system" / "controlDict"
     values: dict[str, float] = {}
@@ -880,7 +901,6 @@ def main() -> int:
         current_stage_samples(samples, start_time), args.window
     )
     end_time = args.end_time if args.end_time is not None else configured_end_time
-    remaining_simulated = max(0.0, end_time - current_time)
     (checkpoints, processor_count, checkpoints_aligned, latest_file_counts,
      incomplete_checkpoints) = processor_checkpoints(
         case_directory, current_time
@@ -899,7 +919,10 @@ def main() -> int:
     run_completion = run_state[2] if run_state is not None else None
     if args.end_time is None and run_completion is not None:
         end_time = run_state[1]
-        remaining_simulated = max(0.0, end_time - current_time)
+    eta_remaining, eta_is_stage_only = eta_remaining_simulated(
+        current_time, end_time, configured_end_time,
+        run_complete=run_completion is not None,
+    )
     thermal_metrics = read_latest_thermal_metrics(case_directory)
     initial_airflow = read_initial_airflow_progress(case_directory)
     latest_air_exchange_time = read_latest_air_exchange_time(case_directory)
@@ -915,12 +938,27 @@ def main() -> int:
     print(f"Log last updated: {format_duration(log_age_seconds)} ago")
     print(f"Simulation: {current_time:.9g} / {end_time:.9g} s")
     if run_completion is not None:
+        completion_fraction = (
+            run_completion / run_state[1] if run_state[1] > 0 else 1.0
+        )
+        early_stop = (
+            f" ({100.0 * completion_fraction:.2f}% of requested horizon; "
+            "stopped by convergence gates)"
+            if completion_fraction < 1.0 - 1.0e-9 else ""
+        )
         print(
             f"Requested run complete: reconstructed through "
-            f"{run_completion:.9g} s"
+            f"{run_completion:.9g} s{early_stop}"
         )
-    stage_span = end_time - start_time
-    if stage_span > 0:
+    stage_display_end = (
+        configured_end_time
+        if configured_end_time >= current_time - 1.0e-9 * max(
+            1.0, abs(current_time), abs(configured_end_time)
+        )
+        else end_time
+    )
+    stage_span = stage_display_end - start_time
+    if run_completion is None and stage_span > 0:
         stage_fraction = min(1.0, max(0.0, (current_time - start_time) / stage_span))
         print(f"Stage progress: {100.0 * stage_fraction:.2f}%")
     if run_request is not None:
@@ -960,17 +998,19 @@ def main() -> int:
     else:
         print(f"Recent rate: {slope:.1f} wall s / simulated s")
     print(f"Solver logged wall time: {format_duration(logged_wall_time)}")
-    if slope is None:
+    if run_completion is not None:
+        print("Estimated remaining wall time: complete")
+    elif slope is None:
         print("Estimated remaining wall time: unavailable until two new timesteps complete")
     else:
         eta_label = (
             "Current solver-stage estimated remaining wall time"
-            if initial_airflow is not None
+            if eta_is_stage_only or initial_airflow is not None
             else "Estimated remaining wall time"
         )
         print(
             f"{eta_label}: "
-            f"{format_duration(remaining_simulated * slope)}"
+            f"{format_duration(eta_remaining * slope)}"
         )
         if (
             initial_airflow is not None
@@ -1028,7 +1068,7 @@ def main() -> int:
         "Fatal signatures: "
         + (", ".join(fatal_signatures) if fatal_signatures else "none")
     )
-    if is_stale_run(
+    if run_completion is None and is_stale_run(
         log_age_seconds, current_time, end_time, args.stale_after
     ):
         print(
@@ -1061,7 +1101,7 @@ def main() -> int:
                 + ", ".join(f"{value:.9g}" for value in incomplete_checkpoints)
                 + f" s; observed files/rank {latest_file_counts}"
             )
-        if checkpoint_stride is not None:
+        if run_completion is None and checkpoint_stride is not None:
             next_checkpoint = min(end_time, checkpoints[-1] + checkpoint_stride)
             if next_checkpoint > current_time + 1e-12:
                 eta = (
