@@ -388,7 +388,7 @@ private:
         // These files are emitted by the generated runner or by commands that
         // Model Runner prints for its case. Clear them only for an explicit
         // overwrite export; unrecognized notes and user files are preserved.
-        static const std::array<const char*,14> exact={
+        static const std::array<const char*,16> exact={
             "run_summary.log",
             "thermal_solver.stdout.log",
             "thermal_solver.stderr.log",
@@ -397,6 +397,8 @@ private:
             "component_thermal_report.md",
             "heat_source_audit.json",
             "heat_source_audit.md",
+            "wall_yplus_report.json",
+            "wall_yplus_report.md",
             "temperature_latest_full_rack.png",
             "temperature_full_rack.mp4",
             "temperature_convergence.png",

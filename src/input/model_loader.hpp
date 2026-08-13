@@ -1712,6 +1712,9 @@ struct ModelLoader {
             const std::filesystem::path heat_audit_script=
                 std::filesystem::absolute(
                     "tools/openfoam_heat_source_audit.py");
+            const std::filesystem::path yplus_report_script=
+                std::filesystem::absolute(
+                    "tools/openfoam_yplus_report.py");
             const std::filesystem::path visualization_output=
                 absolute_case_directory/"temperature_latest_full_rack.png";
             const std::filesystem::path animation_output=
@@ -1726,6 +1729,8 @@ struct ModelLoader {
                 absolute_case_directory/"component_thermal_report.md";
             const std::filesystem::path heat_audit_markdown=
                 absolute_case_directory/"heat_source_audit.md";
+            const std::filesystem::path yplus_report_markdown=
+                absolute_case_directory/"wall_yplus_report.md";
             const auto shell_display_path=[](
                 const std::filesystem::path& path) {
                 std::string value=path.string();
@@ -1773,6 +1778,8 @@ struct ModelLoader {
                 shell_display_path(component_report_script);
             const std::string heat_audit_script_display=
                 shell_display_path(heat_audit_script);
+            const std::string yplus_report_script_display=
+                shell_display_path(yplus_report_script);
             const std::string attribution_script_wsl=
                 wsl_display_path(attribution_script);
             const std::string attribution_build_script_wsl=
@@ -1785,6 +1792,8 @@ struct ModelLoader {
                 shell_display_path(component_report_markdown);
             const std::string heat_audit_markdown_display=
                 shell_display_path(heat_audit_markdown);
+            const std::string yplus_report_markdown_display=
+                shell_display_path(yplus_report_markdown);
             const auto command_quote=[](const std::string& value) {
                 std::string quoted="'";
                 for(const char character : value) {
@@ -1947,7 +1956,18 @@ struct ModelLoader {
                 << command_quote(heat_audit_script_display) << ' '
                 << command_quote(case_directory_display)
                 << " --markdown "
-                << command_quote(heat_audit_markdown_display) << "\n";
+                << command_quote(heat_audit_markdown_display) << "\n"
+                << "Report latest live-flow wall y+ and near-wall regime "
+                   "(PowerShell or Git Bash):\n  "
+#ifdef _WIN32
+                << "python "
+#else
+                << "python3 "
+#endif
+                << command_quote(yplus_report_script_display) << ' '
+                << command_quote(case_directory_display)
+                << " --markdown "
+                << command_quote(yplus_report_markdown_display) << "\n";
             std::map<int,unsigned> internal_device_kinds;
             for(const auto& device : mesh.get_openfoam_internal_flow_devices()) {
                 internal_device_kinds[device.component_id] |=

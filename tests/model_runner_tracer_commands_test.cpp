@@ -81,6 +81,9 @@ int main() {
     assert(output.find("tools/openfoam_heat_source_audit.py") !=
            std::string::npos);
     assert(output.find("heat_source_audit.md") != std::string::npos);
+    assert(output.find("tools/openfoam_yplus_report.py") !=
+           std::string::npos);
+    assert(output.find("wall_yplus_report.md") != std::string::npos);
     assert(output.find("component_thermal_report.csv") !=
            std::string::npos);
     assert(output.find("steadyExhaustTracerFoam") != std::string::npos);

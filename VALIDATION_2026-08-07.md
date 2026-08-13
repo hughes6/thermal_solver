@@ -3854,3 +3854,49 @@ validation, component-report, and multirate files plus an unrelated
 preserves the note. The full OpenFOAM exporter test and generated-command test
 both pass. This does not change `overwrite=false`, which remains the safe mode
 for inspecting or plotting an existing case without deleting its solution.
+
+## Near-wall y+ and Spalding wall-function sensitivity (2026-08-13)
+
+The SST cases write two y+ summaries at some checkpoints: a zero-valued
+placeholder from the thermal-only stage and a time-suffixed live-flow report.
+Reading `yPlus.dat` alone can therefore falsely suggest y+=0 everywhere. The
+new `openfoam_yplus_report.py` inspects the latest report directory, selects
+the nonzero live-flow file with the largest observed y+, rejects all-zero or
+stale data, classifies every patch, and writes JSON/Markdown. Model Runner now
+prints this command, and explicit overwrite clears its standard outputs.
+
+The authoritative results show mixed near-wall resolution on every wall
+patch. Component-interface average y+ ranges were 13.65--36.98 for screening,
+12.46--36.55 for 15 mm in-depth, and 7.73--30.43 for 10 mm. Every patch spans
+both below y+=30 and above y+=1, so substantial surface area lies in or crosses
+the buffer layer. Refining from 15 to 10 mm does not produce a uniformly
+wall-resolved y+<1 mesh. This is consistent with the observed non-monotonic
+component peaks and is now an explicit limitation on local heat-transfer and
+recirculation claims.
+
+Because OpenFOAM's separated-flow verification examples use the continuous
+`nutUSpaldingWallFunction`, a controlled derivative of the converged screening
+case was created as
+`model_generic_airside_screening_spalding_20260813`. The original case was not
+modified. Only the `nut` wall function changed; the copied case received the
+mandatory coupled warm start and continued from 40,000.01 to 44,800.03 s.
+The runner's long-lag gate initially rejected the changed airflow, then
+accepted it after subsequent cycles. The final independent validation passed:
+0.00369% mass imbalance, 0.2876% energy error, 0.297991 kg/s outlet flow, and
+298.2941 K outlet temperature.
+
+The change was not demonstrably better. Against the byte-identical-topology
+screening control, fluid velocity changed by 5.956% component-weighted RMS;
+the median cell-vector change was 0.0303 m/s and 1% of cells contained 70.6%
+of squared velocity change. Fluid temperature changed by 0.292 K RMS. Dell
+volume-average temperature moved -0.668 K while its peak moved +0.223 K;
+Eaton average moved -0.583 K. Spalding interface average y+ ranged
+11.49--47.65 and did not eliminate mixed/buffer-layer coverage.
+
+`nutkWallFunction` therefore remains the default. Switching wall functions
+without measured wall heat-transfer or flow data would exchange one modeling
+assumption for another and materially alter results. Final local temperature
+claims need either boundary-layer meshing toward y+<1 or calibration against
+physical chassis/intake/exhaust measurements. Two focused y+ parser tests
+cover duplicate zero/live reports and all-zero rejection; the real four-case
+comparison is stored beside the Spalding experiment.
