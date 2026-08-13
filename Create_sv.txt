@@ -1,117 +1,30 @@
-overview
-About me
-Sims Overview
-Initial tasks (Weeks 1-4)
-My project (Weeks 5-10)
-Thank you
+cur.execute("""
+SELECT ID, COPY
+FROM dbo.CABLE_ELEMENTS
+WHERE COMPONENT_ID = ?
+ORDER BY COPY
+""", component_id)
 
+elements = cur.fetchall()
 
-About Me
-Rising senior at Colorado School of Mines
-Major: Mechanical Eng.
-Minors: Computer Science & Aerospace Eng.
-Hobbies
-Motorcycle
-Gym
-Rubiks cube
-From: Arvada/Golden
-Role @ comp
-role title
-Mentor
-bldg name 
+for element_id, copy_no in elements:
+    print("\nELEMENT COPY:", copy_no)
+    print("ELEMENT ID:", element_id)
 
+    cur.execute("""
+    SELECT *
+    FROM dbo.Cable
+    WHERE ParentID = ?
+       OR ENTRY = ?
+    """, element_id, element_id)
 
-sim overviewPrune database of outdated/misfigured parts
-Create subcircuits for all parts that don’t have them
-Create Zuken standards manual
+    rows = cur.fetchall()
 
+    print("Cable matches:", len(rows))
 
-sim overview
+    if rows:
+        columns = [col[0] for col in cur.description]
 
-sim hw overview
-Define
- connections
- design drawings for manufacturers
-interface between hardware and software
-rack layout and wire management
-Responsible for debugging hardware issues
-Responsible for component selection/versioning
-
-zuken tasks
-Prune database of outdated/misfigured parts
-Create subcircuits for all parts that don’t have them
-Create Zuken standards manual
-
-
-
-modernize automation scripts
-Rewrite old VBS scripts in python
-VBS deprecated due to security concerns
-Sims HW team uses scripts to automate hours of work
-Scripts in python execute magnitudes of order faster
-Outcome:
-Save Sim HW Engineers from spreadsheet deadlock
-Decrease script execution time by ~70-80%
-Eliminate security concerts from scripts
-
-project overview
-Objective – create thermal model for racks to detect hotspots and fire dangers
-Requirements
-Model interface not overly complex
-Reusable parts
-Fidelity ~10-20%
-Design
-C++ & OpemFOAM (solver) backend
-Python visualization
-Thermal Desktop & Fluent validation
-
-
-model overview
-
-input file
-Simulation parameters (dt, turbulence, etc)
-Environment (air properties)
-Rack, components, fans, vents
-Mesh
-Many many more
-
-model discretization
-Model parses input file into objects
-Objects stamped into mesh
-Exported to OpenFOAM readable mesh
-
-solve
-OpenFOAM take mesh and physics files
-Solve Heat transfer and fluid PDE’s over and over until solution converge
-Export results to .vtk file
-Python used to visualize results
-
-
-model validation
-thermal model
-Thermal desktop model used to validate thermal model
-Thermal Desktop model verified by thermal engineer
-<1% Thermal difference between models
-
-
-fluent model
-ANSYS Fluent model used to validate thermal fluid model
-Energy conservation (0.017% deviation)
-Mass weighted avg temperatures match (<1% deviation)
-Temperature profiles match (<1% deviation)
-All important metrics match or deviate less than 1%
-
-
-
-
-future model use
-Model sim racks
-Detect recirculation
-Hot spots
-Airflow paths
-
-
-new slide about cable generation
-
-
-
+        for row in rows:
+            for name, value in zip(columns, row):
+                print(f"{name} = {value}")
