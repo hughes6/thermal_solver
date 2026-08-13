@@ -331,6 +331,9 @@ int main(int argc, char** argv) {
             "initial_exchange_state=\"$case_dir/.initial_air_exchange_state\"") !=
                std::string::npos);
         assert(text.str().find(
+            "t>=start-tolerance && t<=now+tolerance") !=
+               std::string::npos);
+        assert(text.str().find(
             "Cumulative initial air exchange: fraction=$air_exchange_fraction") !=
                std::string::npos);
         assert(text.str().find(

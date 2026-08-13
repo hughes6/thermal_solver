@@ -2838,6 +2838,18 @@ space was approximately 4.00 GiB at the 4.9355 s check; no deletion or
 reconstruction was attempted, and the rolling processor retention remained six
 common checkpoints with three in the current cadence series.
 
+Auditing the current cumulative exchanged-mass controller found a restart-state
+edge case not exercised by the preserved legacy case. The parser rejected
+future timestamps, malformed numbers, negative flow, and negative fractions,
+but accepted a saved timestamp older than the current initial-airflow
+observation window. A stale `.initial_air_exchange_state` from an earlier
+attempt could therefore integrate an artificial time gap and over-credit the
+exchange fraction. Current exports now require
+`initial_start - tolerance <= saved_time <= current_time + tolerance`; an
+incompatible state resets to zero. A freshly compiled `openfoam_export_test`
+passed, as did all 23 focused progress-monitor tests. The active case was not
+modified.
+
 The direct internal checkpoint data was initially present only in CSV and
 console output. Saved `--snapshot-times --save` figures now add a fifth panel
 with dashed intake and solid rear-outlet temperature traces for every paired
