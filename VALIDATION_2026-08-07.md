@@ -3234,6 +3234,16 @@ This is direct confirmation that the physical exchange gate prevents a
 numerically settled short window from certifying a still-young rack flow
 field.
 
+The very next 0.1 s physical advance proved that the early local pass was not
+a settled global field. At 0.47 s, spatial velocity movement jumped from
+2.852% to 22.285% and Fan 5 changed 7.722%, while one-way rack flow continued
+to rise. Subsequent 0.01 s checks reduced velocity movement to 2.372% and
+2.370%; the controlling device change fell from 4.617% to 0.578%. The
+controller then resumed physical exchange at 0.49 s with only 5.410% of one
+air exchange accumulated. This is an observed false-acceptance case that would
+have escaped mass balance, direction checks, and two adjacent short windows
+without the cumulative exchange gate.
+
 The component-definition audit confirmed that the air-side variant applies
 the intended 1545 W exactly once: 150 W Eaton, 950 W Dell, 425 W Trenton, and
 20 W passive KVM. It also exposed a calibration distinction that the previous
