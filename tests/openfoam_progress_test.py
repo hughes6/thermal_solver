@@ -17,6 +17,7 @@ from tools.openfoam_progress import (
     read_thermal_only_flow,
     read_health,
     read_latest_run_request,
+    read_latest_thermal_metrics,
     read_initial_airflow_progress,
     read_samples,
     recent_slope,
@@ -28,6 +29,27 @@ from tools.openfoam_progress import (
 
 
 class OpenFoamProgressTest(unittest.TestCase):
+    def test_reads_normalized_thermal_metrics_and_runner_limits(self):
+        with tempfile.TemporaryDirectory() as directory:
+            case = Path(directory)
+            (case / "run_summary.log").write_text(
+                "now | thermal time=7200 maxInternalCellChange=5.83854 "
+                "maxComponentAverageChange=3.4787 "
+                "controllingPeakRegion=Trenton "
+                "controllingAverageRegion=Trenton elapsed=2400\n",
+                encoding="utf-8",
+            )
+            (case / "run_parallel.sh").write_text(
+                'if ! awk -v v="$scaled_delta" -v limit="0.25"; then :; fi\n'
+                'if ! awk -v v="$scaled_average_delta" -v limit="0.1"; then :; fi\n',
+                encoding="utf-8",
+            )
+            self.assertEqual(
+                read_latest_thermal_metrics(case),
+                (7200.0, 5.83854, 3.4787, "Trenton", "Trenton", 2400.0,
+                 0.25, 0.1),
+            )
+
     def test_fast_storage_usage_skips_recursive_case_walk(self):
         fake_usage = mock.Mock(free=12345)
         with mock.patch(

@@ -52,6 +52,19 @@ INITIAL_EXCHANGE_FRACTION_RE = re.compile(
     r"\|\s+initial_air_exchange_advance\s+current=([0-9.eE+-]+)\s+"
     r"target=([0-9.eE+-]+)\s+completedFraction=([0-9.eE+-]+)"
 )
+THERMAL_METRICS_RE = re.compile(
+    r"\|\s+thermal\s+time=([0-9.eE+-]+)\s+"
+    r"maxInternalCellChange=([0-9.eE+-]+)\s+"
+    r"maxComponentAverageChange=([0-9.eE+-]+)\s+"
+    r"controllingPeakRegion=(\S+)\s+controllingAverageRegion=(\S+)\s+"
+    r"elapsed=([0-9.eE+-]+)"
+)
+THERMAL_PEAK_LIMIT_RE = re.compile(
+    r'if ! awk -v v="\$scaled_delta" -v limit="([0-9.eE+-]+)"'
+)
+THERMAL_AVERAGE_LIMIT_RE = re.compile(
+    r'if ! awk -v v="\$scaled_average_delta" -v limit="([0-9.eE+-]+)"'
+)
 
 
 def read_samples(log_path: Path) -> list[tuple[float, float]]:
@@ -202,6 +215,35 @@ def read_latest_run_request(case_directory: Path) -> tuple[str, float] | None:
         if match:
             latest = match.group(1), float(match.group(2))
     return latest
+
+
+def read_latest_thermal_metrics(case_directory: Path):
+    """Return latest normalized thermal rates and generated-runner limits."""
+    summary = case_directory / "run_summary.log"
+    if not summary.is_file():
+        return None
+    latest = None
+    for line in summary.read_text(encoding="utf-8", errors="ignore").splitlines():
+        match = THERMAL_METRICS_RE.search(line)
+        if match:
+            latest = (
+                float(match.group(1)), float(match.group(2)),
+                float(match.group(3)), match.group(4), match.group(5),
+                float(match.group(6)),
+            )
+    if latest is None:
+        return None
+    peak_limit = average_limit = None
+    runner = case_directory / "run_parallel.sh"
+    if runner.is_file():
+        runner_text = runner.read_text(encoding="utf-8", errors="ignore")
+        match = THERMAL_PEAK_LIMIT_RE.search(runner_text)
+        if match:
+            peak_limit = float(match.group(1))
+        match = THERMAL_AVERAGE_LIMIT_RE.search(runner_text)
+        if match:
+            average_limit = float(match.group(1))
+    return latest + (peak_limit, average_limit)
 
 
 def read_initial_airflow_progress(
@@ -540,6 +582,7 @@ def main() -> int:
     )
     maximum_courant, cumulative_continuity, fatal_signatures = read_health(log_path)
     run_request = read_latest_run_request(case_directory)
+    thermal_metrics = read_latest_thermal_metrics(case_directory)
     initial_airflow = read_initial_airflow_progress(case_directory)
     case_bytes, free_bytes = storage_usage(case_directory, args.fast)
 
@@ -563,6 +606,20 @@ def main() -> int:
             )
     if initial_airflow is not None:
         print(format_initial_airflow_stage(initial_airflow, current_time))
+    if thermal_metrics is not None:
+        (thermal_time, peak_rate, average_rate, peak_region, average_region,
+         thermal_elapsed, peak_limit, average_limit) = thermal_metrics
+        peak_gate = f" / {peak_limit:.6g}" if peak_limit is not None else ""
+        average_gate = (
+            f" / {average_limit:.6g}" if average_limit is not None else ""
+        )
+        print(
+            "Latest thermal convergence rates at "
+            f"{thermal_time:.9g} s (normalized from {thermal_elapsed:.9g} s): "
+            f"peak {peak_rate:.6g}{peak_gate} K/300s [{peak_region}], "
+            f"component average {average_rate:.6g}{average_gate} K/300s "
+            f"[{average_region}]"
+        )
     print(f"Recent rate: {slope:.1f} wall s / simulated s")
     print(f"Solver logged wall time: {format_duration(logged_wall_time)}")
     print(f"Estimated remaining wall time: {format_duration(remaining_simulated * slope)}")
