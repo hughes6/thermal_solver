@@ -101,6 +101,13 @@ int main() {
     assert(std::abs(
         fallback_loader.model.openfoam_solver.airflow_warmup_time-20.0)<1e-12);
     const auto provenance_case=root/"provenance_case";
+    std::filesystem::create_directories(
+        provenance_case/"provenance");
+    {
+        std::ofstream stale(
+            provenance_case/"provenance"/"stale_component.toml");
+        stale << "obsolete\n";
+    }
     fallback_loader.write_openfoam_provenance(provenance_case);
     const auto provenance=provenance_case/"provenance";
     assert(read_file(provenance/"model.toml")==fallback_model);
@@ -111,6 +118,8 @@ int main() {
     assert(manifest.find("model.toml <- ")!=std::string::npos);
     assert(manifest.find("openfoam_profile.toml <- ")!=std::string::npos);
     assert(manifest.find("fan_curves.toml <- ")!=std::string::npos);
+    assert(!std::filesystem::exists(
+        provenance/"stale_component.toml"));
     ModelLoader component_loader;
     component_loader.load_fan_curves(
         "library/fan_curves/fan_curves.toml");

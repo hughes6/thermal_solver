@@ -1097,6 +1097,7 @@ struct ModelLoader {
     void write_openfoam_provenance(
         const std::filesystem::path& case_directory) const {
         const std::filesystem::path directory=case_directory/"provenance";
+        std::filesystem::remove_all(directory);
         std::filesystem::create_directories(directory);
         std::ofstream manifest(directory/"manifest.txt");
         if(!manifest)
