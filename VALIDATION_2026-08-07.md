@@ -2850,6 +2850,16 @@ incompatible state resets to zero. A freshly compiled `openfoam_export_test`
 passed, as did all 23 focused progress-monitor tests. The active case was not
 modified.
 
+The preserved runner's post-exchange transition was audited directly before
+the `5.27144 s` target. Its thermal-only branch does not inherit the 0.1 s
+live-flow checkpoint cadence: it independently computes
+`ceil(interval / thermal_only_maximum_time_step)`, uses a fixed divisible
+timestep, and writes only the stage endpoint. From 5.27144 to 2400 s, the
+generated plan is 120 steps at approximately 19.9561 s with a processor write
+at step 120. The 0.1 s alignment logic is confined to live-flow stages. This
+confirms that a successful initial-airflow transition will enter the intended
+fast implicit thermal workflow rather than continuing at CFD-scale timesteps.
+
 The direct internal checkpoint data was initially present only in CSV and
 console output. Saved `--snapshot-times --save` figures now add a fifth panel
 with dashed intake and solid rear-outlet temperature traces for every paired
