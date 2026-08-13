@@ -1,32 +1,45 @@
-wire_lpntr = "LC-CD6DBA76-E2EB-4DBC-93AE-712B63B85274"
-
 cur.execute("""
-SELECT *
+SELECT
+    COPY,
+    BundleID,
+    ParentID,
+    Name,
+    NODENO,
+    SUBENTRY,
+    SUBVERSION
 FROM dbo.Cable
 WHERE ENTRY = ?
 ORDER BY COPY
 """, wire_lpntr)
 
-columns = [col[0] for col in cur.description]
-rows = cur.fetchall()
-
-print("Rows:", len(rows))
-
-for row in rows:
-    print("\n" + "-" * 60)
-
-    for name, value in zip(columns, row):
-        print(f"{name} = {value}")
+for row in cur.fetchall():
+    print(tuple(row))
 
 
 
-component_id = "ADB52ED8-D987-40A2-A8A2-28CFBC23A4A0"
 
 cur.execute("""
-SELECT *
+SELECT LPNTR
+FROM dbo.ComponentData
+WHERE ENTRY = ?
+AND ENTRYTYP = 22
+""", "Twisted 5 Wire - 24AWG")
+
+five_wire_lpntr = cur.fetchone()[0]
+
+cur.execute("""
+SELECT
+    COPY,
+    BundleID,
+    ParentID,
+    Name,
+    NODENO,
+    SUBENTRY,
+    SUBVERSION
 FROM dbo.Cable
 WHERE ENTRY = ?
 ORDER BY COPY
-""", component_id)
+""", five_wire_lpntr)
 
-print("Rows:", len(cur.fetchall()))
+for row in cur.fetchall():
+    print(tuple(row))
