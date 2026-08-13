@@ -3196,3 +3196,40 @@ reconstruction. The progress monitor previously interpreted that restored
 latest `run_start` and `run_complete` records, reports the requested 18,000 s
 target and reconstructed completion explicitly, and clears the completion
 state when a newer run begins. All 37 progress-monitor tests pass.
+
+## Fresh generic-airside screening cold start (2026-08-13)
+
+A uniquely named 208,772-cell screening case was exported as
+`model_generic_airside_screening_20260813`; no prior case was overwritten.
+The first export exposed that its 10 s default horizon was shorter than the
+profile's 20 s `airflow_warmup_time` safety ceiling. The two generic-airside
+models now use a 30 s default horizon. A repository-wide audit found the same
+invalid combination in `model.toml`, `model_baseline_current.toml`,
+`model_generic_components.toml`, and `model_generic_selective.toml`; those
+defaults are also 30 s now. A regression test loads every OpenFOAM-enabled
+model and its referenced profile and requires the export horizon to exceed
+the safety ceiling.
+
+The fresh startup also quantified a Courant-planning weakness. At the end of
+the fan ramp, a preflight based on the barely developed 0.05 s field predicted
+`Co_max=1.04186` and selected `deltaT=0.000992908 s` for one fixed-step
+stage through 0.33 s. As the flow accelerated, the actual postflight value
+reached `Co_max=4.60227`, 4.42 times the prediction. It remained below the
+screening limit of 5, so the preserved run is valid, but it exceeded the
+planner's intended 80% margin and took 1243.832 wall seconds.
+
+Future generated runners bound only the pre-eligibility accelerating interval
+to the existing 0.1 s airflow-checkpoint cadence. Each segment therefore
+recomputes its Courant-safe fixed timestep from a more representative field.
+The efficient direct advance to a multi-second physical air-exchange target
+after metrics settle is unchanged. The exporter regression verifies the new
+cap.
+
+At 0.35 s, the first complete cold-flow gate reported 0.326088% mass
+imbalance, valid directions, and 2.88% spatial velocity RMS movement, all
+inside the screening limits. Its estimated air-exchange time was 5.50946 s,
+but cumulative exchanged mass represented only 2.72259% of rack air. The
+controller therefore rejected early acceptance and continued live airflow.
+This is direct confirmation that the physical exchange gate prevents a
+numerically settled short window from certifying a still-young rack flow
+field.
