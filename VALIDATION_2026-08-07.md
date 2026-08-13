@@ -2938,3 +2938,24 @@ still rests on only a 0.0039 K outlet rise. Net sensible rejection remained an
 expected early-transient -3.43 W. The global trend is favorable but remains
 above the spatial gate, and the nonmonotonic local maximum reinforces the
 decision to continue through the full physical air exchange.
+
+At `3.89388571 s`, adjacent whole-fluid velocity movement decreased again to
+6.549%, external rack-air movement to 6.633%, and Dell internal-air movement
+sharply to 2.065%. Trenton's low-speed relative movement decreased to 10.473%,
+or 0.00605 m/s RMS in absolute terms. The maximum local velocity difference
+returned from 3.038 to 1.925 m/s at `(0.345249, 0.368200, 0.229000) m` in the
+Dell region. Fluid temperature moved 0.000372 K RMS and all regions moved
+0.000779 K RMS. `k`, `alphat`, and `omega` movement decreased to 10.197%,
+9.932%, and 3.477%. Gauge-invariant pressure movement increased slightly but
+remained small at 0.088 Pa RMS (0.570%).
+
+Boundary behavior remained settled. Intake magnitude changed -0.01927%; Fan 6
+was the largest exhaust change at -0.17675%; all nine fans remained outward,
+the intake remained inward, and bidirectional flow remained zero. Dell's
+intake/rear-outlet averages reached 293.1539/293.2299 K and its intake-rise
+index was 4.86%. Eaton remained reversed and undefined at
+293.1582/293.1558 K. Trenton reached 293.1516/293.1555 K; its 28.70% ratio
+still rests on only a 0.0039 K outlet rise. Net sensible rejection remained an
+expected early-transient -3.38 W. Four consecutive global windows now show
+declining velocity movement, but 6.55% remains above the spatial gate and does
+not replace the full air-exchange requirement.
