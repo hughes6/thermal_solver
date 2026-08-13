@@ -22,6 +22,7 @@ from tools.openfoam_progress import (
     read_latest_run_state,
     read_latest_air_exchange_time,
     read_recent_exchange_wall_rate,
+    read_latest_airflow_metrics,
     read_latest_thermal_metrics,
     read_initial_airflow_progress,
     read_samples,
@@ -521,6 +522,22 @@ class OpenFoamProgressTest(unittest.TestCase):
             )
             self.assertAlmostEqual(
                 read_recent_exchange_wall_rate(case), 4800.0
+            )
+
+    def test_reads_latest_airflow_gate_metrics(self):
+        with tempfile.TemporaryDirectory() as directory:
+            case = Path(directory)
+            (case / "run_summary.log").write_text(
+                "now | airflow time=0.85 imbalance=0.000465642 "
+                "maxFlowChange=0.00155094 maxFlowDevice=Fan_6 "
+                "directionsOK=1 velocityRelativeRms=0.0169129 "
+                "previousVelocityRelativeRms=0.0171351 "
+                "estimatedAirExchangeTime=4.46603\n",
+                encoding="utf-8",
+            )
+            self.assertEqual(
+                read_latest_airflow_metrics(case),
+                (0.85, 0.000465642, 0.00155094, "Fan_6", True, 0.0169129),
             )
 
     def test_initial_exchange_stage_distinguishes_reached_target(self):

@@ -80,6 +80,12 @@ AIRFLOW_STAGE_RE = re.compile(
     r"start=([0-9.eE+-]+)\s+target=([0-9.eE+-]+)\s+"
     r"seconds=([0-9.eE+-]+)"
 )
+AIRFLOW_METRICS_RE = re.compile(
+    r"\|\s+airflow\s+time=([0-9.eE+-]+)\s+"
+    r"imbalance=([0-9.eE+-]+)\s+"
+    r"maxFlowChange=([0-9.eE+-]+)\s+maxFlowDevice=(\S+)\s+"
+    r"directionsOK=([01])\s+velocityRelativeRms=([0-9.eE+-]+)"
+)
 THERMAL_PEAK_LIMIT_RE = re.compile(
     r'if ! awk -v v="\$scaled_delta" -v limit="([0-9.eE+-]+)"'
 )
@@ -408,6 +414,25 @@ def read_recent_exchange_wall_rate(
     if total_span <= 0.0:
         return None
     return sum(seconds for _, seconds in selected) / total_span
+
+
+def read_latest_airflow_metrics(case_directory: Path):
+    summary = case_directory / "run_summary.log"
+    if not summary.is_file():
+        return None
+    latest = None
+    for line in summary.read_text(encoding="utf-8", errors="ignore").splitlines():
+        match = AIRFLOW_METRICS_RE.search(line)
+        if match:
+            latest = (
+                float(match.group(1)),
+                float(match.group(2)),
+                float(match.group(3)),
+                match.group(4),
+                match.group(5) == "1",
+                float(match.group(6)),
+            )
+    return latest
 
 
 def format_initial_airflow_stage(
@@ -744,6 +769,7 @@ def main() -> int:
     initial_airflow = read_initial_airflow_progress(case_directory)
     latest_air_exchange_time = read_latest_air_exchange_time(case_directory)
     exchange_wall_rate = read_recent_exchange_wall_rate(case_directory)
+    airflow_metrics = read_latest_airflow_metrics(case_directory)
     case_bytes, free_bytes = storage_usage(case_directory, args.fast)
 
     print(f"Case: {case_directory}")
@@ -771,6 +797,17 @@ def main() -> int:
             )
     if initial_airflow is not None:
         print(format_initial_airflow_stage(initial_airflow, current_time))
+        if airflow_metrics is not None:
+            (airflow_time, imbalance, flow_change, flow_device,
+             directions_ok, velocity_change) = airflow_metrics
+            print(
+                f"Latest airflow gates at {airflow_time:.9g} s: "
+                f"mass imbalance {100.0 * imbalance:.4f}%, "
+                f"device change {100.0 * flow_change:.4f}% "
+                f"[{flow_device}], spatial velocity change "
+                f"{100.0 * velocity_change:.4f}%, directions "
+                f"{'valid' if directions_ok else 'INVALID'}"
+            )
     if thermal_metrics is not None:
         (thermal_time, peak_rate, average_rate, peak_region, average_region,
          thermal_elapsed, peak_limit, average_limit) = thermal_metrics
