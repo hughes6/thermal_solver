@@ -2959,3 +2959,14 @@ still rests on only a 0.0039 K outlet rise. Net sensible rejection remained an
 expected early-transient -3.38 W. Four consecutive global windows now show
 declining velocity movement, but 6.55% remains above the spatial gate and does
 not replace the full air-exchange requirement.
+
+Before rolling retention removed `3.69709224 s`, a two-window comparison to
+`3.89388571 s` measured 12.143% whole-fluid and 12.292% external-air velocity
+movement. The two adjacent windows measured 6.820% and 6.549%; the long-lag
+change is therefore nearly their sum rather than being canceled by a repeating
+two-phase oscillation. Dell's two-window movement was 4.618%, Eaton's 2.007%,
+and Trenton's low-speed relative value was 22.361% (0.0129 m/s RMS absolute).
+The maximum long-lag difference was 3.152 m/s in the Dell at
+`(0.345249, 0.333200, 0.229000) m`. This provides stronger evidence that the
+cold field is still drifting coherently and that the physical air-exchange
+gate is doing necessary work.
