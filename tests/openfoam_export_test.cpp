@@ -325,6 +325,23 @@ int main(int argc, char** argv) {
             "Mapped airflow skips the cold-start air-exchange horizon after live spatial and device validation.") !=
                std::string::npos);
         assert(text.str().find(
+            "Cumulative air exchange is $air_exchange_fraction; advancing to t=$exchange_target s before final local convergence checks.") !=
+               std::string::npos);
+        assert(text.str().find(
+            "if [[ ! -f \"$mapped_state_marker\" ]] && ! awk -v completed=\"$air_exchange_fraction\"") !=
+               std::string::npos);
+        const auto exchange_advance=text.str().find(
+            "Cumulative air exchange is $air_exchange_fraction;");
+        const auto final_local_acceptance=text.str().find(
+            "if [[ \"$airflow_metrics_passed\" == true ]]; then",
+            exchange_advance);
+        assert(exchange_advance!=std::string::npos);
+        assert(final_local_acceptance!=std::string::npos);
+        assert(exchange_advance<final_local_acceptance);
+        assert(text.str().find(
+            "Initial airflow gates pass, but cumulative air exchange") ==
+               std::string::npos);
+        assert(text.str().find(
             "minimum_observation=\"0.01\"") != std::string::npos);
         assert(text.str().find(
             "t>=minimum-tolerance") != std::string::npos);

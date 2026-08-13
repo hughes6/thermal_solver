@@ -3280,3 +3280,22 @@ status treated arrival at the next incremental check as completion of the
 full exchange. The monitor now uses cumulative fraction >= 1 for current
 runners while retaining absolute-target behavior for legacy runners. The
 solver controller was unaffected. All 42 progress-monitor tests pass.
+
+Later cold-start checkpoints showed that the 3% long-window field gate should
+be reached before the one-exchange requirement. At 1.43 s, 26.4378% of an
+exchange had accumulated; mass imbalance was 0.00844%, device-flow change was
+0.7882%, and spatial velocity movement was 7.8934%. The following two 0.01 s
+windows passed locally at 0.7872% and 0.7723% velocity movement before the
+runner resumed its next 0.1 s physical advance.
+
+Those short confirmations cannot change the mandatory exchange outcome and
+cost about 67.9 + 70.2 = 138.1 wall seconds after a 468.6-second exchange
+step. Future cold starts therefore advance directly between the existing
+0.1 s physical checkpoints while the cumulative fraction is incomplete. Each
+checkpoint still performs Courant postflight, mass balance, device-flow,
+direction, and spatial-field measurements and remains restart-safe. Once the
+configured exchange fraction is reached, the full local gates must pass
+before thermal-only evolution begins; mapped starts still require live gates
+before skipping the cold horizon. This removes about 23% of the observed
+cold-start wall time without relaxing final acceptance. The preserved live
+case was not modified mid-run.
