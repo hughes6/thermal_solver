@@ -3640,3 +3640,81 @@ python plot/exhaust_recirculation_matrix.py snapshot_1.csv `
 The real 15 and 12.5 mm plots and statistics were generated beside their
 source OpenFOAM cases. Five focused aggregation/plot tests pass, including
 mean and spread calculation, CSV output, and misaligned-order rejection.
+
+## Current 10 mm in-depth mesh refinement (2026-08-13)
+
+The temporal study proved that grid resolution, rather than transient-RANS
+snapshot noise, dominated the remaining source-attributed recirculation
+uncertainty. A uniquely named current 10 mm case,
+`model_generic_airside_mesh10_probe_20260813`, was therefore exported with the
+same model, components, fan curves, solver profile, 0.10 m coarse target, and
+0.02 m refinement margin as the validated 12.5 mm case. Only `fine_dx` changed
+from 0.0125 to 0.010 m. The prepared mesh contained 791,700 total cells:
+680,725 fluid plus 110,975 solid. All five region meshes passed full topology
+and geometry checks, including coupled AMI weights. The fluid mesh retained
+the expected two connected volumes (rack air plus the intentional sealed KVM
+air volume).
+
+The workstation had only 5.3 GiB free disk and 3.7 GiB visible RAM before the
+run. The case therefore retained two processor checkpoints instead of three;
+this preserves restart data and the required 2/2 convergence evidence without
+changing any physics. The prepared case occupied 398 MiB and the mapped warm
+start 884 MiB. During the two-rank solve, available memory remained at least
+about 1.6 GiB with effectively zero swap. Free disk remained above 4.4 GiB.
+
+All five regions were mapped from the converged current 12.5 mm endpoint at
+4,800.01 s, followed by the mandatory coupled warm start. Six strict 0.01 s
+mapped-flow windows were required. Spatial velocity RMS fell from 1.554% to
+0.962%; the final adjacent windows also held mass imbalance below 0.013%,
+worst device-flow change below 0.374%, and correct directions. The normal
+1,200 s multirate stages then reached a 2/2 accepted convergence streak and
+stopped cleanly at 4,800.01 s rather than the requested 12,000 s ceiling.
+
+| Metric | Current 15 mm | Current 12.5 mm | Current 10 mm |
+|---|---:|---:|---:|
+| Total cells | 335,580 | 477,456 | 791,700 |
+| Fluid cells | 284,396 | 405,414 | 680,725 |
+| Outlet mass flow | 0.296809 kg/s | 0.295567 kg/s | 0.296576 kg/s |
+| Mass-weighted outlet T | 298.3175 K | 298.3411 K | 298.3235 K |
+| Analytical outlet T | 298.3295 K | 298.3512 K | 298.3335 K |
+| Solid average T | 303.3156 K | 303.1183 K | 302.6789 K |
+| Hottest solid | 315.3678 K | 314.4263 K | 313.3669 K |
+| Mass error | 0.0165% | 0.0413% | 0.0228% |
+| Energy error | 0.2304% | 0.1955% | 0.1938% |
+
+Bulk flow and outlet temperature are effectively grid-converged: the 10 mm
+endpoint differs from 12.5 mm by +0.341% outlet flow and -0.0176 K outlet
+temperature. Solid average changes another -0.439 K, however, and the hottest
+solid changes another -1.059 K. A 15 mm or 12.5 mm result is therefore valid
+for rack heat rejection and equipment ranking, but an uncalibrated volumetric
+block's individual peak-cell temperature must carry at least the observed
+roughly 1 K discretization uncertainty; it is not yet grid-independent.
+
+The 10 mm fixed-flow tracer was run at adjacent accepted 3,600.01 and
+4,800.01 s checkpoints. Its maximum temporal path change was 0.1579
+percentage points and temporal RMS was 0.0923 points. By contrast, two-
+snapshot 12.5 versus 10 mm means differed by 2.2931 points maximum and 0.8358
+points RMS. The dominant change was Trenton exhaust entering Dell intake,
+22.3680% at 12.5 mm versus 20.0750% at 10 mm. All dominant path rankings were
+preserved, but exact recirculation percentages remain mesh-sensitive. Final
+mitigation claims should use at least 10 mm locally or report a roughly
+2.3-point grid uncertainty; 15 mm remains appropriate for screening path
+ranking and comparative layout work.
+
+Settled 10 mm thermal legs cost 335--433 wall seconds and strict airflow
+refreshes 730--926 seconds, for approximately 18--21 minutes per cycle. This
+is roughly 1.9 times the 12.5 mm cycle and 2.8 times the 15 mm cycle on this
+machine. The evidence does not justify changing the 15 mm in-depth default.
+Instead, 10 mm is an escalation mesh for final local-hotspot or recirculation
+magnitude decisions when its extra runtime and storage are acceptable.
+
+The study also exposed avoidable tracer storage. Each attribution run copied
+the full serial fluid mesh and fields even though downstream plotting needs
+only the matrix, metadata, and convergence logs. The tracer driver now accepts
+`--compact`. After all source solves converge and all three reports exist, it
+removes only the derived output's copied `constant`, `system`, and numeric time
+directories. It refuses to compact the source case or an incomplete output,
+marks metadata with `compacted_output: true`, and retains every source log.
+The generated model-runner tracer command now uses this mode. A real 405,414-
+cell compact run produced a byte-identical matrix to the original full output;
+ten focused tracer tests and the generated-command C++ regression pass.

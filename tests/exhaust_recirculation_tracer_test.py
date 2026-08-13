@@ -1,9 +1,11 @@
 import tempfile
 import unittest
+import json
 from pathlib import Path
 
 from tools.exhaust_recirculation_tracer import (
     MESH_RE,
+    compact_output_case,
     copy_case,
     load_devices,
     parse_solver_output,
@@ -73,6 +75,45 @@ class ExhaustTracerTest(unittest.TestCase):
             self.assertIn('"tracer.*"', copied)
             self.assertIn("tolerance       1e-12", copied)
             self.assertIn("relTol          0", copied)
+
+    def test_compact_output_preserves_reports_and_logs_only(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source = root / "source"
+            output = root / "derived"
+            source.mkdir()
+            (output / "constant").mkdir(parents=True)
+            (output / "system").mkdir()
+            (output / "12.5" / "fluid").mkdir(parents=True)
+            (output / "constant" / "mesh").write_text("mesh")
+            (output / "system" / "dictionary").write_text("dictionary")
+            (output / "12.5" / "fluid" / "tracer").write_text("field")
+            (output / "log.tracer_source_0").write_text("converged")
+            for report in (
+                "exhaust_recirculation_matrix.csv",
+                "exhaust_recirculation_matrix.md",
+            ):
+                (output / report).write_text("report")
+            (output / "exhaust_recirculation_metadata.json").write_text("{}")
+            compact_output_case(output, source)
+            self.assertFalse((output / "constant").exists())
+            self.assertFalse((output / "system").exists())
+            self.assertFalse((output / "12.5").exists())
+            self.assertTrue((output / "log.tracer_source_0").is_file())
+            self.assertTrue((output / "exhaust_recirculation_matrix.csv").is_file())
+            metadata = json.loads(
+                (output / "exhaust_recirculation_metadata.json").read_text())
+            self.assertTrue(metadata["compacted_output"])
+
+    def test_compact_refuses_source_or_incomplete_output(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            with self.assertRaisesRegex(ValueError, "source OpenFOAM case"):
+                compact_output_case(root, root)
+            output = root / "derived"
+            output.mkdir()
+            with self.assertRaisesRegex(ValueError, "before report creation"):
+                compact_output_case(output, root)
 
     def test_selects_latest_exact_and_numeric_time(self):
         with tempfile.TemporaryDirectory() as directory:

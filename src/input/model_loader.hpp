@@ -1935,7 +1935,7 @@ struct ModelLoader {
                     << command_quote(launch_directory+"_tracer_RUN_ID")
                     << " --solver "
                        "/mnt/c/OpenFOAM/thermal_sim_v2_tools/bin/"
-                       "steadyExhaustTracerFoam\n"
+                       "steadyExhaustTracerFoam --compact\n"
                     << "Plot that saved matrix without rerunning OpenFOAM "
                        "(PowerShell or Git Bash):\n  "
 #ifdef _WIN32

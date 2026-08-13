@@ -240,6 +240,33 @@ def write_reports(output: Path, devices: list[Device], matrix: dict[tuple[int, i
         json.dumps(metadata, indent=2) + "\n", encoding="utf-8")
 
 
+def compact_output_case(output: Path, source: Path) -> None:
+    output = output.resolve()
+    source = source.resolve()
+    if output == source:
+        raise ValueError("Refusing to compact the source OpenFOAM case")
+    required = (
+        "exhaust_recirculation_matrix.csv",
+        "exhaust_recirculation_matrix.md",
+        "exhaust_recirculation_metadata.json",
+    )
+    missing = [name for name in required if not (output / name).is_file()]
+    if missing:
+        raise ValueError(
+            f"Refusing to compact before report creation: missing {missing[0]}")
+    metadata_path = output / "exhaust_recirculation_metadata.json"
+    metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+    metadata["compacted_output"] = True
+    metadata_path.write_text(json.dumps(metadata, indent=2) + "\n",
+                             encoding="utf-8")
+    for name in ("constant", "system"):
+        path = output / name
+        if path.is_dir():
+            shutil.rmtree(path)
+    for _, path in numeric_times(output):
+        shutil.rmtree(path)
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("source_case", type=Path)
@@ -251,6 +278,10 @@ def main() -> int:
     parser.add_argument("--schmidt", type=float, default=0.7)
     parser.add_argument("--iterations", type=int, default=500)
     parser.add_argument("--tolerance", type=float, default=1e-9)
+    parser.add_argument(
+        "--compact", action="store_true",
+        help="after successful report creation, remove copied mesh/dictionaries "
+             "and tracer fields while retaining reports and solve logs")
     args = parser.parse_args()
     source = args.source_case.resolve()
     output = args.output_case.resolve()
@@ -319,9 +350,12 @@ def main() -> int:
         "turbulent_schmidt": args.schmidt,
         "maximum_iterations": args.iterations,
         "field_change_tolerance": args.tolerance,
+        "compacted_output": args.compact,
         "source_solves": solve_records,
     }
     write_reports(output, devices, matrix, intake_flows, metadata_output)
+    if args.compact:
+        compact_output_case(output, source)
     print(output / "exhaust_recirculation_matrix.csv")
     print(output / "exhaust_recirculation_matrix.md")
     print(output / "exhaust_recirculation_metadata.json")

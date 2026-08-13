@@ -77,6 +77,8 @@ int main() {
            std::string::npos);
     assert(output.find("tools/openfoam_progress.py") != std::string::npos);
     assert(output.find("steadyExhaustTracerFoam") != std::string::npos);
+    assert(output.find("steadyExhaustTracerFoam --compact") !=
+           std::string::npos);
     assert(output.find(
         "source /usr/lib/openfoam/openfoam2606/etc/bashrc && export "
         "WM_PROJECT_USER_DIR=/tmp/thermal_sim_foam_user && cd /tmp && "
