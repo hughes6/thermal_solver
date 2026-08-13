@@ -350,6 +350,12 @@ int main(int argc, char** argv) {
         assert(text.str().find(
             "Airflow metrics evaluation failed; aborting refresh.") !=
                std::string::npos);
+        const auto exchange_reached=text.str().find(
+            "Initial air-exchange requirement reached; collecting fresh local convergence windows before acceptance.");
+        assert(exchange_reached!=std::string::npos);
+        assert(exchange_reached<final_local_acceptance);
+        assert(text.str().find(
+            "exchange_was_incomplete=true") != std::string::npos);
         assert(text.str().find(
             "minimum_observation=\"0.01\"") != std::string::npos);
         assert(text.str().find(

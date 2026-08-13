@@ -3300,6 +3300,17 @@ before skipping the cold horizon. This removes about 23% of the observed
 cold-start wall time without relaxing final acceptance. The preserved live
 case was not modified mid-run.
 
+Retained raw internal-fan output at 1.67, 1.68, and 1.69 s confirmed the
+existing period-two source mode: Eaton alternated 0.0169801, 0.0146768, and
+0.0169923 m3/s, while Trenton alternated 0.0451535, 0.0419631, and 0.0451643
+m3/s. Two-sample means remained stable. A sequence of even-step 0.1 s stages
+could repeatedly end on one phase, so the optimized runner now always starts
+fresh short convergence windows when the exchange threshold is first crossed,
+even if that final long checkpoint appears to pass. The required two adjacent
+local velocity checks and internal-flow smoothing therefore remain
+period-two-safe; only redundant checks while exchange is still incomplete are
+removed.
+
 The direct-advance review also exposed that `airflow_metrics_converged`
 previously returned the same status for an ordinary gate miss and for failed
 OpenFOAM post-processing or missing flow output. Both initial airflow and
