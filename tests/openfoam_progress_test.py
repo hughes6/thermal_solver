@@ -25,11 +25,18 @@ from tools.openfoam_progress import (
     is_stale_run,
     storage_usage,
     low_space_warning,
+    temperature_warning,
     format_initial_airflow_stage,
 )
 
 
 class OpenFoamProgressTest(unittest.TestCase):
+    def test_temperature_warning_is_diagnostic_threshold(self):
+        self.assertIsNone(temperature_warning(423.15, 150.0))
+        warning = temperature_warning(424.15, 150.0)
+        self.assertIn("150 C", warning)
+        self.assertIn("component airflow", warning)
+
     def test_reads_temperature_ranges_from_latest_completed_timestep(self):
         with tempfile.TemporaryDirectory() as directory:
             log = Path(directory) / "run.stdout.log"

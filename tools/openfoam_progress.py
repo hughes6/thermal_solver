@@ -541,6 +541,19 @@ def low_space_warning(free_bytes: int, minimum_free_gib: float) -> str | None:
     )
 
 
+def temperature_warning(
+    temperature_k: float, maximum_temperature_c: float
+) -> str | None:
+    temperature_c = temperature_k - 273.15
+    if temperature_c > maximum_temperature_c:
+        return (
+            "WARNING: latest region maximum exceeds the diagnostic "
+            f"temperature threshold of {maximum_temperature_c:g} C; check "
+            "component airflow, heat load, and material calibration"
+        )
+    return None
+
+
 def is_stale_run(
     log_age_seconds: float,
     current_time: float,
@@ -590,9 +603,18 @@ def main() -> int:
         default=5.0,
         help="warn below this free-space threshold in GiB (default: 5)",
     )
+    parser.add_argument(
+        "--maximum-temperature-c",
+        type=float,
+        default=150.0,
+        help=("warn when the latest completed region maximum exceeds this "
+              "temperature in C (default: 150; diagnostic only)"),
+    )
     args = parser.parse_args()
     if not math.isfinite(args.minimum_free_gib) or args.minimum_free_gib < 0:
         parser.error("--minimum-free-gib must be finite and nonnegative")
+    if not math.isfinite(args.maximum_temperature_c):
+        parser.error("--maximum-temperature-c must be finite")
 
     case_directory = args.case.resolve()
     log_path = choose_log(case_directory, args.log.resolve() if args.log else None)
@@ -684,6 +706,11 @@ def main() -> int:
             f"{hottest_region} {hottest_temperature:.6g} K "
             f"({hottest_temperature - 273.15:.6g} C)"
         )
+        warning = temperature_warning(
+            hottest_temperature, args.maximum_temperature_c
+        )
+        if warning:
+            print(warning)
     print(
         "Fatal signatures: "
         + (", ".join(fatal_signatures) if fatal_signatures else "none")
