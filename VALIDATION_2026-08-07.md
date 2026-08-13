@@ -3338,3 +3338,49 @@ period-two fan-source check. Restarting during this phase restores another
 full-window target instead of silently reverting to short-window acceptance.
 The exporter regression verifies marker creation, restart handling, failed
 full-window continuation, and ordering before final local acceptance.
+
+## Real-rack cold-airflow acceptance regression (2026-08-13)
+
+The 208,772-cell generic airside screening rack provided a controlled
+legacy-versus-current acceptance test.  Both runs used two MPI ranks and the
+same decomposed 4.56 s checkpoint.  The preserved source checkpoint had
+99.5572% cumulative exchanged air and 0.2982105 kg/s one-way rack flow.
+
+The legacy generated runner crossed one exchanged rack volume on a 0.01 s
+local check at 4.58 s.  That check reported 0.5822% spatial velocity RMS,
+zero reported mass imbalance, 0.0170% maximum device-flow change, and valid
+directions, so the runner immediately printed `Initial airflow converged` and
+entered thermal-only mode.  However, its preceding full 0.1 s checkpoint at
+4.56 s still changed by 4.0935% RMS, above the screening limit of 3%.  This is
+direct evidence that two locally quiet samples cannot replace rack-scale
+settling.
+
+The current runner (`de6dfb3`) was copied into the unique restart derivative
+`model_generic_airside_screening_gate_regression_20260813_456`.  Twenty
+critical `U`, `p_rgh`, `T`, `phi`, `k`, and `omega` checkpoint files across
+both ranks and all available regions matched the source by SHA-256.  After a
+local 4.56--4.57 s check, the runner scheduled a full 4.57--4.67 s physical
+window.  At 4.67 s it measured:
+
+- cumulative exchanged-air fraction: 1.02128775;
+- spatial velocity RMS change: 4.51125% (3% limit);
+- mass imbalance: 0.001006%;
+- maximum device-flow change: 0.153531%; and
+- all tracked directions valid.
+
+The runner did **not** accept this state.  It created
+`.initial_airflow_physical_settling` and scheduled another full 0.1 s window
+to 4.77 s.  This validates the persistent full-window gate on a real heated
+rack workflow, including restart immediately before the exchange boundary.
+The 922 s derivative wall time is intentionally excluded from performance
+comparisons because it shared the workstation with the live 2400 s airflow
+refresh.
+
+The legacy case then demonstrated the intended multirate performance: its
+4.58--2400 s implicit thermal-only stage completed in 277.2 wall seconds.  At
+2400 s the adaptive flow refresh required three 0.01 s samples.  The second
+sample failed the device gate at 7.5598%; the third settled to 0.58455%
+device change, 0.918972% spatial RMS, 0.12395% mass imbalance, and valid
+directions, after which thermal-only evolution resumed.  This confirms that
+the adaptive refresh continues rather than freezing the first disturbed
+heated-airflow sample.
