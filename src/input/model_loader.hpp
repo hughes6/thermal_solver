@@ -763,15 +763,19 @@ struct ModelLoader {
     LoggingConfig config;
     std::unordered_map<std::string, FanCurveInput> fan_curve_library;
     std::unordered_map<std::string, ComponentInput> component_template_cache; 
+    std::filesystem::path model_source_path;
+    std::filesystem::path fan_curve_source_path;
 
     ModelLoader() = default;
 
     void load_fan_curves(const std::filesystem::path& library_path) {
+        fan_curve_source_path=std::filesystem::absolute(library_path);
         fan_curve_library = load_fan_curve_library(library_path);}
 
     void load_model(const std::filesystem::path& model_path) 
     {
         try {
+            model_source_path=std::filesystem::absolute(model_path);
             const toml::table root = toml::parse_file(model_path.string());
 
             model.name = root["name"].value<std::string>().value_or(model_path.stem().string());
@@ -1087,6 +1091,43 @@ struct ModelLoader {
 
         } catch(const toml::parse_error& error) {
             throw std::runtime_error("Failed to parse model file '" + model_path.string() + "': " + std::string(error.description()));
+        }
+    }
+
+    void write_openfoam_provenance(
+        const std::filesystem::path& case_directory) const {
+        const std::filesystem::path directory=case_directory/"provenance";
+        std::filesystem::create_directories(directory);
+        std::ofstream manifest(directory/"manifest.txt");
+        if(!manifest)
+            throw std::runtime_error(
+                "Unable to write OpenFOAM provenance manifest.");
+        const auto snapshot=[&](const std::filesystem::path& source,
+                                const std::string& snapshot_name) {
+            if(source.empty() || !std::filesystem::is_regular_file(source))
+                throw std::runtime_error(
+                    "OpenFOAM provenance source is missing: " +
+                    source.string());
+            std::filesystem::copy_file(
+                source,directory/snapshot_name,
+                std::filesystem::copy_options::overwrite_existing);
+            manifest << snapshot_name << " <- "
+                     << std::filesystem::absolute(source).string() << '\n';
+        };
+        snapshot(model_source_path,"model.toml");
+        snapshot(fan_curve_source_path,"fan_curves.toml");
+        if(model.openfoam_solver.template_file &&
+           *model.openfoam_solver.template_file!="NULL")
+            snapshot(*model.openfoam_solver.template_file,
+                     "openfoam_profile.toml");
+        std::size_t component_index=0;
+        for(const ComponentInput& component:model.components) {
+            if(!component.template_path) continue;
+            const std::filesystem::path source=*component.template_path;
+            snapshot(
+                source,
+                "component_" + std::to_string(component_index++) + "_" +
+                source.filename().string());
         }
     }
 
@@ -1621,6 +1662,7 @@ struct ModelLoader {
                     "path without spaces (for example "
                     "\"C:/OpenFOAM/my_model\").");
             OpenFoamExporter::export_mesh(mesh,options);
+            write_openfoam_provenance(absolute_case_directory);
             // Keep the source geometry beside the exact OpenFOAM mesh. The
             // Python visualizer uses this for component names, internal-region
             // boxes, and fan/vent arrows without relying on a stale output.txt

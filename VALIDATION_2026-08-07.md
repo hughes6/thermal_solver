@@ -3257,3 +3257,12 @@ ideal 16.36 K rise at 950 W. The rack can conserve energy while an individual
 device remains miscalibrated. Generated template comments now say
 `Target mass-flow input` instead of claiming the value was measured, and no
 fan curve was retuned without physical pressure-flow or installed-flow data.
+
+The same audit found that an exported case retained resolved OpenFOAM
+dictionaries but not immutable copies of the source model, selected fidelity
+profile, fan-curve library, or component templates. Future exports now write a
+`provenance/` directory containing those exact input snapshots and a manifest
+that maps each snapshot to its original absolute path. A regression test
+verifies both inline-component and four-template generic models. This makes a
+later screening/in-depth comparison attributable to case-local inputs instead
+of the repository's potentially newer working state.

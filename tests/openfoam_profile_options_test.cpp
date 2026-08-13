@@ -92,12 +92,40 @@ int main() {
         output << fallback_model;
     }
     ModelLoader fallback_loader;
+    fallback_loader.load_fan_curves(
+        "library/fan_curves/fan_curves.toml");
     fallback_loader.load_model(fallback_model_path);
     assert(std::abs(
         fallback_loader.model.openfoam_solver.airflow_checkpoint_interval-
         0.1)<1e-12);
     assert(std::abs(
         fallback_loader.model.openfoam_solver.airflow_warmup_time-20.0)<1e-12);
+    const auto provenance_case=root/"provenance_case";
+    fallback_loader.write_openfoam_provenance(provenance_case);
+    const auto provenance=provenance_case/"provenance";
+    assert(read_file(provenance/"model.toml")==fallback_model);
+    assert(read_file(provenance/"openfoam_profile.toml")==fallback_profile);
+    assert(std::filesystem::is_regular_file(
+        provenance/"fan_curves.toml"));
+    const std::string manifest=read_file(provenance/"manifest.txt");
+    assert(manifest.find("model.toml <- ")!=std::string::npos);
+    assert(manifest.find("openfoam_profile.toml <- ")!=std::string::npos);
+    assert(manifest.find("fan_curves.toml <- ")!=std::string::npos);
+    ModelLoader component_loader;
+    component_loader.load_fan_curves(
+        "library/fan_curves/fan_curves.toml");
+    component_loader.load_model(
+        "library/models/model_generic_airside_screening.toml");
+    const auto component_case=root/"component_provenance_case";
+    component_loader.write_openfoam_provenance(component_case);
+    const std::string component_manifest=read_file(
+        component_case/"provenance"/"manifest.txt");
+    assert(component_manifest.find(
+        "component_0_generic_eaton_2u_airside.toml <- ")!=
+        std::string::npos);
+    assert(component_manifest.find(
+        "component_3_generic_kvm_1u_airside.toml <- ")!=
+        std::string::npos);
 
     std::filesystem::remove_all(root);
 }
