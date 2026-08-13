@@ -513,6 +513,30 @@ def format_airflow_gates(label: str, metrics, limits) -> str:
     )
 
 
+def airflow_gate_reports(metrics, exchange_metrics, limits) -> list[str]:
+    """Label latest local and longer physical-exchange measurements."""
+    reports: list[str] = []
+    same_checkpoint = (
+        metrics is not None
+        and exchange_metrics is not None
+        and abs(exchange_metrics[0] - metrics[0]) <= 1.0e-9
+    )
+    if metrics is not None:
+        reports.append(format_airflow_gates(
+            (
+                "Latest physical-exchange checkpoint"
+                if same_checkpoint else "Latest local airflow gates"
+            ),
+            metrics,
+            limits,
+        ))
+    if exchange_metrics is not None and not same_checkpoint:
+        reports.append(format_airflow_gates(
+            "Latest physical-exchange checkpoint", exchange_metrics, limits
+        ))
+    return reports
+
+
 def format_initial_airflow_stage(
     progress: tuple[float, float | None, float | None, float | None],
     current_time: float,
@@ -890,22 +914,10 @@ def main() -> int:
             )
     if initial_airflow is not None:
         print(format_initial_airflow_stage(initial_airflow, current_time))
-        if airflow_metrics is not None:
-            print(format_airflow_gates(
-                "Latest local airflow gates", airflow_metrics, airflow_limits
-            ))
-        if (
-            exchange_airflow_metrics is not None
-            and (
-                airflow_metrics is None
-                or abs(exchange_airflow_metrics[0] - airflow_metrics[0]) > 1.0e-9
-            )
+        for report in airflow_gate_reports(
+            airflow_metrics, exchange_airflow_metrics, airflow_limits
         ):
-            print(format_airflow_gates(
-                "Latest physical-exchange checkpoint",
-                exchange_airflow_metrics,
-                airflow_limits,
-            ))
+            print(report)
     if thermal_metrics is not None:
         (thermal_time, peak_rate, average_rate, peak_region, average_region,
          thermal_elapsed, peak_limit, average_limit) = thermal_metrics

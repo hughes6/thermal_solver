@@ -25,6 +25,7 @@ from tools.openfoam_progress import (
     read_latest_airflow_metrics,
     read_latest_exchange_airflow_metrics,
     read_airflow_limits,
+    airflow_gate_reports,
     read_latest_thermal_metrics,
     read_initial_airflow_progress,
     read_samples,
@@ -572,6 +573,24 @@ class OpenFoamProgressTest(unittest.TestCase):
                 read_latest_exchange_airflow_metrics(case),
                 (1.31, 0.00009, 0.0123, "Fan_4", True, 0.1017),
             )
+
+    def test_labels_current_exchange_checkpoint_as_physical(self):
+        metrics = (1.43, 0.00008, 0.0078, "Fan_6", True, 0.0789)
+        reports = airflow_gate_reports(metrics, metrics, (0.01, 0.01, 0.03))
+        self.assertEqual(len(reports), 1)
+        self.assertTrue(reports[0].startswith(
+            "Latest physical-exchange checkpoint at 1.43 s"
+        ))
+
+    def test_preserves_local_and_prior_exchange_reports(self):
+        local = (1.33, 0.00008, 0.001, "Fan_6", True, 0.01)
+        exchange = (1.31, 0.00009, 0.012, "Fan_4", True, 0.10)
+        reports = airflow_gate_reports(local, exchange, (0.01, 0.01, 0.03))
+        self.assertEqual(len(reports), 2)
+        self.assertTrue(reports[0].startswith("Latest local airflow gates"))
+        self.assertTrue(reports[1].startswith(
+            "Latest physical-exchange checkpoint"
+        ))
 
     def test_initial_exchange_stage_distinguishes_reached_target(self):
         progress = (0.05, 5.27144, 5.22144, None)
