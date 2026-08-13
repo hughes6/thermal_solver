@@ -20,6 +20,7 @@ from tools.openfoam_progress import (
     read_latest_temperature_ranges,
     read_latest_run_request,
     read_latest_run_state,
+    read_latest_air_exchange_time,
     read_latest_thermal_metrics,
     read_initial_airflow_progress,
     read_samples,
@@ -468,6 +469,18 @@ class OpenFoamProgressTest(unittest.TestCase):
                 read_initial_airflow_progress(case),
                 (0.05, 1.35, None, 0.42),
             )
+
+    def test_reads_latest_measured_air_exchange_time(self):
+        with tempfile.TemporaryDirectory() as directory:
+            case = Path(directory)
+            (case / "run_summary.log").write_text(
+                "now | airflow time=0.35 imbalance=0.003 "
+                "estimatedAirExchangeTime=5.50946\n"
+                "now | airflow time=0.49 imbalance=0.002 "
+                "estimatedAirExchangeTime=4.96662\n",
+                encoding="utf-8",
+            )
+            self.assertEqual(read_latest_air_exchange_time(case), 4.96662)
 
     def test_initial_exchange_stage_distinguishes_reached_target(self):
         progress = (0.05, 5.27144, 5.22144, None)

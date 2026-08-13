@@ -67,6 +67,10 @@ THERMAL_METRICS_RE = re.compile(
     r"controllingPeakRegion=(\S+)\s+controllingAverageRegion=(\S+)\s+"
     r"elapsed=([0-9.eE+-]+)"
 )
+AIRFLOW_EXCHANGE_TIME_RE = re.compile(
+    r"\|\s+airflow\s+time=[0-9.eE+-]+.*"
+    r"estimatedAirExchangeTime=([0-9.eE+-]+)"
+)
 THERMAL_PEAK_LIMIT_RE = re.compile(
     r'if ! awk -v v="\$scaled_delta" -v limit="([0-9.eE+-]+)"'
 )
@@ -351,6 +355,18 @@ def read_initial_airflow_progress(
                 required_elapsed = None
                 completed_fraction = float(match.group(3))
     return observation_start, latest_target, required_elapsed, completed_fraction
+
+
+def read_latest_air_exchange_time(case_directory: Path) -> float | None:
+    summary = case_directory / "run_summary.log"
+    if not summary.is_file():
+        return None
+    latest: float | None = None
+    for line in summary.read_text(encoding="utf-8", errors="ignore").splitlines():
+        match = AIRFLOW_EXCHANGE_TIME_RE.search(line)
+        if match:
+            latest = float(match.group(1))
+    return latest
 
 
 def format_initial_airflow_stage(
@@ -685,6 +701,7 @@ def main() -> int:
         remaining_simulated = max(0.0, end_time - current_time)
     thermal_metrics = read_latest_thermal_metrics(case_directory)
     initial_airflow = read_initial_airflow_progress(case_directory)
+    latest_air_exchange_time = read_latest_air_exchange_time(case_directory)
     case_bytes, free_bytes = storage_usage(case_directory, args.fast)
 
     print(f"Case: {case_directory}")
@@ -734,10 +751,29 @@ def main() -> int:
     if slope is None:
         print("Estimated remaining wall time: unavailable until two new timesteps complete")
     else:
+        eta_label = (
+            "Current solver-stage estimated remaining wall time"
+            if initial_airflow is not None
+            else "Estimated remaining wall time"
+        )
         print(
-            "Estimated remaining wall time: "
+            f"{eta_label}: "
             f"{format_duration(remaining_simulated * slope)}"
         )
+        if (
+            initial_airflow is not None
+            and initial_airflow[3] is not None
+            and latest_air_exchange_time is not None
+        ):
+            exchange_remaining = (
+                max(0.0, 1.0 - initial_airflow[3])
+                * latest_air_exchange_time
+            )
+            print(
+                "Estimated remaining physical-exchange wall time: "
+                f"{format_duration(exchange_remaining * slope)} "
+                "(before final convergence rechecks)"
+            )
     if maximum_courant is not None:
         if thermal_only_flow:
             print(
