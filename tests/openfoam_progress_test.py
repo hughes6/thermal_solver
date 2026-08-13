@@ -23,6 +23,7 @@ from tools.openfoam_progress import (
     read_latest_air_exchange_time,
     read_recent_exchange_wall_rate,
     read_latest_airflow_metrics,
+    read_airflow_limits,
     read_latest_thermal_metrics,
     read_initial_airflow_progress,
     read_samples,
@@ -539,6 +540,18 @@ class OpenFoamProgressTest(unittest.TestCase):
                 read_latest_airflow_metrics(case),
                 (0.85, 0.000465642, 0.00155094, "Fan_6", True, 0.0169129),
             )
+
+    def test_reads_generated_airflow_limits(self):
+        with tempfile.TemporaryDirectory() as directory:
+            case = Path(directory)
+            (case / "run_parallel.sh").write_text(
+                'if ! awk -v v="$imbalance" -v limit="0.01"\n'
+                'if ! awk -v v="$maximum_change" -v limit="0.02"\n'
+                '! awk -v v="$latest_velocity_relative_rms" '
+                '-v limit="0.03"\n',
+                encoding="utf-8",
+            )
+            self.assertEqual(read_airflow_limits(case), (0.01, 0.02, 0.03))
 
     def test_initial_exchange_stage_distinguishes_reached_target(self):
         progress = (0.05, 5.27144, 5.22144, None)

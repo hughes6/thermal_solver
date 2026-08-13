@@ -92,6 +92,15 @@ THERMAL_PEAK_LIMIT_RE = re.compile(
 THERMAL_AVERAGE_LIMIT_RE = re.compile(
     r'if ! awk -v v="\$scaled_average_delta" -v limit="([0-9.eE+-]+)"'
 )
+AIRFLOW_MASS_LIMIT_RE = re.compile(
+    r'if ! awk -v v="\$imbalance" -v limit="([0-9.eE+-]+)"'
+)
+AIRFLOW_DEVICE_LIMIT_RE = re.compile(
+    r'if ! awk -v v="\$maximum_change" -v limit="([0-9.eE+-]+)"'
+)
+AIRFLOW_VELOCITY_LIMIT_RE = re.compile(
+    r'-v v="\$latest_velocity_relative_rms" -v limit="([0-9.eE+-]+)"'
+)
 
 
 def read_samples(log_path: Path) -> list[tuple[float, float]]:
@@ -433,6 +442,24 @@ def read_latest_airflow_metrics(case_directory: Path):
                 float(match.group(6)),
             )
     return latest
+
+
+def read_airflow_limits(
+    case_directory: Path,
+) -> tuple[float, float, float] | None:
+    """Read the generated runner's local airflow acceptance thresholds."""
+    runner = case_directory / "run_parallel.sh"
+    if not runner.is_file():
+        return None
+    text = runner.read_text(encoding="utf-8", errors="ignore")
+    matches = (
+        AIRFLOW_MASS_LIMIT_RE.search(text),
+        AIRFLOW_DEVICE_LIMIT_RE.search(text),
+        AIRFLOW_VELOCITY_LIMIT_RE.search(text),
+    )
+    if any(match is None for match in matches):
+        return None
+    return tuple(float(match.group(1)) for match in matches)
 
 
 def format_initial_airflow_stage(
@@ -783,6 +810,7 @@ def main() -> int:
     latest_air_exchange_time = read_latest_air_exchange_time(case_directory)
     exchange_wall_rate = read_recent_exchange_wall_rate(case_directory)
     airflow_metrics = read_latest_airflow_metrics(case_directory)
+    airflow_limits = read_airflow_limits(case_directory)
     case_bytes, free_bytes = storage_usage(case_directory, args.fast)
 
     print(f"Case: {case_directory}")
@@ -813,12 +841,28 @@ def main() -> int:
         if airflow_metrics is not None:
             (airflow_time, imbalance, flow_change, flow_device,
              directions_ok, velocity_change) = airflow_metrics
+            if airflow_limits is None:
+                imbalance_limit = flow_limit = velocity_limit = None
+            else:
+                imbalance_limit, flow_limit, velocity_limit = airflow_limits
+            imbalance_gate = (
+                f" / {100.0 * imbalance_limit:.4f}%"
+                if imbalance_limit is not None else ""
+            )
+            flow_gate = (
+                f" / {100.0 * flow_limit:.4f}%"
+                if flow_limit is not None else ""
+            )
+            velocity_gate = (
+                f" / {100.0 * velocity_limit:.4f}%"
+                if velocity_limit is not None else ""
+            )
             print(
                 f"Latest airflow gates at {airflow_time:.9g} s: "
-                f"mass imbalance {100.0 * imbalance:.4f}%, "
-                f"device change {100.0 * flow_change:.4f}% "
+                f"mass imbalance {100.0 * imbalance:.4f}%{imbalance_gate}, "
+                f"device change {100.0 * flow_change:.4f}%{flow_gate} "
                 f"[{flow_device}], spatial velocity change "
-                f"{100.0 * velocity_change:.4f}%, directions "
+                f"{100.0 * velocity_change:.4f}%{velocity_gate}, directions "
                 f"{'valid' if directions_ok else 'INVALID'}"
             )
     if thermal_metrics is not None:
