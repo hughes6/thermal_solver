@@ -3320,3 +3320,21 @@ the workflow immediately with context; valid mass/device/direction/spatial
 gate misses continue normally. This prevents the optimized path from spending
 an entire warmup window after a reporting failure and improves the existing
 refresh path as well.
+
+Continued physical checkpoints exposed a separate scale-selection defect. At
+2.40 s, the cold rack had completed 49.0718% of one measured air exchange and
+its 0.1 s velocity-field movement was still 5.3543%, while the following
+0.01 s local windows were already near 0.6%. The earlier controller could
+reach one exchange on a failing 0.1 s checkpoint, then accept two short local
+windows. That satisfied timestep-scale settling but did not enforce the
+configured rack-scale field threshold.
+
+Future runners now persist an `.initial_airflow_physical_settling` marker. Once
+the exchange requirement is reached, they continue full
+`airflow_checkpoint_interval` advances until one complete physical window
+passes mass, device-flow, direction, and both spatial-field gates. Only then
+is the marker cleared and fresh adjacent local windows collected for the
+period-two fan-source check. Restarting during this phase restores another
+full-window target instead of silently reverting to short-window acceptance.
+The exporter regression verifies marker creation, restart handling, failed
+full-window continuation, and ordering before final local acceptance.

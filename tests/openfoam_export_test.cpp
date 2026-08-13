@@ -333,7 +333,7 @@ int main(int argc, char** argv) {
         const auto exchange_advance=text.str().find(
             "Cumulative air exchange is $air_exchange_fraction;");
         const auto final_local_acceptance=text.str().find(
-            "if [[ \"$airflow_metrics_passed\" == true ]]; then",
+            "Initial airflow converged after $initial_elapsed s beyond the fan ramp;",
             exchange_advance);
         assert(exchange_advance!=std::string::npos);
         assert(final_local_acceptance!=std::string::npos);
@@ -351,11 +351,20 @@ int main(int argc, char** argv) {
             "Airflow metrics evaluation failed; aborting refresh.") !=
                std::string::npos);
         const auto exchange_reached=text.str().find(
-            "Initial air-exchange requirement reached; collecting fresh local convergence windows before acceptance.");
+            "Initial air-exchange and full-window settling requirements reached; collecting fresh local convergence windows before acceptance.");
         assert(exchange_reached!=std::string::npos);
         assert(exchange_reached<final_local_acceptance);
         assert(text.str().find(
             "exchange_was_incomplete=true") != std::string::npos);
+        assert(text.str().find(
+            "initial_physical_settling_marker=\"$case_dir/.initial_airflow_physical_settling\"") !=
+               std::string::npos);
+        assert(text.str().find(
+            "Initial air exchange is complete, but the full-window airflow gate has not passed;") !=
+               std::string::npos);
+        assert(text.str().find(
+            "Resuming full-window initial airflow settling toward") !=
+               std::string::npos);
         assert(text.str().find(
             "minimum_observation=\"0.01\"") != std::string::npos);
         assert(text.str().find(
