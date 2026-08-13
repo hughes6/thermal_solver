@@ -186,7 +186,7 @@ class OpenFoamProgressTest(unittest.TestCase):
             (case / "processor0" / "2").mkdir()
             (case / "processor0" / "2" / "T").write_text("field")
             self.assertEqual(
-                processor_checkpoints(case), ([1.0], 2, False, [1, 0], [2.0])
+                processor_checkpoints(case), ([1.0], 2, True, [1, 0], [2.0])
             )
 
     def test_reports_aligned_parallel_checkpoint_file_counts(self):
@@ -209,7 +209,24 @@ class OpenFoamProgressTest(unittest.TestCase):
                 diagnostic.mkdir(parents=True)
                 (diagnostic / "yPlus").write_text("diagnostic")
             self.assertEqual(
-                processor_checkpoints(case), ([], 2, False, [1, 1], [300.0])
+                processor_checkpoints(case), ([], 2, True, [1, 1], [300.0])
+            )
+
+    def test_detects_restart_checkpoint_missing_from_one_rank(self):
+        with tempfile.TemporaryDirectory() as directory:
+            case = Path(directory)
+            for rank in (0, 1):
+                first = case / f"processor{rank}" / "1" / "fluid"
+                first.mkdir(parents=True)
+                (first / "T").write_text("field")
+                (first / "U").write_text("field")
+            second = case / "processor0" / "2" / "fluid"
+            second.mkdir(parents=True)
+            (second / "T").write_text("field")
+            (second / "U").write_text("field")
+            self.assertEqual(
+                processor_checkpoints(case),
+                ([1.0], 2, False, [2, 0], [2.0]),
             )
 
     def test_accepts_restart_checkpoint_just_above_nominal_log_time(self):

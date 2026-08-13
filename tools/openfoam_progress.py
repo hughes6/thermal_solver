@@ -317,7 +317,6 @@ def processor_checkpoints(
     time_sets = [
         [value for value in times if eligible(value)] for times in raw_time_sets
     ]
-    time_sets_aligned = all(times == time_sets[0] for times in time_sets[1:])
     common_times = sorted(set.intersection(*(set(times) for times in time_sets)))
     manifests_by_time = {}
     for value in common_times:
@@ -342,6 +341,25 @@ def processor_checkpoints(
         if manifests and restartable(manifests[0])
         and all(item == manifests[0] for item in manifests[1:])
     ]
+    restart_time_sets = []
+    for processor, times in zip(processors, time_sets):
+        restart_times = []
+        for value in times:
+            directory = next(
+                child for child in processor.iterdir()
+                if child.is_dir() and _is_float(child.name)
+                and float(child.name) == value
+            )
+            manifest = {
+                child.relative_to(directory).as_posix()
+                for child in directory.rglob("*") if child.is_file()
+            }
+            if restartable(manifest):
+                restart_times.append(value)
+        restart_time_sets.append(restart_times)
+    restart_times_aligned = all(
+        times == restart_time_sets[0] for times in restart_time_sets[1:]
+    )
     all_times = sorted(set().union(*(set(times) for times in raw_time_sets)))
     incomplete_newer = [
         value for value in all_times if value not in complete_times
@@ -361,8 +379,21 @@ def processor_checkpoints(
             latest_file_counts.append(sum(
                 1 for child in directory.rglob("*") if child.is_file()
             ))
-    manifests_aligned = len(complete_times) == len(common_times)
-    state_aligned = time_sets_aligned and manifests_aligned
+    common_restart_times = sorted(
+        set.intersection(*(set(times) for times in restart_time_sets))
+    )
+    restart_manifests_aligned = (
+        len(complete_times) == len(common_restart_times)
+    )
+    common_manifests_aligned = all(
+        manifests and all(item == manifests[0] for item in manifests[1:])
+        for manifests in manifests_by_time.values()
+    )
+    state_aligned = (
+        restart_times_aligned
+        and restart_manifests_aligned
+        and common_manifests_aligned
+    )
     return (
         complete_times,
         len(processors),
