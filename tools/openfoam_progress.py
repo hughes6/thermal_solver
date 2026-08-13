@@ -68,6 +68,7 @@ THERMAL_METRICS_RE = re.compile(
     r"\|\s+thermal\s+time=([0-9.eE+-]+)\s+"
     r"maxInternalCellChange=([0-9.eE+-]+)\s+"
     r"maxComponentAverageChange=([0-9.eE+-]+)\s+"
+    r"(?:fluidMaximumChange=[0-9.eE+-]+\s+)?"
     r"controllingPeakRegion=(\S+)\s+controllingAverageRegion=(\S+)\s+"
     r"elapsed=([0-9.eE+-]+)"
 )

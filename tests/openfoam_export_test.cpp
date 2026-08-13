@@ -475,6 +475,21 @@ int main(int argc, char** argv) {
             "Spatial velocity change: rmsDelta=") !=
                std::string::npos);
         assert(text.str().find(
+            "fluid_average_root=\"$case_dir/postProcessing/fluid/") !=
+               std::string::npos);
+        assert(text.str().find(
+            "previous_fluid_average=\"${state_values[2]:-}\"") !=
+               std::string::npos);
+        assert(text.str().find(
+            "delta=$(awk -v a=\"$fluid_average\" -v b=\"$previous_fluid_average\"") !=
+               std::string::npos);
+        assert(text.str().find(
+            "controlling_peak_region=fluidAverage") !=
+               std::string::npos);
+        assert(text.str().find(
+            "fluidMaximumChange=$scaled_fluid_max_delta") !=
+               std::string::npos);
+        assert(text.str().find(
             "velocityRelativeRms=${latest_velocity_relative_rms:-unavailable}") !=
                std::string::npos);
         assert(text.str().find(

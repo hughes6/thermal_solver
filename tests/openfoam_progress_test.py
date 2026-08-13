@@ -87,6 +87,27 @@ class OpenFoamProgressTest(unittest.TestCase):
                  0.25, 0.1),
             )
 
+    def test_reads_thermal_metrics_with_fluid_maximum_diagnostic(self):
+        with tempfile.TemporaryDirectory() as directory:
+            case = Path(directory)
+            (case / "run_summary.log").write_text(
+                "now | thermal time=12000 maxInternalCellChange=0.03 "
+                "maxComponentAverageChange=0.02 fluidMaximumChange=0.29 "
+                "controllingPeakRegion=fluidAverage "
+                "controllingAverageRegion=server elapsed=2400\n",
+                encoding="utf-8",
+            )
+            (case / "run_parallel.sh").write_text(
+                'if ! awk -v v="$scaled_delta" -v limit="0.25"; then :; fi\n'
+                'if ! awk -v v="$scaled_average_delta" -v limit="0.1"; then :; fi\n',
+                encoding="utf-8",
+            )
+            self.assertEqual(
+                read_latest_thermal_metrics(case),
+                (12000.0, 0.03, 0.02, "fluidAverage", "server", 2400.0,
+                 0.25, 0.1),
+            )
+
     def test_fast_storage_usage_skips_recursive_case_walk(self):
         fake_usage = mock.Mock(free=12345)
         with mock.patch(

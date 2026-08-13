@@ -181,6 +181,9 @@ struct OpenFoamSolverInput {
     bool stop_when_thermally_converged = true;
     double minimum_thermal_convergence_time = 3600.0;
     double thermal_convergence_reference_interval = 300.0;
+    // Limits bulk-fluid average drift and every solid-region maximum drift.
+    // The moving fluid maximum remains a diagnostic because turbulent fan
+    // wakes can move the hottest air cell without changing rack heat balance.
     double maximum_temperature_change = 0.1;
     double maximum_component_average_temperature_change = 0.05;
     int thermal_convergence_required_checkpoints = 2;

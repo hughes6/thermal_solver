@@ -101,6 +101,62 @@ def vector_delta_distribution(
             magnitudes.append(math.sqrt(dx * dx + dy * dy + dz * dz))
     if not magnitudes:
         raise ValueError("fields contain no internal vectors")
+    return delta_distribution(magnitudes)
+
+
+def scalar_delta_distribution(
+    before_paths: list[Path], after_paths: list[Path]
+) -> tuple[int, dict[str, float], dict[str, float]]:
+    """Summarize absolute scalar changes and concentration of squared change."""
+    if len(before_paths) != len(after_paths):
+        raise ValueError("checkpoint rank counts differ")
+    magnitudes: list[float] = []
+    for before_path, after_path in zip(before_paths, after_paths):
+        before_type, before = read_internal_field(before_path)
+        after_type, after = read_internal_field(after_path)
+        if before_type != "scalar" or after_type != "scalar":
+            raise ValueError("scalar delta distribution requires scalar fields")
+        if len(before) != len(after):
+            raise ValueError(f"field layout differs: {before_path} vs {after_path}")
+        magnitudes.extend(abs(new - old) for old, new in zip(before, after))
+    return delta_distribution(magnitudes)
+
+
+def top_scalar_delta_locations(
+    before_paths: list[Path], after_paths: list[Path], centre_paths: list[Path],
+    limit: int,
+) -> list[tuple[float, float, float, float, float, float]]:
+    """Return abs delta, coordinates, old value, and new value for top cells."""
+    if not (len(before_paths) == len(after_paths) == len(centre_paths)):
+        raise ValueError("checkpoint and cell-centre rank counts differ")
+    rows: list[tuple[float, float, float, float, float, float]] = []
+    for before_path, after_path, centre_path in zip(
+        before_paths, after_paths, centre_paths
+    ):
+        before_type, before = read_internal_field(before_path)
+        after_type, after = read_internal_field(after_path)
+        centre_type, centres = read_internal_field(centre_path)
+        if before_type != "scalar" or after_type != "scalar":
+            raise ValueError("top scalar locations require scalar fields")
+        if centre_type != "vector":
+            raise ValueError("cell centres must be a vector field")
+        if len(before) != len(after) or len(centres) != 3 * len(before):
+            raise ValueError("field and cell-centre layouts differ")
+        for index, (old, new) in enumerate(zip(before, after)):
+            base = 3 * index
+            rows.append(
+                (abs(new - old), centres[base], centres[base + 1],
+                 centres[base + 2], old, new)
+            )
+    return sorted(rows, reverse=True)[:limit]
+
+
+def delta_distribution(
+    magnitudes: list[float],
+) -> tuple[int, dict[str, float], dict[str, float]]:
+    """Calculate percentiles and squared-change concentration."""
+    if not magnitudes:
+        raise ValueError("fields contain no internal values")
     ordered = sorted(magnitudes)
 
     def percentile(fraction: float) -> float:
@@ -223,6 +279,11 @@ def main() -> int:
     parser.add_argument("--region", default="fluid")
     parser.add_argument("--field", default="U")
     parser.add_argument("--rank", type=int, help="compare only one processor rank")
+    parser.add_argument(
+        "--top-cells", type=int, default=0,
+        help="for scalar fields, report this many largest-delta cell locations; "
+             "requires a C cell-centres field at the after time",
+    )
     args = parser.parse_args()
     case = args.case.resolve()
     if args.latest_pair:
@@ -251,7 +312,8 @@ def main() -> int:
     print(f"Maximum component delta: {maximum_delta:.9g}")
     print(f"Component-weighted RMS field value: {rms_field:.9g}")
     print(f"Component-weighted relative RMS delta: {100.0 * relative:.6g}%")
-    if read_internal_field(before[0])[0] == "vector":
+    field_type = read_internal_field(before[0])[0]
+    if field_type == "vector":
         cells, percentiles, concentration = vector_delta_distribution(before, after)
         print(f"Cell vectors compared: {cells}")
         print(
@@ -266,6 +328,31 @@ def main() -> int:
             f"top 5%={100.0 * concentration['top_5pct']:.6g}%, "
             f"top 10%={100.0 * concentration['top_10pct']:.6g}%"
         )
+    elif field_type == "scalar":
+        cells, percentiles, concentration = scalar_delta_distribution(before, after)
+        print(f"Scalar cells compared: {cells}")
+        print(
+            "Absolute-delta percentiles: "
+            f"p50={percentiles['p50']:.9g}, p90={percentiles['p90']:.9g}, "
+            f"p95={percentiles['p95']:.9g}, p99={percentiles['p99']:.9g}, "
+            f"max={percentiles['maximum']:.9g}"
+        )
+        print(
+            "Squared-delta concentration: "
+            f"top 1%={100.0 * concentration['top_1pct']:.6g}%, "
+            f"top 5%={100.0 * concentration['top_5pct']:.6g}%, "
+            f"top 10%={100.0 * concentration['top_10pct']:.6g}%"
+        )
+        if args.top_cells > 0:
+            centres = processor_field_paths(
+                case, args.after, args.region, "C", args.rank
+            )
+            rows = top_scalar_delta_locations(
+                before, after, centres, args.top_cells
+            )
+            print("Largest scalar deltas (absDelta, x, y, z, before, after):")
+            for row in rows:
+                print("  " + ", ".join(f"{value:.9g}" for value in row))
     return 0
 
 

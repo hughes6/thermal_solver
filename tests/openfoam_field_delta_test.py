@@ -9,6 +9,8 @@ from tools.openfoam_field_delta import (
     processor_field_paths,
     read_internal_field,
     resolve_time_directory,
+    scalar_delta_distribution,
+    top_scalar_delta_locations,
     vector_delta_distribution,
 )
 
@@ -159,6 +161,35 @@ class OpenFoamFieldDeltaTest(unittest.TestCase):
             write_field(after, "scalar", [2.0])
             with self.assertRaisesRegex(ValueError, "requires vector"):
                 vector_delta_distribution([before], [after])
+
+    def test_reports_scalar_delta_distribution(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            before = root / "before"
+            after = root / "after"
+            write_field(before, "scalar", [0.0, 0.0, 0.0, 0.0])
+            write_field(after, "scalar", [-1.0, 2.0, -3.0, 4.0])
+            count, percentiles, concentration = scalar_delta_distribution(
+                [before], [after]
+            )
+            self.assertEqual(count, 4)
+            self.assertEqual(percentiles["p50"], 2.5)
+            self.assertEqual(percentiles["maximum"], 4.0)
+            self.assertAlmostEqual(concentration["top_5pct"], 16.0 / 30.0)
+
+    def test_reports_top_scalar_delta_locations(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            before = root / "before"
+            after = root / "after"
+            centres = root / "C"
+            write_field(before, "scalar", [10.0, 20.0])
+            write_field(after, "scalar", [11.0, 25.0])
+            write_field(centres, "vector", [1.0, 2.0, 3.0, 4.0, 5.0, 6.0])
+            self.assertEqual(
+                top_scalar_delta_locations([before], [after], [centres], 1),
+                [(5.0, 4.0, 5.0, 6.0, 20.0, 25.0)],
+            )
 
 
 if __name__ == "__main__":

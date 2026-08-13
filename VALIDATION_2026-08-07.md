@@ -3406,3 +3406,33 @@ contributed 84.48%.  This establishes that the persistent global RMS is
 strongly wake/source dominated.  The conservative gate remains unchanged
 until those cells are mapped against fan zones and recirculation-sensitive
 rack volume; percentile evidence alone is not sufficient to relax acceptance.
+
+The screening stage completed its requested 18,000 s without fatal signatures
+or checkpoint inconsistency and occupied 0.26 GiB. Its final validator report
+showed 0.00782% mass error, 0.2539% energy error (1541.08 of 1545 W), and a
+298.2894 K mass-weighted outlet versus 298.3025 K analytical. Thermal
+re-ingestion remained zero and bidirectional boundary traffic was 0.12995%.
+
+The former maximum-fluid-cell convergence criterion proved unsuitable for
+this fan-source architecture. It passed at 9600 s (0.1855 K/300 s), failed at
+12000 s (0.286988), passed at 14400 s (0.244313), and failed at 16800 s
+(0.298275), resetting the required two-checkpoint streak each time. In
+contrast, maximum component-average drift fell to 0.00964 K/300 s and final
+energy closure was 0.254%. Solver-backed cell centres located the largest
+16,800--18,000 s temperature changes at x=0.336--0.367 m,
+y=0.493--0.519 m, z=0.406--0.439 m: the Generic Trenton 3U rear-exhaust fan
+wake (fan centre y=0.53945 m, z=0.422275 m). The top 1% of fluid cells
+contributed 66.50% of squared temperature change, while median absolute
+change was 0.01345 K.
+
+The generated convergence policy therefore now applies
+`maximum_temperature_change` to bulk-fluid volume-average drift and every
+solid-component maximum drift. It continues applying the separate
+component-average limit. Moving fluid maximum temperature remains reported
+as `fluidMaximumChange` for safety diagnosis but no longer blocks convergence
+by itself. The persisted state gained an explicit fluid-average value, so an
+old state has the wrong value count and safely records one fresh baseline.
+This does not relax component hotspot, component thermal-mass, airflow,
+energy-balance, or re-ingestion validation. The exported script passed an
+actual WSL `bash -n` check; the C++ exporter regression and 68 focused Python
+tests also passed.
