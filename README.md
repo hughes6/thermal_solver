@@ -478,6 +478,25 @@ cp = 700.0
 k = 130.0
 ```
 
+Materials may instead reference a reusable TOML file. The catalog under
+`library/components/materials` contains aluminum, copper, steels, FR-4, ABS,
+and an effective mixed-electronics material:
+
+```toml
+material = "library/components/materials/aluminum.toml"
+
+[[internal_regions]]
+name = "Electronics"
+state = "solid"
+watts = 400.0
+material = "library/components/materials/mixed_electronics.toml"
+```
+
+Each referenced material file contains root-level `rho`, `cp`, and `k` values.
+Paths follow the existing component-template convention and are resolved from
+the process working directory, normally the repository root. Inline material
+tables remain supported.
+
 The outer component is stamped first with its material and `watts`. Internal
 regions then overwrite the cells they occupy:
 
@@ -1613,6 +1632,15 @@ avoids a narrow one-cell bezel/tunnel mismatch and prevents an unresisted
 opening around the vent. It remains a rack-level effective geometry rather
 than a literal internal CAD model.
 
+The corrected 208,772-cell screening case was warm-mapped from the earlier
+19,200 s solution and then run with 2,400 s implicit thermal intervals plus
+coupled refreshes. Two consecutive thermal/airflow checkpoints passed at
+26,400.02 s and 28,800.02 s. At the final checkpoint the largest
+per-component hotspot rate was Trenton at 0.0572 K per 300 s (screening limit
+0.25 K per 300 s); airflow mass imbalance was 0.0041% and the largest device
+flow change was 0.0444%. This validates convergence of this screening workflow,
+not mesh independence or literal internal component temperatures.
+
 When making a new component more accurate:
 
 1. Place fans slightly inside the enclosure when they are internal devices.
@@ -1725,8 +1753,11 @@ flow-change decision can pass. Later adaptive refreshes retain the last
 accepted flow vector in the running process, so their first live window checks
 both the thermally accumulated operating-point change and current stability.
 A restarted runner conservatively reacquires a baseline because that in-memory
-vector is unavailable. Flow direction checks ensure intake/exhaust devices are
-operating in their intended directions.
+vector is unavailable. Its `airflow_warmup_time` limit is measured forward
+from the current checkpoint, so mapped or ordinary nonzero-time restarts do
+not incorrectly compare their time against an absolute five-second limit.
+Flow direction checks ensure intake/exhaust devices are operating in their
+intended directions.
 
 The screening profile uses a short `airflow_refresh_duration = 0.01`. Once the
 initial baseline exists, an unchanged operating point can pass after one
@@ -1735,9 +1766,9 @@ default, validation, and in-depth profiles all use a 1% device-flow tolerance.
 In-depth and validation retain longer minimum refresh windows for
 higher-fidelity updates.
 
-The screening profile uses
-`minimum_tracked_boundary_flow_fraction = 0.0001`; the in-depth profile uses
-`0.001` to reject sign noise below 0.1% of rack throughput. This prevents numerical
+The screening and in-depth profiles use
+`minimum_tracked_boundary_flow_fraction = 0.001` to reject sign and
+cancellation noise below 0.1% of rack throughput. This prevents numerical
 noise through an effectively stagnant passive opening from blocking the whole
 rack indefinitely. The floor is computed from half the sum of absolute
 exterior mass flows, so it scales with rack throughput. A boundary device that
@@ -1770,13 +1801,13 @@ the internal `U` field is also insensitive to the longer reference duration.
 | `stop_when_thermally_converged` | Allows a requested long run to stop early after both thermal and airflow criteria pass. |
 | `minimum_thermal_convergence_time` | Earliest simulated time at which thermal convergence may be accepted. |
 | `thermal_convergence_reference_interval` | Reference seconds used to normalize temperature changes from checkpoints with different spacing. |
-| `maximum_temperature_change` | Maximum allowed global peak-temperature change, in K per reference interval. |
+| `maximum_temperature_change` | Maximum allowed change of the fluid peak or any individual component peak, in K per reference interval. |
 | `maximum_component_average_temperature_change` | Maximum allowed component volume-average change, in K per reference interval. |
 | `thermal_convergence_required_checkpoints` | Number of consecutive accepted thermal checkpoints required. |
 
 At each checkpoint the run script records:
 
-- fluid peak temperature
+- fluid peak temperature and the peak temperature of every component region
 - volume-average temperature of every exported component solid region
 - exterior mass imbalance
 - tracked fan/device-flow change
@@ -1986,6 +2017,12 @@ The recirculation tool therefore omits boundary-temperature samples at or below
 `0.0001`) from temperature, heat-rejection, and re-ingestion calculations.
 Signed flow is still plotted, so a formerly stagnant opening becoming active
 remains visible.
+
+The companion `*_latest_face_flow.csv` reads reconstructed `phi` and `T`
+faces directly and separates inward from outward traffic on every patch. Use
+its inward/outward mass flow and temperatures for passive openings that carry
+simultaneous ingress and egress; their net signed mass-weighted temperature can
+fall outside the physical face-temperature range and is not meaningful.
 
 ### 16.5 How OpenFOAM saves fields and resumes in time segments
 
@@ -2607,6 +2644,28 @@ the fitted curve is less sensitive to errors introduced while reading pixels
 from a datasheet graph. If the tool warns that `b` or `c` is negative, inspect
 the points and verify that the fitted curve decreases over the actual fan
 operating range.
+
+RPM versus equipment-load data may be supplied as repeated
+`--rpm-load-point LOAD_PERCENT,RPM` values or as a CSV with `load_percent,rpm`
+columns. Select the operating condition with `--target-load-percent`. RPM/load
+data alone defines a controller schedule, not a pressure-flow curve. To produce
+scaled Thermal Sim coefficients, also provide pressure-flow points measured at
+`--reference-rpm`; the tool applies the fan affinity laws:
+
+```powershell
+python .\tools\fan_curve_fitter.py `
+  --name "fan_at_50_percent_load" `
+  --flow-unit cfm `
+  --pressure-unit pa `
+  --point 0,300 --point 100,150 --point 200,0 `
+  --reference-rpm 3000 `
+  --rpm-load-point 0,1500 `
+  --rpm-load-point 100,3000 `
+  --target-load-percent 50
+```
+
+The selected RPM is linearly interpolated between load points and clamped to
+the end RPM outside the supplied schedule range.
 
 After copying the printed block into the fan-curve library, reference it from
 a rack or internal fan:

@@ -78,6 +78,19 @@ int main() {
     assert(homogeneous_loader.model.components.size() == 1);
     assert(homogeneous_loader.model.components[0].internal_regions.empty());
 
+    ComponentLoader material_reference_loader;
+    material_reference_loader.load_component(
+        "library/tests/material_reference_component.toml");
+    assert(material_reference_loader.model.material.density == 2700.0);
+    assert(material_reference_loader.model.material.cp == 900.0);
+    assert(material_reference_loader.model.material.k == 205.0);
+    assert(material_reference_loader.model.internal_regions.size() == 1);
+    const MaterialInput& referenced_internal_material =
+        material_reference_loader.model.internal_regions[0].material;
+    assert(referenced_internal_material.density == 1200.0);
+    assert(referenced_internal_material.cp == 800.0);
+    assert(referenced_internal_material.k == 10.0);
+
     ModelLoader foam_loader;
     foam_loader.load_model("library/tests/openfoam_model.toml");
     assert(foam_loader.model.openfoam_solver.case_directory ==

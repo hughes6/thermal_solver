@@ -60,6 +60,7 @@ int main(int argc, char *argv[])
         for (int oCorr=0; oCorr<nOuterCorr; ++oCorr)
         {
             const bool finalIter = (oCorr == nOuterCorr-1);
+            bool isothermalAirflow = false;
 
             forAll(fluidRegions, i)
             {
@@ -67,6 +68,10 @@ int main(int argc, char *argv[])
                 #include "readFluidMultiRegionPIMPLEControls.H"
                 const bool thermalOnlyFlow =
                     pimple.getOrDefault("thermalOnlyFlow", false);
+                const bool regionIsothermalAirflow =
+                    pimple.getOrDefault("isothermalAirflow", false);
+                isothermalAirflow =
+                    isothermalAirflow || regionIsothermalAirflow;
                 #include "setRegionFluidFields.H"
                 if (thermalOnlyFlow)
                 {
@@ -82,25 +87,59 @@ int main(int argc, char *argv[])
                         mesh.data().setFinalIteration(false);
                     }
                 }
+                else if (regionIsothermalAirflow)
+                {
+                    Info<< "\nSolving isothermal airflow region "
+                        << fluidRegions[i].name() << endl;
+                    if (finalIter)
+                    {
+                        mesh.data().setFinalIteration(true);
+                    }
+                    if (oCorr == 0)
+                    {
+                        #include "rhoEqn.H"
+                    }
+                    #include "UEqn.H"
+                    #include "YEqn.H"
+                    if (!coupled)
+                    {
+                        for (int corr=0; corr<nCorr; corr++)
+                        {
+                            #include "pEqn.H"
+                        }
+                        turbulence.correct();
+                        rho = thermo.rho();
+                    }
+                    if (finalIter)
+                    {
+                        mesh.data().setFinalIteration(false);
+                    }
+                }
                 else
                 {
                     #include "solveFluid.H"
                 }
             }
 
-            forAll(solidRegions, i)
+            if (!isothermalAirflow)
             {
-                fvMesh& mesh = solidRegions[i];
-                #include "readSolidMultiRegionPIMPLEControls.H"
-                #include "setRegionSolidFields.H"
-                #include "solveSolid.H"
+                forAll(solidRegions, i)
+                {
+                    fvMesh& mesh = solidRegions[i];
+                    #include "readSolidMultiRegionPIMPLEControls.H"
+                    #include "setRegionSolidFields.H"
+                    #include "solveSolid.H"
+                }
             }
 
             if (coupled)
             {
-                Info<< "\nSolving energy coupled regions " << endl;
-                fvMatrixAssemblyPtr->solve();
-                #include "correctThermos.H"
+                if (!isothermalAirflow)
+                {
+                    Info<< "\nSolving energy coupled regions " << endl;
+                    fvMatrixAssemblyPtr->solve();
+                    #include "correctThermos.H"
+                }
 
                 forAll(fluidRegions, i)
                 {
@@ -110,6 +149,8 @@ int main(int argc, char *argv[])
                         pimple.getOrDefault("semiFrozenFlow", false);
                     const bool thermalOnlyFlow =
                         pimple.getOrDefault("thermalOnlyFlow", false);
+                    const bool regionIsothermalAirflow =
+                        pimple.getOrDefault("isothermalAirflow", false);
                     #include "setRegionFluidFields.H"
 
                     if (thermalOnlyFlow)
@@ -121,6 +162,16 @@ int main(int argc, char *argv[])
                         // airflow solution until the next refresh stage.
                         rho = thermo.rho();
                         p_rgh = p - rho*gh;
+                    }
+                    else if (regionIsothermalAirflow)
+                    {
+                        Info<< "\nPressure-correcting isothermal airflow region "
+                            << fluidRegions[i].name() << endl;
+                        for (int corr=0; corr<nCorr; corr++)
+                        {
+                            #include "pEqn.H"
+                        }
+                        turbulence.correct();
                     }
                     else if (!frozenFlow)
                     {
@@ -141,10 +192,13 @@ int main(int argc, char *argv[])
                         << max(thermo.T()).value() << endl;
                 }
 
-                fvMatrixAssemblyPtr->clear();
+                if (!isothermalAirflow)
+                {
+                    fvMatrixAssemblyPtr->clear();
+                }
             }
 
-            if (!oCorr && nOuterCorr > 1)
+            if (!isothermalAirflow && !oCorr && nOuterCorr > 1)
             {
                 loopControl looping(runTime, pimple, "energyCoupling");
                 while (looping.loop())
