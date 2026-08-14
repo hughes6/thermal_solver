@@ -1,15 +1,22 @@
 import win32com.client as win32
-import pythoncom
+
 
 e3 = win32.gencache.EnsureDispatch("CT.Application")
 
 dev = e3.CreateDeviceObject()
+pin = e3.CreatePinObject()
 
-COMPONENT = "2627453-500"
+COMPONENT = "YOUR_CABLE_ASSEMBLY"
 VERSION = "1"
+DEVICE_NAME = "W1"
+
+
+# ============================================================
+# CREATE ASSEMBLY
+# ============================================================
 
 assembly_id = dev.Create(
-    "W1",
+    DEVICE_NAME,
     "",
     "",
     COMPONENT,
@@ -18,6 +25,9 @@ assembly_id = dev.Create(
 )
 
 print("Assembly ID:", assembly_id)
+
+if assembly_id <= 0:
+    raise RuntimeError("Failed to create assembly")
 
 dev.SetId(assembly_id)
 
@@ -29,52 +39,71 @@ print("DeviceCount:", dev.GetDeviceCount())
 # GET CHILD DEVICE IDS
 # ============================================================
 
-device_ids = win32.VARIANT(
-    pythoncom.VT_BYREF | pythoncom.VT_VARIANT,
-    None
-)
+count, raw_ids = dev.GetDeviceIds()
 
-count = dev.GetDeviceIds(device_ids)
-
-print("GetDeviceIds count:", count)
-print("device_ids.value:", device_ids.value)
-print("type:", type(device_ids.value))
-
-
-# ============================================================
-# NORMALIZE RETURN
-# ============================================================
-
-raw_ids = device_ids.value
+print("Count:", count)
+print("Raw IDs:", raw_ids)
 
 if raw_ids is None:
-    raise RuntimeError(
-        f"GetDeviceIds returned count={count}, but no IDs were populated"
-    )
+    raise RuntimeError("No child IDs returned")
 
-if isinstance(raw_ids, int):
-    child_ids = [raw_ids]
-else:
-    child_ids = list(raw_ids)
+# E3 arrays are 1-based:
+# raw_ids[0] = None
+child_ids = [
+    child_id
+    for child_id in raw_ids[1:]
+    if child_id is not None
+]
 
-print("Child IDs:", child_ids)
+print("\nChild IDs:")
+print(child_ids)
 
 
 # ============================================================
-# INSPECT CHILDREN
+# INSPECT CHILD DEVICES
 # ============================================================
 
 for child_id in child_ids:
-    print("\n----------------------------")
-    print("Trying child:", child_id)
 
-    if child_id is None:
-        continue
+    dev.SetId(child_id)
 
-    dev.SetId(int(child_id))
+    print("\n" + "=" * 60)
 
     print("ID:", child_id)
     print("Name:", dev.GetName())
     print("Component:", dev.GetComponentName())
-    print("Pins:", dev.GetPinCount())
     print("IsAssemblyPart:", dev.IsAssemblyPart())
+    print("PinCount:", dev.GetPinCount())
+
+    # Only look at pins for actual connector/device children
+    if dev.GetPinCount() <= 0:
+        continue
+
+    # ========================================================
+    # GET PIN IDS
+    # ========================================================
+
+    pin_count, raw_pin_ids = dev.GetPinIds()
+
+    print("Raw Pin Count:", pin_count)
+    print("Raw Pin IDs:", raw_pin_ids)
+
+    if raw_pin_ids is None:
+        continue
+
+    pin_ids = [
+        pin_id
+        for pin_id in raw_pin_ids[1:]
+        if pin_id is not None
+    ]
+
+    print("Pin IDs:", pin_ids)
+
+    for pin_id in pin_ids:
+
+        pin.SetId(pin_id)
+
+        print(
+            "    Pin ID:", pin_id,
+            "| Name:", pin.GetName()
+        )
