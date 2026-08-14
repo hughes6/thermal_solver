@@ -1,17 +1,12 @@
 import win32com.client as win32
+import pythoncom
 
 e3 = win32.gencache.EnsureDispatch("CT.Application")
 
 dev = e3.CreateDeviceObject()
-pin = e3.CreatePinObject()
 
-COMPONENT = "TEMPLATE_CABLE_ASSY"
+COMPONENT = "2627453-500"
 VERSION = "1"
-
-
-# ============================================================
-# CREATE ASSEMBLY
-# ============================================================
 
 assembly_id = dev.Create(
     "W1",
@@ -26,8 +21,6 @@ print("Assembly ID:", assembly_id)
 
 dev.SetId(assembly_id)
 
-print("Name:", dev.GetName())
-print("Component:", dev.GetComponentName())
 print("IsAssembly:", dev.IsAssembly())
 print("DeviceCount:", dev.GetDeviceCount())
 
@@ -36,90 +29,52 @@ print("DeviceCount:", dev.GetDeviceCount())
 # GET CHILD DEVICE IDS
 # ============================================================
 
-result = dev.GetDeviceIds(None)
+device_ids = win32.VARIANT(
+    pythoncom.VT_BYREF | pythoncom.VT_VARIANT,
+    None
+)
 
-print("\nGetDeviceIds FULL RESULT:")
-print(result)
-print(type(result))
+count = dev.GetDeviceIds(device_ids)
+
+print("GetDeviceIds count:", count)
+print("device_ids.value:", device_ids.value)
+print("type:", type(device_ids.value))
 
 
-# E3 / pywin32 should return:
-#
-# (count, (id1, id2, id3, ...))
-#
-# or something similar
+# ============================================================
+# NORMALIZE RETURN
+# ============================================================
 
-if isinstance(result, tuple):
-    count = result[0]
-    ids = result[1]
+raw_ids = device_ids.value
 
-    print("Count:", count)
-    print("IDs:", ids)
+if raw_ids is None:
+    raise RuntimeError(
+        f"GetDeviceIds returned count={count}, but no IDs were populated"
+    )
+
+if isinstance(raw_ids, int):
+    child_ids = [raw_ids]
 else:
-    raise RuntimeError("Unexpected GetDeviceIds return")
+    child_ids = list(raw_ids)
+
+print("Child IDs:", child_ids)
 
 
 # ============================================================
-# NORMALIZE IDS
-# ============================================================
-
-if ids is None:
-    child_ids = []
-
-elif isinstance(ids, int):
-    child_ids = [ids]
-
-else:
-    child_ids = list(ids)
-
-
-print("\nChild IDs:", child_ids)
-
-
-# ============================================================
-# INSPECT CHILD DEVICES
+# INSPECT CHILDREN
 # ============================================================
 
 for child_id in child_ids:
+    print("\n----------------------------")
+    print("Trying child:", child_id)
 
-    print("\n" + "=" * 60)
+    if child_id is None:
+        continue
 
-    dev.SetId(child_id)
+    dev.SetId(int(child_id))
 
     print("ID:", child_id)
     print("Name:", dev.GetName())
     print("Component:", dev.GetComponentName())
+    print("Pins:", dev.GetPinCount())
     print("IsAssemblyPart:", dev.IsAssemblyPart())
-    print("PinCount:", dev.GetPinCount())
-
-    # --------------------------------------------
-    # GET PINS
-    # --------------------------------------------
-
-    pin_result = dev.GetPinIds(None)
-
-    print("GetPinIds result:", pin_result)
-
-    if isinstance(pin_result, tuple):
-        pin_count = pin_result[0]
-        pin_ids_raw = pin_result[1]
-
-        if pin_ids_raw is None:
-            pin_ids = []
-        elif isinstance(pin_ids_raw, int):
-            pin_ids = [pin_ids_raw]
-        else:
-            pin_ids = list(pin_ids_raw)
-
-        print("Pin count:", pin_count)
-        print("Pin IDs:", pin_ids)
-
-        for pin_id in pin_ids:
-            pin.SetId(pin_id)
-
-            print(
-                "    Pin ID:",
-                pin_id,
-                "| Name:",
-                pin.GetName()
-            )
