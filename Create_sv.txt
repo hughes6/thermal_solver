@@ -1,22 +1,43 @@
-import pythoncom
-import win32com.client as win32
+cur.execute("""
+SELECT
+    ENTRY,
+    VERSION,
+    Description,
+    LPNTR
+FROM dbo.SymbolData
+WHERE ENTRY LIKE ?
+ORDER BY ENTRY, VERSION
+""", "%MilSymbol%")
 
-ids = win32.VARIANT(
-    pythoncom.VT_BYREF | pythoncom.VT_VARIANT,
-    None
-)
+for row in cur.fetchall():
+    print(tuple(row))
 
-count = dev.GetSymbolIds(ids, 0)
+cur.execute("""
+SELECT
+    ENTRY,
+    VERSION,
+    Description,
+    LPNTR
+FROM dbo.SymbolData
+WHERE Description LIKE ?
+ORDER BY ENTRY, VERSION
+""", "%Recept%")
 
-print("count:", count)
-print("ids:", ids.value)
+for row in cur.fetchall():
+    print(tuple(row))
 
-ids = win32.VARIANT(
-    pythoncom.VT_BYREF | pythoncom.VT_ARRAY | pythoncom.VT_I4,
-    []
-)
+cur.execute("""
+SELECT
+    ENTRY,
+    VERSION,
+    Description
+FROM dbo.SymbolData
+WHERE ENTRY LIKE '%MIL%'
+   OR ENTRY LIKE '%REC%'
+   OR Description LIKE '%MIL%'
+   OR Description LIKE '%REC%'
+ORDER BY ENTRY
+""")
 
-count = dev.GetSymbolIds(ids, 0)
-
-print("count:", count)
-print("ids:", ids.value)
+for row in cur.fetchall():
+    print(tuple(row))
