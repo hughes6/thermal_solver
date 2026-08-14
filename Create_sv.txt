@@ -1,10 +1,315 @@
-for child_id in device_ids.value:
+import win32com.client as win32
+import pythoncom
+
+
+# ============================================================
+# SETUP
+# ============================================================
+
+e3 = win32.gencache.EnsureDispatch("CT.Application")
+
+job = e3.CreateJobObject()
+dev = e3.CreateDeviceObject()
+pin = e3.CreatePinObject()
+sym = e3.CreateSymbolObject()
+
+COMPONENT = "YOUR_CABLE_ASSEMBLY_NAME"
+VERSION = "1"
+DEVICE_NAME = "W1"
+
+
+# ============================================================
+# HELPER TO CLEAN UP E3 COM RETURNS
+# ============================================================
+
+def clean_ids(value):
+    ids = []
+
+    if value is None:
+        return ids
+
+    if isinstance(value, int):
+        if value > 0:
+            ids.append(value)
+        return ids
+
+    if isinstance(value, (tuple, list)):
+        for item in value:
+            ids.extend(clean_ids(item))
+
+    return ids
+
+
+# ============================================================
+# CREATE CABLE ASSEMBLY DEVICE
+# ============================================================
+
+assembly_id = dev.Create(
+    DEVICE_NAME,
+    "",
+    "",
+    COMPONENT,
+    VERSION,
+    0
+)
+
+print("\n========================================")
+print("CREATE")
+print("========================================")
+print("Assembly ID:", assembly_id)
+
+if assembly_id <= 0:
+    raise RuntimeError("Device.Create() failed")
+
+dev.SetId(assembly_id)
+
+print("Name:", dev.GetName())
+print("Component:", dev.GetComponentName())
+print("IsAssembly:", dev.IsAssembly())
+print("IsAssemblyPart:", dev.IsAssemblyPart())
+print("DeviceCount:", dev.GetDeviceCount())
+
+
+# ============================================================
+# TRY TO GET CHILD DEVICE IDS
+# ============================================================
+
+print("\n========================================")
+print("GET CHILD DEVICES")
+print("========================================")
+
+child_ids = []
+
+
+# -------------------------
+# METHOD 1
+# normal COM call
+# -------------------------
+
+try:
+    result = dev.GetDeviceIds()
+
+    print("GetDeviceIds raw:", result)
+
+    child_ids = clean_ids(result)
+
+except Exception as e:
+    print("Normal GetDeviceIds failed:", e)
+
+
+# -------------------------
+# METHOD 2
+# explicit BYREF array
+# -------------------------
+
+if not child_ids:
+    try:
+        ids_out = win32.VARIANT(
+            pythoncom.VT_BYREF |
+            pythoncom.VT_ARRAY |
+            pythoncom.VT_I4,
+            []
+        )
+
+        result = dev.GetDeviceIds(ids_out)
+
+        print("GetDeviceIds BYREF result:", result)
+        print("GetDeviceIds BYREF values:", ids_out.value)
+
+        child_ids = clean_ids(ids_out.value)
+
+    except Exception as e:
+        print("BYREF GetDeviceIds failed:", e)
+
+
+# -------------------------
+# REMOVE PARENT ID IF E3
+# RETURNS IT TOO
+# -------------------------
+
+child_ids = [
+    i for i in child_ids
+    if i != assembly_id
+]
+
+print("Clean child IDs:", child_ids)
+
+
+# ============================================================
+# IF GETDEVICEIDS GAVE NOTHING,
+# SEARCH EVERY DEVICE IN PROJECT
+# ============================================================
+
+if not child_ids:
+
+    print("\nGetDeviceIds returned nothing.")
+    print("Searching all project devices instead...")
+
+    all_ids = []
+
+    try:
+        result = job.GetAllDeviceIds()
+
+        print("Job GetAllDeviceIds raw:", result)
+
+        all_ids = clean_ids(result)
+
+    except Exception as e:
+        print("Job.GetAllDeviceIds() failed:", e)
+
+
+    # Try Job.GetDeviceIds if available
+    if not all_ids and hasattr(job, "GetDeviceIds"):
+
+        try:
+            result = job.GetDeviceIds()
+
+            print("Job GetDeviceIds raw:", result)
+
+            all_ids = clean_ids(result)
+
+        except Exception as e:
+            print("Job.GetDeviceIds() failed:", e)
+
+
+    print("All project device IDs:", all_ids)
+
+    # Find devices that belong to this assembly
+    for test_id in all_ids:
+
+        try:
+            dev.SetId(test_id)
+
+            is_part = dev.IsAssemblyPart()
+
+            if is_part:
+                assy_id = dev.GetAssemblyId()
+                root_id = dev.GetRootAssemblyId()
+
+                print(
+                    "Candidate:",
+                    test_id,
+                    "| Name:", dev.GetName(),
+                    "| Assembly:", assy_id,
+                    "| Root:", root_id
+                )
+
+                if assy_id == assembly_id or root_id == assembly_id:
+                    child_ids.append(test_id)
+
+        except Exception as e:
+            print("Could not inspect device", test_id, e)
+
+
+# ============================================================
+# PRINT ALL CHILD DEVICES
+# ============================================================
+
+print("\n========================================")
+print("ASSEMBLY CHILDREN")
+print("========================================")
+
+print("Found:", len(child_ids))
+
+for child_id in child_ids:
+
     dev.SetId(child_id)
 
     print(
-        "ID:", child_id,
-        "| Name:", dev.GetName(),
-        "| Component:", dev.GetComponentName(),
-        "| Pins:", dev.GetPinCount(),
-        "| Is assembly part:", dev.IsAssemblyPart()
+        "\nID:", child_id,
+        "\nName:", dev.GetName(),
+        "\nComponent:", dev.GetComponentName(),
+        "\nPins:", dev.GetPinCount(),
+        "\nIsAssemblyPart:", dev.IsAssemblyPart()
     )
+
+
+# ============================================================
+# GET PINS FOR EACH CONNECTOR CHILD
+# ============================================================
+
+print("\n========================================")
+print("CHILD PINS")
+print("========================================")
+
+for child_id in child_ids:
+
+    dev.SetId(child_id)
+
+    pin_count = dev.GetPinCount()
+
+    if pin_count <= 0:
+        continue
+
+    print(
+        "\n----------------------------------------"
+    )
+
+    print(
+        "DEVICE:",
+        dev.GetName(),
+        "| ID:",
+        child_id,
+        "| Pins:",
+        pin_count
+    )
+
+    pin_ids = []
+
+    # First normal call
+    try:
+        result = dev.GetPinIds()
+
+        print("GetPinIds raw:", result)
+
+        pin_ids = clean_ids(result)
+
+    except Exception as e:
+        print("Normal GetPinIds failed:", e)
+
+
+    # Then BYREF if needed
+    if not pin_ids:
+
+        try:
+            pins_out = win32.VARIANT(
+                pythoncom.VT_BYREF |
+                pythoncom.VT_ARRAY |
+                pythoncom.VT_I4,
+                []
+            )
+
+            result = dev.GetPinIds(pins_out)
+
+            print("GetPinIds BYREF result:", result)
+            print("GetPinIds BYREF values:", pins_out.value)
+
+            pin_ids = clean_ids(pins_out.value)
+
+        except Exception as e:
+            print("BYREF GetPinIds failed:", e)
+
+
+    print("CLEAN PIN IDS:", pin_ids)
+
+
+    # Print physical pin information
+    for pin_id in pin_ids:
+
+        try:
+            pin.SetId(pin_id)
+
+            print(
+                "Pin ID:",
+                pin_id,
+                "| Name:",
+                pin.GetName()
+            )
+
+        except Exception as e:
+            print("Could not read pin:", pin_id, e)
+
+
+print("\n========================================")
+print("DONE")
+print("========================================")
