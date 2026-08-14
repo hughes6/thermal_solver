@@ -1,31 +1,54 @@
+component_name = "2627453-500"
+component_version = "1"
+
 cur.execute("""
-SELECT
-    c.ENTRY,
-    c.VERSION,
-    c.Description,
-    COUNT(cb.COPY) AS NumberOfWires
-FROM dbo.ComponentData c
+SELECT ID, LPNTR
+FROM dbo.ComponentData
+WHERE ENTRY = ?
+AND VERSION = ?
+""", component_name, component_version)
 
-LEFT JOIN dbo.Cable cb
-    ON cb.ENTRY = c.LPNTR
-    AND cb.BundleID = 0
-    AND cb.NODENO > 0
+row = cur.fetchone()
 
-WHERE c.ENTRYTYP = 22
+component_id = row[0]
+component_lpntr = row[1]
 
-GROUP BY
-    c.ENTRY,
-    c.VERSION,
-    c.Description
+print("ID:", component_id)
+print("LPNTR:", component_lpntr)
 
-ORDER BY
-    c.ENTRY,
-    c.VERSION
+
+cur.execute("""
+SELECT TABLE_SCHEMA, TABLE_NAME, COLUMN_NAME
+FROM INFORMATION_SCHEMA.COLUMNS
+WHERE DATA_TYPE IN ('varchar', 'nvarchar', 'char', 'nchar')
+ORDER BY TABLE_NAME, COLUMN_NAME
 """)
 
-for entry, version, description, number_of_wires in cur.fetchall():
-    print(
-        f"{entry} | "
-        f"Wires: {number_of_wires} | "
-        f"desc: {description}"
-    )
+columns_to_check = cur.fetchall()
+
+for value_name, value in [
+    ("ID", component_id),
+    ("LPNTR", component_lpntr)
+]:
+    print("\nSEARCHING", value_name, value)
+
+    for schema, table, column in columns_to_check:
+        try:
+            cur.execute(
+                f"SELECT COUNT(*) "
+                f"FROM [{schema}].[{table}] "
+                f"WHERE [{column}] = ?",
+                value
+            )
+
+            count = cur.fetchone()[0]
+
+            if count > 0:
+                print(
+                    f"{schema}.{table} | "
+                    f"{column} | "
+                    f"matches: {count}"
+                )
+
+        except Exception:
+            pass
