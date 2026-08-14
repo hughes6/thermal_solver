@@ -18,6 +18,7 @@ from heat_animation import (
     read_openfoam_internal_meshes,
     select_openfoam_time,
 )
+from run_metadata import resolve_case
 
 
 FIELD_ALIASES = {
@@ -173,7 +174,7 @@ def build_argument_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description="View OpenFOAM fluid temperature, velocity, pressure, or turbulence fields"
     )
-    parser.add_argument("--case", required=True, help="OpenFOAM case directory")
+    parser.add_argument("--case", help="OpenFOAM case; defaults to the last model_runner export")
     parser.add_argument("--time", default="latest", help="Written time or 'latest'")
     parser.add_argument("--field", default="temperature", help=(
         "temperature, speed, pressure, p_rgh, k, omega, nut, alphat, or an exact field name"))
@@ -231,7 +232,10 @@ def main() -> None:
     # global. Initialize it here when the helpers are reused independently.
     heat_animation.np = np
 
-    case = Path(args.case).expanduser().resolve()
+    try:
+        case = resolve_case(args.case)
+    except (FileNotFoundError, ValueError) as exc:
+        raise SystemExit(str(exc)) from exc
     if not (case / "system" / "controlDict").is_file():
         raise SystemExit(f"Not an OpenFOAM case: {case}")
     marker = case / f"{case.name}.foam"

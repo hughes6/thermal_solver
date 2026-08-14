@@ -6,6 +6,11 @@ import argparse
 from pathlib import Path
 
 try:
+    from .run_metadata import resolve_case
+except ImportError:  # Direct execution from the plot directory
+    from run_metadata import resolve_case
+
+try:
     from tools.openfoam_field_delta import resolve_time_directory
     from tools.validate_openfoam_case import latest_result_paths, patch_values
 except ModuleNotFoundError:
@@ -154,7 +159,8 @@ def main() -> None:
             "Calculate an outlet temperature weighted by OpenFOAM mass flux phi."
         )
     )
-    parser.add_argument("case", type=Path, help="OpenFOAM case directory")
+    parser.add_argument("case", nargs="?", type=Path,
+                        help="OpenFOAM case; defaults to the last model_runner export")
     parser.add_argument(
         "--outlet",
         default="Validation_outlet",
@@ -178,7 +184,10 @@ def main() -> None:
     if args.minimum_mass_flow < 0.0:
         raise SystemExit("--minimum-mass-flow cannot be negative")
 
-    case = args.case.expanduser().resolve()
+    try:
+        case = resolve_case(args.case)
+    except (FileNotFoundError, ValueError) as exc:
+        raise SystemExit(str(exc)) from exc
     if not (case / "system" / "controlDict").is_file():
         raise SystemExit(f"Not an OpenFOAM case: {case}")
 

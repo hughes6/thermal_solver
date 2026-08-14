@@ -22,6 +22,7 @@
 #include "src/vent.hpp"
 #include "src/workload.hpp"
 #include "src/input/model_loader.hpp"
+#include "src/run_metadata.hpp"
 
 
 int main(int argc, char* argv[]) {
@@ -160,6 +161,43 @@ int main(int argc, char* argv[]) {
     std::cout << "Native backend forced; OpenFOAM export is disabled.\n";
   }
   loader.run(geometry_only);
+
+  const bool openfoam=loader.model.openfoam_solver.enabled;
+  const std::filesystem::path metadata_path=
+      std::filesystem::current_path()/".thermal_sim_last_run.json";
+  try {
+    write_run_metadata(metadata_path,{
+      .executable=std::filesystem::absolute(argv[0]),
+      .working_directory=std::filesystem::current_path(),
+      .model=std::filesystem::absolute(model_path),
+      .fan_curves=std::filesystem::absolute(fan_curve_path),
+      .case_directory=openfoam
+          ? std::filesystem::absolute(
+                loader.model.openfoam_solver.case_directory)
+          : std::filesystem::path(),
+      .geometry=openfoam
+          ? std::filesystem::absolute(
+                loader.model.openfoam_solver.case_directory)/"geometry.txt"
+          : std::filesystem::absolute("output.txt"),
+      .simulation=openfoam ? std::filesystem::path()
+                           : std::filesystem::absolute("simulation.csv"),
+      .backend=openfoam ? "openfoam" : "native",
+      .mode=geometry_only ? "geometry-only" :
+            (force_native ? "forced-native" : "normal")
+    });
+    std::cout << "Last-run metadata: " << metadata_path << "\n";
+    if(openfoam) {
+      std::cout
+          << "Short plotting commands (use the last-run metadata):\n"
+          << "  python .\\plot\\heat_animation.py --format openfoam "
+             "--time latest\n"
+          << "  python .\\plot\\fluid_results.py --time latest\n"
+          << "  python .\\plot\\recirculation_report.py --save\n";
+    }
+  } catch(const std::exception& error) {
+    std::cerr << "Warning: could not write last-run metadata: "
+              << error.what() << "\n";
+  }
 
   return 0;
 }

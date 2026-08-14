@@ -908,7 +908,14 @@ def run_openfoam(args: argparse.Namespace) -> None:
             "  python -m pip install pyvista"
         ) from exc
 
-    case_directory = Path(args.case).expanduser().resolve()
+    try:
+        from .run_metadata import resolve_case
+    except ImportError:  # Direct execution: python plot/heat_animation.py
+        from run_metadata import resolve_case
+    try:
+        case_directory = resolve_case(args.case)
+    except (FileNotFoundError, ValueError) as exc:
+        raise SystemExit(str(exc)) from exc
     if not (case_directory / "system" / "controlDict").is_file():
         raise SystemExit(f"Not an OpenFOAM case: {case_directory}")
 
@@ -1128,8 +1135,6 @@ def build_argument_parser() -> argparse.ArgumentParser:
 def main() -> None:
     args = build_argument_parser().parse_args()
     if args.format == "openfoam":
-        if not args.case:
-            raise SystemExit("--case is required when --format openfoam is selected")
         run_openfoam(args)
     else:
         run_native(args)

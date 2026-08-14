@@ -93,6 +93,32 @@ argument selects a different fan-curve library:
 .\model.exe library\models\model.toml library\fan_curves\fan_curves.toml
 ```
 
+After a successful run, `model_runner` atomically writes the machine-local
+`.thermal_sim_last_run.json` in the directory where it was launched. It records
+the executable, working directory, model TOML, fan-curve library, backend,
+generated OpenFOAM case, geometry file, native simulation file, run mode, and
+UTC timestamp. The file is ignored by Git and is only a convenience pointer;
+simulation results remain in their normal case directory.
+
+The main Python OpenFOAM plotting commands can therefore use the most recently
+generated case without repeating its long directory name:
+
+```powershell
+python .\plot\heat_animation.py --format openfoam --time latest
+python .\plot\fluid_results.py --time latest --streamlines --seed vents
+python .\plot\recirculation_report.py --save
+python .\plot\outlet_mass_weighted_temperature.py
+python .\plot_outlet_flow.py
+```
+
+This is backward compatible: an explicit `--case "C:\OpenFOAM\..."` (or the
+existing positional case argument for `outlet_mass_weighted_temperature.py`)
+always takes precedence, which is how to plot an older archived case. Set
+`THERMAL_SIM_RUN_METADATA` to a different metadata JSON path when launching a
+plotter outside the repository or when maintaining several independent working
+directories. A native-only last run contains no OpenFOAM case, so OpenFOAM
+plotters will request an explicit case instead of silently using stale data.
+
 The loader decides what happens from `[openfoam_solver].enabled`:
 
 - `false` or an omitted section runs the native explicit solver.

@@ -5,6 +5,8 @@ from __future__ import annotations
 import argparse
 from pathlib import Path
 
+from plot.run_metadata import resolve_case
+
 from tools.validate_openfoam_case import latest_result_paths, patch_values
 
 
@@ -99,7 +101,8 @@ def main() -> None:
         ) from exc
 
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--case", type=Path, required=True)
+    parser.add_argument("--case", type=Path,
+                        help="OpenFOAM case; defaults to the last model_runner export")
     parser.add_argument(
         "--report",
         help=(
@@ -111,7 +114,10 @@ def main() -> None:
     parser.add_argument("--expected-kg-s", type=float)
     args = parser.parse_args()
 
-    case = args.case.resolve()
+    try:
+        case = resolve_case(args.case)
+    except (FileNotFoundError, ValueError) as exc:
+        raise SystemExit(str(exc)) from exc
     report = select_report(case, args.report)
     times, mass_flow = read_samples(report)
     patch = report.name.removesuffix("_mass_flow")

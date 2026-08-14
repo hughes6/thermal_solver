@@ -9,6 +9,11 @@ import re
 import sys
 from pathlib import Path
 
+try:
+    from .run_metadata import resolve_case
+except ImportError:  # Direct execution: python plot/recirculation_report.py
+    from run_metadata import resolve_case
+
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from tools.openfoam_field_delta import resolve_time_directory
 from tools.validate_openfoam_case import latest_result_paths, patch_values
@@ -772,7 +777,8 @@ def combined_samples(
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--case", required=True, type=Path)
+    parser.add_argument("--case", type=Path,
+                        help="OpenFOAM case; defaults to the last model_runner export")
     parser.add_argument("--ambient-temperature", type=float, default=293.15)
     parser.add_argument("--cp-air", type=float, default=1005.0,
                         help="air specific heat in J/(kg K), default: 1005")
@@ -807,7 +813,10 @@ def main() -> None:
                 "or use --csv-only"
             ) from exc
 
-    case = args.case.expanduser().resolve()
+    try:
+        case = resolve_case(args.case)
+    except (FileNotFoundError, ValueError) as exc:
+        raise SystemExit(str(exc)) from exc
     expected_heat_watts = args.expected_heat_watts
     if expected_heat_watts is None:
         expected_heat_watts = exported_heat_watts(case)

@@ -10,7 +10,8 @@ $tests = @(
     "advection_subcycling_test",
     "face_wall_test",
     "model_config_test",
-    "model_runner_tracer_commands_test"
+    "model_runner_tracer_commands_test",
+    "run_metadata_test"
 )
 
 $tempBase = [IO.Path]::GetFullPath([IO.Path]::GetTempPath())
@@ -63,6 +64,7 @@ Write-Host "Checking Python plotting scripts"
 & python -m py_compile `
     "plot/heat_animation.py" `
     "plot/fluid_results.py" `
+    "plot/run_metadata.py" `
     "plot/coarse_heat_animation.py" `
     "plot/coarse_heat_io.py" `
     "plot/plot.py" `
@@ -84,6 +86,7 @@ Write-Host "Checking Python plotting scripts"
     "tests/plot_geometry_test.py" `
     "tests/openfoam_animation_test.py" `
     "tests/fluid_results_test.py" `
+    "tests/run_metadata_test.py" `
     "tests/openfoam_field_convergence_test.py" `
     "tests/openfoam_field_delta_test.py" `
     "tests/openfoam_cross_case_comparison_test.py" `
@@ -128,6 +131,11 @@ if ($LASTEXITCODE -ne 0) {
 & python "tests/fluid_results_test.py"
 if ($LASTEXITCODE -ne 0) {
     throw "OpenFOAM fluid-results viewer tests failed"
+}
+
+& python "tests/run_metadata_test.py"
+if ($LASTEXITCODE -ne 0) {
+    throw "Last-run metadata tests failed"
 }
 
 & python -m unittest "tests.recirculation_report_test"
