@@ -1,34 +1,23 @@
-cur.execute("""
-SELECT
-    COPY,
-    SUBENTRY,
-    SUBVERSION
-FROM dbo.Assembly
-WHERE LPNTR = ?
-ORDER BY COPY
-""", component_lpntr)
+count, sym_id = dev.GetSymbolIds()
 
-members = cur.fetchall()
+print("count:", count)
+print("sym_id:", sym_id)
 
-for copy_no, part, version in members:
-    print(
-        f"COPY {copy_no} | "
-        f"{part} | "
-        f"Version {version}"
-    )
+sym.SetId(sym_id)
+
+print("SetId result maybe:", sym.GetId() if hasattr(sym, "GetId") else "no GetId")
+print("type:", sym.GetSymbolTypeName())
 
 
-cur.execute("""
-SELECT *
-FROM dbo.GatePinRelation
-WHERE ENTRY = ?
-ORDER BY GateNumber
-""", component_lpntr)
+result = dev.GetSymbolIds()
 
-columns = [col[0] for col in cur.description]
+print(result)
+print(type(result))
 
-for row in cur.fetchall():
-    print("\n" + "-" * 60)
+if isinstance(result, tuple):
+    for i, value in enumerate(result):
+        print(i, value, type(value))
 
-    for name, value in zip(columns, row):
-        print(f"{name} = {value}")
+help(dev.GetSymbolIds)
+
+
