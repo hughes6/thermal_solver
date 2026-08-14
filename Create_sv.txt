@@ -1,54 +1,12 @@
-component_name = "2627453-500"
-component_version = "1"
-
-cur.execute("""
-SELECT ID, LPNTR
-FROM dbo.ComponentData
-WHERE ENTRY = ?
-AND VERSION = ?
-""", component_name, component_version)
-
-row = cur.fetchone()
-
-component_id = row[0]
-component_lpntr = row[1]
-
-print("ID:", component_id)
-print("LPNTR:", component_lpntr)
-
-
 cur.execute("""
 SELECT TABLE_SCHEMA, TABLE_NAME, COLUMN_NAME
 FROM INFORMATION_SCHEMA.COLUMNS
-WHERE DATA_TYPE IN ('varchar', 'nvarchar', 'char', 'nchar')
+WHERE TABLE_NAME LIKE '%SYM%'
+   OR COLUMN_NAME LIKE '%SYM%'
+   OR TABLE_NAME LIKE '%MODEL%'
+   OR COLUMN_NAME LIKE '%MODEL%'
 ORDER BY TABLE_NAME, COLUMN_NAME
 """)
 
-columns_to_check = cur.fetchall()
-
-for value_name, value in [
-    ("ID", component_id),
-    ("LPNTR", component_lpntr)
-]:
-    print("\nSEARCHING", value_name, value)
-
-    for schema, table, column in columns_to_check:
-        try:
-            cur.execute(
-                f"SELECT COUNT(*) "
-                f"FROM [{schema}].[{table}] "
-                f"WHERE [{column}] = ?",
-                value
-            )
-
-            count = cur.fetchone()[0]
-
-            if count > 0:
-                print(
-                    f"{schema}.{table} | "
-                    f"{column} | "
-                    f"matches: {count}"
-                )
-
-        except Exception:
-            pass
+for row in cur.fetchall():
+    print(row)
