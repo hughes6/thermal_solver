@@ -294,15 +294,23 @@ namespace {
         region.transverse_darcy_coefficient=table["transverse_darcy_coefficient"].value<double>();
         region.transverse_forchheimer_coefficient=table["transverse_forchheimer_coefficient"].value<double>();
         region.free_area_ratio=table["free_area_ratio"].value<double>();
+        const auto porosity_percent=table["porosity_percent"].value<double>();
+        if(region.free_area_ratio && porosity_percent)
+            throw std::runtime_error(context+": specify only porosity_percent (preferred) or legacy free_area_ratio, not both");
+        if(porosity_percent) {
+            if(*porosity_percent<=0.0 || *porosity_percent>100.0)
+                throw std::runtime_error(context+": porosity_percent must be in (0,100]");
+            region.free_area_ratio=*porosity_percent/100.0;
+        }
         region.discharge_coefficient=table["discharge_coefficient"].value<double>();
         const bool coefficients=region.darcy_coefficient.has_value() ||
                                 region.forchheimer_coefficient.has_value();
         const bool perforated=region.free_area_ratio.has_value() ||
                               region.discharge_coefficient.has_value();
         if(coefficients==perforated)
-            throw std::runtime_error(context+": specify either Darcy/Forchheimer coefficients or both free_area_ratio and discharge_coefficient");
+            throw std::runtime_error(context+": specify either Darcy/Forchheimer coefficients or both porosity_percent and discharge_coefficient");
         if(perforated && (!region.free_area_ratio || !region.discharge_coefficient))
-            throw std::runtime_error(context+": perforated plate requires both free_area_ratio and discharge_coefficient");
+            throw std::runtime_error(context+": perforated plate requires both porosity_percent and discharge_coefficient");
         return region;
     }
 

@@ -95,6 +95,36 @@ int main() {
     foam_loader.load_model("library/tests/openfoam_model.toml");
     assert(foam_loader.model.porous_regions.size()==1);
     assert(foam_loader.model.porous_regions[0].free_area_ratio.value()==0.40);
+    {
+        std::string legacy_text=read_file("library/tests/openfoam_model.toml");
+        const std::string percent_line="porosity_percent = 40.0";
+        const auto percent_at=legacy_text.find(percent_line);
+        assert(percent_at!=std::string::npos);
+        legacy_text.replace(percent_at,percent_line.size(),
+                            "free_area_ratio = 0.40");
+        const auto legacy_path=test_root/"legacy_porous_ratio.toml";
+        std::ofstream(legacy_path) << legacy_text;
+        ModelLoader legacy_porous_loader;
+        legacy_porous_loader.load_model(legacy_path.string());
+        assert(legacy_porous_loader.model.porous_regions[0]
+                   .free_area_ratio.value()==0.40);
+
+        std::string ambiguous_text=legacy_text;
+        const auto ratio_at=ambiguous_text.find("free_area_ratio = 0.40");
+        assert(ratio_at!=std::string::npos);
+        ambiguous_text.insert(ratio_at,"porosity_percent = 40.0\n");
+        const auto ambiguous_path=test_root/"ambiguous_porosity.toml";
+        std::ofstream(ambiguous_path) << ambiguous_text;
+        bool rejected_ambiguous=false;
+        try {
+            ModelLoader ambiguous_loader;
+            ambiguous_loader.load_model(ambiguous_path.string());
+        } catch(const std::runtime_error& error) {
+            rejected_ambiguous=std::string(error.what()).find(
+                "specify only porosity_percent")!=std::string::npos;
+        }
+        assert(rejected_ambiguous);
+    }
     const PorousRegion parsed_porous=build_porous_region(
         foam_loader.model.porous_regions[0]);
     assert(std::abs(parsed_porous.forchheimer-

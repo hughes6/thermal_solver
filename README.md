@@ -635,7 +635,7 @@ For a perforated tray with known open area and discharge coefficient:
 ```toml
 [[porous_regions]]
 name = "Rear perforated cable tray"
-free_area_ratio = 0.42
+porosity_percent = 42.0
 discharge_coefficient = 0.65
 # Optional high transverse resistance prevents flow travelling inside the
 # numerically thickened tray instead of crossing its holes.
@@ -661,7 +661,10 @@ z = 0.0
 ```
 
 This form derives `F = 1/(Cd^2*phi^2*L)`, giving
-`deltaP = rho*U^2/(2*Cd^2*phi^2)`. Both inputs must be in `(0,1]`.
+`deltaP = rho*U^2/(2*Cd^2*phi^2)`. Enter `porosity_percent` in `(0,100]`;
+for example, `42.0` means 42% open area. `discharge_coefficient` remains a
+dimensionless value in `(0,1]`. The legacy fractional `free_area_ratio = 0.42`
+form remains accepted for backward compatibility, but do not specify both.
 
 For a cable bundle or obstruction calibrated from measured/Fluent pressure
 drop, enter coefficients directly:
