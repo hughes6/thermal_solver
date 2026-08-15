@@ -624,6 +624,14 @@ That guide also documents `tools/porous_obstruction_calculator.py`, which
 converts hole geometry, cable inventory, or measured pressure-drop points into
 reports and a copy-ready `[[porous_regions]]` block.
 
+When cable pressure data are impractical or unavailable, use
+`--estimate-cable-bundle` with cable count, average outside diameter, and a
+dominant cable axis plus a `loose`, `typical`, or `dense` packing condition.
+Use a tight bundle envelope, not the whole rear-rack air volume. The tool writes optimistic,
+nominal, and conservative TOML alternatives. These are bounded engineering
+sensitivity cases; run all three rather than treating the nominal correlation
+as measured cable performance.
+
 The memory-bounded pressure-drop acceptance model is
 `library/models/validation_porous_duct.toml`; detailed native/OpenFOAM results
 are recorded in `POROUS_ACCEPTANCE_VALIDATION_2026-08-15.md`. OpenFOAM thin

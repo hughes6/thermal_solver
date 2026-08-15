@@ -110,6 +110,75 @@ class PorousObstructionCalculatorTest(unittest.TestCase):
         self.assertEqual(result["inputs"]["size_m"], [0.4, 0.15, 1.4])
         self.assertEqual(result["inputs"]["specified_porosity_percent"], 55.0)
 
+    def test_cable_bundle_estimate_outputs_ordered_sensitivity_bounds(self):
+        args = parser().parse_args([
+            "--name", "Rear cables", "--size", "0.4,0.15,1.4",
+            "--direction", "y", "--estimate-cable-bundle",
+            "--cable-count", "120", "--average-cable-diameter-mm", "8",
+            "--packing-condition", "typical",
+        ])
+        result = calculate(args)
+        scenarios = result["cable_bundle_estimate"]["scenarios"]
+        self.assertLess(
+            scenarios["optimistic"]["darcy_coefficient_1_m2"],
+            scenarios["nominal"]["darcy_coefficient_1_m2"])
+        self.assertLess(
+            scenarios["nominal"]["forchheimer_coefficient_1_m"],
+            scenarios["conservative"]["forchheimer_coefficient_1_m"])
+        for scenario in scenarios.values():
+            self.assertGreater(scenario["effective_void_percent"], 0)
+            self.assertEqual(len(scenario["pressure_curve"]), 5)
+        self.assertEqual(result["toml"], result["scenario_toml"]["nominal"])
+        self.assertEqual(len(result["warnings"]), 2)
+
+    def test_cable_bundle_estimate_writes_three_tomls_and_curve(self):
+        args = parser().parse_args([
+            "--size", "0.4,0.15,1.4", "--direction", "y",
+            "--estimate-cable-bundle", "--cable-count", "80",
+            "--average-cable-diameter-mm", "7", "--packing-condition", "loose",
+        ])
+        result = calculate(args)
+        with tempfile.TemporaryDirectory() as directory:
+            paths = write_outputs(result, Path(directory) / "bundle")
+            names = {path.name for path in paths}
+            self.assertTrue({
+                "bundle_optimistic.toml", "bundle_nominal.toml",
+                "bundle_conservative.toml", "bundle_sensitivity.csv",
+            }.issubset(names))
+            report = (Path(directory) / "bundle.md").read_text(encoding="utf-8")
+            self.assertIn("engineering-estimate scenarios", report)
+
+    def test_cable_estimate_requires_complete_exclusive_inputs(self):
+        incomplete = parser().parse_args([
+            "--size", "0.4,0.15,1.4", "--direction", "y",
+            "--estimate-cable-bundle", "--cable-count", "80",
+        ])
+        with self.assertRaisesRegex(ValueError, "requires"):
+            calculate(incomplete)
+        conflicting = parser().parse_args([
+            "--size", "0.4,0.15,1.4", "--direction", "y",
+            "--estimate-cable-bundle", "--cable-count", "80",
+            "--average-cable-diameter-mm", "7", "--porosity-percent", "50",
+        ])
+        with self.assertRaisesRegex(ValueError, "cannot be combined"):
+            calculate(conflicting)
+
+    def test_cable_axis_and_packing_change_resistance_physically(self):
+        base = [
+            "--size", "0.4,0.15,1.4", "--direction", "y",
+            "--estimate-cable-bundle", "--cable-count", "120",
+            "--average-cable-diameter-mm", "8",
+        ]
+        parallel = calculate(parser().parse_args(
+            base + ["--cable-axis", "y", "--packing-condition", "loose"]))
+        crossflow = calculate(parser().parse_args(
+            base + ["--cable-axis", "z", "--packing-condition", "dense"]))
+        parallel_f = parallel["cable_bundle_estimate"]["scenarios"]["nominal"][
+            "forchheimer_coefficient_1_m"]
+        crossflow_f = crossflow["cable_bundle_estimate"]["scenarios"]["nominal"][
+            "forchheimer_coefficient_1_m"]
+        self.assertLess(parallel_f, crossflow_f)
+
 
 if __name__ == "__main__":
     unittest.main()

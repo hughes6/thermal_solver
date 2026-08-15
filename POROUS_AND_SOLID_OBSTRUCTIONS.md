@@ -155,6 +155,76 @@ are represented approximately by `discharge_coefficient`.
 Cable bundles are not automatically equivalent to perforated plates. Choose
 one of the following levels of evidence, in descending order of confidence.
 
+### 4.0 Practical engineering estimate when data are unavailable
+
+For ordinary rack work, measurements, manufacturer curves, and resolved cable
+CFD are often unavailable or not worth their cost. Use the calculator's bounded
+cable mode instead of inventing one precise porosity or pressure drop.
+
+Required inputs are:
+
+- the porous bundle envelope through `--size WIDTH,DEPTH,HEIGHT`;
+- the primary airflow `--direction`;
+- estimated cable count;
+- average cable **outside** diameter, including jackets and sleeving;
+- dominant cable axis (`x`, `y`, or `z`; vertical `z` is the default);
+- `loose`, `typical`, or `dense` packing condition.
+
+Make the porous box a reasonably tight envelope around the cables. Do not use
+the entire open rear-rack volume if the cables occupy only one narrow bundle;
+that would dilute their calculated solid fraction and underpredict resistance.
+
+Example:
+
+```powershell
+python .\tools\porous_obstruction_calculator.py `
+  --name "Rear vertical cable field" `
+  --position 0.10,0.75,0.20 `
+  --size 0.40,0.15,1.40 --direction y `
+  --estimate-cable-bundle `
+  --cable-count 120 `
+  --average-cable-diameter-mm 8 `
+  --cable-axis z `
+  --packing-condition typical `
+  --output .\rear_cable_estimate
+```
+
+The method calculates cable volume by assuming each cable spans the box along
+`--cable-axis`, divides it by bundle-envelope volume, applies the selected
+packing multiplier, and uses an Ergun-form packed-cylinder surrogate. Flow
+parallel to the cable axis receives a lower orientation factor than crossflow:
+
+```text
+D = C * 150 * (1-epsilon)^2 / (epsilon^3 * d^2)
+F = C * 3.5 * (1-epsilon) / (epsilon^3 * d)
+```
+
+`epsilon` is the scenario's effective void fraction, `d` is average cable
+outside diameter, and `C` is a deliberately broad drag multiplier. The tool
+varies both effective solid fraction and `C` to create:
+
+- `optimistic`: open/organized bundle and lower resistance;
+- `nominal`: the selected packing condition's central estimate;
+- `conservative`: tangled/tied/tortuous bundle and higher resistance.
+
+These are engineering sensitivity bounds, not probability intervals and not a
+claim that cables are spherical packed particles. Their purpose is to answer
+whether uncertain cable blockage changes the rack conclusion.
+
+Run all three cases without changing fans, vents, heat loads, or other geometry.
+Compare total rack flow, every fan operating point, rack static pressure,
+component intake flow, recirculation, outlet temperature, and component
+temperature. If the design conclusion is unchanged across the three cases,
+further cable characterization is unnecessary. If it changes, report the
+range and treat that cable region as a dominant uncertainty.
+
+Do **not** paste all three blocks into one model; they occupy the same volume.
+Create three model copies, place exactly one scenario block in each, and give
+each model/case a unique name such as `rack_cables_optimistic`,
+`rack_cables_nominal`, and `rack_cables_conservative`. Run them from the same
+validated unobstructed or nominal checkpoint when possible so initialization
+differences do not masquerade as cable sensitivity.
+
 ### 4.1 Measured pressure-drop curve — preferred
 
 Measure pressure difference across the cable zone at several steady flow
@@ -401,6 +471,16 @@ For output basename `rear_cables_calibrated`, it writes:
 - `.md`: readable calculation report and TOML;
 - `.csv`: measured and fitted pressure points, when supplied;
 - `.svg`: pressure-drop fit plot, when points are supplied.
+
+Bounded cable estimation additionally writes:
+
+- `_optimistic.toml`, `_nominal.toml`, and `_conservative.toml`;
+- `_sensitivity.csv`, containing pressure predictions at 0.25, 0.5, 1, 2,
+  and 3 m/s for all three scenarios.
+
+The unsuffixed `.toml` is the nominal case for convenience. Do not run only
+that file and describe the cable model as validated. Preserve the JSON and
+Markdown reports with the rack results so the assumptions remain traceable.
 
 Use `--porosity-percent` when the percentage is already known or
 `--open-area-m2` when total open area is known. Run `--help` for every option.

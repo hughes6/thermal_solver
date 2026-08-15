@@ -85,6 +85,75 @@ def cable_void_percent(
     return solid_volume, 100.0 * (1.0 - solid_volume / zone_volume)
 
 
+def estimate_cable_bundle(
+    count: int, diameter_mm: float, size: tuple[float, float, float],
+    direction: str, cable_axis: str, length: float,
+    viscosity: float, density: float, packing: str,
+) -> dict[str, object]:
+    """Create bounded packed-cylinder estimates, not calibrated properties."""
+    if count <= 0 or diameter_mm <= 0:
+        raise ValueError("Cable count and average diameter must be positive.")
+    diameter = diameter_mm / 1000.0
+    axis_index = {"x": 0, "y": 1, "z": 2}[cable_axis]
+    zone_volume = size[0] * size[1] * size[2]
+    cable_length_in_zone = size[axis_index]
+    cable_volume = (count * math.pi * diameter * diameter
+                    * cable_length_in_zone / 4.0)
+    raw_solid = cable_volume / zone_volume
+    if raw_solid >= 1.0:
+        raise ValueError(
+            "Cable cross-sectional area equals or exceeds the bundle envelope; "
+            "increase --size or correct cable count/diameter.")
+    packing_factor = {"loose": 0.70, "typical": 1.0, "dense": 1.30}[packing]
+    orientation_factor = 0.50 if direction == cable_axis else 1.50
+    nominal_solid = min(0.85, raw_solid * packing_factor)
+    scenarios: dict[str, dict[str, object]] = {}
+    for name, solid_factor, drag_factor in (
+        ("optimistic", 0.70, 0.60),
+        ("nominal", 1.00, 1.00),
+        ("conservative", 1.40, 1.80),
+    ):
+        solid = min(0.90, max(1.0e-4, nominal_solid * solid_factor))
+        void = 1.0 - solid
+        combined_drag = drag_factor * orientation_factor
+        darcy = (combined_drag * 150.0 * solid * solid
+                 / (void ** 3 * diameter ** 2))
+        forchheimer = (combined_drag * 3.5 * solid
+                       / (void ** 3 * diameter))
+        scenarios[name] = {
+            "effective_solid_fraction": solid,
+            "effective_void_percent": 100.0 * void,
+            "darcy_coefficient_1_m2": darcy,
+            "forchheimer_coefficient_1_m": forchheimer,
+            "pressure_curve": [{
+                "velocity_m_s": velocity,
+                "pressure_pa": pressure_prediction(
+                    velocity, length, viscosity, density, darcy, forchheimer),
+            } for velocity in (0.25, 0.5, 1.0, 2.0, 3.0)],
+        }
+    return {
+        "method": "bounded Ergun-form packed-cylinder engineering estimate",
+        "packing_condition": packing,
+        "cable_count": count,
+        "average_cable_diameter_mm": diameter_mm,
+        "cable_axis": cable_axis,
+        "assumed_cable_length_in_zone_m": cable_length_in_zone,
+        "estimated_cable_volume_m3": cable_volume,
+        "raw_volume_solid_fraction": raw_solid,
+        "packing_factor": packing_factor,
+        "orientation_factor": orientation_factor,
+        "scenarios": scenarios,
+        "assumptions": [
+            "The porous box tightly bounds the cable field rather than the rack.",
+            "Cable outside diameter includes jackets and sleeving.",
+            "Each cable spans the porous box along the specified cable axis.",
+            "Ergun packed-bed behavior is used as a cylinder-bundle surrogate.",
+            "Scenario factors bound unknown orientation, gaps, ties, and tortuosity.",
+            "Bounds are engineering sensitivity cases, not confidence intervals.",
+        ],
+    }
+
+
 def fit_pressure_points(
     points: list[PressurePoint], length: float, viscosity: float, density: float
 ) -> dict[str, float]:
@@ -268,6 +337,12 @@ def write_svg(path: Path, rows: list[dict[str, float]]) -> None:
 
 def calculate(args: argparse.Namespace) -> dict[str, object]:
     gross_area, length, zone_volume = geometry(args.size, args.direction)
+    if not args.estimate_cable_bundle and (
+        args.cable_count is not None or args.average_cable_diameter_mm is not None
+    ):
+        raise ValueError(
+            "--cable-count and --average-cable-diameter-mm require "
+            "--estimate-cable-bundle.")
     specified = sum(value is not None for value in (
         args.porosity_percent, args.open_area_m2,
         args.hole_count if args.hole_diameter_mm is not None else None))
@@ -331,8 +406,39 @@ def calculate(args: argparse.Namespace) -> dict[str, object]:
     elif args.discharge_coefficient is not None:
         raise ValueError("--discharge-coefficient requires a porosity source.")
 
-    snippet = toml_snippet(args, porosity, darcy,
-                           fit["forchheimer_coefficient_1_m"] if fit else None)
+    cable_estimate = None
+    scenario_toml: dict[str, str] = {}
+    if args.estimate_cable_bundle:
+        if args.cable_count is None or args.average_cable_diameter_mm is None:
+            raise ValueError(
+                "--estimate-cable-bundle requires --cable-count and "
+                "--average-cable-diameter-mm.")
+        if points or porosity is not None or args.cable:
+            raise ValueError(
+                "Cable-bundle estimation cannot be combined with pressure, "
+                "porosity, hole, or --cable inventory inputs.")
+        cable_estimate = estimate_cable_bundle(
+            args.cable_count, args.average_cable_diameter_mm, args.size,
+            args.direction, args.cable_axis, length, args.viscosity,
+            args.density, args.packing_condition)
+        for scenario, values in cable_estimate["scenarios"].items():
+            scenario_args = argparse.Namespace(**{
+                **vars(args), "name": f"{args.name} - {scenario} estimate"})
+            scenario_toml[scenario] = toml_snippet(
+                scenario_args, None, values["darcy_coefficient_1_m2"],
+                values["forchheimer_coefficient_1_m"])
+        darcy = cable_estimate["scenarios"]["nominal"]["darcy_coefficient_1_m2"]
+        forchheimer = cable_estimate["scenarios"]["nominal"]["forchheimer_coefficient_1_m"]
+        warnings.extend([
+            "Cable coefficients are correlation-based engineering estimates, "
+            "not measured properties.",
+            "Run optimistic, nominal, and conservative rack cases and report "
+            "the resulting sensitivity range.",
+        ])
+
+    snippet = (scenario_toml["nominal"] if cable_estimate else
+               toml_snippet(args, porosity, darcy,
+                            fit["forchheimer_coefficient_1_m"] if fit else None))
     return {
         "name": args.name,
         "inputs": {
@@ -348,6 +454,11 @@ def calculate(args: argparse.Namespace) -> dict[str, object]:
             "discharge_coefficient": args.discharge_coefficient,
             "cables": [list(values) for values in args.cable],
             "used_cable_void_as_porosity": args.use_cable_void_as_porosity,
+            "estimate_cable_bundle": args.estimate_cable_bundle,
+            "cable_count": args.cable_count,
+            "average_cable_diameter_mm": args.average_cable_diameter_mm,
+            "packing_condition": args.packing_condition,
+            "cable_axis": args.cable_axis,
             "pressure_csv": (str(args.pressure_csv)
                              if args.pressure_csv is not None else None),
         },
@@ -361,6 +472,8 @@ def calculate(args: argparse.Namespace) -> dict[str, object]:
         "derived_forchheimer_coefficient_1_m": forchheimer if not fit else None,
         "pressure_fit": fit,
         "pressure_points": rows,
+        "cable_bundle_estimate": cable_estimate,
+        "scenario_toml": scenario_toml,
         "warnings": warnings,
         "toml": snippet,
     }
@@ -377,6 +490,24 @@ def write_outputs(result: dict[str, object], output: Path) -> list[Path]:
     }
     paths["json"].write_text(json.dumps(result, indent=2) + "\n", encoding="utf-8")
     paths["toml"].write_text(str(result["toml"]), encoding="utf-8")
+    scenario_paths: list[Path] = []
+    for scenario, snippet in result.get("scenario_toml", {}).items():
+        scenario_path = output.with_name(
+            output.name + f"_{scenario}").with_suffix(".toml")
+        scenario_path.write_text(snippet, encoding="utf-8")
+        scenario_paths.append(scenario_path)
+    estimate = result.get("cable_bundle_estimate")
+    if estimate:
+        sensitivity_path = output.with_name(
+            output.name + "_sensitivity").with_suffix(".csv")
+        with sensitivity_path.open("w", newline="", encoding="utf-8") as handle:
+            writer = csv.DictWriter(
+                handle, fieldnames=("scenario", "velocity_m_s", "pressure_pa"))
+            writer.writeheader()
+            for scenario, values in estimate["scenarios"].items():
+                for point in values["pressure_curve"]:
+                    writer.writerow({"scenario": scenario, **point})
+        scenario_paths.append(sensitivity_path)
     rows = result["pressure_points"]
     if rows:
         with paths["csv"].open("w", newline="", encoding="utf-8") as handle:
@@ -401,13 +532,30 @@ def write_outputs(result: dict[str, object], output: Path) -> list[Path]:
             f'({fit["normalized_rmse_percent"]:.4g}%)',
             f'- Maximum fit error: {fit["maximum_absolute_error_pa"]:.6g} Pa',
             f'- Fit R²: {fit["r_squared"]:.8g}'])
+    estimate = result.get("cable_bundle_estimate")
+    if estimate:
+        lines.extend([
+            "", "## Cable engineering-estimate scenarios", "",
+            "| Scenario | Effective void | Darcy (1/m2) | Forchheimer (1/m) |",
+            "|---|---:|---:|---:|",
+        ])
+        for scenario, values in estimate["scenarios"].items():
+            lines.append(
+                f'| {scenario} | {values["effective_void_percent"]:.3f}% | '
+                f'{values["darcy_coefficient_1_m2"]:.6g} | '
+                f'{values["forchheimer_coefficient_1_m"]:.6g} |')
+        lines.extend([
+            "", "Run all three TOML alternatives. Compare total rack airflow, "
+            "fan operating points, pressure, recirculation, and component "
+            "temperatures before selecting a design conclusion.",
+        ])
     if result["warnings"]:
         lines.extend(["", "## Warnings", ""])
         lines.extend(f'- {warning}' for warning in result["warnings"])
     lines.extend(["", "## Copy-ready TOML", "", "```toml",
                   str(result["toml"]).rstrip(), "```", ""])
     paths["md"].write_text("\n".join(lines), encoding="utf-8")
-    return [path for path in paths.values() if path.exists()]
+    return [path for path in paths.values() if path.exists()] + scenario_paths
 
 
 def parser() -> argparse.ArgumentParser:
@@ -426,6 +574,15 @@ def parser() -> argparse.ArgumentParser:
     result.add_argument("--cable", action="append", type=cable, default=[],
                         metavar="COUNT,DIAMETER_MM,LENGTH_M")
     result.add_argument("--use-cable-void-as-porosity", action="store_true")
+    result.add_argument("--estimate-cable-bundle", action="store_true",
+                        help="generate bounded cable resistance scenarios")
+    result.add_argument("--cable-count", type=int)
+    result.add_argument("--average-cable-diameter-mm", type=positive)
+    result.add_argument("--packing-condition",
+                        choices=("loose", "typical", "dense"),
+                        default="typical")
+    result.add_argument("--cable-axis", choices=("x", "y", "z"), default="z",
+                        help="dominant cable direction; default: vertical z")
     result.add_argument("--pressure-point", action="append", type=pair, default=[],
                         metavar="VELOCITY_M_S,PRESSURE_PA")
     result.add_argument("--flow-pressure-point", action="append", type=pair,
