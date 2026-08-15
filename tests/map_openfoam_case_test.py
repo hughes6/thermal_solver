@@ -62,12 +62,13 @@ class MapOpenFoamCaseTest(unittest.TestCase):
             source = make_case(root, "source", "10")
             target = make_case(root, "target")
             commands = build_commands(source, target, 10.0, 0.03, 4, "foam")
-            self.assertEqual(len(commands), 5)
+            self.assertEqual(len(commands), 6)
             self.assertIn("prepare_regions.sh", commands[0])
             self.assertIn("-sourceRegion fluid -targetRegion fluid", commands[1])
             self.assertIn("-sourceRegion solid_a -targetRegion solid_a", commands[2])
             self.assertIn("-sourceRegion solid_b -targetRegion solid_b", commands[3])
-            self.assertIn("run_parallel.sh 4 --warm-start 0.029999999999999999", commands[4])
+            self.assertIn("mv -- 0 10", commands[4])
+            self.assertIn("run_parallel.sh 4 --warm-start 0.029999999999999999", commands[5])
 
 
 if __name__ == "__main__":

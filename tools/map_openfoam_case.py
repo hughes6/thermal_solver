@@ -112,6 +112,11 @@ def build_commands(source: Path, target: Path, source_time: float,
             f"-mapMethod interpolate -consistent -sourceRegion {word} "
             f"-targetRegion {word} > {log} 2>&1"
         )
+    mapped_time = f"{source_time:.17g}"
+    commands.append(
+        f"cd {target_linux} && test -d 0 && test ! -e {shlex.quote(mapped_time)} "
+        f"&& mv -- 0 {shlex.quote(mapped_time)}"
+    )
     commands.append(
         f"cd {target_linux} && {launcher} env OPENFOAM_LAUNCHER=env "
         f"./run_parallel.sh {processes} --warm-start {warm_start_end:.17g}"

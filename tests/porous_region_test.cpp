@@ -16,7 +16,7 @@ static Mesh make_mesh(bool porous) {
     mesh.at(9,0,0).set_vent_conductance(1.0);
     if(porous) {
         PorousRegion region{"calibrated cable bundle",
-            {0.45,0.0,0.0},{0.01,1.0,1.0},{1.0,0.0,0.0},
+            {0.41,0.0,0.0},{0.01,1.0,1.0},{1.0,0.0,0.0},
             100000.0,50.0,100000.0,50.0};
         mesh.stamp_porous_region(region);
         assert(mesh.at(4,0,0).is_porous());

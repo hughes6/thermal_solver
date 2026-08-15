@@ -713,6 +713,9 @@ int main() {
         "-entry endTime -set \"$requested_end\"") != std::string::npos);
     assert(run_parallel.find(
         "foamDictionary -precision 17 \"$case_dir/system/controlDict\" "
+        "-entry stopAt -set endTime", warm_start_position) != std::string::npos);
+    assert(run_parallel.find(
+        "foamDictionary -precision 17 \"$case_dir/system/controlDict\" "
         "-entry writeInterval -set \"$warm_interval\"") !=
         std::string::npos);
     assert(run_parallel.find(

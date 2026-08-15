@@ -771,9 +771,9 @@ public:
         const int i0=std::max(0,index_x(region.position[0]));
         const int j0=std::max(0,index_y(region.position[1]));
         const int k0=std::max(0,index_z(region.position[2]));
-        const int i1=std::min(nx,end_index_x(region.position[0]+region.size[0]));
-        const int j1=std::min(ny,end_index_y(region.position[1]+region.size[1]));
-        const int k1=std::min(nz,end_index_z(region.position[2]+region.size[2]));
+        const int i1=std::min(nx,std::max(i0+1,end_index_x(region.position[0]+region.size[0])));
+        const int j1=std::min(ny,std::max(j0+1,end_index_y(region.position[1]+region.size[1])));
+        const int k1=std::min(nz,std::max(k0+1,end_index_z(region.position[2]+region.size[2])));
         const int normal_axis=std::abs(e[0])>=std::abs(e[1]) &&
             std::abs(e[0])>=std::abs(e[2]) ? 0 :
             (std::abs(e[1])>=std::abs(e[2]) ? 1 : 2);
