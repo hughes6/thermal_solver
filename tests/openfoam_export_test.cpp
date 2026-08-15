@@ -103,9 +103,13 @@ int main(int argc, char** argv) {
         VentShapeType::Rectangular);
     mesh.stamp_fan_for_openfoam(inlet);
     mesh.stamp_vent_for_openfoam(outlet);
+    PorousRegion porous{"perforated tray",{0.0,0.1,0.1},{0.1,0.1,0.1},
+        {1.0,0.0,0.0},0.0,2500.0,1.0e8,1.0e5};
+    mesh.stamp_porous_region(porous,true);
 
     assert(mesh.has_openfoam_export_metadata());
     assert(mesh.get_openfoam_component_regions().size()==3);
+    assert(mesh.get_openfoam_porous_regions().size()==1);
     assert(mesh.get_openfoam_heat_source_regions().size()==3);
     assert(mesh.get_openfoam_heat_source_regions()[1].watts==7.0);
     assert(mesh.get_openfoam_heat_source_regions()[2].watts==5.0);
@@ -221,6 +225,15 @@ int main(int argc, char** argv) {
             "homogeneous_heater_load_1"));
     assert(std::filesystem::is_regular_file(
         case_path/"constant"/"openfoamExportProperties"));
+    assert(std::filesystem::is_regular_file(
+        case_path/"0"/"porous_perforated_tray_0_mask"));
+    assert(std::filesystem::is_regular_file(
+        case_path/"system"/"topoSetDict_porous_perforated_tray_0"));
+    {
+        std::ifstream zones(case_path/"constant"/"polyMesh"/"cellZones");
+        std::ostringstream text; text << zones.rdbuf();
+        assert(text.str().find("porous_perforated_tray_0")==std::string::npos);
+    }
     {
         std::ifstream properties_file(
             case_path/"constant"/"openfoamExportProperties");
@@ -311,6 +324,8 @@ int main(int argc, char** argv) {
         assert(text.str().find("heated_internal_air_2_energy") !=
                std::string::npos);
         assert(text.str().find("sources { h (5") != std::string::npos);
+        assert(text.str().find("porous_perforated_tray_0") != std::string::npos);
+        assert(text.str().find("f (2500 100000 100000)") != std::string::npos);
     }
     {
         std::ifstream flow_only(

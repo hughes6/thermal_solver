@@ -94,6 +94,8 @@ public:
     double get_vmag() const { return std::sqrt(vx*vx + vy*vy + vz*vz); }
     double get_mu() const { return mu; }
     double get_pr() const { return pr; }
+    int get_porous_resistance_id() const { return porous_resistance_id; }
+    bool is_porous() const { return porous_resistance_id>=0; }
     
     bool is_fluid() const { return cell_state == State::Air || cell_state == State::Fan ||
                                    cell_state == State::Exhaust || cell_state == State::Intake ||
@@ -131,6 +133,7 @@ public:
 
     void set_mu(double mu_) { mu = mu_; }
     void set_pr(double pr_) { pr = pr_; }
+    void set_porous_resistance_id(int id) { porous_resistance_id=id; }
     void set_state(State s) { cell_state = s; }
 
 
@@ -175,6 +178,7 @@ private:
     double pressure;           // P_i, (Pa) 
     double flow_source;        // S_i (m^3/s) += intake -= exh
     double vent_conductance;   // C_v (m^3/(s*Pa)). 0 unless vent cell
+    int porous_resistance_id=-1;
     double fan_curve_a = 0.0;
     double fan_curve_b = 0.0;
     double fan_curve_c = 0.0;

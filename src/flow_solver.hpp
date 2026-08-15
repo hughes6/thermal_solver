@@ -367,9 +367,17 @@ private:
         const double flow_sign = (q_old >= 0.0) ? +1.0 : -1.0;
         const double K = turn_loss(upstream, axis, flow_sign);
 
+        const int axis_index = axis == Axis::X ? 0 : (axis == Axis::Y ? 1 : 2);
+        const double porous_d = 0.5*(mesh.get_porous_darcy(low_cell,axis_index)+
+                                     mesh.get_porous_darcy(high_cell,axis_index));
+        const double porous_f = 0.5*(mesh.get_porous_forchheimer(low_cell,axis_index)+
+                                     mesh.get_porous_forchheimer(high_cell,axis_index));
+
         // DeltaP = R_linear*Q + R_quad*Q|Q|.
-        const double R_linear = linear_resistivity * length / area;
-        const double R_quad = (K + f * length / Dh) * rho / (2.0 * area * area);
+        const double R_linear = linear_resistivity * length / area +
+                                mu*porous_d*length/area;
+        const double R_quad = (K + f * length / Dh) * rho / (2.0 * area * area) +
+                              0.5*rho*porous_f*length/(area*area);
         const double R_effective = R_linear + R_quad * q_ref;
         return 1.0 / std::max(R_effective, 1e-30);
     }

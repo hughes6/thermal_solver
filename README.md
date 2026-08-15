@@ -614,7 +614,97 @@ density.
 `cfm` remains required by the parser and supplies the initial/reference flow,
 even when a curve is present.
 
-### 4.7 Rack-boundary circular fan
+### 4.7 Porous rack obstructions and perforated trays
+
+Use a top-level `[[porous_regions]]` volume for cable bundles, perforated
+shelves, hole-pattern trays, grilles, or other obstructions that remain
+air-permeable. The region stays fluid and adds a directional
+Darcy-Forchheimer pressure gradient:
+
+```text
+deltaP/L = mu*D*U + 0.5*rho*F*U*abs(U)
+```
+
+`D` has units 1/m2, `F` has units 1/m, `U` is superficial velocity based on
+the region's gross area, and `L` is thickness along `direction`. The same law
+is applied by the native solver and exported as an OpenFOAM
+`explicitPorositySource` cell zone.
+
+For a perforated tray with known open area and discharge coefficient:
+
+```toml
+[[porous_regions]]
+name = "Rear perforated cable tray"
+free_area_ratio = 0.42
+discharge_coefficient = 0.65
+# Optional high transverse resistance prevents flow travelling inside the
+# numerically thickened tray instead of crossing its holes.
+transverse_darcy_coefficient = 1.0e8
+transverse_forchheimer_coefficient = 1.0e5
+
+[porous_regions.position]
+units = "m"
+x = 0.05
+y = 0.72
+z = 0.30
+
+[porous_regions.size]
+units = "m"
+width = 0.50
+depth = 0.01
+height = 1.20
+
+[porous_regions.direction]
+x = 0.0
+y = 1.0
+z = 0.0
+```
+
+This form derives `F = 1/(Cd^2*phi^2*L)`, giving
+`deltaP = rho*U^2/(2*Cd^2*phi^2)`. Both inputs must be in `(0,1]`.
+
+For a cable bundle or obstruction calibrated from measured/Fluent pressure
+drop, enter coefficients directly:
+
+```toml
+[[porous_regions]]
+name = "Rear cable field"
+darcy_coefficient = 2.5e6
+forchheimer_coefficient = 850.0
+# Omit these for isotropic resistance, appropriate for a tangled bundle.
+transverse_darcy_coefficient = 2.5e6
+transverse_forchheimer_coefficient = 850.0
+
+[porous_regions.position]
+units = "m"
+x = 0.10
+y = 0.75
+z = 0.20
+
+[porous_regions.size]
+units = "m"
+width = 0.40
+depth = 0.15
+height = 1.40
+
+[porous_regions.direction]
+x = 0.0
+y = 1.0
+z = 0.0
+```
+
+The numerical zone is guaranteed to occupy at least one cell. When its
+stamped thickness differs from the physical thickness, coefficients are
+automatically scaled so integrated pressure drop remains mesh-independent.
+Porous regions must remain inside the rack and may not overlap components or
+one another. They must remain internal along their resistance direction; use
+a rack vent for a porous exterior opening. Omitted transverse coefficients
+default to the normal values (isotropic resistance). For final use, calibrate
+cable coefficients from several
+pressure-drop/velocity points, verify the direction, compare mass flow with
+and without the obstruction, and repeat one case on a finer mesh.
+
+### 4.8 Rack-boundary circular fan
 
 ```toml
 [[fans]]
@@ -651,7 +741,7 @@ height = 120.0
 Valid fan shapes are `"circular"` and `"rectangular"`. Valid flow types are
 `"intake"` and `"exhaust"`.
 
-### 4.8 Rack-boundary vent
+### 4.9 Rack-boundary vent
 
 ```toml
 [[vents]]

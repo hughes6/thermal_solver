@@ -17,6 +17,7 @@
 #include "environment.hpp"
 #include "fan.hpp"
 #include "rack.hpp"
+#include "porous_region.hpp"
 #include "vent.hpp"
 #include "workload.hpp"
 
@@ -98,6 +99,21 @@ public:
         std::array<double,3> requested_size{0.0,0.0,0.0};
         bool circular = false;
         double requested_diameter = 0.0;
+    };
+
+    struct OpenFoamPorousRegion {
+        int id=-1;
+        std::string name;
+        std::array<double,3> direction{0.0,1.0,0.0};
+        std::vector<std::size_t> cells;
+        double darcy=0.0;
+        double forchheimer=0.0;
+        double transverse_darcy=0.0;
+        double transverse_forchheimer=0.0;
+    };
+    struct PorousResistance {
+        std::array<double,3> darcy{};
+        std::array<double,3> forchheimer{};
     };
 
     struct WallFace {
@@ -229,6 +245,17 @@ public:
     const std::vector<OpenFoamInternalFlowDevice>&
     get_openfoam_internal_flow_devices() const {
         return openfoam_internal_flow_devices;
+    }
+    const std::vector<OpenFoamPorousRegion>& get_openfoam_porous_regions() const {
+        return openfoam_porous_regions;
+    }
+    double get_porous_darcy(const Cell& cell,int axis) const {
+        const int id=cell.get_porous_resistance_id();
+        return id<0 ? 0.0 : porous_resistances.at(static_cast<std::size_t>(id)).darcy.at(axis);
+    }
+    double get_porous_forchheimer(const Cell& cell,int axis) const {
+        const int id=cell.get_porous_resistance_id();
+        return id<0 ? 0.0 : porous_resistances.at(static_cast<std::size_t>(id)).forchheimer.at(axis);
     }
     int get_openfoam_boundary_patch_id(
         int x, int y, int z, int axis, int side) const {
@@ -734,6 +761,56 @@ public:
                  region.flow_m3s(),center,size,region.is_circular(),
                  region.get_diameter()});
         }
+    }
+
+    void stamp_porous_region(const PorousRegion& region,
+                             bool record_openfoam=false) {
+        region.validate();
+        if(record_openfoam) enable_openfoam_export_metadata();
+        const auto e=region.unit_direction();
+        const int i0=std::max(0,index_x(region.position[0]));
+        const int j0=std::max(0,index_y(region.position[1]));
+        const int k0=std::max(0,index_z(region.position[2]));
+        const int i1=std::min(nx,end_index_x(region.position[0]+region.size[0]));
+        const int j1=std::min(ny,end_index_y(region.position[1]+region.size[1]));
+        const int k1=std::min(nz,end_index_z(region.position[2]+region.size[2]));
+        const int normal_axis=std::abs(e[0])>=std::abs(e[1]) &&
+            std::abs(e[0])>=std::abs(e[2]) ? 0 :
+            (std::abs(e[1])>=std::abs(e[2]) ? 1 : 2);
+        const double stamped_thickness=normal_axis==0 ? x_bounds[i1]-x_bounds[i0] :
+            (normal_axis==1 ? y_bounds[j1]-y_bounds[j0] : z_bounds[k1]-z_bounds[k0]);
+        if(!(stamped_thickness>0.0))
+            throw std::runtime_error("Porous region '"+region.name+"' selected no thickness.");
+        const double thickness_scale=region.size[normal_axis]/stamped_thickness;
+        const double axial_d=region.darcy*thickness_scale;
+        const double axial_f=region.forchheimer*thickness_scale;
+        const double transverse_d=region.transverse_darcy*thickness_scale;
+        const double transverse_f=region.transverse_forchheimer*thickness_scale;
+        std::array<double,3> d{},f{};
+        for(int axis=0;axis<3;++axis) {
+            const double normal_fraction=e[axis]*e[axis];
+            d[axis]=transverse_d+(axial_d-transverse_d)*normal_fraction;
+            f[axis]=transverse_f+(axial_f-transverse_f)*normal_fraction;
+        }
+        std::vector<std::size_t> selected;
+        const int resistance_id=static_cast<int>(porous_resistances.size());
+        porous_resistances.push_back({d,f});
+        for(int i=i0;i<i1;++i) for(int j=j0;j<j1;++j) for(int k=k0;k<k1;++k) {
+            Cell& cell=at(i,j,k);
+            if(!cell.is_fluid())
+                throw std::runtime_error("Porous region '"+region.name+"' overlaps a solid cell.");
+            if(cell.is_porous())
+                throw std::runtime_error("Porous region '"+region.name+"' overlaps another porous region.");
+            cell.set_porous_resistance_id(resistance_id);
+            selected.push_back(idx(i,j,k));
+        }
+        if(selected.empty())
+            throw std::runtime_error("Porous region '"+region.name+"' selected no mesh cells; refine the mesh or increase its thickness.");
+        if(record_openfoam)
+            openfoam_porous_regions.push_back({
+                static_cast<int>(openfoam_porous_regions.size()),region.name,
+                e,std::move(selected),axial_d,axial_f,
+                transverse_d,transverse_f});
     }
 
     void stamp_fan_for_openfoam(const Fan& fan) {
@@ -2559,6 +2636,8 @@ private:
     std::vector<OpenFoamBoundaryPatch> openfoam_boundary_patches;
     std::vector<OpenFoamInternalFlowDevice>
         openfoam_internal_flow_devices;
+    std::vector<OpenFoamPorousRegion> openfoam_porous_regions;
+    std::vector<PorousResistance> porous_resistances;
     std::vector<int> openfoam_boundary_patch_ids;
     std::vector<InternalFanInterface> internal_fans;
     std::vector<int32_t> wall_face_refs;

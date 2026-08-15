@@ -93,6 +93,12 @@ int main() {
 
     ModelLoader foam_loader;
     foam_loader.load_model("library/tests/openfoam_model.toml");
+    assert(foam_loader.model.porous_regions.size()==1);
+    assert(foam_loader.model.porous_regions[0].free_area_ratio.value()==0.40);
+    const PorousRegion parsed_porous=build_porous_region(
+        foam_loader.model.porous_regions[0]);
+    assert(std::abs(parsed_porous.forchheimer-
+        1.0/(0.65*0.65*0.40*0.40*0.05))<1e-10);
     assert(foam_loader.model.openfoam_solver.case_directory ==
            std::filesystem::path("openfoam_cases/openfoam_model"));
     foam_loader.model.openfoam_solver.case_directory=

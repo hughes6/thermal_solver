@@ -16,6 +16,7 @@
 #include "../collision.hpp"
 #include "../mesh_refinement_planner.hpp"
 #include "../openfoam_exporter.hpp"
+#include "../porous_region.hpp"
 #include "../thermal_estimator.hpp"
 #include "../toml.hpp"
 
@@ -281,6 +282,30 @@ namespace {
         return vent;
     }
 
+    PorousRegionInput parse_porous_region(const toml::table& table,
+                                          const std::string& context) {
+        PorousRegionInput region;
+        region.name=require_value<std::string>(table["name"],context+".name");
+        region.position=parse_position(require_table(table["position"],context+".position"),context+".position");
+        region.size=parse_size(require_table(table["size"],context+".size"),context+".size");
+        region.direction=parse_direction(require_table(table["direction"],context+".direction"),context+".direction");
+        region.darcy_coefficient=table["darcy_coefficient"].value<double>();
+        region.forchheimer_coefficient=table["forchheimer_coefficient"].value<double>();
+        region.transverse_darcy_coefficient=table["transverse_darcy_coefficient"].value<double>();
+        region.transverse_forchheimer_coefficient=table["transverse_forchheimer_coefficient"].value<double>();
+        region.free_area_ratio=table["free_area_ratio"].value<double>();
+        region.discharge_coefficient=table["discharge_coefficient"].value<double>();
+        const bool coefficients=region.darcy_coefficient.has_value() ||
+                                region.forchheimer_coefficient.has_value();
+        const bool perforated=region.free_area_ratio.has_value() ||
+                              region.discharge_coefficient.has_value();
+        if(coefficients==perforated)
+            throw std::runtime_error(context+": specify either Darcy/Forchheimer coefficients or both free_area_ratio and discharge_coefficient");
+        if(perforated && (!region.free_area_ratio || !region.discharge_coefficient))
+            throw std::runtime_error(context+": perforated plate requires both free_area_ratio and discharge_coefficient");
+        return region;
+    }
+
     void parse_global_components(const toml::table& root, ModelInput& model) {
         const toml::array* components = root["components"].as_array();
         if(components == nullptr) return;
@@ -474,6 +499,31 @@ namespace {
     }
 
 
+
+    PorousRegion build_porous_region(const PorousRegionInput& input) {
+        PorousRegion region;
+        region.name=input.name;
+        region.position=position_to_meters(input.position,"porous_region.position");
+        region.size=size_to_meters(input.size,"porous_region.size");
+        region.direction={input.direction.x,input.direction.y,input.direction.z};
+        if(input.free_area_ratio.has_value()) {
+            const double phi=*input.free_area_ratio;
+            const double cd=*input.discharge_coefficient;
+            if(!(phi>0.0 && phi<=1.0) || !(cd>0.0 && cd<=1.0))
+                throw std::runtime_error("Porous region '"+input.name+"' free_area_ratio and discharge_coefficient must be in (0,1].");
+            const auto e=region.unit_direction();
+            const int axis=std::abs(e[0])>=std::abs(e[1]) && std::abs(e[0])>=std::abs(e[2]) ? 0 : (std::abs(e[1])>=std::abs(e[2]) ? 1 : 2);
+            const double thickness=region.size[axis];
+            region.forchheimer=1.0/(cd*cd*phi*phi*thickness);
+        } else {
+            region.darcy=input.darcy_coefficient.value_or(0.0);
+            region.forchheimer=input.forchheimer_coefficient.value_or(0.0);
+        }
+        region.transverse_darcy=input.transverse_darcy_coefficient.value_or(region.darcy);
+        region.transverse_forchheimer=input.transverse_forchheimer_coefficient.value_or(region.forchheimer);
+        region.validate();
+        return region;
+    }
 
     // --------------logger----------------------------
 
@@ -1079,6 +1129,7 @@ struct ModelLoader {
             parse_global_components(root, model);
             parse_global_fans(root, model);
             parse_global_vents(root, model);
+            parse_global_porous_regions(root, model);
 
             // ------------------------------------------Global Objects---------------------------------------
             parse_logger(root, input);
@@ -1091,6 +1142,19 @@ struct ModelLoader {
 
         } catch(const toml::parse_error& error) {
             throw std::runtime_error("Failed to parse model file '" + model_path.string() + "': " + std::string(error.description()));
+        }
+    }
+
+    void parse_global_porous_regions(const toml::table& root,ModelInput& model) {
+        const toml::array* regions=root["porous_regions"].as_array();
+        if(regions==nullptr) return;
+        std::size_t index=0;
+        for(const toml::node& node:*regions) {
+            const toml::table* table=node.as_table();
+            if(table==nullptr)
+                throw std::runtime_error("porous_regions["+std::to_string(index)+"] must be a table");
+            model.porous_regions.push_back(parse_porous_region(*table,"porous_regions["+std::to_string(index)+"]"));
+            ++index;
         }
     }
 
@@ -1171,6 +1235,7 @@ struct ModelLoader {
         std::vector<Component> components;
         std::vector<Fan> fans;
         std::vector<Vent> vents;
+        std::vector<PorousRegion> porous_regions;
 
         for(const ComponentInput& c_in : model.components) {
             Component component;
@@ -1342,6 +1407,38 @@ struct ModelLoader {
             vents.push_back(vent);
         }
 
+        for(const PorousRegionInput& input:model.porous_regions) {
+            PorousRegion region=build_porous_region(input);
+            for(int axis=0;axis<3;++axis) {
+                const double extent=axis==0 ? rack.get_width_m() :
+                    (axis==1 ? rack.get_depth_m() : rack.get_height_m());
+                if(region.position[axis]<-1e-8 ||
+                   region.position[axis]+region.size[axis]>extent+1e-8)
+                    throw std::out_of_range("Porous region '"+region.name+"' is outside the rack.");
+            }
+            const auto porous_direction=region.unit_direction();
+            const int porous_axis=std::abs(porous_direction[0])>=std::abs(porous_direction[1]) &&
+                std::abs(porous_direction[0])>=std::abs(porous_direction[2]) ? 0 :
+                (std::abs(porous_direction[1])>=std::abs(porous_direction[2]) ? 1 : 2);
+            const double normal_extent=porous_axis==0 ? rack.get_width_m() :
+                (porous_axis==1 ? rack.get_depth_m() : rack.get_height_m());
+            if(region.position[porous_axis]<=1e-8 ||
+               region.position[porous_axis]+region.size[porous_axis]>=normal_extent-1e-8)
+                throw std::runtime_error("Porous region '"+region.name+"' must be internal along its resistance direction; use a vent for an exterior porous opening.");
+            const AABB porous_box{region.position,
+                {region.position[0]+region.size[0],region.position[1]+region.size[1],region.position[2]+region.size[2]},region.name,"Porous region"};
+            for(const Component& component:components)
+                if(porous_box.overlaps(AABB::from_component(component)))
+                    throw std::runtime_error("Porous region '"+region.name+"' overlaps component '"+component.get_name()+"'.");
+            for(const PorousRegion& existing:porous_regions) {
+                const AABB other{existing.position,
+                    {existing.position[0]+existing.size[0],existing.position[1]+existing.size[1],existing.position[2]+existing.size[2]},existing.name,"Porous region"};
+                if(porous_box.overlaps(other))
+                    throw std::runtime_error("Porous regions '"+region.name+"' and '"+existing.name+"' overlap.");
+            }
+            porous_regions.push_back(region);
+        }
+
         // Single geometry-level validation gate, run once before anything is
         // stamped into the mesh or populated into the grapher: first, does
         // everything fit inside the rack; second, does anything collide with
@@ -1403,6 +1500,8 @@ struct ModelLoader {
                 coarse_mesh.stamp_fan_adaptive(fan);
             for (const Vent& vent : vents)
                 coarse_mesh.stamp_vent_adaptive(vent);
+            for(const PorousRegion& region:porous_regions)
+                coarse_mesh.stamp_porous_region(region);
 
             if (model.flow_solver.enable_flow_solver) {
                 FlowSolver coarse_flow(
@@ -1572,6 +1671,8 @@ struct ModelLoader {
             }
             grapher.add_vent(vent);
         }
+        for(const PorousRegion& region:porous_regions)
+            mesh.stamp_porous_region(region,model.openfoam_solver.enabled);
 
         if(model.openfoam_solver.enabled) {
             const auto& cfg=model.openfoam_solver;

@@ -264,6 +264,19 @@ struct VentInput {
     double free_area_ratio = 0.0;
 };
 
+struct PorousRegionInput {
+    std::string name;
+    PositionInput position;
+    SizeInput size;
+    DirectionInput direction;
+    std::optional<double> darcy_coefficient;
+    std::optional<double> forchheimer_coefficient;
+    std::optional<double> transverse_darcy_coefficient;
+    std::optional<double> transverse_forchheimer_coefficient;
+    std::optional<double> free_area_ratio;
+    std::optional<double> discharge_coefficient;
+};
+
 // -------------------------------------------------------------
 // Internal Regions
 // -------------------------------------------------------------
@@ -325,6 +338,7 @@ struct ModelInput {
     std::vector<ComponentInput> components;
     std::vector<FanInput> fans;
     std::vector<VentInput> vents;
+    std::vector<PorousRegionInput> porous_regions;
 };
 
 #endif

@@ -140,6 +140,7 @@ public:
         write_heat_source_masks(mesh, options.case_directory);
         write_heat_source_toposet_dicts(mesh, options.case_directory);
         write_internal_device_files(mesh, options.case_directory);
+        write_porous_region_files(mesh, options.case_directory);
         write_external_device_files(mesh, options, options.case_directory);
         write_device_report(
             mesh,options,options.case_directory/"airflow_devices.txt");
@@ -1909,6 +1910,39 @@ private:
         output << "}\n";
     }
 
+    static void write_porous_region_files(
+        const Mesh& mesh,const std::filesystem::path& case_directory) {
+        for(const auto& region:mesh.get_openfoam_porous_regions()) {
+            const std::string name="porous_"+foam_word(region.name)+"_"+
+                std::to_string(region.id);
+            const std::string mask_name=name+"_mask";
+            const auto mask_path=case_directory/"0"/mask_name;
+            std::ofstream mask(mask_path);
+            require_stream(mask,mask_path);
+            write_header(mask,"volScalarField",mask_name.c_str(),"0");
+            std::vector<unsigned char> selected(mesh.get_cell_count(),0);
+            for(std::size_t cell:region.cells) selected.at(cell)=1;
+            mask << "dimensions [0 0 0 0 0 0 0];\n"
+                 << "internalField nonuniform List<scalar>\n"
+                 << selected.size() << "\n(\n";
+            for(unsigned char value:selected)
+                mask << static_cast<int>(value) << '\n';
+            mask << ")\n;\nboundaryField\n{\n \".*\"\n"
+                    " { type calculated; value uniform 0; }\n}\n";
+            const auto dict_path=case_directory/"system"/("topoSetDict_"+name);
+            std::ofstream dict(dict_path);
+            require_stream(dict,dict_path);
+            write_header(dict,"dictionary",dict_path.filename().string().c_str(),"system");
+            dict << "actions\n(\n"
+                 << "{ name " << name << "; type cellSet; action new;\n"
+                 << "  source fieldToCell; field " << mask_name
+                 << "; min 0.5; max 1.5; }\n"
+                 << "{ name " << name << "; type cellZoneSet; action new;\n"
+                 << "  source setToCellZone; set " << name << "; }\n"
+                 << ");\n";
+        }
+    }
+
     static void write_spatial_convergence_dict(
         const std::filesystem::path& path) {
         std::ofstream output(path);
@@ -2674,6 +2708,33 @@ functions
                        << "}\n";
             }
         }
+        for(const auto& region:mesh.get_openfoam_porous_regions()) {
+            const std::string name="porous_"+foam_word(region.name)+"_"+
+                std::to_string(region.id);
+            const auto e1=region.direction;
+            const std::array<double,3> e3=
+                std::abs(e1[2])<0.9 ? std::array<double,3>{0.0,0.0,1.0}
+                                    : std::array<double,3>{0.0,1.0,0.0};
+            output << name << "\n{\n"
+                   << " type explicitPorositySource;\n"
+                   << " explicitPorositySourceCoeffs\n {\n"
+                   << "  selectionMode cellZone;\n"
+                   << "  cellZone " << name << ";\n"
+                   << "  type DarcyForchheimer;\n"
+                   << "  d (" << region.darcy << ' '
+                   << region.transverse_darcy << ' '
+                   << region.transverse_darcy << ");\n"
+                   << "  f (" << region.forchheimer << ' '
+                   << region.transverse_forchheimer << ' '
+                   << region.transverse_forchheimer << ");\n"
+                   << "  coordinateSystem\n  {\n"
+                   << "   origin (0 0 0);\n"
+                   << "   e1 (" << e1[0] << ' ' << e1[1] << ' '
+                   << e1[2] << ");\n"
+                   << "   e3 (" << e3[0] << ' ' << e3[1] << ' '
+                   << e3[2] << ");\n"
+                   << "  }\n }\n}\n";
+        }
         for(const auto& device :
             mesh.get_openfoam_internal_flow_devices()) {
             const std::string name = internal_device_name(device);
@@ -2823,6 +2884,7 @@ functions
             }
         }
         if(mesh.get_openfoam_internal_flow_devices().empty() &&
+           mesh.get_openfoam_porous_regions().empty() &&
            !wrote_external)
             output << "// No stamped flow devices.\n";
     }
@@ -3014,6 +3076,15 @@ functions
         for(const auto& device :
             mesh.get_openfoam_internal_flow_devices()) {
             const std::string name = internal_device_name(device);
+            output <<
+                "\"$foam_launcher\" topoSet "
+                    "-case \"$case_dir\" -region fluid -time 0 "
+                << "-dict \"$case_dir/system/topoSetDict_"
+                << name << "\"\n";
+        }
+        for(const auto& region:mesh.get_openfoam_porous_regions()) {
+            const std::string name="porous_"+foam_word(region.name)+"_"+
+                std::to_string(region.id);
             output <<
                 "\"$foam_launcher\" topoSet "
                     "-case \"$case_dir\" -region fluid -time 0 "
