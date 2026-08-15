@@ -616,6 +616,11 @@ even when a curve is present.
 
 ### 4.7 Porous rack obstructions and perforated trays
 
+For the full decision guide, percentage/pressure-drop calculations, cable
+volume estimates, solid-obstruction examples, calibration workflow, and
+validation commands, see
+[Porous and solid rack obstructions](POROUS_AND_SOLID_OBSTRUCTIONS.md).
+
 Use a top-level `[[porous_regions]]` volume for cable bundles, perforated
 shelves, hole-pattern trays, grilles, or other obstructions that remain
 air-permeable. The region stays fluid and adds a directional
