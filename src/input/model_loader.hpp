@@ -308,9 +308,9 @@ namespace {
         const bool perforated=region.free_area_ratio.has_value() ||
                               region.discharge_coefficient.has_value();
         if(coefficients==perforated)
-            throw std::runtime_error(context+": specify either Darcy/Forchheimer coefficients or both porosity_percent and discharge_coefficient");
+            throw std::runtime_error(context+": specify either Darcy/Forchheimer coefficients or a perforated form with porosity_percent (preferred; legacy free_area_ratio is accepted) and discharge_coefficient");
         if(perforated && (!region.free_area_ratio || !region.discharge_coefficient))
-            throw std::runtime_error(context+": perforated plate requires both porosity_percent and discharge_coefficient");
+            throw std::runtime_error(context+": perforated plate requires discharge_coefficient and either porosity_percent (preferred) or legacy free_area_ratio");
         return region;
     }
 
