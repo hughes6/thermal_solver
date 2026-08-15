@@ -325,7 +325,9 @@ int main(int argc, char** argv) {
                std::string::npos);
         assert(text.str().find("sources { h (5") != std::string::npos);
         assert(text.str().find("porous_perforated_tray_0") != std::string::npos);
-        assert(text.str().find("f (2500 100000 100000)") != std::string::npos);
+        // The physical tray occupies one axial mesh cell, so OpenFOAM spreads
+        // it over two and halves every coefficient to conserve delta-p.
+        assert(text.str().find("f (1250 50000 50000)") != std::string::npos);
     }
     {
         std::ifstream flow_only(

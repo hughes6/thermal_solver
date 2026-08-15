@@ -65,6 +65,13 @@ resolved. Use a porous region across the shelf plane instead.
 
 ## 3. Percentage porosity for perforated objects
 
+For OpenFOAM, a thin porous source is distributed over at least two cells in
+its flow direction. The exported Darcy and Forchheimer coefficients are scaled
+by physical thickness divided by stamped thickness, so the requested pressure
+drop is conserved. This avoids the one-cell pressure/velocity checkerboard
+demonstrated in `POROUS_ACCEPTANCE_VALIDATION_2026-08-15.md`; it does not make
+uncalibrated coefficients physically accurate.
+
 The preferred input is a percentage:
 
 ```toml

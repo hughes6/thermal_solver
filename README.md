@@ -624,6 +624,12 @@ That guide also documents `tools/porous_obstruction_calculator.py`, which
 converts hole geometry, cable inventory, or measured pressure-drop points into
 reports and a copy-ready `[[porous_regions]]` block.
 
+The memory-bounded pressure-drop acceptance model is
+`library/models/validation_porous_duct.toml`; detailed native/OpenFOAM results
+are recorded in `POROUS_ACCEPTANCE_VALIDATION_2026-08-15.md`. OpenFOAM thin
+porous sources are automatically spread over at least two axial cells with
+coefficient scaling that preserves their physical integrated pressure loss.
+
 Use a top-level `[[porous_regions]]` volume for cable bundles, perforated
 shelves, hole-pattern trays, grilles, or other obstructions that remain
 air-permeable. The region stays fluid and adds a directional

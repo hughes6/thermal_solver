@@ -2939,7 +2939,8 @@ functions
         write_region_decompose_include(
             case_directory/"system"/"fluid"/"decomposeParDict");
         write_fluid_decompose_include(
-            case_directory/"system"/"fluid"/"decomposeParDict");
+            case_directory/"system"/"fluid"/"decomposeParDict",
+            !mesh.get_openfoam_component_regions().empty());
 
         for(const auto& component :
             mesh.get_openfoam_component_regions()) {
@@ -2987,13 +2988,14 @@ functions
     }
 
     static void write_fluid_decompose_include(
-        const std::filesystem::path& path) {
+        const std::filesystem::path& path,bool has_coupled_interfaces) {
         std::ofstream output(path);
         require_stream(output,path);
         write_header(
             output,"dictionary","decomposeParDict","system/fluid");
+        output << "#include \"../decomposeParDict\"\n";
+        if(!has_coupled_interfaces) return;
         output <<
-            "#include \"../decomposeParDict\"\n"
             "constraints\n"
             "{\n"
             "    coupledInterfaces\n"
@@ -3047,9 +3049,31 @@ functions
                 "topology.\"\n"
             "    exit 0\n"
             "fi\n\n"
-            "\"$foam_launcher\" splitMeshRegions "
-                "-case \"$case_dir\" -cellZonesOnly -overwrite\n"
-            "\n";
+            "";
+        if(mesh.get_openfoam_component_regions().empty()) {
+            output <<
+                "# A fluid-only case has nothing for splitMeshRegions to "
+                    "split, but the multi-region solver still requires the "
+                    "mesh and selection fields below the fluid region.\n"
+                "if [[ ! -d \"$case_dir/constant/polyMesh\" ]]; then\n"
+                "    echo \"ERROR: fluid-only preparation found no root "
+                    "polyMesh.\" >&2\n"
+                "    exit 1\n"
+                "fi\n"
+                "mkdir -p \"$case_dir/constant/fluid\"\n"
+                "mv \"$case_dir/constant/polyMesh\" "
+                    "\"$case_dir/constant/fluid/polyMesh\"\n"
+                "for field in \"$case_dir/0\"/*; do\n"
+                "    [[ -f \"$field\" ]] || continue\n"
+                "    cp \"$field\" \"$case_dir/0/fluid/\"\n"
+                "done\n"
+                "echo \"Prepared sole fluid region for the multi-region "
+                    "solver.\"\n\n";
+        } else {
+            output <<
+                "\"$foam_launcher\" splitMeshRegions "
+                    "-case \"$case_dir\" -cellZonesOnly -overwrite\n\n";
+        }
         output <<
             "\"$foam_launcher\" topoSet "
                 "-case \"$case_dir\" -region fluid "

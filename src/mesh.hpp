@@ -768,15 +768,33 @@ public:
         region.validate();
         if(record_openfoam) enable_openfoam_export_metadata();
         const auto e=region.unit_direction();
-        const int i0=std::max(0,index_x(region.position[0]));
-        const int j0=std::max(0,index_y(region.position[1]));
-        const int k0=std::max(0,index_z(region.position[2]));
-        const int i1=std::min(nx,std::max(i0+1,end_index_x(region.position[0]+region.size[0])));
-        const int j1=std::min(ny,std::max(j0+1,end_index_y(region.position[1]+region.size[1])));
-        const int k1=std::min(nz,std::max(k0+1,end_index_z(region.position[2]+region.size[2])));
+        int i0=std::max(0,index_x(region.position[0]));
+        int j0=std::max(0,index_y(region.position[1]));
+        int k0=std::max(0,index_z(region.position[2]));
+        int i1=std::min(nx,std::max(i0+1,end_index_x(region.position[0]+region.size[0])));
+        int j1=std::min(ny,std::max(j0+1,end_index_y(region.position[1]+region.size[1])));
+        int k1=std::min(nz,std::max(k0+1,end_index_z(region.position[2]+region.size[2])));
         const int normal_axis=std::abs(e[0])>=std::abs(e[1]) &&
             std::abs(e[0])>=std::abs(e[2]) ? 0 :
             (std::abs(e[1])>=std::abs(e[2]) ? 1 : 2);
+        // A strong explicit Darcy-Forchheimer jump in one OpenFOAM cell can
+        // form an axial pressure/velocity checkerboard even on an orthogonal
+        // duct mesh. Spread only the OpenFOAM source over two axial cells;
+        // the thickness scaling below preserves the requested integrated
+        // pressure loss. The native solver retains its exact one-cell model.
+        if(record_openfoam) {
+            int* lower=normal_axis==0 ? &i0 : (normal_axis==1 ? &j0 : &k0);
+            int* upper=normal_axis==0 ? &i1 : (normal_axis==1 ? &j1 : &k1);
+            const int count=normal_axis==0 ? nx : (normal_axis==1 ? ny : nz);
+            if(*upper-*lower<2) {
+                if(*upper<count) ++*upper;
+                else if(*lower>0) --*lower;
+                else throw std::runtime_error(
+                    "OpenFOAM porous region '"+region.name+
+                    "' needs at least two mesh cells along its flow direction; "
+                    "refine that axis.");
+            }
+        }
         const double stamped_thickness=normal_axis==0 ? x_bounds[i1]-x_bounds[i0] :
             (normal_axis==1 ? y_bounds[j1]-y_bounds[j0] : z_bounds[k1]-z_bounds[k0]);
         if(!(stamped_thickness>0.0))
