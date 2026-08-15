@@ -124,6 +124,34 @@ int main() {
                 "specify only porosity_percent")!=std::string::npos;
         }
         assert(rejected_ambiguous);
+
+        const auto load_percent_case=[&](const std::string& value,
+                                         const std::string& filename) {
+            std::string text=read_file("library/tests/openfoam_model.toml");
+            const std::string original="porosity_percent = 40.0";
+            const auto at=text.find(original);
+            assert(at!=std::string::npos);
+            text.replace(at,original.size(),"porosity_percent = "+value);
+            const auto path=test_root/filename;
+            std::ofstream(path) << text;
+            ModelLoader parsed;
+            parsed.load_model(path.string());
+            return parsed.model.porous_regions[0].free_area_ratio.value();
+        };
+        assert(load_percent_case("100.0","full_porosity.toml")==1.0);
+        for(const auto& invalid : {
+                std::pair<std::string,std::string>{"0.0","zero_porosity.toml"},
+                {"100.1","excess_porosity.toml"},
+                {"-1.0","negative_porosity.toml"}}) {
+            bool rejected=false;
+            try {
+                (void)load_percent_case(invalid.first,invalid.second);
+            } catch(const std::runtime_error& error) {
+                rejected=std::string(error.what()).find(
+                    "porosity_percent must be in (0,100]")!=std::string::npos;
+            }
+            assert(rejected);
+        }
     }
     const PorousRegion parsed_porous=build_porous_region(
         foam_loader.model.porous_regions[0]);
