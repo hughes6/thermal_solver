@@ -309,7 +309,96 @@ For complex mapped CHT cases, keep the coupled thermal acceptance run at
 `maxCo = 5` or lower. The project validation found that `maxCo = 10` created a
 nonphysical isolated hot-cell rise even in the unobstructed control.
 
-## 8. Useful analysis commands
+## 8. Porous-obstruction calculator
+
+`tools/porous_obstruction_calculator.py` performs the geometry and pressure-fit
+calculations in this guide and writes a copy-ready TOML block. Every invocation
+requires the physical zone `--size` in metres and its primary resistance
+`--direction`.
+
+Calculate porosity from a perforated sheet with 500 circular 8 mm holes:
+
+```powershell
+python .\tools\porous_obstruction_calculator.py `
+  --name "Rear perforated tray" `
+  --position 0.05,0.72,0.30 `
+  --size 0.50,0.01,1.20 --direction y `
+  --hole-count 500 --hole-diameter-mm 8 `
+  --discharge-coefficient 0.65 `
+  --transverse-darcy-coefficient 1e8 `
+  --transverse-forchheimer-coefficient 1e5 `
+  --output .\rear_tray
+```
+
+Inventory cables as `COUNT,OUTSIDE_DIAMETER_MM,LENGTH_INSIDE_ZONE_M`:
+
+```powershell
+python .\tools\porous_obstruction_calculator.py `
+  --name "Rear cable field—geometry estimate" `
+  --position 0.10,0.75,0.20 `
+  --size 0.40,0.15,1.40 --direction y `
+  --cable 24,6.5,1.2 --cable 8,10.0,1.0 `
+  --use-cable-void-as-porosity --discharge-coefficient 0.65 `
+  --output .\rear_cables_uncalibrated
+```
+
+The second command deliberately prints and records a warning: cable volume
+void fraction is not guaranteed to equal flow-normal open area. Omit
+`--use-cable-void-as-porosity` when pressure data are available.
+
+Fit the preferred Darcy–Forchheimer form from superficial velocity and static
+pressure-loss points:
+
+```powershell
+python .\tools\porous_obstruction_calculator.py `
+  --name "Measured rear cable field" `
+  --position 0.10,0.75,0.20 `
+  --size 0.40,0.15,1.40 --direction y `
+  --pressure-point 0.25,8.2 `
+  --pressure-point 0.50,27.5 `
+  --pressure-point 1.00,101.0 `
+  --pressure-point 1.50,220.0 `
+  --output .\rear_cables_calibrated
+```
+
+If measurements are recorded as volume flow rather than velocity, use
+`--flow-pressure-point FLOW_M3_S,PRESSURE_PA`; the tool divides flow by the
+gross area normal to `direction`. A CSV may also be supplied:
+
+```csv
+flow_m3_s,pressure_pa
+0.10,8.2
+0.20,27.5
+0.40,101.0
+```
+
+```powershell
+python .\tools\porous_obstruction_calculator.py `
+  --name "Measured cable field" `
+  --size 0.40,0.15,1.40 --direction y `
+  --pressure-csv .\cable_pressure_points.csv `
+  --output .\rear_cables_calibrated
+```
+
+The CSV may instead contain `velocity_m_s,pressure_pa`. The calculator uses a
+nonnegative least-squares fit, so it will not invent negative Darcy or
+Forchheimer resistance. Enter positive flow/velocity and nonnegative static
+pressure-loss magnitudes. It reports pressure RMSE, normalized RMSE, maximum
+absolute error, and R². The JSON preserves the geometry, air properties,
+measurement source, cable inventory, and every derived result for traceability.
+
+For output basename `rear_cables_calibrated`, it writes:
+
+- `rear_cables_calibrated.toml`: copy-ready `[[porous_regions]]` block;
+- `.json`: all inputs, derived geometry, coefficients, errors, and warnings;
+- `.md`: readable calculation report and TOML;
+- `.csv`: measured and fitted pressure points, when supplied;
+- `.svg`: pressure-drop fit plot, when points are supplied.
+
+Use `--porosity-percent` when the percentage is already known or
+`--open-area-m2` when total open area is known. Run `--help` for every option.
+
+## 9. Useful analysis commands
 
 Validate mass and energy balance:
 

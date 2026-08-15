@@ -620,6 +620,9 @@ For the full decision guide, percentage/pressure-drop calculations, cable
 volume estimates, solid-obstruction examples, calibration workflow, and
 validation commands, see
 [Porous and solid rack obstructions](POROUS_AND_SOLID_OBSTRUCTIONS.md).
+That guide also documents `tools/porous_obstruction_calculator.py`, which
+converts hole geometry, cable inventory, or measured pressure-drop points into
+reports and a copy-ready `[[porous_regions]]` block.
 
 Use a top-level `[[porous_regions]]` volume for cable bundles, perforated
 shelves, hole-pattern trays, grilles, or other obstructions that remain

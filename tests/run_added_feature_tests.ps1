@@ -72,6 +72,7 @@ Write-Host "Checking Python plotting scripts"
     "tools/fan_curve_fitter.py" `
     "tools/rack_system_curve.py" `
     "tools/heat_load_estimator.py" `
+    "tools/porous_obstruction_calculator.py" `
     "tools/openfoam_field_convergence.py" `
     "tools/openfoam_field_delta.py" `
     "tools/openfoam_cross_case_comparison.py" `
@@ -85,6 +86,7 @@ Write-Host "Checking Python plotting scripts"
     "plot/exhaust_recirculation_matrix.py" `
     "tests/coarse_heat_io_test.py" `
     "tests/engineering_tools_test.py" `
+    "tests/porous_obstruction_calculator_test.py" `
     "tests/rack_system_curve_test.py" `
     "tests/plot_geometry_test.py" `
     "tests/openfoam_animation_test.py" `
@@ -129,6 +131,11 @@ if ($LASTEXITCODE -ne 0) {
 & python "tests/openfoam_animation_test.py"
 if ($LASTEXITCODE -ne 0) {
     throw "OpenFOAM animation tests failed"
+}
+
+& python -m unittest "tests.porous_obstruction_calculator_test"
+if ($LASTEXITCODE -ne 0) {
+    throw "Porous obstruction calculator tests failed"
 }
 
 & python -m unittest "tests.rack_system_curve_test"
