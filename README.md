@@ -2692,7 +2692,66 @@ relative to the fan's pressure range, R-squared is close to one, `a` is close
 to the plotted shutoff pressure, and the fitted pressure decreases throughout
 the expected operating range.
 
-### 19.2 Estimate watts for an internal solid region
+### 19.2 Build a rack system static-pressure curve
+
+`tools/rack_system_curve.py` turns completed airflow cases or measured points
+into `deltaP = B Q + C Q^2`, where `Q` is total rack flow in m3/s and pressure
+is Pa. It saves CSV/JSON data and an SVG plot, overlays a library fan curve,
+combines identical fans in parallel, and calculates the operating intersection.
+
+For OpenFOAM, it sums `phi/rho` over all `fanPressure` patches and evaluates
+each exported fan-pressure table at the solved flow. Unequal parallel fan
+points are combined by air-power weighting. This uses the pressure rise implied
+by the solved fan boundary, not arbitrary cell-pressure extrema.
+
+Use the latest case recorded in `.thermal_sim_last_run.json`:
+
+```powershell
+python .\tools\rack_system_curve.py `
+  --fan-curve "top_fan_MS1238E-H" --fan-count 9 `
+  --output .\fan_analysis\rack_system_curve
+```
+
+For a proper CFD sweep, preserve at least four converged, isothermal cases at
+distinct flows spanning about 50-125% of expected rack flow, then run:
+
+```powershell
+python .\tools\rack_system_curve.py `
+  --case "C:\OpenFOAM\thermal_sim_v2\rack_flow_50" `
+  --case "C:\OpenFOAM\thermal_sim_v2\rack_flow_75" `
+  --case "C:\OpenFOAM\thermal_sim_v2\rack_flow_100" `
+  --case "C:\OpenFOAM\thermal_sim_v2\rack_flow_125" `
+  --fan-curve "top_fan_MS1238E-H" --fan-count 9 `
+  --operating-density 1.184 --output .\fan_analysis\rack_sweep
+```
+
+A single case gives one nonzero point, so its pure-quadratic result is only a
+provisional local estimate. Copies at the same operating flow do not add curve
+information. `--fan-count` means identical fans in parallel: pressure is
+evaluated at `Q_total/fan_count`, because parallel fan pressures do not add.
+`--operating-density` scales pressure relative to the curve's `rho_rated`.
+
+Manual or Fluent-derived points and CSV data are also accepted:
+
+```powershell
+python .\tools\rack_system_curve.py `
+  --flow-unit cfm --pressure-unit inh2o `
+  --point 500,0.08 --point 1000,0.29 `
+  --point 1500,0.66 --point 2000,1.15 `
+  --fan-curve "top_fan_MS1238E-H" --fan-count 9
+
+python .\tools\rack_system_curve.py `
+  --csv .\rack_pressure_sweep.csv --flow-unit cfm --pressure-unit pa
+```
+
+CSV columns must be named `flow,pressure`. Before fan selection, verify each
+case has converged flow, inlet/outlet mass imbalance below about 1%, intended
+flow direction through every fan, and no fan beyond its lookup-table range.
+Large reported per-fan flow spread can indicate starvation or recirculation.
+Repeat one point with a finer mesh, then compare the predicted intersection
+against a complete fan-enabled simulation.
+
+### 19.3 Estimate watts for an internal solid region
 
 This utility estimates the heat that belongs inside the CFD/thermal domain. It
 does not estimate IT workload from temperature alone. Prefer inputs in this
