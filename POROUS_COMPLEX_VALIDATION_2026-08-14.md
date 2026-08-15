@@ -59,6 +59,15 @@ and tray resistance, but it must not be used as a normal-rack prediction until
 the porous coefficients are calibrated from pressure-drop data and the case is
 advanced until both mass and stored-energy residuals pass.
 
+A follow-up same-mesh control was attempted with `maxCo=10` to accelerate a
+ten-second coupled acceptance window. The unobstructed control developed the
+same rising isolated-cell temperature (about 337 K before the run was stopped),
+proving that the earlier 342 K porous peak is primarily a coarse mapped-field
+timestep artifact rather than evidence of physical cable-tray heating. Complex
+mapped CHT validation must retain `maxCo=5` or lower. This agrees with the
+existing screening-profile decision to use 5 for warm starts and 2 for airflow
+refresh validation; `maxCo=10` is rejected for temperature acceptance work.
+
 ## Defects found and corrected
 
 1. A porous region thinner than one adaptive cell could select zero cells when
