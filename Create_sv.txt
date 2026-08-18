@@ -1,3 +1,162 @@
+import win32com.client as win32
+import time
+import pyodbc
+from openpyxl import load_workbook
+from collections import defaultdict
+
+def ask_save_path(default_full_path=""):
+    import os
+    import tkinter as tk
+    from tkinter import filedialog
+
+    default_folder = os.path.dirname(default_full_path)
+
+    # Create Tk root
+    root = tk.Tk()
+    root.withdraw()
+    root.attributes("-topmost", True)
+    root.update()
+
+    try:
+        # Let user PICK an existing Excel file
+        selected_path = filedialog.askopenfilename(
+            initialdir=default_folder,
+            filetypes=[("Excel Files", "*.xlsx"), ("All Files", "*.*")]
+        )
+    except Exception:
+        return None
+
+    # Cancel or X
+    if not selected_path:
+        return None
+
+    # Return ONLY the file name (not full path)
+    return os.path.abspath(selected_path)
+
+def generate_ordered_pin_ids(dict_to_order, dest):
+    return {str(pin): dict_to_order[str(pin)] for pin in dest}
+
+def generate_placement_locations(Pins, layout):
+    TOP_OF_PAGE = 32.9
+    BOTTOM_OF_PAGE = 0.0
+    LEFT_OF_PAGE = 0.0
+    RIGHT_OF_PAGE = 42.9
+
+    PIN_OFFSET_FROM_CONN = 3.0
+
+    X_START = 1.0
+    Y_START = 32.5
+    main_conn_locs = [] # conn, x, y, flip
+
+    for i, (row) in enumerate(layout):
+        for j, (conn) in enumerate(row):
+            if conn is not None:
+                flip = i > 0
+                main_conn_locs.append([conn, X_START + (i * 3.0), Y_START - (j * 1.0), flip])
+
+    y_pin_start = 32.9
+    for r in main_conn_locs:
+        if y_pin_start > r[2]:
+            y_pin_start = r[2]
+    y_pin_start -= PIN_OFFSET_FROM_CONN
+
+    print(Pins)
+    print(layout)
+
+    pin_locs = [] # conn, xstart, ystart, flip
+
+    for dictionary in Pins:
+        # connector number from "W1.Pn"
+        conn_key = list(dictionary.keys())[0]
+        conn = int(conn_key.split(".")[1][1:])   # P1 -> 1, P2 -> 2, etc.
+
+        # number of pins = all keys except the "W1.Pn"
+        count = len(dictionary) - 1
+
+        top = True
+        flip = 0
+        xstart = 0
+        ystart = 0
+
+        # find this connector's placement data
+        for r in main_conn_locs:
+            if int(r[0]) == conn:
+                xstart = r[1]
+                ystart = r[2]
+                flip = r[3]
+
+        # determine if connector is below another connector
+        for r in main_conn_locs:
+            if r[3] == flip:       # same flip side (top or bottom)
+                if ystart < r[2]:  # this connector is below another
+                    top = False
+
+        if top:
+            # normal top placement
+            ystart = y_pin_start
+        else:
+            # below another connector:
+            # new rule:
+            #  p_start = top_p_start - pins_above*0.25 - conns_above*1
+
+            pins_above = 0
+            conns_above = 0
+
+            # iterate over all pin dictionaries ABOVE our current connector
+            for r in Pins:
+                r_conn_key = list(r.keys())[0]
+                r_conn = int(r_conn_key.split(".")[1][1:])
+
+                if r_conn == conn:
+                    break  # stop when reaching our connector
+
+                # check if the connector is above AND same flip
+                for c in main_conn_locs:
+                    if int(c[0]) == r_conn and c[3] == flip:
+                        if c[2] > ystart:
+                            pins_above += (len(r) - 1)
+                            conns_above += 1
+
+            ystart = y_pin_start - (pins_above * 0.25) - (conns_above * 0.5)
+
+        pin_locs.append([conn, xstart, ystart, flip])
+
+    return main_conn_locs, pin_locs, y_pin_start + 2
+
+def generate_aligned_pin_y(pinouts, y_start, pin_spacing=0.25, connector_gap=0.5):
+    pin_y = {}
+
+    current_y = y_start
+
+    previous_c1 = None
+    previous_c2 = None
+
+    for row_index, (c1, p1, c2, p2) in enumerate(pinouts):
+        if c1 is None or c2 is None:
+            continue
+
+        # Add a gap whenever we move into a new connector group
+        # on EITHER side of the cable.
+        if previous_c1 is not None:
+            connector_changed = (
+                c1 != previous_c1
+                or c2 != previous_c2
+            )
+
+            if connector_changed:
+                current_y -= connector_gap
+
+        # Both ends of this wire get EXACTLY the same Y.
+        pin_y[(int(c1), str(p1))] = current_y
+        pin_y[(int(c2), str(p2))] = current_y
+
+        current_y -= pin_spacing
+
+        previous_c1 = c1
+        previous_c2 = c2
+
+    return pin_y
+
 def get_spare_pins(pins, pinouts):
     spares = {}
 
@@ -41,5 +200,355 @@ def get_spare_pins(pins, pinouts):
                     spares[connector][str(p2)] = pin_id
 
     return spares
+        
+# ================================================
+# PARSE EXCEL
+# ================================================
+output_path = ask_save_path()
+wb = load_workbook(output_path, data_only=True)
+ws = wb.active
+NO_WIRES = ws["B10"].value
+q4 = ws["Q4"].value
+q5 = ws["Q5"].value
+q6 = ws["Q6"].value
+q7 = ws["Q7"].value
+t4 = ws["T4"].value
+t5 = ws["T5"].value
+t6 = ws["T6"].value
+t7 = ws["T7"].value
+LAYOUT = [[q4, q5, q6, q7], [t4, t5, t6, t7]]
+VERSION = ws["B2"].value
+NAME = ws["B1"].value
+
+pinouts = []
+for r in range(5, 5 + NO_WIRES):
+    connector1 = ws[r][7].value
+    pin1 = ws[r][9].value
+    connector2 = ws[r][12].value
+    pin2 = ws[r][10].value
+
+    if connector1 is not None:
+        connector1 = int(connector1)
+    if connector2 is not None:
+        connector2 = int(connector2)
+
+    pinouts.append([connector1, pin1, connector2, pin2])
+
+wb.close()
+
+PINORDER = defaultdict(list)
+for c1, p1, c2, p2 in pinouts:
+    if c1 is not None and c2 is not None:
+        PINORDER[c1].append(p1)
+        PINORDER[c2].append(p2)
+
+# ================================================
+# CONNECT TO DB
+# ================================================
+CONNECTION_STRING = (
+    "DRIVER={SQL Server};"
+    "SERVER=sql-zuken-prd;"
+    "DATABASE=Zuken_E3Library;"
+    "Trusted_Connection=yes;"
+)
+
+conn = pyodbc.connect(CONNECTION_STRING, autocommit=True)
+cur = conn.cursor()
+
+# set objects
+#====================================================================================================================================
+app = win32.gencache.EnsureDispatch('CT.Application')
+prj = app.CreateJobObject()
+text = prj.CreateTextObject()
+comp = prj.CreateComponentObject()
+dev = prj.CreateDeviceObject()
+sym = prj.CreateSymbolObject()
+pin = prj.CreatePinObject()
+attr = prj.CreateAttributeObject()
+s_Drawing_Name = "Ball Drawing Number"
+s_Drawing_Rev = "Ball Revision Number"
+s_Col_Header_Names = "WIRE NO.;FROM REF;FROM PIN;FROM PART;TO REF;TO PIN;TO PART;SIGNAL;STATUS"
+tar_dev = prj.CreateDeviceObject()
+connFROM = prj.CreateDeviceObject()
+connA = prj.CreateDeviceObject()
+blockA = prj.CreateDeviceObject()
+connB = prj.CreateDeviceObject()
+blockB = prj.CreateDeviceObject()
+mated_conn = prj.CreateDeviceObject()
+pinFROM = prj.CreatePinObject()
+pinA = prj.CreatePinObject()
+pinB = prj.CreatePinObject()
+mated_pin = prj.CreatePinObject()
+core = prj.CreatePinObject()
+bundle = prj.CreateBundleObject()
+sig = prj.CreateSignalObject()
+
+#====================================================================================================================================
+# more setup
+#====================================================================================================================================
+app.PutMessage("Starting Pin Ordering Scrpit")
+
+sht = prj.CreateSheetObject()
+sheet_info = prj.GetAllSheetIds(None)
+sheet_count = sheet_info[0]
+sheet_ids = sheet_info[1]
+sheet_ids = [x for x in sheet_ids if x is not None]
+
+for id in sheet_ids:
+    sht.SetId(id)
+    if sht.GetName() != "1":
+        sht.Delete()
+    else:
+        sheet_1_id = id
+
+sheet1 = sht.SetId(sheet_1_id)
 
 
+#====================================================================================================================================
+# step 1 - get the component from the database
+#====================================================================================================================================
+name = NAME
+ver = VERSION
+res = app.GetDatabaseTableSelectedComponents(name, ver)
+if(res[0] != 0):
+    app.PutMessage(f"step 1 did not work, Result: {res}\n")
+    raise Exception(f"Step 1 failed. No device found in database with name: {name}.\n")
+else:
+    app.PutMessage(f"Step 1 success. Device found in database. Result: {res}")
+
+#====================================================================================================================================
+# step 2 - place the component from the library into the device tree
+#====================================================================================================================================
+res = dev.Create("", "", "", name, ver, 0)
+if(res == 0):
+    app.PutMessage(f"step 2 did not work, Result: {res}\n")
+    raise Exception("Step 2 failed. Device failed to be added to device tree.\n")
+else:
+    app.PutMessage(f"Step 2 success. Device added to device tree. Result: {res}")
+
+
+#====================================================================================================================================
+# step 3 - get the device, and pin info from tree and order it
+#====================================================================================================================================
+devinfo = prj.GetAllDeviceIds(None)
+devcount = devinfo[0]
+devids   = devinfo[1]
+devids   = [x for x in devids if x is not None]
+dev_total = len(devids)
+
+if(dev_total == 0):
+    app.PutMessage("Step 3 error, no devices found.\n")
+    raise Exception("Step 3 failed. No devices found.\n")
+else:
+    app.PutMessage("Getting pin info now.")
+
+
+CONNECTORS = {"W1.P1" : None, "W1.P2" : None, "W1.P3" : None, "W1.P4" : None, "W1.P5" : None}
+for id in devids:
+    dev.SetId(id)
+    name = dev.GetName()
+    print(name)
+    match name:
+        case "W1.P1":
+            CONNECTORS["W1.P1"] = id
+        case "W1.P2":
+            CONNECTORS["W1.P2"] = id
+        case "W1.P3":
+            CONNECTORS["W1.P3"] = id
+        case "W1.P4":
+            CONNECTORS["W1.P4"] = id
+        case "W1.P5":
+            CONNECTORS["W1.P5"] = id
+        case _:
+            pass
+
+
+PINS = []
+for key, value in CONNECTORS.items():
+    if value is not None:
+        dev.SetId(value)
+        pininfo = dev.GetAllPinIds(None)
+        pincount = pininfo[0]
+        pinids = [x for x in pininfo[1] if x is not None]
+
+        pindict = {key: value}
+        for id in pinids:
+            pin.SetId(id)
+            name = pin.GetName()
+            pindict.update({name : id})
+
+        PINS.append(pindict)
+
+MAIN_CONN_LOCS, PINN_LOCS, Y_START = generate_placement_locations(PINS, LAYOUT)
+SPARES = get_spare_pins(PINS, pinouts)
+print("spare pins: ", SPARES)
+print('main_conn: ', MAIN_CONN_LOCS)
+print('pin: ', PINN_LOCS)
+
+PIN_Y = generate_aligned_pin_y(
+    pinouts,
+    y_start=Y_START,
+    pin_spacing=0.25,
+    connector_gap=0.5
+)
+
+SPARE_X = 7.0
+SPARE_Y = Y_START
+SPARE_PIN_SPACING = 0.25
+SPARE_CONN_GAP = 0.5
+
+# print("ALIGNED PIN Y:")
+# for key, value in PIN_Y.items():
+#     print(key, value)
+
+# BIG POPULATION LOOP==================================
+j = 1
+for i, (connector, conn_id) in enumerate(CONNECTORS.items()):
+    if conn_id is None:
+        continue
+
+    if j == 1:
+        for _, (connector_loop, conn_id_loop) in enumerate(CONNECTORS.items()):
+            if conn_id_loop == None:
+                continue
+
+            ids = []
+            for pindict in PINS:
+                if connector_loop in pindict:
+                    for key, value in pindict.items():
+                        if key != connector_loop:
+                            ids.append(value)
+                    break
+
+            symname = "MilSymbolReceptacle¶FULL"
+            p = int(connector_loop.split(".P")[1])
+            for c in MAIN_CONN_LOCS:
+                if c[0] == int(p):
+                    x = c[1]
+                    y = c[2]
+                    flip = c[3]
+            if flip == 1:
+                flip = "/1"
+            else:
+                flip = 0
+
+            print("bulk: ", connector_loop, " conn_id: ", conn_id_loop, " pins: ", ids, " x: ", x, " y: ", y, " flip: ", flip, "\n")
+            res = sym.PlacePins(ids, symname, ver, sheet_1_id, x, y, flip, 1.0)
+            time.sleep(1)
+
+            if res == 0:
+                app.PutMessage(f"Step 3 not working. Result: {res}\n")
+                raise Exception("Step 3 failed. Place failed.\n")
+            else:
+                app.PutMessage(f"Step 3 success. Pins Placed. Result: {res}\n")
+
+
+    # step 4 - create the pin # view
+    devinfo = prj.GetAllDeviceIds(None)
+    dev_ids = [x for x in devinfo[1] if x is not None]
+    for id in dev_ids:
+        dev.SetId(id)
+        if dev.GetName() == connector:
+            device_id = id
+
+    res = dev.CreateView(device_id, 1, 0, 0)
+    if res == 0:
+        app.PutMessage(f"Step 4 not working. Result: {res}\n")
+        raise Exception(f"Step 4 failed. No new device view created.\n")
+    else:
+        app.PutMessage(f"Step 4 success. New device view placed. Result: {res}")
+
+    new_device_view_id = res
+    dev.SetId(new_device_view_id)
+    newpininfo = dev.GetAllPinIds(None)
+    newpinids = [x for x in newpininfo[1] if x is not None]
+    newpindict = {}
+    for id in newpinids:
+        pin.SetId(id)
+        name = pin.GetName()
+        newpindict.update({name : id})
+
+    # PINS ARE GETTING ORDERED HERE
+    ordered_pin_ids = generate_ordered_pin_ids(newpindict, PINORDER[j])
+
+    p = connector[-1]
+    for c in PINN_LOCS:
+        if c[0] == int(p):
+            xp = c[1]
+            yp = c[2]
+            pflip = c[3]
+    if pflip == 1:
+        pflip = "/1"
+    else:
+        pflip = 0
+
+    symname = "MilSymbolReceptacle¶END_SPLIT"
+    for key, value in ordered_pin_ids.items():
+        pin_key = (int(p), str(key))
+        if pin_key not in PIN_Y:
+            app.PutMessage(f"WARNING: No aligned Y position found forConnector {p} Pin {key}")
+            continue
+        pin_y = PIN_Y[pin_key]
+        res = sym.PlacePins(value, symname, ver,  sheet_1_id, xp, pin_y, pflip, 1.0)
+        app.PutMessage(f"placing pin: {key} id: {value} symbol: {symname} y: {pin_y} x: {xp}, rot: {pflip} conn: {p}")
+        symname = "MilSymbolReceptacle¶SPLIT_BOTTOM"
+        time.sleep(0.5)
+
+    connector_spares = SPARES.get(connector, {})
+    if connector_spares:
+        symname = "MilSymbolReceptacle¶END_SPLIT"
+        app.PutMessage(f"placing {len(connector_spares)} spare pins for connector {connector}")
+        for spare_pin_name, spare_pin_id in connector_spares.items():
+            res = sym.PlacePins(spare_pin_id, symname, ver, sheet_1_id, SPARE_X, SPARE_Y, 0, 1.0)
+            app.PutMessage(f"placing spare pin: {spare_pin_name} id: {spare_pin_id} symbol: {symname} y: {SPARE_Y} x: {SPARE_X}, rot: {0} conn: {connector}")
+            if res == 0:
+                app.PutMessage(f"WARNING: Spare pin placement failed for {connector} pin {spare_pin_name} id {spare_pin_id}")
+            SPARE_Y -= SPARE_PIN_SPACING
+            time.sleep(0.5)
+            app.PutMessage(f"Result: {res}")
+        SPARE_Y -= SPARE_CONN_GAP
+
+    dev.SetId(new_device_view_id)
+    symbol_info = dev.GetSymbolIds(None)
+    symbol_ids = [x for x in symbol_info[1] if x is not None]
+    for id in symbol_ids:
+        sym.SetId(id)
+        texinfo = sym.GetTextIds(None)
+        text_ids = [x for x in texinfo[1] if x is not None]
+        for t_id in text_ids:
+            text.SetId(t_id)
+            if text.GetType() == 5:
+                text.SetVisibility(0)
+            if text.GetType() == 12:
+                text.SetStyle(1) # bold
+
+    dev.SetId(dev.GetAssemblyId())
+    assydevinfo = dev.GetDeviceIds(None)
+    assydevids = [x for x in assydevinfo[1] if x is not None]
+    for assydev_id in assydevids:
+        dev.SetId(assydev_id)
+        if(dev.GetName() in ("W1.P1", "W1.P2", "W1.P3", "W1.P4", "W1.P5")):
+            assydevsymbolinfo = dev.GetSymbolIds(None)
+            assydevsymbolids = [x for x in assydevsymbolinfo[1] if x is not None]
+            for assydevsymbol_id in assydevsymbolids:
+                sym.SetId(assydevsymbol_id)
+                assydevsymboltextinfo = sym.GetTextIds(None)
+                assydevsymboltextids = [x for x in assydevsymboltextinfo[1] if x is not None]
+                for assydevsymboltext_id in assydevsymboltextids:
+                    text.SetId(assydevsymboltext_id)
+                    if text.GetType() == 5:
+                        text.SetVisibility(0)
+                    if text.GetType() == 12:
+                        text.SetStyle(1) # bold
+    j += 1
+    time.sleep(2.0)
+
+
+
+
+# unset objects 
+#====================================================================================================================================
+del dev
+del prj
+del app
+#====================================================================================================================================
