@@ -1,257 +1,294 @@
-def run_ct_code():
+def create_gui():
+    from tkinter import ttk
+
+    root = tk.Tk()
+    root.title("CT Symbol Formatter")
+    root.geometry("560x430")
+    root.resizable(False, False)
+
+    # ========================================================
+    # STYLE
+    # ========================================================
+
+    style = ttk.Style()
+
     try:
-        app = win32.gencache.EnsureDispatch('CT.Application')
-        prj = app.CreateJobObject()
-        text = prj.CreateTextObject()
-        dev = prj.CreateDeviceObject()
-        sym = prj.CreateSymbolObject()
+        style.theme_use("vista")
+    except:
+        pass
+
+    style.configure(
+        "Title.TLabel",
+        font=("Segoe UI", 18, "bold")
+    )
+
+    style.configure(
+        "Subtitle.TLabel",
+        font=("Segoe UI", 10)
+    )
+
+    style.configure(
+        "Step.TLabel",
+        font=("Segoe UI", 10)
+    )
+
+    style.configure(
+        "Status.TLabel",
+        font=("Segoe UI", 10, "bold")
+    )
+
+    style.configure(
+        "Run.TButton",
+        font=("Segoe UI", 11, "bold"),
+        padding=(20, 10)
+    )
+
+    style.configure(
+        "Secondary.TButton",
+        font=("Segoe UI", 10),
+        padding=(15, 8)
+    )
+
+
+    # ========================================================
+    # MAIN CONTAINER
+    # ========================================================
+
+    main_frame = ttk.Frame(
+        root,
+        padding=25
+    )
+
+    main_frame.pack(
+        fill="both",
+        expand=True
+    )
+
+
+    # ========================================================
+    # HEADER
+    # ========================================================
+
+    title = ttk.Label(
+        main_frame,
+        text="CT Symbol Formatter",
+        style="Title.TLabel"
+    )
+
+    title.pack(
+        anchor="w"
+    )
+
+
+    subtitle = ttk.Label(
+        main_frame,
+        text="Configure and format generated connector symbols.",
+        style="Subtitle.TLabel"
+    )
+
+    subtitle.pack(
+        anchor="w",
+        pady=(2, 20)
+    )
+
+
+    # ========================================================
+    # INSTRUCTIONS
+    # ========================================================
+
+    instruction_frame = ttk.LabelFrame(
+        main_frame,
+        text="Before Running",
+        padding=15
+    )
+
+    instruction_frame.pack(
+        fill="x",
+        pady=(0, 20)
+    )
+
+
+    instructions = (
+        "1. Open Device Properties in CT.\n\n"
+        "2. Enable:\n"
+        "   Assembly  →  Additional Part ID\n\n"
+        "3. Return here and click Run Formatter."
+    )
 
-        # =====================================================
-        # LOOP THROUGH EACH NEW DEVICE VIEW
-        # =====================================================
 
-        for new_dev_id in new_dev_ids:
+    instruction_label = ttk.Label(
+        instruction_frame,
+        text=instructions,
+        justify="left",
+        style="Step.TLabel"
+    )
 
-            connector = NEW_DEV_CONNECTORS.get(new_dev_id)
+    instruction_label.pack(
+        anchor="w"
+    )
 
-            print("\n======================================")
-            print("NEW VIEW ID:", new_dev_id)
-            print("CONNECTOR:", connector)
-            print("======================================")
 
-            if connector is None:
-                print(
-                    "WARNING: no connector mapping for view",
-                    new_dev_id
-                )
-                continue
+    # ========================================================
+    # STATUS
+    # ========================================================
 
+    status_frame = ttk.LabelFrame(
+        main_frame,
+        text="Status",
+        padding=12
+    )
 
-            # =================================================
-            # FORMAT THE INDIVIDUAL PIN SYMBOLS
-            # FROM THE NEW DEVICE VIEW
-            # =================================================
+    status_frame.pack(
+        fill="x",
+        pady=(0, 20)
+    )
 
-            dev.SetId(new_dev_id)
 
-            symbol_info = dev.GetSymbolIds(None)
+    status_label = ttk.Label(
+        status_frame,
+        text="Ready",
+        style="Status.TLabel"
+    )
 
-            symbol_ids = [
-                x for x in symbol_info[1]
-                if x is not None
-            ]
+    status_label.pack(
+        anchor="w"
+    )
 
-            print("NEW VIEW SYMBOL IDS:", symbol_ids)
 
+    # ========================================================
+    # REPLACE MESSAGE BOXES
+    # ========================================================
 
-            for symbol_id in symbol_ids:
-
-                sym.SetId(symbol_id)
-
-                print(
-                    "new view symbol:",
-                    symbol_id,
-                    sym.GetName()
-                )
-
-                texinfo = sym.GetTextIds(None)
-
-                text_ids = [
-                    x for x in texinfo[1]
-                    if x is not None
-                ]
-
-
-                for t_id in text_ids:
-
-                    text.SetId(t_id)
-
-                    print(
-                        "PIN SYMBOL:",
-                        sym.GetName(),
-                        "| text:",
-                        text.GetText(),
-                        "| type:",
-                        text.GetType()
-                    )
-
-
-                    if (
-                        text.GetType() == 5
-                        or text.GetType() == 1000
-                    ):
-                        text.SetVisibility(0)
-
-
-                    if text.GetType() == 12:
-                        text.SetStyle(1)
-
-
-            # =================================================
-            # FORMAT THE ORIGINAL / BULK CONNECTOR SYMBOL
-            # =================================================
-
-            connector_id = CONNECTORS.get(connector)
-
-            print(
-                "CONNECTOR:",
-                connector,
-                "ID:",
-                connector_id
-            )
-
-
-            if connector_id is None:
-
-                print(
-                    "WARNING: connector ID not found for",
-                    connector
-                )
-
-                continue
-
-
-            dev.SetId(connector_id)
-
-            print(
-                "Formatting bulk connector:",
-                dev.GetName()
-            )
-
-
-            assydevsymbolinfo = dev.GetSymbolIds(None)
-
-            assydevsymbolids = [
-                x for x in assydevsymbolinfo[1]
-                if x is not None
-            ]
-
-
-            print(
-                "BULK SYMBOL IDS:",
-                assydevsymbolids
-            )
-
-
-            for assydevsymbol_id in assydevsymbolids:
-
-                sym.SetId(assydevsymbol_id)
-
-                print(
-                    "BULK SYMBOL:",
-                    assydevsymbol_id,
-                    "| name:",
-                    sym.GetName()
-                )
-
-
-                assydevsymboltextinfo = sym.GetTextIds(None)
-
-                assydevsymboltextids = [
-                    x for x in assydevsymboltextinfo[1]
-                    if x is not None
-                ]
-
-
-                for assydevsymboltext_id in assydevsymboltextids:
-
-                    text.SetId(assydevsymboltext_id)
-
-                    print(
-                        "name:",
-                        sym.GetName(),
-                        "| text:",
-                        text.GetText(),
-                        "| type:",
-                        text.GetType()
-                    )
-
-
-                    # -----------------------------------------
-                    # TYPE 5
-                    # -----------------------------------------
-
-                    if text.GetType() == 5:
-                        text.SetVisibility(0)
-
-
-                    # -----------------------------------------
-                    # TYPE 12
-                    # -----------------------------------------
-
-                    if text.GetType() == 12:
-                        text.SetStyle(1)
-
-
-                    # -----------------------------------------
-                    # TYPE 1000 FOR J1
-                    # -----------------------------------------
-
-                    if (
-                        text.GetType() == 1000
-                        and sym.GetName() == "J1"
-                    ):
-
-                        app.PutMessage(
-                            "Configuring text"
-                        )
-
-                        text.SetVisibility(1)
-                        text.SetStyle(1)
-                        text.SetHeight(0.2)
-                        text.SetColour(0)
-                        text.SetMode(1)
-                        text.SetAlignment(2)
-
-
-                        xloc = [0.0]
-                        yloc = [0.0]
-                        grid = [""]
-                        column = [""]
-                        row = [""]
-
-
-                        result = text.GetSchemaLocation(
-                            xloc,
-                            yloc,
-                            grid,
-                            column,
-                            row
-                        )
-
-
-                        new_x = result[1] + 1.5
-                        new_y = result[2] + 0.25
-
-
-                        text.SetSchemaLocation(
-                            new_x,
-                            new_y
-                        )
-
-
-                    # -----------------------------------------
-                    # OTHER TYPE 1000 TEXT
-                    # -----------------------------------------
-
-                    elif text.GetType() == 1000:
-
-                        text.SetVisibility(0)
-
-
-        del dev
-        del prj
-        del app
-
-        messagebox.showinfo(
-            "Success",
-            "CT code ran successfully!"
+    def gui_showinfo(title, message):
+        status_label.config(
+            text=message
         )
 
+        root.update_idletasks()
 
-    except Exception as e:
 
-        messagebox.showerror(
-            "Error",
-            f"An error occurred:\n{e}"
+    def gui_showerror(title, message):
+        status_label.config(
+            text=message
         )
+
+        root.update_idletasks()
+
+
+    # run_ct_code() still calls messagebox.showinfo/showerror,
+    # but they now update this GUI instead of making popups.
+    messagebox.showinfo = gui_showinfo
+    messagebox.showerror = gui_showerror
+
+
+    # ========================================================
+    # RUN WRAPPER
+    # ========================================================
+
+    def run_formatter():
+        status_label.config(
+            text="Running..."
+        )
+
+        root.update_idletasks()
+
+        run_button.config(
+            state="disabled"
+        )
+
+        root.config(
+            cursor="watch"
+        )
+
+        root.update()
+
+        try:
+            run_ct_code()
+
+        finally:
+            run_button.config(
+                state="normal"
+            )
+
+            root.config(
+                cursor=""
+            )
+
+            run_again_button.pack(
+                side="left",
+                padx=(0, 8)
+            )
+
+            close_button.pack(
+                side="left"
+            )
+
+
+    # ========================================================
+    # BUTTONS
+    # ========================================================
+
+    button_frame = ttk.Frame(
+        main_frame
+    )
+
+    button_frame.pack(
+        fill="x"
+    )
+
+
+    run_button = ttk.Button(
+        button_frame,
+        text="Run Formatter",
+        style="Run.TButton",
+        command=run_formatter
+    )
+
+    run_button.pack(
+        fill="x"
+    )
+
+
+    secondary_button_frame = ttk.Frame(
+        main_frame
+    )
+
+    secondary_button_frame.pack(
+        pady=(12, 0)
+    )
+
+
+    run_again_button = ttk.Button(
+        secondary_button_frame,
+        text="Run Again",
+        style="Secondary.TButton",
+        command=run_formatter
+    )
+
+
+    close_button = ttk.Button(
+        secondary_button_frame,
+        text="Close",
+        style="Secondary.TButton",
+        command=root.destroy
+    )
+
+
+    # ========================================================
+    # FOOTER
+    # ========================================================
+
+    footer = ttk.Label(
+        main_frame,
+        text="CT / E3 Symbol Automation",
+        font=("Segoe UI", 8)
+    )
+
+    footer.pack(
+        side="bottom",
+        anchor="e",
+        pady=(15, 0)
+    )
+
+
+    root.mainloop()
