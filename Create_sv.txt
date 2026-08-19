@@ -1,14 +1,11 @@
 def create_gui():
     from tkinter import ttk
+    import threading
 
     root = tk.Tk()
     root.title("CT Symbol Formatter")
     root.geometry("560x430")
     root.resizable(False, False)
-
-    # ========================================================
-    # STYLE
-    # ========================================================
 
     style = ttk.Style()
 
@@ -49,11 +46,6 @@ def create_gui():
         padding=(15, 8)
     )
 
-
-    # ========================================================
-    # MAIN CONTAINER
-    # ========================================================
-
     main_frame = ttk.Frame(
         root,
         padding=25
@@ -64,21 +56,13 @@ def create_gui():
         expand=True
     )
 
-
-    # ========================================================
-    # HEADER
-    # ========================================================
-
     title = ttk.Label(
         main_frame,
         text="CT Symbol Formatter",
         style="Title.TLabel"
     )
 
-    title.pack(
-        anchor="w"
-    )
-
+    title.pack(anchor="w")
 
     subtitle = ttk.Label(
         main_frame,
@@ -91,11 +75,6 @@ def create_gui():
         pady=(2, 20)
     )
 
-
-    # ========================================================
-    # INSTRUCTIONS
-    # ========================================================
-
     instruction_frame = ttk.LabelFrame(
         main_frame,
         text="Before Running",
@@ -107,14 +86,12 @@ def create_gui():
         pady=(0, 20)
     )
 
-
     instructions = (
         "1. Open Device Properties in CT.\n\n"
         "2. Enable:\n"
         "   Assembly  →  Additional Part ID\n\n"
         "3. Return here and click Run Formatter."
     )
-
 
     instruction_label = ttk.Label(
         instruction_frame,
@@ -123,14 +100,7 @@ def create_gui():
         style="Step.TLabel"
     )
 
-    instruction_label.pack(
-        anchor="w"
-    )
-
-
-    # ========================================================
-    # STATUS
-    # ========================================================
+    instruction_label.pack(anchor="w")
 
     status_frame = ttk.LabelFrame(
         main_frame,
@@ -143,46 +113,97 @@ def create_gui():
         pady=(0, 20)
     )
 
-
     status_label = ttk.Label(
         status_frame,
         text="Ready",
         style="Status.TLabel"
     )
 
-    status_label.pack(
-        anchor="w"
-    )
+    status_label.pack(anchor="w")
 
 
     # ========================================================
-    # REPLACE MESSAGE BOXES
+    # OVERRIDE MESSAGE BOXES
     # ========================================================
 
     def gui_showinfo(title, message):
-        status_label.config(
-            text=message
+        root.after(
+            0,
+            lambda: status_label.config(text=message)
         )
-
-        root.update_idletasks()
-
 
     def gui_showerror(title, message):
-        status_label.config(
-            text=message
+        root.after(
+            0,
+            lambda: status_label.config(text=message)
         )
 
-        root.update_idletasks()
-
-
-    # run_ct_code() still calls messagebox.showinfo/showerror,
-    # but they now update this GUI instead of making popups.
     messagebox.showinfo = gui_showinfo
     messagebox.showerror = gui_showerror
 
 
     # ========================================================
-    # RUN WRAPPER
+    # FINISH CALLBACK
+    # ========================================================
+
+    def finished():
+        status_label.config(
+            text="Finished successfully."
+        )
+
+        run_button.config(
+            state="normal"
+        )
+
+        run_again_button.config(
+            state="normal"
+        )
+
+        root.config(
+            cursor=""
+        )
+
+
+    def failed(error):
+        status_label.config(
+            text=f"Error: {error}"
+        )
+
+        run_button.config(
+            state="normal"
+        )
+
+        run_again_button.config(
+            state="normal"
+        )
+
+        root.config(
+            cursor=""
+        )
+
+
+    # ========================================================
+    # BACKGROUND WORKER
+    # ========================================================
+
+    def worker():
+        try:
+            run_ct_code()
+
+            root.after(
+                0,
+                finished
+            )
+
+        except Exception as e:
+            root.after(
+                0,
+                lambda e=e: failed(e)
+            )
+
+
+    # ========================================================
+    # RUN BUTTON
     # ========================================================
 
     def run_formatter():
@@ -190,9 +211,11 @@ def create_gui():
             text="Running..."
         )
 
-        root.update_idletasks()
-
         run_button.config(
+            state="disabled"
+        )
+
+        run_again_button.config(
             state="disabled"
         )
 
@@ -200,28 +223,20 @@ def create_gui():
             cursor="watch"
         )
 
-        root.update()
+        thread = threading.Thread(
+            target=worker,
+            daemon=True
+        )
 
-        try:
-            run_ct_code()
+        thread.start()
 
-        finally:
-            run_button.config(
-                state="normal"
-            )
 
-            root.config(
-                cursor=""
-            )
+    # ========================================================
+    # CLOSE
+    # ========================================================
 
-            run_again_button.pack(
-                side="left",
-                padx=(0, 8)
-            )
-
-            close_button.pack(
-                side="left"
-            )
+    def close_app():
+        root.destroy()
 
 
     # ========================================================
@@ -236,7 +251,6 @@ def create_gui():
         fill="x"
     )
 
-
     run_button = ttk.Button(
         button_frame,
         text="Run Formatter",
@@ -248,47 +262,40 @@ def create_gui():
         fill="x"
     )
 
-
-    secondary_button_frame = ttk.Frame(
+    secondary_frame = ttk.Frame(
         main_frame
     )
 
-    secondary_button_frame.pack(
+    secondary_frame.pack(
         pady=(12, 0)
     )
 
-
     run_again_button = ttk.Button(
-        secondary_button_frame,
+        secondary_frame,
         text="Run Again",
         style="Secondary.TButton",
         command=run_formatter
     )
 
+    run_again_button.pack(
+        side="left",
+        padx=(0, 8)
+    )
 
     close_button = ttk.Button(
-        secondary_button_frame,
+        secondary_frame,
         text="Close",
         style="Secondary.TButton",
-        command=root.destroy
+        command=close_app
     )
 
-
-    # ========================================================
-    # FOOTER
-    # ========================================================
-
-    footer = ttk.Label(
-        main_frame,
-        text="CT / E3 Symbol Automation",
-        font=("Segoe UI", 8)
+    close_button.pack(
+        side="left"
     )
 
-    footer.pack(
-        side="bottom",
-        anchor="e",
-        pady=(15, 0)
+    root.protocol(
+        "WM_DELETE_WINDOW",
+        close_app
     )
-
 
     root.mainloop()
