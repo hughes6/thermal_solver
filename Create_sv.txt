@@ -1,301 +1,118 @@
-def create_gui():
-    from tkinter import ttk
-    import threading
-
-    root = tk.Tk()
-    root.title("CT Symbol Formatter")
-    root.geometry("560x430")
-    root.resizable(False, False)
-
-    style = ttk.Style()
-
-    try:
-        style.theme_use("vista")
-    except:
-        pass
-
-    style.configure(
-        "Title.TLabel",
-        font=("Segoe UI", 18, "bold")
-    )
-
-    style.configure(
-        "Subtitle.TLabel",
-        font=("Segoe UI", 10)
-    )
-
-    style.configure(
-        "Step.TLabel",
-        font=("Segoe UI", 10)
-    )
-
-    style.configure(
-        "Status.TLabel",
-        font=("Segoe UI", 10, "bold")
-    )
-
-    style.configure(
-        "Run.TButton",
-        font=("Segoe UI", 11, "bold"),
-        padding=(20, 10)
-    )
-
-    style.configure(
-        "Secondary.TButton",
-        font=("Segoe UI", 10),
-        padding=(15, 8)
-    )
-
-    main_frame = ttk.Frame(
-        root,
-        padding=25
-    )
-
-    main_frame.pack(
-        fill="both",
-        expand=True
-    )
-
-    title = ttk.Label(
-        main_frame,
-        text="CT Symbol Formatter",
-        style="Title.TLabel"
-    )
-
-    title.pack(anchor="w")
-
-    subtitle = ttk.Label(
-        main_frame,
-        text="Configure and format generated connector symbols.",
-        style="Subtitle.TLabel"
-    )
-
-    subtitle.pack(
-        anchor="w",
-        pady=(2, 20)
-    )
-
-    instruction_frame = ttk.LabelFrame(
-        main_frame,
-        text="Before Running",
-        padding=15
-    )
-
-    instruction_frame.pack(
-        fill="x",
-        pady=(0, 20)
-    )
-
-    instructions = (
-        "1. Open Device Properties in CT.\n\n"
-        "2. Enable:\n"
-        "   Assembly  →  Additional Part ID\n\n"
-        "3. Return here and click Run Formatter."
-    )
-
-    instruction_label = ttk.Label(
-        instruction_frame,
-        text=instructions,
-        justify="left",
-        style="Step.TLabel"
-    )
+import tkinter as tk
+from tkinter import scrolledtext
 
-    instruction_label.pack(anchor="w")
 
-    status_frame = ttk.LabelFrame(
-        main_frame,
-        text="Status",
-        padding=12
-    )
+def convert():
+    # Get text from input box
+    input_text = input_box.get("1.0", tk.END)
 
-    status_frame.pack(
-        fill="x",
-        pady=(0, 20)
-    )
+    # Split on any whitespace: spaces, tabs, newlines, etc.
+    values = input_text.split()
+    values = [x for x in values if x.isdigit()]
 
-    status_label = ttk.Label(
-        status_frame,
-        text="Ready",
-        style="Status.TLabel"
-    )
+    # Put each value on its own line
+    output_text = "\n".join(values)
 
-    status_label.pack(anchor="w")
+    # Clear old output
+    output_box.delete("1.0", tk.END)
 
+    # Insert converted output
+    output_box.insert(tk.END, output_text)
 
-    # ========================================================
-    # OVERRIDE MESSAGE BOXES
-    # ========================================================
+    # Update count label
+    count_label.config(text=f"Items: {len(values)}")
 
-    def gui_showinfo(title, message):
-        root.after(
-            0,
-            lambda: status_label.config(text=message)
-        )
 
-    def gui_showerror(title, message):
-        root.after(
-            0,
-            lambda: status_label.config(text=message)
-        )
+def copy_output():
+    output_text = output_box.get("1.0", tk.END).strip()
 
-    messagebox.showinfo = gui_showinfo
-    messagebox.showerror = gui_showerror
+    root.clipboard_clear()
+    root.clipboard_append(output_text)
+    root.update()
 
 
-    # ========================================================
-    # FINISH CALLBACK
-    # ========================================================
+def clear_all():
+    input_box.delete("1.0", tk.END)
+    output_box.delete("1.0", tk.END)
 
-    def finished():
-        status_label.config(
-            text="Finished successfully."
-        )
 
-        run_button.config(
-            state="normal"
-        )
+# =========================================
+# GUI
+# =========================================
 
-        run_again_button.config(
-            state="normal"
-        )
+root = tk.Tk()
+root.title("Excel Column Formatter")
+root.geometry("600x560")
 
-        root.config(
-            cursor=""
-        )
 
+# Input label
+tk.Label(
+    root,
+    text="Paste numbers here:",
+    font=("Arial", 12, "bold")
+).pack(pady=(15, 5))
 
-    def failed(error):
-        status_label.config(
-            text=f"Error: {error}"
-        )
 
-        run_button.config(
-            state="normal"
-        )
+# Small input window
+input_box = scrolledtext.ScrolledText(
+    root,
+    width=65,
+    height=6,
+    font=("Consolas", 11)
+)
+input_box.pack(padx=15)
 
-        run_again_button.config(
-            state="normal"
-        )
 
-        root.config(
-            cursor=""
-        )
+# Convert button
+tk.Button(
+    root,
+    text="Convert",
+    command=convert,
+    width=20,
+    height=2
+).pack(pady=10)
 
 
-    # ========================================================
-    # BACKGROUND WORKER
-    # ========================================================
+# Output label
+tk.Label(
+    root,
+    text="Excel-ready output:",
+    font=("Arial", 12, "bold")
+).pack(pady=(5, 5))
 
-    def worker():
-        try:
-            run_ct_code()
 
-            root.after(
-                0,
-                finished
-            )
+# Large output window
+output_box = scrolledtext.ScrolledText(
+    root,
+    width=65,
+    height=15,
+    font=("Consolas", 11)
+)
+output_box.pack(padx=15)
 
-        except Exception as e:
-            root.after(
-                0,
-                lambda e=e: failed(e)
-            )
 
+# Count label (NEW)
+count_label = tk.Label(root, text="Items: 0", font=("Arial", 12, "bold"), fg="blue")
+count_label.pack(pady=(5, 10))
 
-    # ========================================================
-    # RUN BUTTON
-    # ========================================================
 
-    def run_formatter():
-        status_label.config(
-            text="Running..."
-        )
-
-        run_button.config(
-            state="disabled"
-        )
-
-        run_again_button.config(
-            state="disabled"
-        )
-
-        root.config(
-            cursor="watch"
-        )
-
-        thread = threading.Thread(
-            target=worker,
-            daemon=True
-        )
-
-        thread.start()
-
-
-    # ========================================================
-    # CLOSE
-    # ========================================================
-
-    def close_app():
-        root.destroy()
-
-
-    # ========================================================
-    # BUTTONS
-    # ========================================================
-
-    button_frame = ttk.Frame(
-        main_frame
-    )
-
-    button_frame.pack(
-        fill="x"
-    )
-
-    run_button = ttk.Button(
-        button_frame,
-        text="Run Formatter",
-        style="Run.TButton",
-        command=run_formatter
-    )
-
-    run_button.pack(
-        fill="x"
-    )
-
-    secondary_frame = ttk.Frame(
-        main_frame
-    )
-
-    secondary_frame.pack(
-        pady=(12, 0)
-    )
-
-    run_again_button = ttk.Button(
-        secondary_frame,
-        text="Run Again",
-        style="Secondary.TButton",
-        command=run_formatter
-    )
-
-    run_again_button.pack(
-        side="left",
-        padx=(0, 8)
-    )
-
-    close_button = ttk.Button(
-        secondary_frame,
-        text="Close",
-        style="Secondary.TButton",
-        command=close_app
-    )
-
-    close_button.pack(
-        side="left"
-    )
-
-    root.protocol(
-        "WM_DELETE_WINDOW",
-        close_app
-    )
-
-    root.mainloop()
+# Buttons
+button_frame = tk.Frame(root)
+button_frame.pack(pady=12)
+
+tk.Button(
+    button_frame,
+    text="Copy to Clipboard",
+    command=copy_output,
+    width=20
+).pack(side=tk.LEFT, padx=5)
+
+tk.Button(
+    button_frame,
+    text="Clear",
+    command=clear_all,
+    width=12
+).pack(side=tk.LEFT, padx=5)
+
+
+root.mainloop()
