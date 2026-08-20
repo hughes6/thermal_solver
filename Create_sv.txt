@@ -1,563 +1,92 @@
-import tkinter as tk
-from tkinter import scrolledtext
+name = "Cable Shield"
+ver = 1
 
+# ============================================================
+# LOAD
+# ============================================================
 
-def convert():
-    # Get text from input box
-    input_text = input_box.get("1.0", tk.END)
+res1 = sym.Load(name, ver)
 
-    # Split on any whitespace: spaces, tabs, newlines, etc.
-    values = input_text.split()
-    values = [x for x in values if x.isdigit()]
+print("LOAD RESULT:", res1)
 
-    # Put each value on its own line
-    output_text = "\n".join(values)
-
-    # Clear old output
-    output_box.delete("1.0", tk.END)
-
-    # Insert converted output
-    output_box.insert(tk.END, output_text)
-
-    # Update count label
-    count_label.config(text=f"Items: {len(values)}")
-
-    # Store count for connector copy default
-    item_count_var.set(len(values))
-
-
-def copy_output():
-    output_text = output_box.get("1.0", tk.END).strip()
-
-    root.clipboard_clear()
-    root.clipboard_append(output_text)
-    root.update()
-
-
-def clear_all():
-    input_box.delete("1.0", tk.END)
-    output_box.delete("1.0", tk.END)
-
-    count_label.config(text="Items: 0")
-    item_count_var.set(0)
-
-
-def copy_connector():
-    connector_number = connector_entry.get().strip()
-    copies_text = copies_entry.get().strip()
-
-    if connector_number == "":
-        connector_status.config(text="Enter a connector number")
-        return
-
-    # If copies box is blank, use number of items from main formatter
-    if copies_text == "":
-        copies = item_count_var.get()
-    else:
-        try:
-            copies = int(copies_text)
-        except ValueError:
-            connector_status.config(text="Copies must be a number")
-            return
-
-    if copies <= 0:
-        connector_status.config(text="No items to copy")
-        return
-
-    # Make Excel-ready vertical output
-    connector_output = "\n".join(
-        [connector_number] * copies
-    )
-
-    root.clipboard_clear()
-    root.clipboard_append(connector_output)
-    root.update()
-
-    connector_status.config(
-        text=f"Copied {copies} copies of connector {connector_number}"
+if res1 == 0:
+    raise Exception(
+        f"Could not load symbol {name}"
     )
 
 
-# =========================================
-# GUI
-# =========================================
+# ============================================================
+# PLACE
+# ============================================================
 
-root = tk.Tk()
-root.title("Excel Column Formatter")
-root.geometry("600x700")
+x = 24.0
+y = 28.0
+flip = 0
 
-
-# Tracks number of items in normal output
-item_count_var = tk.IntVar(value=0)
-
-
-# =========================================
-# MAIN FORMATTER
-# =========================================
-
-tk.Label(
-    root,
-    text="Paste numbers here:",
-    font=("Arial", 12, "bold")
-).pack(pady=(15, 5))
-
-
-input_box = scrolledtext.ScrolledText(
-    root,
-    width=65,
-    height=6,
-    font=("Consolas", 11)
-)
-input_box.pack(padx=15)
-
-
-tk.Button(
-    root,
-    text="Convert",
-    command=convert,
-    width=20,
-    height=2
-).pack(pady=10)
-
-
-tk.Label(
-    root,
-    text="Excel-ready output:",
-    font=("Arial", 12, "bold")
-).pack(pady=(5, 5))
-
-
-output_box = scrolledtext.ScrolledText(
-    root,
-    width=65,
-    height=15,
-    font=("Consolas", 11)
-)
-output_box.pack(padx=15)
-
-
-count_label = tk.Label(
-    root,
-    text="Items: 0",
-    font=("Arial", 12, "bold"),
-    fg="blue"
-)
-count_label.pack(pady=(5, 10))
-
-
-button_frame = tk.Frame(root)
-button_frame.pack(pady=12)
-
-
-tk.Button(
-    button_frame,
-    text="Copy to Clipboard",
-    command=copy_output,
-    width=20
-).pack(side=tk.LEFT, padx=5)
-
-
-tk.Button(
-    button_frame,
-    text="Clear",
-    command=clear_all,
-    width=12
-).pack(side=tk.LEFT, padx=5)
-
-
-# =========================================
-# CONNECTOR COPY SECTION
-# =========================================
-
-connector_frame = tk.LabelFrame(
-    root,
-    text="Connector Number Generator",
-    padx=10,
-    pady=10
+placed_symbol_id = sym.Place(
+    sheet_1_id,
+    x,
+    y,
+    flip,
+    1.0,
+    0
 )
 
-connector_frame.pack(
-    fill="x",
-    padx=15,
-    pady=(10, 15)
-)
+print("PLACED SYMBOL ID:", placed_symbol_id)
 
-
-# Connector number
-tk.Label(
-    connector_frame,
-    text="Connector Number:"
-).grid(
-    row=0,
-    column=0,
-    padx=5,
-    pady=5,
-    sticky="e"
-)
-
-connector_entry = tk.Entry(
-    connector_frame,
-    width=10
-)
-
-connector_entry.grid(
-    row=0,
-    column=1,
-    padx=5,
-    pady=5
-)
-
-
-# Optional number of copies
-tk.Label(
-    connector_frame,
-    text="Copies (optional):"
-).grid(
-    row=0,
-    column=2,
-    padx=5,
-    pady=5,
-    sticky="e"
-)
-
-copies_entry = tk.Entry(
-    connector_frame,
-    width=10
-)
-
-copies_entry.grid(
-    row=0,
-    column=3,
-    padx=5,
-    pady=5
-)
-
-
-# Copy button
-tk.Button(
-    connector_frame,
-    text="Copy Connector Column",
-    command=copy_connector,
-    width=22
-).grid(
-    row=1,
-    column=0,
-    columnspan=4,
-    pady=(8, 5)
-)
-
-
-# Status text
-connector_status = tk.Label(
-    connector_frame,
-    text="Blank copies = use Items count",
-    fg="gray"
-)
-
-connector_status.grid(
-    row=2,
-    column=0,
-    columnspan=4,
-    pady=(2, 0)
-)
-
-
-root.mainloop()
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-import tkinter as tk
-from tkinter import scrolledtext
-
-
-current_count = 0
-
-
-def convert():
-    global current_count
-
-    # Get text from input box
-    input_text = input_box.get("1.0", tk.END)
-
-    # Split on any whitespace: spaces, tabs, newlines, etc.
-    values = input_text.split()
-    values = [x for x in values if x.isdigit()]
-
-    # Put each value on its own line
-    output_text = "\n".join(values)
-
-    # Clear old output
-    output_box.delete("1.0", tk.END)
-
-    # Insert converted output
-    output_box.insert(tk.END, output_text)
-
-    # Update count
-    current_count = len(values)
-
-    count_label.config(
-        text=f"Items: {current_count}"
+if placed_symbol_id == 0:
+    raise Exception(
+        "Symbol placement failed"
     )
 
 
-def copy_output():
-    output_text = output_box.get("1.0", tk.END).strip()
+# ============================================================
+# SET CURRENT SYMBOL TO THE PLACED INSTANCE
+# ============================================================
 
-    root.clipboard_clear()
-    root.clipboard_append(output_text)
-    root.update()
-
-
-def clear_all():
-    global current_count
-
-    input_box.delete("1.0", tk.END)
-    output_box.delete("1.0", tk.END)
-
-    current_count = 0
-
-    count_label.config(
-        text="Items: 0"
-    )
-
-
-def copy_connector():
-    connector_number = connector_entry.get().strip()
-    copy_count_text = copy_count_entry.get().strip()
-
-    if connector_number == "":
-        connector_status.config(
-            text="Enter a connector number."
-        )
-        return
-
-    # If copy count is blank, use the main item count
-    if copy_count_text == "":
-        copy_count = current_count
-    else:
-        try:
-            copy_count = int(copy_count_text)
-        except ValueError:
-            connector_status.config(
-                text="Copy count must be a number."
-            )
-            return
-
-    if copy_count <= 0:
-        connector_status.config(
-            text="No items to copy."
-        )
-        return
-
-    connector_output = "\n".join(
-        [connector_number] * copy_count
-    )
-
-    root.clipboard_clear()
-    root.clipboard_append(connector_output)
-    root.update()
-
-    connector_status.config(
-        text=f"Copied {copy_count} copies of connector {connector_number}"
-    )
-
-
-# =========================================
-# GUI
-# =========================================
-
-root = tk.Tk()
-root.title("Excel Column Formatter")
-root.geometry("600x720")
-
-
-# =========================================
-# MAIN NUMBER FORMATTER
-# =========================================
-
-tk.Label(
-    root,
-    text="Paste numbers here:",
-    font=("Arial", 12, "bold")
-).pack(pady=(15, 5))
-
-
-input_box = scrolledtext.ScrolledText(
-    root,
-    width=65,
-    height=6,
-    font=("Consolas", 11)
+set_result = sym.SetId(
+    placed_symbol_id
 )
-input_box.pack(padx=15)
+
+print("SET ID RESULT:", set_result)
+print("SYMBOL NAME:", sym.GetName())
 
 
-tk.Button(
-    root,
-    text="Convert",
-    command=convert,
-    width=20,
-    height=2
-).pack(pady=10)
+# ============================================================
+# CHECK ORIGINAL LENGTH
+# ============================================================
 
+original_length = sym.GetDisplayLength()
 
-tk.Label(
-    root,
-    text="Excel-ready output:",
-    font=("Arial", 12, "bold")
-).pack(pady=(5, 5))
-
-
-output_box = scrolledtext.ScrolledText(
-    root,
-    width=65,
-    height=15,
-    font=("Consolas", 11)
-)
-output_box.pack(padx=15)
-
-
-count_label = tk.Label(
-    root,
-    text="Items: 0",
-    font=("Arial", 12, "bold"),
-    fg="blue"
-)
-count_label.pack(pady=(5, 10))
-
-
-button_frame = tk.Frame(root)
-button_frame.pack(pady=8)
-
-
-tk.Button(
-    button_frame,
-    text="Copy to Clipboard",
-    command=copy_output,
-    width=20
-).pack(side=tk.LEFT, padx=5)
-
-
-tk.Button(
-    button_frame,
-    text="Clear",
-    command=clear_all,
-    width=12
-).pack(side=tk.LEFT, padx=5)
-
-
-# =========================================
-# CONNECTOR COPY SECTION
-# =========================================
-
-separator = tk.Frame(
-    root,
-    height=2,
-    bd=1,
-    relief=tk.SUNKEN
-)
-separator.pack(
-    fill=tk.X,
-    padx=20,
-    pady=15
+print(
+    "ORIGINAL DISPLAY LENGTH:",
+    original_length
 )
 
 
-tk.Label(
-    root,
-    text="Connector Number Generator",
-    font=("Arial", 12, "bold")
-).pack(pady=(0, 8))
+# ============================================================
+# CHANGE LENGTH
+# ============================================================
 
+new_length = 10.0
 
-connector_frame = tk.Frame(root)
-connector_frame.pack()
+length_result = sym.SetDisplayLength(
+    new_length
+)
 
-
-tk.Label(
-    connector_frame,
-    text="Connector Number:"
-).grid(
-    row=0,
-    column=0,
-    padx=5,
-    pady=5,
-    sticky="e"
+print(
+    "SET DISPLAY LENGTH RESULT:",
+    length_result
 )
 
 
-connector_entry = tk.Entry(
-    connector_frame,
-    width=10,
-    font=("Consolas", 11)
+# ============================================================
+# READ IT BACK IMMEDIATELY
+# ============================================================
+
+after_length = sym.GetDisplayLength()
+
+print(
+    "DISPLAY LENGTH AFTER SET:",
+    after_length
 )
-connector_entry.grid(
-    row=0,
-    column=1,
-    padx=5,
-    pady=5
-)
-
-
-tk.Label(
-    connector_frame,
-    text="Number of Copies:"
-).grid(
-    row=0,
-    column=2,
-    padx=5,
-    pady=5,
-    sticky="e"
-)
-
-
-copy_count_entry = tk.Entry(
-    connector_frame,
-    width=10,
-    font=("Consolas", 11)
-)
-copy_count_entry.grid(
-    row=0,
-    column=3,
-    padx=5,
-    pady=5
-)
-
-
-tk.Label(
-    root,
-    text="Leave copy count blank to use the Items count above.",
-    font=("Arial", 9)
-).pack(pady=(2, 8))
-
-
-tk.Button(
-    root,
-    text="Copy Connector Column",
-    command=copy_connector,
-    width=24,
-    height=2
-).pack(pady=5)
-
-
-connector_status = tk.Label(
-    root,
-    text="",
-    font=("Arial", 9)
-)
-connector_status.pack(pady=(5, 10))
-
-
-root.mainloop()
