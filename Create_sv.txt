@@ -2,91 +2,62 @@ name = "Cable Shield"
 ver = 1
 
 # ============================================================
-# LOAD
+# LOAD SYMBOL - DO NOT PLACE YET
 # ============================================================
 
-res1 = sym.Load(name, ver)
+res = sym.Load(name, ver)
 
-print("LOAD RESULT:", res1)
+print("LOAD:", res)
 
-if res1 == 0:
-    raise Exception(
-        f"Could not load symbol {name}"
+if res == 0:
+    raise Exception("Could not load Cable Shield")
+
+
+# ============================================================
+# GET PINS FROM LOADED SYMBOL
+# ============================================================
+
+pin_info = sym.GetPinIds(None)
+
+print("PIN INFO:", pin_info)
+
+pin_ids = [
+    x for x in pin_info[1]
+    if x is not None
+]
+
+print("PIN IDS:", pin_ids)
+
+
+# ============================================================
+# INSPECT PIN LOCATIONS BEFORE PLACEMENT
+# ============================================================
+
+for pin_id in pin_ids:
+
+    pin.SetId(pin_id)
+
+    xloc = [0.0]
+    yloc = [0.0]
+    grid = [""]
+    column = [""]
+    row = [""]
+
+    result = pin.GetSchemaLocation(
+        xloc,
+        yloc,
+        grid,
+        column,
+        row
     )
 
-
-# ============================================================
-# PLACE
-# ============================================================
-
-x = 24.0
-y = 28.0
-flip = 0
-
-placed_symbol_id = sym.Place(
-    sheet_1_id,
-    x,
-    y,
-    flip,
-    1.0,
-    0
-)
-
-print("PLACED SYMBOL ID:", placed_symbol_id)
-
-if placed_symbol_id == 0:
-    raise Exception(
-        "Symbol placement failed"
+    print(
+        "PIN:",
+        pin_id,
+        "NAME:",
+        pin.GetName(),
+        "X:",
+        result[1],
+        "Y:",
+        result[2]
     )
-
-
-# ============================================================
-# SET CURRENT SYMBOL TO THE PLACED INSTANCE
-# ============================================================
-
-set_result = sym.SetId(
-    placed_symbol_id
-)
-
-print("SET ID RESULT:", set_result)
-print("SYMBOL NAME:", sym.GetName())
-
-
-# ============================================================
-# CHECK ORIGINAL LENGTH
-# ============================================================
-
-original_length = sym.GetDisplayLength()
-
-print(
-    "ORIGINAL DISPLAY LENGTH:",
-    original_length
-)
-
-
-# ============================================================
-# CHANGE LENGTH
-# ============================================================
-
-new_length = 10.0
-
-length_result = sym.SetDisplayLength(
-    new_length
-)
-
-print(
-    "SET DISPLAY LENGTH RESULT:",
-    length_result
-)
-
-
-# ============================================================
-# READ IT BACK IMMEDIATELY
-# ============================================================
-
-after_length = sym.GetDisplayLength()
-
-print(
-    "DISPLAY LENGTH AFTER SET:",
-    after_length
-)
