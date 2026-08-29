@@ -25,6 +25,7 @@ int main() {
         "centered fixture fan",10.0,0.0,{0.2,0.0,0.2},
         {0.15,0.15,0.15},{0.0,1.0,0.0},
         FlowType::Exhaust,ShapeType::Rectangular);
+    fan.set_curve(100.0,1000.0,0.0);
     component.add_region(InternalRegion(fan));
     component.order_internal_regions();
     mesh.stamp_component_for_openfoam(component);

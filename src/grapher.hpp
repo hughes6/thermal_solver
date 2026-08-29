@@ -8,6 +8,7 @@
 #include <vector>
 #include <cmath>
 #include <iomanip>
+#include <limits>
 
 #include "rack.hpp"
 #include "component.hpp"
@@ -19,14 +20,21 @@ public:
     Grapher(const Rack& rack,
             double dx = 0.0254,
             double dy = 0.0254,
-            double dz = Rack::U_TO_M)
+            double dz = Rack::U_TO_M,
+            std::size_t maximum_cells =
+                std::numeric_limits<std::size_t>::max(),
+            std::size_t maximum_bitmap_bytes =
+                std::numeric_limits<std::size_t>::max())
         : rack(rack),
           dx(dx),
           dy(dy),
           dz(dz),
-          nx(static_cast<int>(std::ceil(rack.get_width_m()  / dx))),
-          ny(static_cast<int>(std::ceil(rack.get_depth_m()  / dy))),
-          nz(static_cast<int>(std::ceil(rack.get_height_m() / dz))),
+          nx(checked_axis_count(rack.get_width_m(),dx,"x")),
+          ny(checked_axis_count(rack.get_depth_m(),dy,"y")),
+          nz(checked_axis_count(rack.get_height_m(),dz,"z")),
+          validated_cell_count(
+              checked_cell_count(
+                  nx,ny,nz,maximum_cells,maximum_bitmap_bytes)),
           component_exist(nx, ny, nz),
           fan_exist(nx, ny, nz),
           vent_exist(nx, ny, nz)
@@ -101,8 +109,13 @@ public:
 
     double total_watts() const {
         double sum = 0.0;
-        for(const Component c : components) {
+        for(const Component& c : components) {
             sum += c.get_watts();
+            for(const InternalRegion& region : c.get_regions()) {
+                if(region.get_region_type() == RegionType::HeatSource ||
+                   region.get_region_type() == RegionType::Air)
+                    sum += region.get_watts();
+            }
         }
         return sum;
     }
@@ -142,11 +155,11 @@ public:
     }
 
     void export_to_file(const std::string& filename) const {
-        std::ofstream fout(filename);
+        std::ofstream fout(filename,std::ios::trunc);
 
         if(!fout) {
-            std::cerr << "Error opening " << filename << "\n";
-            return;
+            throw std::runtime_error(
+                "Grapher: unable to open output file '"+filename+"'.");
         }
         fout << "Rack dimensions:\n";
         fout << "  height: " << rack.get_height_m() << " m ("
@@ -276,6 +289,16 @@ public:
             fout << "\n";
             ++ctr;
         }
+        fout.flush();
+        if(!fout)
+            throw std::runtime_error(
+                "Grapher: failed while writing output file '"+
+                filename+"'.");
+        fout.close();
+        if(!fout)
+            throw std::runtime_error(
+                "Grapher: failed to finalize output file '"+
+                filename+"'.");
     }
 
     const std::vector<Component>& get_components() const {
@@ -283,9 +306,54 @@ public:
     }
 
 private:
+    static int checked_axis_count(
+        double extent,double spacing,const char* axis) {
+        if(!std::isfinite(extent) || extent <= 0.0 ||
+           !std::isfinite(spacing) || spacing <= 0.0)
+            throw std::invalid_argument(
+                std::string("Grapher ")+axis+
+                " extent and spacing must be finite and positive.");
+        const double raw=std::ceil(extent/spacing);
+        const double maximum=static_cast<double>(
+            std::numeric_limits<int>::max()-1);
+        if(!std::isfinite(raw) || raw < 1.0 || raw > maximum)
+            throw std::overflow_error(
+                std::string("Grapher ")+axis+
+                " axis count exceeds INT_MAX-1 before allocation.");
+        return static_cast<int>(raw);
+    }
+
+    static std::size_t checked_cell_count(
+        int nx,int ny,int nz,std::size_t maximum_cells,
+        std::size_t maximum_bitmap_bytes) {
+        const std::size_t sx=static_cast<std::size_t>(nx);
+        const std::size_t sy=static_cast<std::size_t>(ny);
+        const std::size_t sz=static_cast<std::size_t>(nz);
+        if(sx != 0 && sy > std::numeric_limits<std::size_t>::max()/sx)
+            throw std::overflow_error(
+                "Grapher cell-count overflow before bitmap allocation.");
+        const std::size_t xy=sx*sy;
+        if(xy != 0 && sz > std::numeric_limits<std::size_t>::max()/xy)
+            throw std::overflow_error(
+                "Grapher cell-count overflow before bitmap allocation.");
+        const std::size_t count=xy*sz;
+        if(count > maximum_cells)
+            throw std::invalid_argument(
+                "Grapher cell count exceeds the configured maximum before "
+                "bitmap allocation.");
+        constexpr std::size_t bitmap_count=3u;
+        if(count > maximum_bitmap_bytes/
+                       (bitmap_count*sizeof(char)))
+            throw std::invalid_argument(
+                "Grapher three-bitmap payload exceeds the configured "
+                "memory maximum before bitmap allocation.");
+        return count;
+    }
+
     const Rack& rack;
     double dx, dy, dz;
     int nx, ny, nz;
+    std::size_t validated_cell_count;
 
     std::vector<Component> components;
     std::vector<Fan> fans;

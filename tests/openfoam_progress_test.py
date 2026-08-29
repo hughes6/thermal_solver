@@ -1,9 +1,12 @@
+import contextlib
+import io
 import tempfile
 import unittest
 from unittest import mock
 from pathlib import Path
 
 from tools.openfoam_progress import (
+    active_time_precedes_last_completed_sample,
     choose_log,
     courant_timestep_headroom,
     current_checkpoint_series_count,
@@ -16,13 +19,16 @@ from tools.openfoam_progress import (
     processor_checkpoints,
     read_control_times,
     read_checkpoint_stride,
+    read_courant_safety_fraction,
     read_thermal_only_flow,
     read_health,
     read_latest_temperature_ranges,
     read_latest_run_request,
     read_latest_run_state,
     read_latest_air_exchange_time,
+    read_latest_logged_time,
     read_recent_exchange_wall_rate,
+    read_recent_airflow_wall_rate,
     read_latest_airflow_metrics,
     read_latest_exchange_airflow_metrics,
     read_airflow_limits,
@@ -38,6 +44,7 @@ from tools.openfoam_progress import (
     low_space_warning,
     temperature_warning,
     format_initial_airflow_stage,
+    main,
 )
 
 
@@ -65,6 +72,20 @@ class OpenFoamProgressTest(unittest.TestCase):
             self.assertEqual(
                 read_latest_temperature_ranges(log),
                 {"fluid": (293.15, 360.0), "server": (301.0, 410.0)},
+            )
+
+    def test_reads_live_flow_fluid_temperature_range(self):
+        with tempfile.TemporaryDirectory() as directory:
+            log = Path(directory) / "run.stdout.log"
+            log.write_text(
+                "Time = 0.05\nSolving for fluid region fluid\n"
+                "Min/max T:291.8 293.7\n"
+                "ExecutionTime = 5 s ClockTime = 6 s\n",
+                encoding="utf-8",
+            )
+            self.assertEqual(
+                read_latest_temperature_ranges(log),
+                {"fluid": (291.8, 293.7)},
             )
 
     def test_reads_normalized_thermal_metrics_and_runner_limits(self):
@@ -145,8 +166,21 @@ class OpenFoamProgressTest(unittest.TestCase):
             )
             self.assertEqual(current, 0.001)
             self.assertEqual(cap, 0.001)
-            self.assertAlmostEqual(safe, 0.0016)
-            self.assertAlmostEqual(multiplier, 1.6)
+            self.assertAlmostEqual(safe, 0.001)
+            self.assertAlmostEqual(multiplier, 1.0)
+
+    def test_reads_generated_runner_courant_safety_fraction(self):
+        with tempfile.TemporaryDirectory() as directory:
+            case = Path(directory)
+            (case / "run_parallel.sh").write_text(
+                "safe=(observed>0?dt*0.71*limit/observed:hard);\n",
+                encoding="utf-8",
+            )
+            self.assertEqual(read_courant_safety_fraction(case), 0.71)
+
+    def test_courant_safety_fraction_has_current_exporter_fallback(self):
+        with tempfile.TemporaryDirectory() as directory:
+            self.assertEqual(read_courant_safety_fraction(Path(directory)), 0.5)
 
     def test_reads_samples_and_recent_rate(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -184,6 +218,25 @@ class OpenFoamProgressTest(unittest.TestCase):
     def test_rate_warms_up_with_one_sample_after_solver_restart(self):
         samples = [(5.26, 46000.0), (5.271, 46088.0), (5.272, 10.0)]
         self.assertIsNone(recent_slope_or_none(samples, 100))
+
+    def test_latest_time_marker_tracks_restart_before_step_completes(self):
+        with tempfile.TemporaryDirectory() as directory:
+            log = Path(directory) / "run.stdout.log"
+            log.write_text(
+                "Time = 0.062\nExecutionTime = 20 s ClockTime = 20 s\n"
+                "Time = 0.0503\n",
+                encoding="utf-8",
+            )
+            self.assertEqual(read_samples(log), [(0.062, 20.0)])
+            self.assertEqual(read_latest_logged_time(log), 0.0503)
+
+    def test_detects_restart_gap_before_first_completed_step(self):
+        self.assertTrue(
+            active_time_precedes_last_completed_sample(0.0503, 0.0643)
+        )
+        self.assertFalse(
+            active_time_precedes_last_completed_sample(0.0644, 0.0643)
+        )
 
     def test_rate_samples_exclude_prior_stage_endpoint(self):
         samples = [
@@ -426,6 +479,78 @@ class OpenFoamProgressTest(unittest.TestCase):
             newer.touch()
             self.assertEqual(choose_log(case, newer), newer)
             self.assertEqual(format_duration(3661), "1h 01m 01s")
+
+    def test_missing_log_uses_durable_checkpoint_only(self):
+        with tempfile.TemporaryDirectory() as directory:
+            case = Path(directory)
+            (case / "system").mkdir()
+            (case / "system" / "controlDict").write_text(
+                "startTime 0;\nendTime 1;\ndeltaT 0.01;\n"
+                "writeControl adjustableRunTime;\nwriteInterval 0.1;\n",
+                encoding="utf-8",
+            )
+            for rank in (0, 1):
+                fluid = case / f"processor{rank}" / "0.15" / "fluid"
+                fluid.mkdir(parents=True)
+                (fluid / "T").write_text("field", encoding="utf-8")
+                (fluid / "U").write_text("field", encoding="utf-8")
+            self.assertIsNone(choose_log(case, None))
+            output = io.StringIO()
+            with mock.patch("sys.argv", ["openfoam_progress.py", str(case), "--fast"]):
+                with contextlib.redirect_stdout(output):
+                    self.assertEqual(main(), 0)
+            report = output.getvalue()
+            self.assertIn("durable checkpoint state only", report)
+            self.assertIn("Simulation: 0.15 / 1 s", report)
+            self.assertIn("Recent rate: unavailable without stdout log", report)
+            self.assertIn(
+                "Estimated remaining wall time: unavailable without stdout log",
+                report,
+            )
+            self.assertIn(
+                "Next checkpoint: 0.25 s (ETA unavailable without stdout log)",
+                report,
+            )
+            self.assertIn("Fatal signatures: unavailable without stdout log", report)
+
+    def test_missing_log_uses_completed_airflow_stage_rate(self):
+        with tempfile.TemporaryDirectory() as directory:
+            case = Path(directory)
+            (case / "system").mkdir()
+            (case / "system" / "controlDict").write_text(
+                "startTime 0;\nendTime 0.25;\ndeltaT 0.001;\n"
+                "writeControl adjustableRunTime;\nwriteInterval 0.1;\n",
+                encoding="utf-8",
+            )
+            (case / "run_summary.log").write_text(
+                "now | stage label=Adaptive initial airflow thermalOnly=false "
+                "start=0.05 target=0.15 seconds=9500\n",
+                encoding="utf-8",
+            )
+            for rank in range(4):
+                fluid = case / f"processor{rank}" / "0.15" / "fluid"
+                fluid.mkdir(parents=True)
+                (fluid / "T").write_text("field", encoding="utf-8")
+                (fluid / "U").write_text("field", encoding="utf-8")
+            self.assertAlmostEqual(read_recent_airflow_wall_rate(case), 95000.0)
+            output = io.StringIO()
+            with mock.patch("sys.argv", ["openfoam_progress.py", str(case), "--fast"]):
+                with contextlib.redirect_stdout(output):
+                    self.assertEqual(main(), 0)
+            report = output.getvalue()
+            self.assertIn(
+                "Recent durable airflow rate: 95000.0 wall s / simulated s",
+                report,
+            )
+            self.assertIn(
+                "Estimated wall time from latest durable checkpoint: 2h 38m 20s",
+                report,
+            )
+            self.assertIn(
+                "Next checkpoint: 0.25 s "
+                "(ETA from durable checkpoint 2h 38m 20s)",
+                report,
+            )
 
     def test_reports_directory_size_and_formats_gibibytes(self):
         with tempfile.TemporaryDirectory() as directory:

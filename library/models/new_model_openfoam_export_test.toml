@@ -1,0 +1,493 @@
+name = "new model - workspace OpenFOAM export validation"
+
+# -------------------------------------------------------------
+# Simulation
+# -------------------------------------------------------------
+[simulation]
+advection_subcycling = true
+advection_cfl_target = 0.8
+max_advection_substeps = 10000
+
+dt = 0.1
+# Must exceed the screening profile's 20 s airflow warmup so an exported case
+# reaches the thermal stage. Keep this short for exploratory shake-down runs.
+duration = 30
+output_interval = 100
+max_timesteps = 1000000
+max_updates = 30000000
+max_cell_count = 10000000
+max_megabyte_usage = 1024
+update_flow_interval = 100
+
+# -------------------------------------------------------------
+# Flow Solver
+# -------------------------------------------------------------
+
+[flow_solver]
+enable_flow_solver = true
+pressure_method = "pcg"
+#pressure_method = "sor"
+resistivity = 4.6
+tolerance = 1e-6
+max_iterations = 3500
+sor_omega = 1.1
+max_outer_iters = 20
+flow_tolerance = 1e-3
+
+
+# -------------------------------------------------------------
+# Environment - air properties
+# -------------------------------------------------------------
+
+[environment]
+humidity = 30.0
+elevation = 5500.0
+T_ambient = 20.0
+cp = 1005.5
+k = 0.02587
+mu = 1.81e-5
+pr = 0.71
+# ISA pressure at 5,500 ft and 20 C gives approximately 0.9833 kg/m^3.
+rho = 0.9833
+
+# -------------------------------------------------------------
+# Fine production mesh
+# -------------------------------------------------------------
+
+[mesh]
+adaptive = true
+fine_dx = 0.02
+coarse_dx = 0.050
+refinement_margin = 0.02
+
+# -------------------------------------------------------------
+# OpenFOAM backend
+# -------------------------------------------------------------
+
+[openfoam_solver]
+enabled = true
+# For rapid tuning, use the screening profile and a separate case directory.
+# The model filename is appended to case_root_directory. For example, copying
+# this file to alternate_layout.toml exports to .../alternate_layout instead
+# of overwriting or reusing this model's results.
+# A profile's top-level [mesh] overrides the root [mesh] for OpenFOAM export
+# only. The root mesh still controls the native explicit solver.
+template = "library/openfoam_cfg/screening_foam_cfg.toml"
+case_root_directory = "C:/Users/hconn/.codex/visualizations/2026/08/04/019fcccd-4536-7b51-a70c-8023779a1618/openfoam_cases"
+
+# -------------------------------------------------------------
+# Coarse warm-start stage
+# -------------------------------------------------------------
+
+[multistage]
+enabled = true
+# The audited coarse mesh has a 0.0904 s non-subcycled conduction limit.
+coarse_dt = 0.05
+# Keep the native warm start within the configured update budget; OpenFOAM
+# ignores this native-only stage.
+coarse_duration = 5.0
+coarse_update_flow_interval = -1
+
+[multistage.coarse_mesh]
+fine_dx = 0.05
+coarse_dx = 0.20
+refinement_margin = 0.02
+
+# -------------------------------------------------------------
+# Logger
+# -------------------------------------------------------------
+
+[logger]
+template = "library/loggers/logger1.toml"
+
+# -------------------------------------------------------------
+# Rack
+# -------------------------------------------------------------
+
+[rack] 
+name = "default single bay, double depth rack"
+
+[rack.size]
+units = "u"
+width = 13.1
+depth = 24.6
+height = 40.0
+
+# -------------------------------------------------------------
+# Components
+# -------------------------------------------------------------
+# =========================RAIL 1==============================
+[[components]]
+template = "library/components/eaton_2U_UPS.toml"
+[components.position]
+units = "u"
+x = 1.6
+y = 0.0
+z = 0
+
+# [[components]]
+# template = "library/components/DELL_R360.toml"
+# [components.position]
+# units = "u"
+# x = 0.628
+# y = 0.0
+# z = 4
+
+[[components]]
+template = "library/components/Keysight_N5766A.toml"
+[components.position]
+units = "u"
+x = 1.79
+y = 0.0
+z = 6
+
+[[components]]
+template = "library/components/Keysight_N6701C.toml"
+[components.position]
+units = "u"
+x = 1.769
+y = 0.0
+z = 7
+
+[[components]]
+template = "library/components/trenton_3u_bam.toml"
+[components.position]
+units = "u"
+x = 1.12
+y = 0.0
+z = 9
+
+[[components]]
+template = "library/components/eaton_KVM.toml"
+[components.position]
+units = "u"
+x = 1.15
+y = 0
+z = 14
+
+[[components]]
+name = "3U storage Shelf"
+watts = 0.0
+[components.position]
+units = "u"
+x = 1.55
+y = 0.0
+z = 15.0
+[components.size]
+units = "u"
+width = 10
+depth = 9.3
+height = 3.0
+[components.material]
+rho = 2700
+cp = 900
+k = 150
+
+[[components.internal_regions]]
+name = "Storage shelf interior air"
+state = "air"
+[components.internal_regions.position]
+units = "u"
+x = 0.1
+y = 0.1
+z = 0.1
+[components.internal_regions.size]
+units = "u"
+width = 9.8
+depth = 9.1
+height = 2.8
+
+[[components]]
+template = "library/components/Thruster_Load_Box.toml"
+[components.position]
+units = "u"
+x = 1.12
+y = 0.0
+z = 30.0
+
+[[components]]
+template = "library/components/cisco_catalyst_9300_24.toml"
+[components.position]
+units = "u"
+x = 1.544
+y = 0
+z = 34
+
+# =========================RAIL 2==============================
+# NOTE: Rail 2 depth locations are provisional pending final measurements.
+[[components]]
+template = "library/components/EATON_PDU_PDUMNH30.toml"
+[components.position]
+units = "u"
+x = 1.55
+y = 15
+z = 3
+
+# [[components]]
+# name = "DIN rail obstructions"
+# watts = 0.0
+# [components.position]
+# units = "u"
+# x = 1.55
+# y = 9.0
+# z = 13.0
+# [components.size]
+# units = "u"
+# width = 10
+# depth = 9.0
+# height = 3.0
+# [components.material]
+# rho = 2700
+# cp = 900
+# k = 150
+
+# panels here if not flush
+
+[[components]]
+template = "library/components/Fan_control_kit_PS.toml"
+[components.position]
+units = "u"
+x = 6.0
+y = 21
+z = 31
+[[components]]
+template = "library/components/Fan_control_kit_PS.toml"
+[components.position]
+units = "u"
+x = 5.0
+y = 21
+z = 31
+
+[[components]]
+template = "library/components/NI_PXIe_Chassis.toml"
+[components.position]
+units = "u"
+x = 1.0
+# Provisional: 21 U exceeded the rear rack boundary by 54.2 mm. A 19.5 U
+# origin keeps the chassis inside with approximately 12.5 mm rear clearance.
+y = 19.5
+z = 35
+
+# =========================RAIL 3==============================
+
+# -------------------------------------------------------------
+# Fans
+# -------------------------------------------------------------
+[[fans]]
+name = "Fan 1"
+shape = "circular"
+diameter = 4.7
+diameter_units = "in"
+
+cfm = 271.0
+flow_type = "exhaust"
+curve = "provisional_top_fan_271cfm"
+
+[fans.position]
+units = "u"
+x = 3.05
+y = 17.8
+z = 40.0
+
+[fans.direction]
+x = 0.0
+y = 0.0
+z = 1.0
+
+[[fans]]
+name = "Fan 2"
+shape = "circular"
+diameter = 4.7
+diameter_units = "in"
+
+cfm = 271.0
+flow_type = "exhaust"
+curve = "provisional_top_fan_271cfm"
+
+[fans.position]
+units = "u"
+x = 3.05
+y = 14.8
+z = 40.0
+
+[fans.direction]
+x = 0.0
+y = 0.0
+z = 1.0
+
+
+[[fans]]
+name = "Fan 3"
+shape = "circular"
+diameter = 4.7
+diameter_units = "in"
+
+cfm = 271.0
+flow_type = "exhaust"
+curve = "provisional_top_fan_271cfm"
+
+[fans.position]
+units = "u"
+x = 9.05
+y = 20.8
+z = 40.0
+
+[fans.direction]
+x = 0.0
+y = 0.0
+z = 1.0
+
+[[fans]]
+name = "Fan 4"
+shape = "circular"
+diameter = 4.7
+diameter_units = "in"
+
+cfm = 271.0
+flow_type = "exhaust"
+curve = "provisional_top_fan_271cfm"
+
+[fans.position]
+units = "u"
+x = 6.05
+y = 20.8
+z = 40.0
+
+[fans.direction]
+x = 0.0
+y = 0.0
+z = 1.0
+
+[[fans]]
+name = "Fan 5"
+shape = "circular"
+diameter = 4.7
+diameter_units = "in"
+
+cfm = 271.0
+flow_type = "exhaust"
+curve = "provisional_top_fan_271cfm"
+
+[fans.position]
+units = "u"
+x = 6.05
+y = 17.8
+z = 40.0
+
+[fans.direction]
+x = 0.0
+y = 0.0
+z = 1.0
+
+[[fans]]
+name = "Fan 6"
+shape = "circular"
+diameter = 4.7
+diameter_units = "in"
+
+cfm = 271.0
+flow_type = "exhaust"
+curve = "provisional_top_fan_271cfm"
+
+[fans.position]
+units = "u"
+x = 6.05
+y = 14.8
+z = 40.0
+
+[fans.direction]
+x = 0.0
+y = 0.0
+z = 1.0
+
+[[fans]]
+name = "Fan 7"
+shape = "circular"
+diameter = 4.7
+diameter_units = "in"
+
+cfm = 271.0
+flow_type = "exhaust"
+curve = "provisional_top_fan_271cfm"
+
+[fans.position]
+units = "u"
+x = 3.05
+y = 20.8
+z = 40.0
+
+[fans.direction]
+x = 0.0
+y = 0.0
+z = 1.0
+
+[[fans]]
+name = "Fan 8"
+shape = "circular"
+diameter = 4.7
+diameter_units = "in"
+
+cfm = 271.0
+flow_type = "exhaust"
+curve = "provisional_top_fan_271cfm"
+
+[fans.position]
+units = "u"
+x = 9.05
+y = 17.8
+z = 40.0
+
+[fans.direction]
+x = 0.0
+y = 0.0
+z = 1.0
+
+[[fans]]
+name = "Fan 9"
+shape = "circular"
+diameter = 4.7
+diameter_units = "in"
+
+cfm = 271.0
+flow_type = "exhaust"
+curve = "provisional_top_fan_271cfm"
+
+[fans.position]
+units = "u"
+x = 9.05
+y = 14.8
+z = 40.0
+
+[fans.direction]
+x = 0.0
+y = 0.0
+z = 1.0
+
+# -------------------------------------------------------------
+# Vents
+# -------------------------------------------------------------
+[[vents]]
+name = "Vent main 2U 74% perforation"
+shape = "rectangular"
+free_area_ratio = 0.74
+vent_discharge_coeff = 0.5
+
+[vents.position]
+units = "u"
+x = 6.55
+y = 0.0
+z = 3.5
+
+[vents.size]
+units = "u"
+width = 9.5
+depth = 0.0
+height = 2.0 
+
+[vents.normal]
+x = 0.0
+y = 1.0
+z = 0.0
+
+
+

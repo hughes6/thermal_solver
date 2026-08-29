@@ -4,7 +4,9 @@
 #include <algorithm>
 #include <cmath>
 #include <iostream>
+#include <limits>
 #include <stdexcept>
+#include <string>
 #include <utility>
 #include <vector>
 
@@ -29,7 +31,11 @@ struct MeshRefinementPlanner {
                                    double fine_dx,
                                    double coarse_dx,
                                    double margin,
-                                   bool align_internal_geometry = true) {
+                                   bool align_internal_geometry = true,
+                                   std::size_t maximum_axis_cells =
+                                       static_cast<std::size_t>(
+                                           std::numeric_limits<int>::max())-
+                                       1u) {
         if (!std::isfinite(fine_dx) || !std::isfinite(coarse_dx) ||
             !std::isfinite(margin) || fine_dx <= 0.0 ||
             coarse_dx <= 0.0 || margin < 0.0) {
@@ -40,14 +46,33 @@ struct MeshRefinementPlanner {
             throw std::invalid_argument(
                 "Adaptive mesh fine spacing cannot exceed coarse spacing.");
         }
+        if(maximum_axis_cells < 1u)
+            throw std::invalid_argument(
+                "Adaptive mesh maximum_axis_cells must be >= 1.");
+        maximum_axis_cells=std::min(
+            maximum_axis_cells,
+            static_cast<std::size_t>(
+                std::numeric_limits<int>::max())-1u);
+        const double extents[3]={
+            rack.get_width_m(),rack.get_depth_m(),rack.get_height_m()};
+        for(int axis=0;axis<3;++axis)
+            if(!std::isfinite(extents[axis]) || extents[axis] <= 0.0)
+                throw std::invalid_argument(
+                    "Adaptive mesh rack extents must be finite and positive.");
 
         MeshRefinementPlan out;
-        out.dxs = plan_axis(0, rack.get_width_m(), components, fans, vents,
-                            fine_dx, coarse_dx, margin, align_internal_geometry);
-        out.dys = plan_axis(1, rack.get_depth_m(), components, fans, vents,
-                            fine_dx, coarse_dx, margin, align_internal_geometry);
-        out.dzs = plan_axis(2, rack.get_height_m(), components, fans, vents,
-                            fine_dx, coarse_dx, margin, align_internal_geometry);
+        out.dxs = plan_axis(
+            0,rack.get_width_m(),components,fans,vents,
+            fine_dx,coarse_dx,margin,align_internal_geometry,
+            maximum_axis_cells);
+        out.dys = plan_axis(
+            1,rack.get_depth_m(),components,fans,vents,
+            fine_dx,coarse_dx,margin,align_internal_geometry,
+            maximum_axis_cells);
+        out.dzs = plan_axis(
+            2,rack.get_height_m(),components,fans,vents,
+            fine_dx,coarse_dx,margin,align_internal_geometry,
+            maximum_axis_cells);
         return out;
     }
 
@@ -70,18 +95,19 @@ private:
         const std::vector<Fan>& fans,
         const std::vector<Vent>& vents,
         double fine_dx, double coarse_dx, double margin,
-                                   bool align_internal_geometry = true) {
+        bool align_internal_geometry,
+        std::size_t maximum_axis_cells) {
         // Face-wall coarse meshes intentionally do not honor exact geometry
         // cuts. A globally regular grid guarantees that nearby component
         // boundaries cannot create microscopic remainder/sliver cells.
         // Component walls and openings are snapped to the nearest resulting
         // face by the face-wall stamper.
         if(!align_internal_geometry) {
-            const int count = std::max(
-                1, static_cast<int>(std::ceil(extent / fine_dx)));
+            const std::size_t count=checked_partition_count(
+                extent,fine_dx,maximum_axis_cells,
+                "unaligned adaptive axis");
             return std::vector<double>(
-                static_cast<size_t>(count),
-                extent / static_cast<double>(count));
+                count,extent/static_cast<double>(count));
         }
 
         std::vector<std::pair<double, double>> bands;
@@ -337,18 +363,22 @@ private:
             if(length<=cut_eps) continue;
             const double target=
                 is_fine(0.5*(begin+end)) ? fine_dx : coarse_dx;
-            int count=std::max(
-                1,static_cast<int>(std::ceil(length/target)));
+            std::size_t count=checked_partition_count(
+                length,target,maximum_axis_cells,
+                "adaptive interval");
             const bool requires_two_cells=std::any_of(
                 snapped_two_cell_spans.begin(),snapped_two_cell_spans.end(),
                 [&](const auto& span) {
                     return std::abs(begin-span.first)<cut_eps &&
                            std::abs(end-span.second)<cut_eps;
                 });
-            if(requires_two_cells) count=std::max(count,2);
+            if(requires_two_cells)
+                count=std::max(count,std::size_t{2});
+            require_axis_capacity(
+                widths.size(),count,maximum_axis_cells,
+                "adaptive interval insertion");
             const double width=length/static_cast<double>(count);
-            widths.insert(
-                widths.end(),static_cast<std::size_t>(count),width);
+            widths.insert(widths.end(),count,width);
         }
 
         // Smooth abrupt transitions without refining the entire coarse
@@ -366,15 +396,21 @@ private:
                 if(larger<=maximum_adjacent_ratio*smaller+cut_eps) continue;
                 const std::size_t large_index=
                     widths[i-1]>widths[i] ? i-1 : i;
-                const int pieces=std::max(
-                    2,static_cast<int>(std::ceil(
-                        widths[large_index]/
-                        (maximum_adjacent_ratio*smaller))));
+                const std::size_t pieces=std::max(
+                    checked_partition_count(
+                        widths[large_index],
+                        maximum_adjacent_ratio*smaller,
+                        maximum_axis_cells,
+                        "adaptive transition smoothing"),
+                    std::size_t{2});
+                require_axis_capacity(
+                    widths.size()-1u,pieces,maximum_axis_cells,
+                    "adaptive transition smoothing insertion");
                 const double piece=widths[large_index]/pieces;
                 widths.erase(widths.begin()+large_index);
                 widths.insert(
                     widths.begin()+large_index,
-                    static_cast<std::size_t>(pieces),piece);
+                    pieces,piece);
                 changed=true;
                 break;
             }
@@ -382,6 +418,37 @@ private:
 
         if (widths.empty()) widths.push_back(extent);
         return widths;
+    }
+
+    static std::size_t checked_partition_count(
+        double extent,
+        double target,
+        std::size_t maximum_axis_cells,
+        const char* context) {
+        if(!std::isfinite(extent) || extent <= 0.0 ||
+           !std::isfinite(target) || target <= 0.0)
+            throw std::invalid_argument(
+                std::string("Adaptive mesh ")+context+
+                " requires finite positive extent and spacing.");
+        const double raw=std::ceil(extent/target);
+        if(!std::isfinite(raw) || raw < 1.0 ||
+           raw > static_cast<double>(maximum_axis_cells))
+            throw std::overflow_error(
+                std::string("Adaptive mesh ")+context+
+                " exceeds the configured axis-cell limit before allocation.");
+        return static_cast<std::size_t>(raw);
+    }
+
+    static void require_axis_capacity(
+        std::size_t existing,
+        std::size_t added,
+        std::size_t maximum_axis_cells,
+        const char* context) {
+        if(existing > maximum_axis_cells ||
+           added > maximum_axis_cells-existing)
+            throw std::overflow_error(
+                std::string("Adaptive mesh ")+context+
+                " exceeds the configured axis-cell limit before allocation.");
     }
 };
 

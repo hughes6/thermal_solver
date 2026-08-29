@@ -2,6 +2,7 @@
 #define WORKLOAD_HPP
 
 #include <stdexcept>
+#include <limits>
 #include <memory>
 
 struct Workload {
@@ -44,23 +45,27 @@ struct Workload {
     }
 
     void set_max_megabyte_threshold(int max) {
-        if(max >= 1) MEGABYTE_THRESHOLD = max * MEGABYTES;
-        else {
+        if(max < 1) {
             throw std::invalid_argument("Workload: max megabyte count must be >= 1.");
         }
+        const std::size_t megabytes = static_cast<std::size_t>(max);
+        if(megabytes > std::numeric_limits<std::size_t>::max()/MEGABYTES)
+            throw std::overflow_error(
+                "Workload: max megabyte count overflows byte accounting.");
+        MEGABYTE_THRESHOLD = megabytes * MEGABYTES;
     }
 
     std::size_t get_max_timesteps() const { return MAX_TIMESTEPS; }
     std::size_t get_max_cell_updates() const { return MAX_CELL_UPATES; }
     int get_cell_count_threshold() const { return CELL_COUNT_THRESHOLD; }
-    int get_megabyte_threshold() const { return MEGABYTE_THRESHOLD; }
+    std::size_t get_megabyte_threshold() const { return MEGABYTE_THRESHOLD; }
 
 private:
-    static constexpr int MEGABYTES = 1024 * 1024;
+    static constexpr std::size_t MEGABYTES = 1024u * 1024u;
     std::size_t MAX_TIMESTEPS;
     std::size_t MAX_CELL_UPATES;
     int CELL_COUNT_THRESHOLD;
-    int MEGABYTE_THRESHOLD;
+    std::size_t MEGABYTE_THRESHOLD;
 };
 
-#endif 
+#endif

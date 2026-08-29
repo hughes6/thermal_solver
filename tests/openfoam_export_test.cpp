@@ -7,6 +7,7 @@
 #include "openfoam_exporter.hpp"
 
 int main(int argc, char** argv) {
+    assert(!OpenFoamExportOptions{}.allow_determinant_warnings);
     Environment env(30.0,0.0,20.0,1005.0,0.02587,
                     0.000018,0.71,1.225);
     Workload load(10000,1000000,100000,100);
@@ -40,6 +41,49 @@ int main(int argc, char** argv) {
         }
         assert(solid_cells==1024);
         assert(std::abs(solid_volume-0.002)<1e-12);
+    }
+
+    // OpenFOAM currently exports one homogeneous solid material per outer
+    // component. Confirm that matching nested material properties are silent
+    // and differing properties produce an explicit, actionable warning.
+    {
+        Rack warning_rack=Rack::from_meters(0.2,0.1,0.1);
+        Mesh warning_mesh=Mesh().build_mesh(
+            warning_rack,0.1,0.1,0.1,env,load);
+        Component matching=Component::from_meters(
+            0.1,0.1,0.1,"matching heater");
+        matching.set_coords_m(0.0,0.0,0.0);
+        matching.set_rho_solid(2700.0);
+        matching.set_cp(900.0);
+        matching.set_k_solid(150.0);
+        matching.add_region(InternalRegion(
+            "matching core",{0.1,0.1,0.1},{0.0,0.0,0.0},
+            900.0,2700.0,150.0,1.0));
+        std::ostringstream matching_warning;
+        std::streambuf* original_cerr =
+            std::cerr.rdbuf(matching_warning.rdbuf());
+        warning_mesh.stamp_component_for_openfoam(matching);
+        std::cerr.rdbuf(original_cerr);
+        assert(matching_warning.str().empty());
+
+        Component differing=Component::from_meters(
+            0.1,0.1,0.1,"heterogeneous heater");
+        differing.set_coords_m(0.1,0.0,0.0);
+        differing.set_rho_solid(2700.0);
+        differing.set_cp(900.0);
+        differing.set_k_solid(150.0);
+        differing.add_region(InternalRegion(
+            "dissimilar core",{0.1,0.1,0.1},{0.0,0.0,0.0},
+            700.0,2330.0,130.0,3.0));
+        std::ostringstream differing_warning;
+        original_cerr = std::cerr.rdbuf(differing_warning.rdbuf());
+        warning_mesh.stamp_component_for_openfoam(differing);
+        std::cerr.rdbuf(original_cerr);
+        assert(differing_warning.str().find(
+                   "OpenFOAM material warning: component 'heterogeneous heater'")
+               != std::string::npos);
+        assert(differing_warning.str().find(
+                   "uses the outer component rho/cp/k") != std::string::npos);
     }
 
     Rack rack=Rack::from_meters(0.5,0.2,0.2);
@@ -97,6 +141,10 @@ int main(int argc, char** argv) {
         "test_inlet",10.0,0.0,{0.1,0.0,0.1},
         {0.05,0.0,0.05},{0.0,1.0,0.0},
         FlowType::Intake,ShapeType::Rectangular);
+    // This bounded fit has two positive roots (0.5 and 0.75 m^3/s) and
+    // becomes positive again above the second. Export must use the first
+    // zero-pressure crossing and clamp the rest of the table to zero.
+    inlet.set_curve(1.5,5.0,-4.0,1.2);
     Vent outlet(
         "test_outlet",{0.1,0.0,0.1},1.0,0.0,0.65,
         {0.25,0.2,0.15},{0.0,1.0,0.0},
@@ -139,16 +187,88 @@ int main(int argc, char** argv) {
             : std::filesystem::temp_directory_path() /
                 "thermal_solver_openfoam_export_test";
     std::filesystem::create_directories(case_path);
+
+    // A fully solid mesh has zero ambient-connected fluid volume. This is a
+    // deterministic generated-runner rejection and must happen during
+    // read-only preflight, before overwrite cleanup can erase old evidence.
+    {
+        Rack solid_rack=Rack::from_meters(0.1,0.1,0.1);
+        Mesh solid_mesh=Mesh().build_mesh(
+            solid_rack,0.1,0.1,0.1,env,load);
+        Component solid=Component::from_meters(
+            0.1,0.1,0.1,"fully solid guard");
+        solid.set_coords_m(0.0,0.0,0.0);
+        solid.set_rho_solid(2700.0);
+        solid.set_cp(900.0);
+        solid.set_k_solid(150.0);
+        solid_mesh.stamp_component_for_openfoam(solid);
+
+        const std::filesystem::path solid_case=
+            case_path/"solid_preflight_guard";
+        std::filesystem::create_directories(solid_case/"0.25");
+        const std::filesystem::path checkpoint=
+            solid_case/"0.25"/"checkpoint_sentinel.txt";
+        const std::string checkpoint_bytes="preserved checkpoint\n";
+        std::ofstream(checkpoint,std::ios::binary) << checkpoint_bytes;
+        bool solid_rejected=false;
+        try {
+            OpenFoamExporter::export_mesh(
+                solid_mesh,
+                {.case_directory=solid_case,
+                 .overwrite=true,
+                 .parallel_processes=2});
+        } catch(const std::invalid_argument& error) {
+            solid_rejected=std::string(error.what()).find(
+                "ambient-connected fluid volume") != std::string::npos;
+        }
+        assert(solid_rejected);
+        std::ifstream checkpoint_input(checkpoint,std::ios::binary);
+        std::ostringstream checkpoint_contents;
+        checkpoint_contents << checkpoint_input.rdbuf();
+        assert(checkpoint_contents.str()==checkpoint_bytes);
+        checkpoint_input.close();
+        assert(!std::filesystem::exists(solid_case/"system"));
+        std::filesystem::remove_all(solid_case);
+    }
     {
         std::ofstream(case_path/"validation_4800.json") << "stale\n";
         std::ofstream(case_path/"component_thermal_report.csv") << "stale\n";
         std::ofstream(case_path/"multirate_18000.stdout.log") << "stale\n";
         std::ofstream(case_path/"engineering_notes.md") << "preserve\n";
+        std::filesystem::create_directories(
+            case_path/".openfoam_selector_fields");
+        std::ofstream(
+            case_path/".openfoam_selector_fields"/"stale_mask") << "stale\n";
+        std::ofstream(case_path/"selector_mapping_audit.json") << "stale\n";
+        std::ofstream(case_path/"splitMeshRegions.low_memory.log") << "stale\n";
+        for(const char* marker : {
+                ".fan_ramp_complete",
+                ".mapped_initial_state",
+                ".initial_airflow_converged",
+                ".initial_airflow_pending",
+                ".initial_air_exchange_state",
+                ".initial_airflow_physical_settling",
+                ".airflow_refresh_pending",
+                ".airflow_convergence_state",
+                ".velocity_convergence_state",
+                ".thermal_convergence_state",
+                ".thermal_convergence_streak",
+                ".openfoam_mesh_determinant_warning"})
+            std::ofstream(case_path/marker) << "stale\n";
+        for(const char* directory : {
+                ".accepted_airflow_reference",
+                ".accepted_airflow_reference.tmp",
+                ".stage_velocity_reference",
+                ".stage_velocity_reference.tmp.123"}) {
+            std::filesystem::create_directories(case_path/directory);
+            std::ofstream(case_path/directory/"stale") << "stale\n";
+        }
     }
     OpenFoamExporter::export_mesh(
         mesh,
         {.case_directory=case_path,
          .overwrite=true,
+         .allow_determinant_warnings=true,
          .parallel_processes=2,
          .end_time=12.5,
          .initial_time_step=0.005,
@@ -160,8 +280,10 @@ int main(int argc, char** argv) {
          .inlet_turbulence_intensity=0.05,
          .turbulence_length_scale=0.01,
          .turbulent_prandtl_number=0.85,
+         .use_fan_curves=true,
          .pimple_outer_correctors=3,
          .pimple_pressure_correctors=2,
+         .thermal_only_pimple_outer_correctors=2,
          .use_multirate_thermal=true,
          .minimum_initial_air_exchange_fraction=1.0,
          .airflow_refresh_maximum_time_step=0.005,
@@ -174,6 +296,27 @@ int main(int argc, char** argv) {
         case_path/"component_thermal_report.csv"));
     assert(!std::filesystem::exists(
         case_path/"multirate_18000.stdout.log"));
+    assert(!std::filesystem::exists(case_path/".openfoam_selector_fields"));
+    assert(!std::filesystem::exists(case_path/"selector_mapping_audit.json"));
+    assert(!std::filesystem::exists(case_path/"splitMeshRegions.low_memory.log"));
+    for(const char* state : {
+            ".fan_ramp_complete",
+            ".mapped_initial_state",
+            ".initial_airflow_converged",
+            ".initial_airflow_pending",
+            ".initial_air_exchange_state",
+            ".initial_airflow_physical_settling",
+            ".airflow_refresh_pending",
+            ".airflow_convergence_state",
+            ".velocity_convergence_state",
+            ".thermal_convergence_state",
+            ".thermal_convergence_streak",
+            ".openfoam_mesh_determinant_warning",
+            ".accepted_airflow_reference",
+            ".accepted_airflow_reference.tmp",
+            ".stage_velocity_reference",
+            ".stage_velocity_reference.tmp.123"})
+        assert(!std::filesystem::exists(case_path/state));
     assert(std::filesystem::is_regular_file(case_path/"engineering_notes.md"));
 
     for(const char* file :
@@ -204,6 +347,8 @@ int main(int argc, char** argv) {
     assert(control_text.str().find("maxDeltaT       0.25;") !=
            std::string::npos);
     assert(control_text.str().find("writeControl    adjustableRunTime;") !=
+           std::string::npos);
+    assert(control_text.str().find("writePrecision  17;") !=
            std::string::npos);
     assert(control_text.str().find("type yPlus;") != std::string::npos);
     const auto y_plus_position=control_text.str().find("type yPlus;");
@@ -267,17 +412,107 @@ int main(int argc, char** argv) {
     assert(preparation_script.find(
         ".openfoam_mesh_determinant_warning") != std::string::npos);
     assert(preparation_script.find(
-        "failed_checks > determinant_failures") != std::string::npos);
+        "allow_determinant_warnings=\"true\"") != std::string::npos);
+    assert(preparation_script.find(
+        "mesh quality policy rejects determinant warnings") !=
+           std::string::npos);
+    assert(preparation_script.find(
+        "SCREENING WARNING:") != std::string::npos);
+    assert(preparation_script.find(
+        "failed_checks != determinant_failures") != std::string::npos);
+    const std::size_t determinant_rejection=preparation_script.find(
+        "mesh quality policy rejects determinant warnings");
+    const std::size_t prepared_marker=preparation_script.find(
+        "touch \"$case_dir/.openfoam_regions_prepared\"");
+    assert(determinant_rejection != std::string::npos);
+    assert(prepared_marker != std::string::npos);
+    assert(determinant_rejection < prepared_marker);
+    assert(preparation_script.find(
+        "run_toposet") != std::string::npos);
+    assert(preparation_script.find(
+        "THERMAL_SIM_LOW_MEMORY_PREP_ACTIVE") != std::string::npos);
+    assert(preparation_script.find(
+        "verify-split --case \"$case_dir\"") != std::string::npos);
+    assert(preparation_script.find(
+        "verify-materialized --case \"$case_dir\"") != std::string::npos);
+    assert(preparation_script.find("splitMeshRegions.done") ==
+           std::string::npos);
+    assert(preparation_script.find("$key.done") == std::string::npos);
+    assert(preparation_script.find(
+        "splitMeshRegions -case") == std::string::npos);
+    assert(preparation_script.find(
+        "topoSet \"$@\" </dev/null") != std::string::npos);
     assert(preparation_script.find("exit 1") != std::string::npos);
+    assert(std::filesystem::is_regular_file(
+        case_path/"openfoam_stream_region_selectors.py"));
+    assert(std::filesystem::is_regular_file(
+        case_path/"prepare_regions_low_memory.sh"));
     assert(std::filesystem::is_regular_file(case_path/"run_cht.sh"));
     assert(std::filesystem::is_regular_file(case_path/"run_parallel.sh"));
+    {
+        std::ifstream stream(case_path/"run_cht.sh");
+        std::ostringstream text;
+        text << stream.rdbuf();
+        assert(text.str().find(
+            "Serial run_cht.sh is disabled for this multirate export") !=
+               std::string::npos);
+        assert(text.str().find(
+            "bash \"$case_dir/prepare_regions.sh\"") == std::string::npos);
+        assert(text.str().find(
+            "prepare_regions_low_memory.sh") == std::string::npos);
+        assert(text.str().find(
+            "chtMultiRegionFoam -case") == std::string::npos);
+    }
     {
         std::ifstream stream(case_path/"run_parallel.sh");
         std::ostringstream text;
         text << stream.rdbuf();
+        const std::string mode_policy_marker =
+            "THERMAL_SIM_SEMIFROZEN_MODE_POLICY_V1";
+        const auto environment_setup = text.str().find(
+            "Initializing OpenFOAM environment once with $foam_launcher.");
+        const auto policy_gate = text.str().find(
+            "solver_mode_policy_marker=\"" + mode_policy_marker + "\"");
+        const auto runtime_attestation = text.str().find(
+            "solver_runtime_attestation=$(\"$semi_frozen_solver\" "
+            "--thermal-sim-attest");
+        const auto case_lock = text.str().find(
+            "run_lock=\"$case_dir/.thermal_solver_run.lock\"");
+        assert(environment_setup != std::string::npos);
+        assert(policy_gate != std::string::npos);
+        assert(runtime_attestation != std::string::npos);
+        assert(case_lock != std::string::npos);
+        assert(environment_setup < policy_gate);
+        assert(policy_gate < runtime_attestation);
+        assert(runtime_attestation < case_lock);
         assert(text.str().find(
-            "semiFrozenChtMultiRegionFoam -case \"$case_dir\" -parallel "
+            "semi_frozen_solver=\"$(command -v "
+            "semiFrozenChtMultiRegionFoam || true)\"") !=
+               std::string::npos);
+        assert(text.str().find(
+            "semi_frozen_solver=\"$(readlink -f "
+            "\"$semi_frozen_solver\")\"") != std::string::npos);
+        assert(text.str().find(
+            "grep -aFq --") == std::string::npos);
+        assert(text.str().find(
+            "custom OpenFOAM solver runtime attestation failed before case "
+            "locking.") != std::string::npos);
+        assert(text.str().find(
+            "run_tracked bash \"$case_dir/prepare_regions_low_memory.sh\" "
+            "\"$case_dir\"") != std::string::npos);
+        assert(text.str().find(
+            "bash \"$case_dir/prepare_regions.sh\"") == std::string::npos);
+        assert(text.str().find(
+            "fan_positive_pressure_rules=(\"test_inlet:0.6125") !=
+               std::string::npos);
+        assert(text.str().find(
+            "Fan outside positive-pressure curve domain") !=
+               std::string::npos);
+        assert(text.str().find(
+            "\"$semi_frozen_solver\" -case \"$case_dir\" -parallel "
             "-postProcess -latestTime") != std::string::npos);
+        assert(text.str().find(
+            "semiFrozenChtMultiRegionFoam -case") == std::string::npos);
         assert(text.str().find("is_restartable_processor_time()") !=
                std::string::npos);
         assert(text.str().find(
@@ -347,6 +582,14 @@ int main(int argc, char** argv) {
             "Initial airflow uses fans and vents with fluid heat sources disabled.") !=
                std::string::npos);
         assert(text.str().find(
+            "Multirate end time $requested_end must be greater than the latest "
+            "processor checkpoint $current; no airflow or thermal stage was run.") !=
+               std::string::npos);
+        assert(text.str().find("exit 11") != std::string::npos);
+        assert(text.str().find(
+            "Solid-region heat sources remain active during initial airflow; CHT and buoyancy continue to evolve.") !=
+               std::string::npos);
+        assert(text.str().find(
             "Restored full fluid heat sources for thermal evolution.") !=
                std::string::npos);
         assert(text.str().find(
@@ -404,7 +647,173 @@ int main(int argc, char** argv) {
             "THERMAL_SOLVER_OPENFOAM_ENV_READY=1") !=
                std::string::npos);
         assert(text.str().find(
+            "THERMAL_SOLVER_SCRIPT_SNAPSHOT=1") !=
+               std::string::npos);
+        assert(text.str().find(
+            "THERMAL_SOLVER_CASE_DIR=\"$case_dir\"") !=
+               std::string::npos);
+        assert(text.str().find(
+            "bash -n \"$script_snapshot_path\"") !=
+               std::string::npos);
+        const auto restore_production_controls=text.str().find(
+            "restore_production_solver_controls()");
+        const auto restore_run_state=text.str().find("restore_run_state()");
+        const auto run_tracked=text.str().find("run_tracked()");
+        const auto run_tracked_capture=text.str().find(
+            "run_tracked_capture()",run_tracked);
+        const auto terminate_run=text.str().find("terminate_run()");
+        const auto bootstrap_exit_trap=text.str().find(
+            "trap cleanup_script_snapshot EXIT",terminate_run);
+        const auto interrupt_trap=text.str().find(
+            "trap 'terminate_run INT' INT",bootstrap_exit_trap);
+        const auto terminate_trap=text.str().find(
+            "trap 'terminate_run TERM' TERM",interrupt_trap);
+        const auto exit_trap=text.str().find(
+            "trap restore_run_state EXIT",restore_run_state);
+        assert(run_tracked != std::string::npos);
+        assert(run_tracked_capture > run_tracked);
+        assert(terminate_run > run_tracked_capture);
+        const std::string tracked_body=text.str().substr(
+            run_tracked,run_tracked_capture-run_tracked);
+        const auto defer_int=tracked_body.find(
+            "trap 'pending_termination_signal=INT' INT");
+        const auto defer_term=tracked_body.find(
+            "trap 'pending_termination_signal=TERM' TERM",defer_int);
+        const auto setsid_launch=tracked_body.find("setsid -- \"$@\" &");
+        const auto job_control_fallback=tracked_body.find("set -m",setsid_launch);
+        const auto job_control_reset=tracked_body.find(
+            "set +m",job_control_fallback);
+        const auto child_registration=tracked_body.find(
+            "active_child_pid=$!",job_control_reset);
+        const auto restore_int=tracked_body.find(
+            "trap 'terminate_run INT' INT",child_registration);
+        const auto restore_term=tracked_body.find(
+            "trap 'terminate_run TERM' TERM",restore_int);
+        const auto deliver_pending=tracked_body.find(
+            "terminate_run \"$pending_termination_signal\"",restore_term);
+        assert(defer_int != std::string::npos);
+        assert(defer_term > defer_int);
+        assert(setsid_launch > defer_term);
+        assert(job_control_fallback > setsid_launch);
+        assert(job_control_reset > job_control_fallback);
+        assert(child_registration > job_control_reset);
+        assert(restore_int > child_registration);
+        assert(restore_term > restore_int);
+        assert(deliver_pending > restore_term);
+        assert(bootstrap_exit_trap > terminate_run);
+        assert(interrupt_trap > bootstrap_exit_trap);
+        assert(terminate_trap > interrupt_trap);
+        const auto script_snapshot_gate=text.str().find(
+            "if [[ \"${THERMAL_SOLVER_SCRIPT_SNAPSHOT:-0}\" != 1 ]]",
+            terminate_trap);
+        const auto tracked_preparation=text.str().find(
+            "run_tracked bash \"$case_dir/prepare_regions_low_memory.sh\"",
+            script_snapshot_gate);
+        assert(script_snapshot_gate > terminate_trap);
+        assert(tracked_preparation > script_snapshot_gate);
+        assert(restore_production_controls != std::string::npos);
+        assert(restore_run_state > restore_production_controls);
+        assert(exit_trap > restore_run_state);
+        const std::string restore_state_body=text.str().substr(
+            restore_run_state,exit_trap-restore_run_state);
+        assert(restore_state_body.find(
+            "restore_full_fan_options || true") != std::string::npos);
+        assert(restore_state_body.find(
+            "restore_production_solver_controls || true") !=
+               std::string::npos);
+        assert(restore_state_body.find(
+            "cleanup_script_snapshot || true") != std::string::npos);
+        const std::string terminate_body=text.str().substr(
+            terminate_run,bootstrap_exit_trap-terminate_run);
+        assert(terminate_body.find("trap - EXIT") !=
+            std::string::npos);
+        assert(terminate_body.find("trap '' INT TERM") !=
+            std::string::npos);
+        assert(terminate_body.find(
+            "declare -F restore_run_state") != std::string::npos);
+        assert(terminate_body.find("cleanup_script_snapshot") !=
+               std::string::npos);
+        assert(terminate_body.find(
+            "kill -s \"$signal\" -- \"-$child_pid\"") !=
+               std::string::npos);
+        assert(terminate_body.find(
+            "kill -s \"$signal\" -- \"$child_pid\"") !=
+               std::string::npos);
+        const auto first_watchdog=terminate_body.find(
+            "for ((attempt=0; attempt<50; ++attempt))");
+        const auto watchdog_term=terminate_body.find(
+            "kill -s TERM -- \"-$child_pid\"",first_watchdog);
+        const auto second_watchdog=terminate_body.find(
+            "for ((attempt=0; attempt<20; ++attempt))",watchdog_term);
+        const auto watchdog_kill=terminate_body.find(
+            "kill -s KILL -- \"-$child_pid\"",second_watchdog);
+        const auto watchdog_wait=terminate_body.find(
+            "wait \"$watchdog_pid\"",watchdog_kill);
+        assert(first_watchdog != std::string::npos);
+        assert(watchdog_term > first_watchdog);
+        assert(second_watchdog > watchdog_term);
+        assert(watchdog_kill > second_watchdog);
+        assert(watchdog_wait > watchdog_kill);
+        assert(terminate_body.find(
+            "declare -F restore_preparation_controls") !=
+               std::string::npos);
+        assert(terminate_body.find("exit \"$status\"") !=
+               std::string::npos);
+        assert(text.str().find(
+            "trap restore_run_state EXIT INT TERM") == std::string::npos);
+        assert(text.str().find(
             "OPENFOAM_LAUNCHER=env") !=
+               std::string::npos);
+        assert(text.str().find(
+            "warm_start_maximum_time_step=\"${THERMAL_WARM_START_MAX_DT:-0.001}\"") !=
+               std::string::npos);
+        assert(text.str().find(
+            "THERMAL_WARM_START_MAX_DT must be a positive finite number.") !=
+               std::string::npos);
+        assert(text.str().find(
+            "warmStartMaxDt=$warm_start_maximum_time_step") !=
+               std::string::npos);
+        assert(text.str().find(
+            "thermal_only_outer_correctors=\"${THERMAL_ONLY_OUTER_CORRECTORS:-2}\"") !=
+               std::string::npos);
+        assert(text.str().find(
+            "THERMAL_ONLY_OUTER_CORRECTORS must be a positive integer.") !=
+               std::string::npos);
+        assert(text.str().find(
+            "THERMAL_ONLY_OUTER_CORRECTORS must be at least 2") !=
+               std::string::npos);
+        assert(text.str().find(
+            "liveOuterCorrectors=3 thermalOnlyOuterCorrectors=$thermal_only_outer_correctors") !=
+               std::string::npos);
+        assert(text.str().find(
+            "stage_outer_correctors=\"$thermal_only_outer_correctors\"") !=
+               std::string::npos);
+        assert(text.str().find(
+            "stage_outer_correctors=\"3\"") != std::string::npos);
+        assert(text.str().find(
+            "restore_live_outer_correctors()") != std::string::npos);
+        assert(text.str().find(
+            "PIMPLE/nOuterCorrectors -set 3") != std::string::npos);
+        assert(text.str().find(
+            "\"$case_dir/system/fvSolution\" -entry PIMPLE/nOuterCorrectors") !=
+               std::string::npos);
+        assert(text.str().find(
+            "\"$case_dir/system/fluid/fvSolution\" -entry PIMPLE/nOuterCorrectors") ==
+               std::string::npos);
+        assert(text.str().find(
+            "outerCorrectors=$stage_outer_correctors") !=
+               std::string::npos);
+        assert(text.str().find(
+            "run_tracked \"$foam_launcher\" decomposePar") !=
+               std::string::npos);
+        assert(text.str().find(
+            "run_tracked \"$foam_launcher\" reconstructPar") !=
+               std::string::npos);
+        assert(text.str().find(
+            "run_tracked \"$foam_launcher\" mpirun -np \"$processes\"") !=
+               std::string::npos);
+        assert(text.str().find(
+            "run_tracked_capture postflight_output") !=
                std::string::npos);
         assert(text.str().find(
             "Initializing OpenFOAM environment once with $foam_launcher.") !=
@@ -434,9 +843,11 @@ int main(int argc, char** argv) {
         assert(text.str().find(
             "latest_one_way_boundary_mass_flow=\"\"") !=
                std::string::npos);
+        assert(text.str().find("invalidate_airflow_acceptance_state()") !=
+               std::string::npos);
         assert(text.str().find(
-            "\"$case_dir/.initial_air_exchange_state\"\n"
-            "    echo \"Warm start invalidated") !=
+            "\"$case_dir/.initial_air_exchange_state\" "
+            "\"$case_dir/.initial_airflow_physical_settling\"") !=
                std::string::npos);
         assert(text.str().find(
             "lead=minimum-2*interval; if(lead<0)lead=0") !=
@@ -479,23 +890,181 @@ int main(int argc, char** argv) {
         assert(text.str().find(
             "latest_complete_processor_time \"$existing_processes\"") !=
                std::string::npos);
+        assert(text.str().find("preflight_warm_start_state()") !=
+               std::string::npos);
+        assert(text.str().find(
+            "common_time=$(latest_complete_processor_time \"$expected\")") !=
+               std::string::npos);
+        assert(text.str().find(
+            "case \"$configured_start_from\" in") !=
+               std::string::npos);
+        assert(text.str().find(
+            "startTime|latestTime|firstTime) ;;") !=
+               std::string::npos);
+        assert(text.str().find(
+            "[[ \"$configured_start_from\" == startTime ]] && awk -v configured=") !=
+               std::string::npos);
+        assert(text.str().find(
+            "configured startTime $configured_start: it is newer than the latest common complete processor checkpoint $common_time") !=
+               std::string::npos);
+        assert(text.str().find(
+            "only the decomposed t=0 initial state; no completed solver checkpoint exists yet") !=
+               std::string::npos);
+        assert(text.str().find(
+            "postProcessing time directories newer than the latest common complete processor checkpoint $common_time") !=
+               std::string::npos);
+        assert(text.str().find(
+            "data files containing first-column time samples newer than the latest common complete processor checkpoint $common_time") !=
+               std::string::npos);
+        assert(text.str().find(
+            "print FILENAME \"\\t\" value") !=
+               std::string::npos);
+        assert(text.str().find("nextfile") != std::string::npos);
+        assert(text.str().find("-exec awk -v common=\"$common_time\"") !=
+               std::string::npos);
+        assert(text.str().find(
+            "staleReportFiles=${#stale_report_samples[@]}") !=
+               std::string::npos);
+        const auto early_warm_preflight=text.str().find(
+            "preflight_warm_start_state false true || exit $?");
+        const auto decomposition_selection=text.str().find(
+            "reuse_decomposition=false");
+        assert(early_warm_preflight != std::string::npos);
+        assert(decomposition_selection != std::string::npos);
+        assert(early_warm_preflight < decomposition_selection);
+        assert(text.str().find(
+            "preflight_warm_start_state true false || exit $?",
+            decomposition_selection) != std::string::npos);
         assert(text.str().find(
             "-v required=\"1\"") != std::string::npos);
         assert(text.str().find(
             "mv -f \"$air_exchange_state_tmp\" \"$initial_exchange_state\"") !=
                std::string::npos);
+        const auto empty_initial_marker=text.str().find(
+            "if [[ -f \"$initial_pending_marker\" && "
+            "! -s \"$initial_pending_marker\" ]]");
+        const auto resumable_initial_marker=text.str().find(
+            "if [[ -s \"$initial_pending_marker\" ]]",empty_initial_marker);
+        const auto new_initial_marker=text.str().find(
+            "if [[ ! -f \"$initial_pending_marker\" ]]",
+            resumable_initial_marker);
+        const auto write_initial_marker=text.str().find(
+            "printf '%s\\n' \"$initial_start\" > \"$initial_pending_tmp\"",
+            new_initial_marker);
+        const auto publish_initial_marker=text.str().find(
+            "mv -f \"$initial_pending_tmp\" \"$initial_pending_marker\"",
+            write_initial_marker);
+        const auto reset_initial_airflow_state=text.str().find(
+            "rm -f \"$velocity_convergence_state\" "
+            "\"$airflow_convergence_state\"",publish_initial_marker);
+        assert(empty_initial_marker != std::string::npos);
+        assert(resumable_initial_marker > empty_initial_marker);
+        assert(new_initial_marker > resumable_initial_marker);
+        assert(write_initial_marker > new_initial_marker);
+        assert(publish_initial_marker > write_initial_marker);
+        assert(reset_initial_airflow_state > publish_initial_marker);
         assert(text.str().find(
-            "tol=1e-9*s; exit !(a<b-tol) }'; do") !=
+            "tol=1e-9*s; if(tol>1e-8)tol=1e-8; ") !=
+               std::string::npos);
+        const auto exact_endpoint_helper=text.str().find(
+            "require_exact_endpoint()");
+        const auto stage_interval_helper=text.str().find(
+            "classify_stage_interval()",exact_endpoint_helper);
+        assert(exact_endpoint_helper != std::string::npos);
+        assert(stage_interval_helper > exact_endpoint_helper);
+        assert(text.str().substr(
+            exact_endpoint_helper,
+            stage_interval_helper-exact_endpoint_helper).find(
+                "if(tolerance>1e-8)tolerance=1e-8") !=
                std::string::npos);
         assert(text.str().find(
-            "tol=1e-9*s; exit !(a>=b-tol) }'; then") !=
+            "Reached the exact requested endpoint t=$current s; terminal "
+            "airflow validation remains pending") !=
                std::string::npos);
         assert(text.str().find(
-            "Refreshing airflow at terminal thermal checkpoint") !=
+            "Refreshing airflow at terminal thermal checkpoint") ==
+               std::string::npos);
+        assert(text.str().find("write_airflow_refresh_state()") !=
+               std::string::npos);
+        const auto refresh_commit_helper=text.str().find(
+            "commit_airflow_refresh_state()");
+        assert(text.str().find("normalize_airflow_refresh_journal()") !=
+               std::string::npos);
+        assert(refresh_commit_helper != std::string::npos);
+        const auto refresh_normalizer=text.str().find(
+            "normalize_airflow_refresh_journal()",refresh_commit_helper);
+        const std::string refresh_commit_body=text.str().substr(
+            refresh_commit_helper,refresh_normalizer-refresh_commit_helper);
+        assert(refresh_commit_body.find(
+            "if [[ \"$state\" != owed ]]") != std::string::npos);
+        assert(refresh_commit_body.find(
+            "[[ ! \"$start\" =~ ^[0-9]+") != std::string::npos);
+        assert(refresh_commit_body.find(
+            "[[ ! \"$target\" =~ ^[0-9]+") != std::string::npos);
+        assert(refresh_commit_body.find(
+            "require_exact_endpoint \"$start\" \"$expected_start\"") !=
+               std::string::npos);
+        assert(refresh_commit_body.find(
+            "require_exact_endpoint \"$target\" \"$expected_target\"") !=
+               std::string::npos);
+        assert(refresh_commit_body.find(
+            "require_exact_endpoint \"$actual\" \"$expected_target\"") !=
+               std::string::npos);
+        assert(refresh_commit_body.find(
+            "write_airflow_refresh_state active \"$actual\"") !=
                std::string::npos);
         assert(text.str().find(
-            "pending_refresh_start=$(awk 'NF { print $1; exit }'") !=
+            "read -r pending_refresh_state pending_refresh_start") !=
                std::string::npos);
+        assert(text.str().find(
+            "write_airflow_refresh_state active \"$refresh_start\"") !=
+               std::string::npos);
+        const auto owed_refresh_journal=text.str().find(
+            "write_airflow_refresh_state owed \"$current\" "
+            "\"$frozen_target\"");
+        const auto thermal_only_stage=text.str().find(
+            "stage true \"$frozen_target\"",owed_refresh_journal);
+        assert(owed_refresh_journal != std::string::npos);
+        assert(thermal_only_stage > owed_refresh_journal);
+        const auto stage_function=text.str().find("stage()\n");
+        const auto stage_endpoint_check=text.str().find(
+            "require_exact_endpoint \"$actual_time\" \"$target\"",
+            stage_function);
+        const auto stage_thermal_source_restore=text.str().find(
+            "if [[ \"$thermal_only\" == \"true\" && ",
+            stage_endpoint_check);
+        const auto active_refresh_commit=text.str().find(
+            "commit_airflow_refresh_state \"$actual_time\" "
+            "\"$current\" \"$target\"",
+            stage_thermal_source_restore);
+        const auto stage_prune=text.str().find(
+            "prune_processor_times",active_refresh_commit);
+        const auto stage_summary=text.str().find(
+            "summary \"stage label=$label",active_refresh_commit);
+        const auto stage_current_commit=text.str().find(
+            "current=\"$actual_time\"",active_refresh_commit);
+        assert(stage_function != std::string::npos);
+        assert(stage_endpoint_check > stage_function);
+        assert(stage_thermal_source_restore > stage_endpoint_check);
+        assert(active_refresh_commit > stage_thermal_source_restore);
+        assert(stage_prune > active_refresh_commit);
+        assert(stage_summary > active_refresh_commit);
+        assert(stage_current_commit > stage_summary);
+        assert(text.str().find(
+            "An uncommitted thermal-only checkpoint advanced from") !=
+               std::string::npos);
+        assert(text.str().find(
+            "refusing automatic recovery.") != std::string::npos);
+        assert(text.str().find(
+            "Recovered completed or partial thermal-only checkpoint") ==
+               std::string::npos);
+        const auto refresh_journal_temporary=text.str().find(
+            "temporary=\"${refresh_pending_marker}.tmp.$$\"");
+        const auto refresh_journal_publish=text.str().find(
+            "mv -f -- \"$temporary\" \"$refresh_pending_marker\"",
+            refresh_journal_temporary);
+        assert(refresh_journal_temporary != std::string::npos);
+        assert(refresh_journal_publish > refresh_journal_temporary);
         assert(text.str().find(
             "Resuming airflow refresh observation window from t=$refresh_start s.") !=
                std::string::npos);
@@ -541,6 +1110,36 @@ int main(int argc, char** argv) {
         assert(text.str().find(
             "accepted_airflow_reference=\"$case_dir/.accepted_airflow_reference\"") !=
                 std::string::npos);
+        const auto acceptance_reference_guard=text.str().find(
+            "acceptance_reference_complete=true");
+        const auto acceptance_time_check=text.str().find(
+            "[[ -f \"$accepted_airflow_reference/time\" ]]",
+            acceptance_reference_guard);
+        const auto acceptance_rank_check=text.str().find(
+            "[[ -f \"$accepted_airflow_reference/processor${rank}/U\" ]]",
+            acceptance_time_check);
+        const auto incomplete_acceptance=text.str().find(
+            "if [[ \"$acceptance_reference_complete\" != true ]]",
+            acceptance_rank_check);
+        const auto revoke_initial_acceptance=text.str().find(
+            "rm -f -- \"$initial_convergence_marker\"",
+            incomplete_acceptance);
+        const auto remove_incomplete_reference=text.str().find(
+            "rm -rf -- \"$accepted_airflow_reference\"",
+            revoke_initial_acceptance);
+        const auto force_initial_revalidation=text.str().find(
+            "if [[ ! -f \"$initial_convergence_marker\" ]]",
+            remove_incomplete_reference);
+        assert(acceptance_reference_guard != std::string::npos);
+        assert(acceptance_time_check > acceptance_reference_guard);
+        assert(acceptance_rank_check > acceptance_time_check);
+        assert(incomplete_acceptance > acceptance_rank_check);
+        assert(revoke_initial_acceptance > incomplete_acceptance);
+        assert(remove_incomplete_reference > revoke_initial_acceptance);
+        assert(force_initial_revalidation > remove_incomplete_reference);
+        assert(text.str().find(
+            "Initial-airflow acceptance evidence is incomplete; revoking the "
+            "marker and requiring full revalidation.") != std::string::npos);
         assert(text.str().find("field_internal_count()") != std::string::npos);
         assert(text.str().find(
             "incompatible with the current decomposition at rank $rank") !=
@@ -619,7 +1218,7 @@ int main(int argc, char** argv) {
         assert(text.str().find(
             "writeControl[[:space:]]+)[^;]+;") != std::string::npos);
         assert(text.str().find(
-            "semiFrozenChtMultiRegionFoam -case \"$case_dir\" -postProcess") !=
+            "\"$semi_frozen_solver\" -case \"$case_dir\" -postProcess") !=
                 std::string::npos);
         assert(text.str().find(
             "Final OpenFOAM report generation failed") != std::string::npos);
@@ -632,7 +1231,26 @@ int main(int argc, char** argv) {
         assert(text.str().find(
             "now+interval") != std::string::npos);
         assert(text.str().find(
-            "summary \"run_paused mode=$mode reconstructedTime=$reconstruct_time reason=airflow_refresh_pending\"") !=
+            "summary \"run_paused mode=$mode reconstructedTime=$reconstruct_time reason=$run_pause_reason\"") !=
+               std::string::npos);
+        assert(text.str().find("multirate_pause_reason()") !=
+               std::string::npos);
+        assert(text.str().find("classify_stage_interval()") !=
+               std::string::npos);
+        assert(text.str().find("Refusing reversed stage target") !=
+               std::string::npos);
+        assert(text.str().find(
+            "Missing fan-ramp time metadata for processor${rank}") !=
+               std::string::npos);
+        assert(text.str().find(
+            "Missing stage time metadata for processor${rank}") !=
+               std::string::npos);
+        assert(text.str().find(
+            "Missing warm-start time metadata for processor${rank}") !=
+               std::string::npos);
+        assert(text.str().find("printf '%s\\n' fan_ramp_pending") !=
+               std::string::npos);
+        assert(text.str().find("printf '%s\\n' initial_airflow_pending") !=
                std::string::npos);
         assert(text.str().find(
             "\"Adaptive airflow refresh\" 0.0050000000000000001") !=
@@ -651,7 +1269,138 @@ int main(int argc, char** argv) {
             "-v v=\"$latest_velocity_relative_rms\" -v limit=\"0.01\"") !=
                std::string::npos);
         assert(text.str().find(
-            "Warm start invalidated cached airflow and thermal convergence references.") !=
+            "Warm start invalidated cached airflow and thermal convergence "
+            "references before checkpoint mutation.") !=
+               std::string::npos);
+        assert(text.str().find(
+            "rm -f -- \"$case_dir/.initial_airflow_converged\"") !=
+               std::string::npos);
+        assert(text.str().find(
+            "\"$case_dir/.initial_airflow_pending\" "
+            "\"$case_dir/.initial_air_exchange_state\"") !=
+               std::string::npos);
+        assert(text.str().find("preflight_checkpoint_space()") !=
+               std::string::npos);
+        assert(text.str().find(
+            "required_kb=$((2*checkpoint_kb+524288))") !=
+               std::string::npos);
+        assert(text.str().find(
+            "preflight_checkpoint_space || exit $?") !=
+               std::string::npos);
+        assert(text.str().find(
+            "Insufficient disk space for a recoverable checkpoint") !=
+               std::string::npos);
+        assert(text.str().find(
+            "fan_ramp_complete_marker=\"$case_dir/.fan_ramp_complete\"") !=
+               std::string::npos);
+        const auto ramp_completion_gate=text.str().find(
+            "if fan_ramp_endpoint_reached \"$ramp_current\"; then");
+        const auto ramp_completion_touch=text.str().find(
+            "touch \"$fan_ramp_complete_marker\"",ramp_completion_gate);
+        assert(ramp_completion_gate != std::string::npos);
+        assert(ramp_completion_touch > ramp_completion_gate);
+        assert(text.str().find("full scale remains pending") !=
+               std::string::npos);
+        assert(text.str().find(
+            "[[ ! -f \"$fan_ramp_complete_marker\" ]]") !=
+               std::string::npos);
+        const auto warm_windows_function=text.str().find(
+            "run_warm_start_windows()");
+        const auto warm_windows_call=text.str().find(
+            "    run_warm_start_windows\n",warm_windows_function);
+        assert(warm_windows_function != std::string::npos);
+        assert(warm_windows_call > warm_windows_function);
+        const auto warm_checkpoint_preflight=text.str().find(
+            "        preflight_checkpoint_space || exit $?");
+        const auto warm_acceptance_invalidation=text.str().find(
+            "        invalidate_airflow_acceptance_state\n",
+            warm_checkpoint_preflight);
+        const auto warm_fan_ramp=text.str().find(
+            "        run_fan_ramp ",warm_acceptance_invalidation);
+        assert(warm_checkpoint_preflight != std::string::npos);
+        assert(warm_acceptance_invalidation > warm_checkpoint_preflight);
+        assert(warm_fan_ramp > warm_acceptance_invalidation);
+        assert(warm_windows_call > warm_acceptance_invalidation);
+        const auto warm_restart_plan = text.str().find(
+            "warm_restart_plan=$(awk -v maximum=\"$warm_start_maximum_time_step\"");
+        assert(warm_restart_plan != std::string::npos);
+        assert(text.str().find("-v remaining=\"$warm_interval\"",
+                               warm_restart_plan) != std::string::npos);
+        assert(text.str().find(
+            "-entry maxDeltaT -set \"$warm_restart_dt\"",
+                               warm_restart_plan) != std::string::npos);
+        assert(text.str().find(
+            "read -r warm_restart_dt warm_restart_steps",
+                               warm_restart_plan) != std::string::npos);
+        assert(text.str().find(
+            "-entry writeControl -set timeStep",
+                               warm_restart_plan) != std::string::npos);
+        assert(text.str().find(
+            "-entry writeInterval -set \"$warm_restart_steps\"",
+                               warm_restart_plan) != std::string::npos);
+        assert(text.str().find(
+            "require_exact_endpoint \"$warm_actual\" \"$warm_window_target\"",
+                               warm_restart_plan) != std::string::npos);
+        assert(text.str().find(
+            "warm_window_target=$(next_warm_start_window") < warm_restart_plan);
+        assert(text.str().find(
+            "summary \"warm_start_window index=$warm_window_index",
+                               warm_restart_plan) != std::string::npos);
+        assert(text.str().find(
+            "validate_latest_airflow_courant \"$warm_window_target\"",
+                               warm_restart_plan) != std::string::npos);
+        const auto restart_courant_helper=text.str().find(
+            "validate_latest_airflow_courant()");
+        const auto restart_courant_precheck=text.str().find(
+            "checkpoint before Courant validation",restart_courant_helper);
+        const auto restart_courant_postprocess=text.str().find(
+            "run_tracked_capture output",restart_courant_helper);
+        const auto restart_courant_postcheck=text.str().find(
+            "checkpoint after Courant validation",restart_courant_postprocess);
+        const auto restart_courant_resume=text.str().find(
+            "validate_latest_airflow_courant \"$warm_current\"",
+            warm_acceptance_invalidation);
+        assert(restart_courant_helper != std::string::npos);
+        assert(restart_courant_precheck > restart_courant_helper);
+        assert(restart_courant_postprocess > restart_courant_precheck);
+        assert(restart_courant_postcheck > restart_courant_postprocess);
+        assert(restart_courant_resume > warm_acceptance_invalidation);
+        assert(restart_courant_resume < warm_fan_ramp);
+        const auto fan_ramp_restart_helper=text.str().find(
+            "validate_interrupted_fan_ramp_checkpoint()");
+        const auto fan_ramp_restart_validation=text.str().find(
+            "validate_latest_airflow_courant \"$actual\"",
+            fan_ramp_restart_helper);
+        const auto fan_ramp_restart_marker=text.str().find(
+            "touch \"$fan_ramp_complete_marker\"",
+            fan_ramp_restart_validation);
+        const auto multirate_fan_ramp_restart=text.str().find(
+            "validate_interrupted_fan_ramp_checkpoint \"$current\"");
+        const auto warm_fan_ramp_restart=text.str().find(
+            "validate_interrupted_fan_ramp_checkpoint \"$warm_current\"",
+            warm_acceptance_invalidation);
+        assert(fan_ramp_restart_helper != std::string::npos);
+        assert(fan_ramp_restart_validation > fan_ramp_restart_helper);
+        assert(fan_ramp_restart_marker > fan_ramp_restart_validation);
+        assert(multirate_fan_ramp_restart != std::string::npos);
+        assert(multirate_fan_ramp_restart < warm_fan_ramp_restart);
+        assert(warm_fan_ramp_restart > warm_acceptance_invalidation);
+        assert(warm_fan_ramp_restart < restart_courant_resume);
+        assert(text.str().find(
+            "completion marker is missing but latest time",
+            fan_ramp_restart_helper) != std::string::npos);
+        assert(text.str().find(
+            "validate_latest_airflow_courant \"$target\" "
+            "\"Fan-ramp stage $step\"") != std::string::npos);
+        assert(text.str().find(
+            "warm_restart_relation\" == equal") != std::string::npos);
+        assert(text.str().find(
+            "Conventional run mode is disabled for this multirate export") !=
+               std::string::npos);
+        assert(text.str().find(
+            "terminal airflow validation remains pending") !=
+               std::string::npos);
+        assert(text.str().find("terminal_requested_end") ==
                std::string::npos);
         assert(text.str().find(
             "\"$case_dir/.thermal_convergence_streak\" \"") !=
@@ -659,6 +1408,13 @@ int main(int argc, char** argv) {
     }
     assert(std::filesystem::is_regular_file(
         case_path/"system"/"spatialConvergenceDict"));
+    {
+        std::ifstream stream(case_path/"0"/"fluid"/"p_rgh");
+        std::ostringstream text;
+        text << stream.rdbuf();
+        assert(text.str().find("(1 0)") != std::string::npos);
+        assert(text.str().find("(1 0.5)") == std::string::npos);
+    }
     assert(std::filesystem::is_regular_file(
         case_path/"system"/"fluid"/"fvSolution"));
     {
@@ -714,6 +1470,36 @@ int main(int argc, char** argv) {
     assert(rejected_invalid_pressure);
     assert(!std::filesystem::exists(invalid_pressure_case));
 
+    const auto invalid_thermal_outer_case=case_path.parent_path()/
+        "thermal_solver_invalid_thermal_outer_correctors";
+    bool rejected_invalid_thermal_outer=false;
+    try {
+        OpenFoamExporter::export_mesh(
+            mesh,
+            {.case_directory=invalid_thermal_outer_case,
+             .overwrite=true,
+             .thermal_only_pimple_outer_correctors=-1});
+    } catch(const std::invalid_argument&) {
+        rejected_invalid_thermal_outer=true;
+    }
+    assert(rejected_invalid_thermal_outer);
+    assert(!std::filesystem::exists(invalid_thermal_outer_case));
+
+    const auto unsafe_single_thermal_outer_case=case_path.parent_path()/
+        "thermal_solver_single_thermal_outer_corrector";
+    bool rejected_single_thermal_outer=false;
+    try {
+        OpenFoamExporter::export_mesh(
+            mesh,
+            {.case_directory=unsafe_single_thermal_outer_case,
+             .overwrite=true,
+             .thermal_only_pimple_outer_correctors=1});
+    } catch(const std::invalid_argument&) {
+        rejected_single_thermal_outer=true;
+    }
+    assert(rejected_single_thermal_outer);
+    assert(!std::filesystem::exists(unsafe_single_thermal_outer_case));
+
     const auto invalid_parallel_case=case_path.parent_path()/
         "thermal_solver_invalid_parallel_processes";
     bool rejected_invalid_parallel=false;
@@ -728,6 +1514,24 @@ int main(int argc, char** argv) {
     }
     assert(rejected_invalid_parallel);
     assert(!std::filesystem::exists(invalid_parallel_case));
+
+    const auto unsafe_nonadaptive_case=case_path.parent_path()/
+        "thermal_solver_nonadaptive_multirate";
+    bool rejected_nonadaptive_multirate=false;
+    try {
+        OpenFoamExporter::export_mesh(
+            mesh,
+            {.case_directory=unsafe_nonadaptive_case,
+             .overwrite=true,
+             .use_multirate_thermal=true,
+             .use_adaptive_airflow_refresh=false});
+    } catch(const std::invalid_argument& error) {
+        rejected_nonadaptive_multirate=std::string(error.what()).find(
+            "requires use_adaptive_airflow_refresh=true") !=
+            std::string::npos;
+    }
+    assert(rejected_nonadaptive_multirate);
+    assert(!std::filesystem::exists(unsafe_nonadaptive_case));
 
     std::cout << case_path.string() << '\n';
     if(!keep_case) std::filesystem::remove_all(case_path);

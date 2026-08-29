@@ -168,6 +168,18 @@ def patch_values(field: Path, patch: str) -> list[float]:
     start = data.find(marker, boundary)
     if start < 0:
         raise ValueError(f"Patch {patch!r} not found in {field}")
+    opening = data.find(b"{", start)
+    if opening < 0:
+        raise ValueError(f"Patch {patch!r} has no boundary block in {field}")
+    # Boundary entries do not contain nested dictionaries. Check the ASCII
+    # entry header before parsing a possibly binary nonuniform payload; binary
+    # scalar bytes may coincidentally contain brace characters.
+    closing = data.find(b"}", opening)
+    if closing < 0:
+        raise ValueError(f"Patch {patch!r} has an unterminated boundary block in {field}")
+    entry_header = data[start:closing]
+    if not re.search(rb"\bvalue\b", entry_header):
+        return []
     patch_data = data[start:]
     uniform = re.search(
         rb"\bvalue\s+uniform\s+([\d.eE+-]+)\s*;", patch_data[:512]
@@ -185,6 +197,8 @@ def patch_values(field: Path, patch: str) -> list[float]:
     if uniform and (first_nonuniform is None or uniform.start() < first_nonuniform):
         return [float(uniform.group(1))]
     if empty and (not nonuniform or empty.start() < nonuniform.start()):
+        return []
+    if not nonuniform:
         return []
     return [
         float(value)
@@ -222,6 +236,37 @@ def label_list(path: Path) -> list[int]:
     return [int(value) for value in data[position:end].decode("ascii").split()]
 
 
+def cyclic_patch_pairs(boundary_path: Path) -> list[tuple[int, int, int]]:
+    """Return (startFace, neighbourStartFace, nFaces) for cyclic patch pairs."""
+    text = boundary_path.read_text(encoding="ascii", errors="replace")
+    patches: dict[str, tuple[str, int, int, str | None]] = {}
+    for match in re.finditer(
+        r"(?m)^\s{4}([^\s{}]+)\s*\n\s*\{([^{}]*)\}", text, re.DOTALL
+    ):
+        name, block = match.group(1), match.group(2)
+        type_match = re.search(r"\btype\s+([^;\s]+)\s*;", block)
+        count_match = re.search(r"\bnFaces\s+(\d+)\s*;", block)
+        start_match = re.search(r"\bstartFace\s+(\d+)\s*;", block)
+        neighbour_match = re.search(r"\bneighbourPatch\s+([^;\s]+)\s*;", block)
+        if type_match and count_match and start_match:
+            patches[name] = (
+                type_match.group(1), int(count_match.group(1)),
+                int(start_match.group(1)),
+                neighbour_match.group(1) if neighbour_match else None,
+            )
+    result: list[tuple[int, int, int]] = []
+    for name, (patch_type, count, start, neighbour) in patches.items():
+        if patch_type != "cyclic" or not neighbour or name >= neighbour:
+            continue
+        if neighbour not in patches:
+            raise ValueError(f"Cyclic patch {name} names missing neighbour {neighbour}")
+        other_type, other_count, other_start, other_neighbour = patches[neighbour]
+        if other_type != "cyclic" or other_neighbour != name or other_count != count:
+            raise ValueError(f"Cyclic patch pair {name}/{neighbour} is inconsistent")
+        result.append((start, other_start, count))
+    return result
+
+
 def mesh_connectivity(poly_mesh: Path) -> tuple[int, int]:
     owner = label_list(poly_mesh / "owner")
     neighbour = label_list(poly_mesh / "neighbour")
@@ -230,6 +275,18 @@ def mesh_connectivity(poly_mesh: Path) -> tuple[int, int]:
     for first, second in zip(owner, neighbour):
         adjacency[first].append(second)
         adjacency[second].append(first)
+    # Coupled cyclic faces are topological neighbours even though OpenFOAM
+    # stores them as boundary faces rather than in the neighbour list.  This
+    # matters for pressure-jump fan baffles: ignoring the coupling falsely
+    # reports each baffle-separated flow volume as disconnected.
+    for first_start, second_start, count in cyclic_patch_pairs(
+        poly_mesh / "boundary"
+    ):
+        for offset in range(count):
+            first = owner[first_start + offset]
+            second = owner[second_start + offset]
+            adjacency[first].append(second)
+            adjacency[second].append(first)
 
     seen: set[int] = set()
     regions = 0
@@ -431,7 +488,7 @@ Overall result: **{status}**
 |---|---:|---:|---:|
 | Fluid connectivity | {result.connected_fluid_regions} region(s), {result.cells} cells | expected {result.expected_connected_fluid_regions} | {'PASS' if result.pass_connectivity else 'FAIL'} |
 | Mass conservation | inlet {result.inlet_mass_flow_kg_s:.8g} kg/s, outlet {result.outlet_mass_flow_kg_s:.8g} kg/s | {100*result.mass_imbalance_fraction:.5f}% | {'PASS' if result.pass_mass_balance else 'FAIL'} |
-| Energy conservation | {result.transported_power_w:.4f} W transported vs {result.applied_power_w:.4f} W applied | {100*result.energy_error_fraction:.4f}% | {'PASS' if result.pass_energy_balance else 'FAIL'} |
+| Steady-state heat removal | {result.transported_power_w:.4f} W outlet sensible transport vs {result.applied_power_w:.4f} W applied | {100*result.energy_error_fraction:.4f}% power-removal mismatch | {'PASS' if result.pass_energy_balance else 'FAIL'} |
 {fluent_row}
 ## Temperatures and outlet behavior
 
@@ -446,6 +503,12 @@ Overall result: **{status}**
 
 The signed mass-flux average is required when an outlet has simultaneous
 forward and reverse flow. An absolute-flow average is not an energy balance.
+
+The steady-state heat-removal row is a thermal-development gate, **not** a
+transient first-law conservation audit. During warm-up, most applied heat may
+be stored in the fluid and solids. A transient conservation claim additionally
+requires high-precision changes in stored energy, boundary enthalpy transport,
+and every applicable work/heat-flux term over a common time interval.
 """
 
 

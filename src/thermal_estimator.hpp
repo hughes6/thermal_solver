@@ -127,8 +127,8 @@ struct ThermalTimeEstimator {
 
                             double h = Convection::compute_local_h(
                                 vmag, char_length,
-                                Convection::AIR_RHO, Convection::AIR_MU, Convection::AIR_K,
-                                Convection::AIR_PR, delta_T, t_film_k);
+                                n.get_rho(), n.get_mu(), n.get_k(),
+                                n.get_pr(), delta_T, t_film_k);
 
                             h_sum += h;
                             ++h_count;
@@ -179,8 +179,8 @@ struct ThermalTimeEstimator {
                 const double film =
                     0.5*(wall.temperature+side->get_T())+273.15;
                 h_sum += Convection::compute_local_h(
-                    vmag,width,Convection::AIR_RHO,Convection::AIR_MU,
-                    Convection::AIR_K,Convection::AIR_PR,delta_T,film);
+                    vmag,width,side->get_rho(),side->get_mu(),
+                    side->get_k(),side->get_pr(),delta_T,film);
                 ++h_count;
             }
 

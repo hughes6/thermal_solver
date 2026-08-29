@@ -85,6 +85,17 @@ static double compare_pressure_fields(const Mesh& a, const Mesh& b) {
 }
 
 int main() {
+    // Signed quadratic fits are only physical through their first positive
+    // zero-pressure crossing. Native evaluation must not rebound above the
+    // second root.
+    Fan bounded_curve;
+    bounded_curve.set_curve(1.5,5.0,-4.0,1.2);
+    assert(std::abs(
+        fan_curve_first_positive_zero(1.5,5.0,-4.0)-0.5)<1e-12);
+    assert(bounded_curve.curve_pressure(0.25,1.2)>0.0);
+    assert(bounded_curve.curve_pressure(0.5,1.2)==0.0);
+    assert(bounded_curve.curve_pressure(1.0,1.2)==0.0);
+
     // The omitted method must remain exactly equivalent to explicit SOR.
     Mesh default_sor_mesh = make_case();
     Mesh explicit_sor_mesh = default_sor_mesh;

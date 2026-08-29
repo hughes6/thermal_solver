@@ -1,0 +1,54 @@
+FoamFile
+{
+    format      ascii;
+    class       dictionary;
+    location    "system";
+    object      spatialConvergenceDict;
+}
+
+
+functions
+{
+    readVelocityFields
+    {
+        type        readFields;
+        libs        (fieldFunctionObjects);
+        region      fluid;
+        fields      (U UPrevious);
+    }
+    velocityDelta
+    {
+        type        subtract;
+        libs        (fieldFunctionObjects);
+        region      fluid;
+        fields      (U UPrevious);
+        result      velocityDelta;
+    }
+    velocityDeltaSquared
+    {
+        type        magSqr;
+        libs        (fieldFunctionObjects);
+        region      fluid;
+        field       velocityDelta;
+        result      velocityDeltaSquared;
+    }
+    velocitySquared
+    {
+        type        magSqr;
+        libs        (fieldFunctionObjects);
+        region      fluid;
+        field       U;
+        result      velocitySquared;
+    }
+    velocityRmsValues
+    {
+        type            volFieldValue;
+        libs            (fieldFunctionObjects);
+        region          fluid;
+        regionType      all;
+        operation       volAverage;
+        postOperation   sqrt;
+        writeFields     false;
+        fields          (velocityDeltaSquared velocitySquared);
+    }
+}

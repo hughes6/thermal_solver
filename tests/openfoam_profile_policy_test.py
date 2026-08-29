@@ -20,12 +20,14 @@ class OpenFoamProfilePolicyTest(unittest.TestCase):
 
     def test_screening_uses_validated_balanced_refresh_limit(self):
         profile = self.profile("screening_foam_cfg.toml")
+        self.assertTrue(profile["allow_determinant_warnings"])
         self.assertEqual(profile["parallel_processes"], 2)
         self.assertEqual(profile["airflow_refresh_maximum_courant_number"], 2.0)
-        self.assertEqual(profile["airflow_maximum_time_step"], 0.001)
+        self.assertEqual(profile["airflow_maximum_time_step"], 0.0005)
         self.assertEqual(profile["airflow_refresh_maximum_time_step"], 0.001)
         self.assertEqual(profile["pimple_outer_correctors"], 3)
         self.assertEqual(profile["pimple_pressure_correctors"], 2)
+        self.assertEqual(profile["thermal_only_pimple_outer_correctors"], 2)
         self.assertEqual(profile["thermal_only_maximum_time_step"], 20.0)
         self.assertEqual(
             profile["minimum_tracked_boundary_flow_fraction"], 0.001
@@ -39,6 +41,17 @@ class OpenFoamProfilePolicyTest(unittest.TestCase):
         )
         self.assertEqual(solver["parallel_processes"], 4)
 
+    def test_updated_lab_export_uses_only_the_benchmarked_thermal_override(self):
+        solver = self.model(
+            "new_model_updated_openfoam_export_test.toml"
+        )["openfoam_solver"]
+        self.assertEqual(
+            solver["template"],
+            "library/openfoam_cfg/screening_foam_cfg.toml",
+        )
+        self.assertEqual(solver["thermal_only_maximum_time_step"], 20.0)
+        self.assertNotIn("airflow_maximum_time_step", solver)
+
     def test_validation_profiles_use_courant_one_refreshes(self):
         for name in ("validation_foam_cfg.toml", "indepth_foam_cfg.toml"):
             with self.subTest(name=name):
@@ -47,6 +60,20 @@ class OpenFoamProfilePolicyTest(unittest.TestCase):
                     profile["airflow_refresh_maximum_courant_number"], 1.0
                 )
                 self.assertEqual(profile["maximum_courant_number"], 1.0)
+                self.assertEqual(
+                    profile["thermal_only_pimple_outer_correctors"], 0
+                )
+
+    def test_quantitative_profiles_fail_closed_on_mesh_determinants(self):
+        for name in (
+            "default_foam_cfg.toml",
+            "validation_foam_cfg.toml",
+            "indepth_foam_cfg.toml",
+        ):
+            with self.subTest(name=name):
+                self.assertFalse(
+                    self.profile(name)["allow_determinant_warnings"]
+                )
 
     def test_validation_uses_matched_refresh_timestep(self):
         self.assertEqual(
@@ -114,6 +141,7 @@ class OpenFoamProfilePolicyTest(unittest.TestCase):
         self.assertEqual(profile["parallel_processes"], 2)
         self.assertEqual(profile["pimple_outer_correctors"], 3)
         self.assertEqual(profile["pimple_pressure_correctors"], 2)
+        self.assertEqual(profile["thermal_only_pimple_outer_correctors"], 0)
         self.assertEqual(profile["airflow_refresh_duration"], 0.01)
         self.assertEqual(profile["airflow_refresh_check_interval"], 0.01)
         self.assertEqual(profile["maximum_airflow_refresh_duration"], 0.10)
@@ -125,6 +153,7 @@ class OpenFoamProfilePolicyTest(unittest.TestCase):
         self.assertEqual(profile["parallel_processes"], 4)
         self.assertEqual(profile["pimple_outer_correctors"], 3)
         self.assertEqual(profile["pimple_pressure_correctors"], 3)
+        self.assertEqual(profile["thermal_only_pimple_outer_correctors"], 0)
 
 
 if __name__ == "__main__":

@@ -3,8 +3,11 @@
 
 #include <algorithm>
 #include <cctype>
+#include <cmath>
+#include <cstdint>
 #include <filesystem>
 #include <iostream>
+#include <limits>
 #include <unordered_map>
 #include <string>
 
@@ -45,6 +48,40 @@ namespace {
         }
 
         return *value;
+    }
+
+    template<typename T>
+    T require_positive_integer(
+        const toml::node_view<const toml::node>& node,
+        const std::string& context) {
+        const auto value=node.value<std::int64_t>();
+        if(!value || *value < 1)
+            throw std::runtime_error(
+                "Missing or invalid positive integer: "+context);
+        const std::uint64_t magnitude=static_cast<std::uint64_t>(*value);
+        if(magnitude >
+           static_cast<std::uint64_t>(std::numeric_limits<T>::max()))
+            throw std::runtime_error(
+                "Positive integer is out of range: "+context);
+        return static_cast<T>(magnitude);
+    }
+
+    int optional_integer(
+        const toml::node_view<const toml::node>& node,
+        const std::string& context,
+        int fallback) {
+        if(!node) return fallback;
+        const auto value=node.value<std::int64_t>();
+        if(!value)
+            throw std::runtime_error(
+                "Invalid integer: "+context);
+        if(*value < static_cast<std::int64_t>(
+                         std::numeric_limits<int>::min()) ||
+           *value > static_cast<std::int64_t>(
+                         std::numeric_limits<int>::max()))
+            throw std::runtime_error(
+                "Integer is out of range: "+context);
+        return static_cast<int>(*value);
     }
 
     PositionInput parse_position(const toml::table& table, const std::string& context) {
@@ -371,9 +408,21 @@ namespace {
         curve.c = table["c"].value<double>().value_or(0.0);
         curve.rho_rated = table["rho_rated"].value<double>().value_or(1.2);
 
-        if (curve.a <= 0.0) {
-            throw std::runtime_error(context + ": shutoff pressure 'a' must be > 0.0");
-        }
+        if (!std::isfinite(curve.a) || curve.a <= 0.0)
+            throw std::runtime_error(
+                context + ": shutoff pressure 'a' must be finite and > 0.0");
+        if (!std::isfinite(curve.b) || !std::isfinite(curve.c))
+            throw std::runtime_error(
+                context + ": b/c coefficients must be finite");
+        if (!std::isfinite(curve.rho_rated) || curve.rho_rated <= 0.0)
+            throw std::runtime_error(
+                context + ": rho_rated must be finite and > 0.0");
+        const double zero=fan_curve_first_positive_zero(
+            curve.a,curve.b,curve.c);
+        if (!std::isfinite(zero) || zero <= 0.0)
+            throw std::runtime_error(
+                context + ": curve must cross zero pressure at a finite "
+                "positive flow");
         return curve;
     }
 
@@ -830,7 +879,9 @@ struct ModelLoader {
         fan_curve_source_path=std::filesystem::absolute(library_path);
         fan_curve_library = load_fan_curve_library(library_path);}
 
-    void load_model(const std::filesystem::path& model_path) 
+    void load_model(
+        const std::filesystem::path& model_path,
+        bool force_native_mesh = false)
     {
         try {
             model_source_path=std::filesystem::absolute(model_path);
@@ -842,18 +893,73 @@ struct ModelLoader {
             const toml::table& simulation = require_table(root["simulation"], "simulation");
             model.simulation.dt = require_value<double>(simulation["dt"], "simulation.dt");
             model.simulation.duration = require_value<double>(simulation["duration"], "simulation.duration");
-            model.simulation.output_interval = simulation["output_interval"].value<int>().value_or(1);
-            model.simulation.max_timesteps = require_value<double>(simulation["max_timesteps"], "simulation.max_timesteps");
-            model.simulation.max_updates = require_value<double>(simulation["max_updates"], "simulation.max_updates");
-            model.simulation.max_cell_count = require_value<double>(simulation["max_cell_count"], "simulation.max_cell_count");
-            model.simulation.max_megabyte_usage = require_value<double>(simulation["max_megabyte_usage"], "simulation.max_megabyte_usage");
-            model.simulation.update_flow_interval = simulation["update_flow_interval"].value<int>().value_or(1);
+            if(const auto output=simulation["native_output_directory"]) {
+                const auto value=output.value<std::string>();
+                if(!value || value->empty())
+                    throw std::runtime_error(
+                        "simulation.native_output_directory must be a "
+                        "non-empty string");
+                model.simulation.native_output_directory=*value;
+            }
+            if(const auto overwrite=simulation["native_overwrite"]) {
+                const auto value=overwrite.value<bool>();
+                if(!value)
+                    throw std::runtime_error(
+                        "simulation.native_overwrite must be a boolean");
+                model.simulation.native_overwrite=*value;
+            }
+            model.simulation.output_interval = optional_integer(
+                simulation["output_interval"],
+                "simulation.output_interval",1);
+            if(model.simulation.output_interval < 1)
+                throw std::runtime_error(
+                    "simulation.output_interval must be >= 1");
+            model.simulation.max_timesteps =
+                require_positive_integer<std::size_t>(
+                    simulation["max_timesteps"],
+                    "simulation.max_timesteps");
+            model.simulation.max_updates =
+                require_positive_integer<std::size_t>(
+                    simulation["max_updates"],
+                    "simulation.max_updates");
+            model.simulation.max_cell_count =
+                require_positive_integer<int>(
+                    simulation["max_cell_count"],
+                    "simulation.max_cell_count");
+            model.simulation.max_megabyte_usage =
+                require_positive_integer<int>(
+                    simulation["max_megabyte_usage"],
+                    "simulation.max_megabyte_usage");
+            model.simulation.update_flow_interval = optional_integer(
+                simulation["update_flow_interval"],
+                "simulation.update_flow_interval",1);
             model.simulation.advection_subcycling =
                 simulation["advection_subcycling"].value<bool>().value_or(false);
             model.simulation.advection_cfl_target =
                 simulation["advection_cfl_target"].value<double>().value_or(0.8);
-            model.simulation.max_advection_substeps =
-                simulation["max_advection_substeps"].value<int>().value_or(10000);
+            model.simulation.max_advection_substeps = optional_integer(
+                simulation["max_advection_substeps"],
+                "simulation.max_advection_substeps",10000);
+            if(!std::isfinite(model.simulation.dt) ||
+               model.simulation.dt <= 0.0)
+                throw std::runtime_error(
+                    "simulation.dt must be a positive finite number");
+            if(!std::isfinite(model.simulation.duration) ||
+               model.simulation.duration <= 0.0)
+                throw std::runtime_error(
+                    "simulation.duration must be a positive finite number");
+            if(model.simulation.update_flow_interval.value() == 0 ||
+               model.simulation.update_flow_interval.value() < -1)
+                throw std::runtime_error(
+                    "simulation.update_flow_interval must be -1 or >= 1");
+            if(!std::isfinite(model.simulation.advection_cfl_target) ||
+               model.simulation.advection_cfl_target <= 0.0 ||
+               model.simulation.advection_cfl_target > 1.0)
+                throw std::runtime_error(
+                    "simulation.advection_cfl_target must be in (0,1]");
+            if(model.simulation.max_advection_substeps < 1)
+                throw std::runtime_error(
+                    "simulation.max_advection_substeps must be >= 1");
 
             // ----------------------------------------Flow Solver-------------------------------------------
             const toml::table& flow_solver = require_table(root["flow_solver"], "simulation");
@@ -902,8 +1008,9 @@ struct ModelLoader {
                     model.multistage.coarse_duration = require_value<double>(
                         (*multistage)["coarse_duration"], "multistage.coarse_duration");
                     model.multistage.coarse_update_flow_interval =
-                        (*multistage)["coarse_update_flow_interval"]
-                            .value<int>().value_or(-1);
+                        optional_integer(
+                            (*multistage)["coarse_update_flow_interval"],
+                            "multistage.coarse_update_flow_interval",-1);
 
                     const toml::table& coarse_mesh = require_table(
                         (*multistage)["coarse_mesh"], "multistage.coarse_mesh");
@@ -914,6 +1021,18 @@ struct ModelLoader {
                         coarse_mesh["coarse_dx"], "multistage.coarse_mesh.coarse_dx");
                     model.multistage.coarse_mesh.refinement_margin =
                         coarse_mesh["refinement_margin"].value<double>().value_or(0.0);
+                    if(!std::isfinite(model.multistage.coarse_dt) ||
+                       model.multistage.coarse_dt <= 0.0 ||
+                       !std::isfinite(model.multistage.coarse_duration) ||
+                       model.multistage.coarse_duration <= 0.0)
+                        throw std::runtime_error(
+                            "multistage coarse_dt and coarse_duration must "
+                            "be positive finite numbers");
+                    if(model.multistage.coarse_update_flow_interval == 0 ||
+                       model.multistage.coarse_update_flow_interval < -1)
+                        throw std::runtime_error(
+                            "multistage.coarse_update_flow_interval must be "
+                            "-1 or >= 1");
                 }
             }
             // Optional backend. Its absence preserves every legacy TOML and
@@ -938,6 +1057,7 @@ struct ModelLoader {
                     return template_cfg
                         ? (*template_cfg)[key] : (*foam)[key];
                 };
+                cfg.enabled=value("enabled").value<bool>().value_or(false);
                 // A fidelity profile may optionally carry mesh controls in
                 // its top-level [mesh] table. Selecting such a profile is an
                 // explicit request to replace the model's base mesh settings.
@@ -950,7 +1070,9 @@ struct ModelLoader {
                     (*foam)["mesh"].as_table();
                 const toml::table* selected_mesh=
                     local_profile_mesh ? local_profile_mesh : profile_mesh;
-                if(selected_mesh) {
+                // Fidelity-profile mesh controls apply only to OpenFOAM.
+                // A forced-native run must retain the model's root [mesh].
+                if(selected_mesh && cfg.enabled && !force_native_mesh) {
                     model.mesh.adaptive=
                         (*selected_mesh)["adaptive"]
                             .value<bool>().value_or(false);
@@ -976,7 +1098,6 @@ struct ModelLoader {
                             "openfoam_solver.mesh.dz");
                     }
                 }
-                cfg.enabled=value("enabled").value<bool>().value_or(false);
                 // Output locations belong to models, not reusable fidelity
                 // profiles. Inheriting a template's case_directory made every
                 // model using that profile overwrite and/or reuse one case.
@@ -993,6 +1114,9 @@ struct ModelLoader {
                         case_root/model_path.stem().string();
                 }
                 cfg.overwrite=value("overwrite").value<bool>().value_or(false);
+                cfg.allow_determinant_warnings=
+                    value("allow_determinant_warnings")
+                        .value<bool>().value_or(false);
                 cfg.parallel_processes=value("parallel_processes")
                     .value<int>().value_or(4);
                 cfg.maximum_time_step=value("maximum_time_step")
@@ -1035,6 +1159,9 @@ struct ModelLoader {
                         .value<int>().value_or(0);
                 cfg.pimple_pressure_correctors=
                     value("pimple_pressure_correctors")
+                        .value<int>().value_or(0);
+                cfg.thermal_only_pimple_outer_correctors=
+                    value("thermal_only_pimple_outer_correctors")
                         .value<int>().value_or(0);
                 cfg.fan_curve_extension_multiplier=
                     value("fan_curve_extension_multiplier")
@@ -1454,11 +1581,43 @@ struct ModelLoader {
         RackBoundsChecker::check_all(rack, components, fans, vents);
         CollisionChecker::check_all(components, fans, vents);
 
+        const std::filesystem::path native_output_directory=
+            std::filesystem::absolute(
+                model.simulation.native_output_directory.empty()
+                    ? std::filesystem::path(".")
+                    : model.simulation.native_output_directory);
+        const std::filesystem::path native_geometry_path=
+            native_output_directory/"output.txt";
+        const std::filesystem::path native_simulation_path=
+            native_output_directory/"simulation.csv";
+        const std::filesystem::path coarse_simulation_path=
+            native_output_directory/"coarse_simulation.csv";
+        if((geometry_only || !model.openfoam_solver.enabled) &&
+           !model.simulation.native_overwrite &&
+           std::filesystem::exists(native_output_directory) &&
+           (!std::filesystem::is_directory(native_output_directory) ||
+            !std::filesystem::is_empty(native_output_directory)))
+            throw std::runtime_error(
+                "Native output directory is not empty and "
+                "simulation.native_overwrite=false: "+
+                native_output_directory.string());
+        if(geometry_only || !model.openfoam_solver.enabled)
+            std::filesystem::create_directories(native_output_directory);
+
+        Workload load(
+            model.simulation.max_timesteps,
+            model.simulation.max_updates,
+            model.simulation.max_cell_count,
+            model.simulation.max_megabyte_usage);
+
         if(geometry_only) {
             const double graph_spacing = model.mesh.adaptive
                 ? model.mesh.fine_dx : model.mesh.dx;
             Grapher grapher(
-                rack, graph_spacing, graph_spacing, graph_spacing);
+                rack,graph_spacing,graph_spacing,graph_spacing,
+                static_cast<std::size_t>(
+                    model.simulation.max_cell_count),
+                load.get_megabyte_threshold());
             for(const Component& component : components)
                 grapher.add_component(component);
             for(const Fan& fan : fans) grapher.add_fan(fan);
@@ -1466,17 +1625,13 @@ struct ModelLoader {
             grapher.stamp_components();
             grapher.stamp_fans();
             grapher.stamp_vents();
-            grapher.export_to_file("output.txt");
-            std::cout << "Geometry-only mode: wrote output.txt; mesh and "
+            grapher.export_to_file(native_geometry_path.string());
+            std::cout << "Geometry-only mode: wrote "
+                      << native_geometry_path.string() << "; mesh and "
                          "transient solvers were not run.\n";
             return;
         }
 
-        Workload load(
-            model.simulation.max_timesteps,
-            model.simulation.max_updates,
-            model.simulation.max_cell_count,
-            model.simulation.max_megabyte_usage);
         Environment env(
             model.environment.humidity,
             model.environment.elevation,
@@ -1486,21 +1641,209 @@ struct ModelLoader {
             model.environment.mu,
             model.environment.pr,
             model.environment.rho);
+
+        const auto checked_native_multiply = [](
+            std::size_t first,
+            std::size_t second,
+            const char* context) {
+            if(first != 0 &&
+               second > std::numeric_limits<std::size_t>::max()/first)
+                throw std::overflow_error(
+                    std::string("Native workload preflight overflow while ")+
+                    "computing "+context+".");
+            return first*second;
+        };
+        const auto checked_native_add = [](
+            std::size_t first,
+            std::size_t second,
+            const char* context) {
+            if(second > std::numeric_limits<std::size_t>::max()-first)
+                throw std::overflow_error(
+                    std::string("Native workload preflight overflow while ")+
+                    "computing "+context+".");
+            return first+second;
+        };
+        const auto planned_steps = [](double duration,double step) {
+            const double raw_count=duration/step;
+            const double count=std::round(raw_count);
+            const double tolerance=
+                64.0*std::numeric_limits<double>::epsilon()*
+                std::max(1.0,std::abs(raw_count));
+            if(!std::isfinite(raw_count) || raw_count < 1.0 ||
+               std::abs(raw_count-count) > tolerance)
+                throw std::runtime_error(
+                    "Native workload preflight requires duration to be an "
+                    "integer multiple of dt.");
+            if(count > static_cast<double>(
+                   std::numeric_limits<int>::max()))
+                throw std::overflow_error(
+                    "Native workload preflight timestep count exceeds "
+                    "INT_MAX.");
+            return static_cast<std::size_t>(count);
+        };
+        std::size_t fine_timestep_count=0;
+        std::size_t coarse_timestep_count=0;
+        if(!model.openfoam_solver.enabled) {
+            fine_timestep_count=planned_steps(
+                model.simulation.duration,model.simulation.dt);
+            if(static_cast<std::size_t>(
+                   model.simulation.output_interval) >
+               fine_timestep_count)
+                throw std::runtime_error(
+                    "Native workload preflight: simulation.output_interval "
+                    "exceeds the fine timestep count before mesh "
+                    "planning or allocation.");
+            if(model.multistage.enabled)
+                coarse_timestep_count=planned_steps(
+                    model.multistage.coarse_duration,
+                    model.multistage.coarse_dt);
+        }
+        // Plan the fine mesh before any coarse allocation or solve. This makes
+        // the configured workload ceiling an actual preflight: a fine stage
+        // that can never fit is rejected before spending time on warm start.
+        const std::size_t planner_axis_limit=std::min({
+            static_cast<std::size_t>(load.get_cell_count_threshold()),
+            load.get_megabyte_threshold()/
+                Mesh::planned_two_mesh_cell_bytes(1u),
+            static_cast<std::size_t>(
+                std::numeric_limits<int>::max())-1u});
+        if(planner_axis_limit < 1u)
+            throw std::runtime_error(
+                "Native workload preflight: max_megabyte_usage cannot hold "
+                "one Solver-owned Cell pair.");
+        std::optional<MeshRefinementPlan> fine_mesh_plan;
+        std::size_t fine_planned_cells=0;
+        if(model.mesh.adaptive) {
+            fine_mesh_plan=MeshRefinementPlanner::plan(
+                rack,components,fans,vents,
+                model.mesh.fine_dx,model.mesh.coarse_dx,
+                model.mesh.refinement_margin,true,planner_axis_limit);
+            fine_planned_cells=Mesh::planned_cell_count(
+                fine_mesh_plan->dxs.size(),fine_mesh_plan->dys.size(),
+                fine_mesh_plan->dzs.size());
+        } else {
+            fine_planned_cells=Mesh::planned_cell_count(
+                Mesh::planned_uniform_axis_count(
+                    rack.get_width_m(),model.mesh.dx,"x"),
+                Mesh::planned_uniform_axis_count(
+                    rack.get_depth_m(),model.mesh.dy,"y"),
+                Mesh::planned_uniform_axis_count(
+                    rack.get_height_m(),model.mesh.dz,"z"));
+        }
+
+        std::optional<MeshRefinementPlan> coarse_mesh_plan;
+        std::size_t coarse_planned_cells=0;
+        if(model.multistage.enabled && !model.openfoam_solver.enabled) {
+            const MeshInput& coarse_cfg=model.multistage.coarse_mesh;
+            coarse_mesh_plan=MeshRefinementPlanner::plan(
+                rack,components,fans,vents,
+                coarse_cfg.fine_dx,coarse_cfg.coarse_dx,
+                coarse_cfg.refinement_margin,true,planner_axis_limit);
+            coarse_planned_cells=Mesh::planned_cell_count(
+                coarse_mesh_plan->dxs.size(),coarse_mesh_plan->dys.size(),
+                coarse_mesh_plan->dzs.size());
+        }
+
+        std::size_t fine_minimum_visits=0;
+        if(!model.openfoam_solver.enabled) {
+            const std::size_t minimum_passes_per_step =
+                model.simulation.advection_subcycling ? 2u : 1u;
+            fine_minimum_visits=checked_native_multiply(
+                checked_native_multiply(
+                    fine_planned_cells,fine_timestep_count,
+                    "fine base cell updates"),
+                minimum_passes_per_step,
+                "fine minimum cell visits");
+            std::size_t total_minimum_visits=fine_minimum_visits;
+            std::size_t coarse_minimum_visits=0;
+            if(coarse_mesh_plan.has_value()) {
+                coarse_minimum_visits=checked_native_multiply(
+                    checked_native_multiply(
+                        coarse_planned_cells,coarse_timestep_count,
+                        "coarse base cell updates"),
+                    minimum_passes_per_step,
+                    "coarse minimum cell visits");
+                total_minimum_visits=checked_native_add(
+                    coarse_minimum_visits,fine_minimum_visits,
+                    "combined minimum cell visits");
+            }
+            std::cout
+                << "Native preflight: fine cells=" << fine_planned_cells
+                << ", minimum fine visits=" << fine_minimum_visits;
+            if(coarse_mesh_plan.has_value())
+                std::cout << ", coarse cells=" << coarse_planned_cells
+                          << ", minimum coarse visits="
+                          << coarse_minimum_visits;
+            std::cout << ", minimum total visits="
+                      << total_minimum_visits << "\n";
+
+            const auto validate_stage_limits = [&](const char* stage,
+                                                    std::size_t cells,
+                                                    std::size_t steps) {
+                if(cells > static_cast<std::size_t>(
+                               load.get_cell_count_threshold()))
+                    throw std::runtime_error(
+                        std::string("Native workload preflight: ")+stage+
+                        " planned cell count ("+std::to_string(cells)+
+                        ") exceeds simulation.max_cell_count ("+
+                        std::to_string(load.get_cell_count_threshold())+
+                        ") before mesh allocation.");
+                const std::size_t bytes=
+                    Mesh::planned_two_mesh_cell_bytes(cells);
+                if(bytes > load.get_megabyte_threshold())
+                    throw std::runtime_error(
+                        std::string("Native workload preflight: ")+stage+
+                        " two-mesh Cell payload ("+
+                        std::to_string(bytes)+
+                        " bytes) exceeds simulation.max_megabyte_usage ("+
+                        std::to_string(load.get_megabyte_threshold())+
+                        " bytes) before mesh allocation.");
+                if(steps > load.get_max_timesteps())
+                    throw std::runtime_error(
+                        std::string("Native workload preflight: ")+stage+
+                        " timestep count ("+std::to_string(steps)+
+                        ") exceeds simulation.max_timesteps ("+
+                        std::to_string(load.get_max_timesteps())+
+                        ") before mesh allocation.");
+            };
+            validate_stage_limits(
+                "fine",fine_planned_cells,fine_timestep_count);
+            if(coarse_mesh_plan.has_value())
+                validate_stage_limits(
+                    "coarse",coarse_planned_cells,
+                    coarse_timestep_count);
+            if(total_minimum_visits > model.simulation.max_updates)
+                throw std::runtime_error(
+                    "Native workload preflight: minimum planned cell visits ("+
+                    std::to_string(total_minimum_visits)+
+                    ") exceed simulation.max_updates ("+
+                    std::to_string(model.simulation.max_updates)+
+                    ") before mesh allocation. "+
+                    (model.simulation.advection_subcycling
+                        ? "This minimum includes one non-advection pass and "
+                          "one mandatory advection pass per step; solved-flow "
+                          "CFL may require more."
+                        : "This minimum includes one thermal pass per step; "
+                          "advection subcycling is disabled."));
+        }
         
         std::optional<Mesh> coarse_warm_start;
         std::optional<ThermalTimeEstimate> coarse_thermal_estimate;
-        std::size_t coarse_timestep_count = 0;
+        std::size_t completed_coarse_cell_visits = 0;
+        std::size_t coarse_estimated_advection_substeps =
+            model.simulation.advection_subcycling ? 1u : 0u;
         if (model.multistage.enabled && !model.openfoam_solver.enabled) {
             std::cout << "----- Coarse warm-start stage -----\n";
-            const MeshInput& coarse_cfg = model.multistage.coarse_mesh;
-            const MeshRefinementPlan coarse_plan = MeshRefinementPlanner::plan(
-                rack, components, fans, vents,
-                coarse_cfg.fine_dx, coarse_cfg.coarse_dx,
-                coarse_cfg.refinement_margin);
-
+            Workload coarse_load=load;
+            // Preserve enough of the one global max_updates budget for the
+            // fine stage's mandatory minimum before spending time on coarse
+            // CFL substeps.
+            coarse_load.set_max_cell_updates(
+                load.get_max_cell_updates()-fine_minimum_visits);
             Mesh coarse_mesh = Mesh().build_adaptive_mesh(
-                rack, coarse_plan.dxs, coarse_plan.dys, coarse_plan.dzs,
-                env, load);
+                rack, coarse_mesh_plan->dxs, coarse_mesh_plan->dys,
+                coarse_mesh_plan->dzs,
+                env, coarse_load);
 
             for (const Component& component : components)
                 coarse_mesh.stamp_component_face_walls_adaptive(component);
@@ -1511,23 +1854,33 @@ struct ModelLoader {
             for(const PorousRegion& region:porous_regions)
                 coarse_mesh.stamp_porous_region(region);
 
+            const int coarse_flow_interval =
+                model.flow_solver.enable_flow_solver
+                    ? model.multistage.coarse_update_flow_interval
+                    : -1;
+            Solver coarse_solver(
+                std::move(coarse_mesh),
+                model.multistage.coarse_dt,
+                model.multistage.coarse_duration,
+                false,
+                static_cast<int>(coarse_timestep_count),
+                coarse_flow_interval,
+                *model.flow_solver.resistivity,
+                *model.flow_solver.tolerance,
+                *model.flow_solver.max_iterations,
+                *model.flow_solver.sor_omega,
+                *model.flow_solver.max_outer_iters,
+                *model.flow_solver.flow_tolerance,
+                model.simulation.advection_subcycling,
+                model.simulation.advection_cfl_target,
+                model.simulation.max_advection_substeps,
+                coarse_simulation_path.string(),
+                model.flow_solver.pressure_method);
+
             if (model.flow_solver.enable_flow_solver) {
-                FlowSolver coarse_flow(
-                    coarse_mesh,
-                    *model.flow_solver.resistivity,
-                    *model.flow_solver.tolerance,
-                    *model.flow_solver.max_iterations,
-                    *model.flow_solver.sor_omega,
-                    *model.flow_solver.max_outer_iters,
-                    *model.flow_solver.flow_tolerance,
-                    model.flow_solver.pressure_method);
-                coarse_flow.solve();
-                const double flow_scale = std::max({
-                    std::abs(coarse_flow.total_source_m3s()),
-                    std::abs(coarse_flow.total_vent_flow_m3s()),
-                    1e-9});
+                coarse_solver.initialize_flow();
                 const double relative_imbalance =
-                    std::abs(coarse_flow.mass_imbalance_m3s()) / flow_scale;
+                    coarse_solver.relative_flow_mass_imbalance();
                 if(relative_imbalance > 0.05) {
                     throw std::runtime_error(
                         "Coarse flow solve is not usable: relative physical "
@@ -1536,22 +1889,12 @@ struct ModelLoader {
                         ". Correct fan/vent connectivity or flow settings before "
                         "running the coarse transient.");
                 }
-                if(!coarse_flow.converged()) {
-                    std::cerr
-                        << "FlowSolver: coarse nonlinear iteration did not meet "
-                        << "its relative-change target, but physical mass "
-                        << "imbalance is " << 100.0*relative_imbalance
-                        << "% (within the 5% coarse acceptance limit).\n";
-                }
             }
 
             std::cout << "\n===== Coarse-stage thermal estimate =====\n";
             coarse_thermal_estimate =
-                ThermalTimeEstimator::estimate(coarse_mesh);
+                ThermalTimeEstimator::estimate(coarse_solver.get_mesh());
             coarse_thermal_estimate->print();
-            coarse_timestep_count = static_cast<std::size_t>(std::ceil(
-                model.multistage.coarse_duration /
-                model.multistage.coarse_dt));
             std::cout << "Configured coarse dt:       "
                       << model.multistage.coarse_dt << " s\n";
             std::cout << "Configured coarse duration: "
@@ -1563,17 +1906,16 @@ struct ModelLoader {
                     ? 0.8*coarse_thermal_estimate
                         ->max_stable_dt_conduction_s
                     : coarse_thermal_estimate->recommended_dt_s;
-            if(model.simulation.advection_subcycling &&
-               std::isfinite(
-                   coarse_thermal_estimate->max_stable_dt_advection_s)) {
-                const int estimated_substeps=std::max(1,
-                    static_cast<int>(std::ceil(
-                        model.multistage.coarse_dt /
-                        (model.simulation.advection_cfl_target *
-                         coarse_thermal_estimate
-                            ->max_stable_dt_advection_s))));
-                std::cout << "Estimated coarse advection substeps: "
-                          << estimated_substeps << "\n";
+            if(model.simulation.advection_subcycling) {
+                coarse_estimated_advection_substeps =
+                    static_cast<std::size_t>(
+                        coarse_solver
+                            .planned_advection_substeps_for_current_flow());
+                std::cout << "Exact current-"
+                          << (coarse_solver.has_face_flux_solution()
+                                  ? "face-flux" : "cell-velocity")
+                          << " coarse advection substeps: "
+                          << coarse_estimated_advection_substeps << "\n";
             }
             if(std::isfinite(coarse_dt_limit) &&
                model.multistage.coarse_dt > coarse_dt_limit) {
@@ -1585,32 +1927,11 @@ struct ModelLoader {
                     " s. The coarse transient was not started.");
             }
 
-            const int coarse_flow_interval =
-                model.flow_solver.enable_flow_solver
-                    ? model.multistage.coarse_update_flow_interval
-                    : -1;
-            Solver coarse_solver(
-                coarse_mesh,
-                model.multistage.coarse_dt,
-                model.multistage.coarse_duration,
-                false,
-                std::max(1, static_cast<int>(std::ceil(
-                    model.multistage.coarse_duration /
-                    model.multistage.coarse_dt))),
-                coarse_flow_interval,
-                *model.flow_solver.resistivity,
-                *model.flow_solver.tolerance,
-                *model.flow_solver.max_iterations,
-                *model.flow_solver.sor_omega,
-                *model.flow_solver.max_outer_iters,
-                *model.flow_solver.flow_tolerance,
-                model.simulation.advection_subcycling,
-                model.simulation.advection_cfl_target,
-                model.simulation.max_advection_substeps,
-                "coarse_simulation.csv",
-                model.flow_solver.pressure_method);
             coarse_solver.solve();
-            coarse_warm_start = coarse_solver.get_mesh();
+            completed_coarse_cell_visits=
+                coarse_solver.completed_native_cell_visits();
+            coarse_warm_start.emplace(
+                coarse_solver.release_completed_mesh());
             double coarse_min_T=std::numeric_limits<double>::infinity();
             double coarse_max_T=-std::numeric_limits<double>::infinity();
             double coarse_total_watts=0.0;
@@ -1626,7 +1947,8 @@ struct ModelLoader {
                       << coarse_max_T << " C, heat-source cells = "
                       << coarse_heated_cells << ", integrated power = "
                       << coarse_total_watts << " W\n";
-            std::cout << "Coarse CSV: coarse_simulation.csv\n";
+            std::cout << "Coarse CSV: "
+                      << coarse_simulation_path.string() << "\n";
             std::cout << "----- Fine production stage -----\n";
         }
         Mesh mesh;
@@ -1634,21 +1956,39 @@ struct ModelLoader {
         double graph_dy = model.mesh.dy;
         double graph_dz = model.mesh.dz;
         if (model.mesh.adaptive) {
-            const MeshRefinementPlan plan = MeshRefinementPlanner::plan(
-                rack, components, fans, vents,
-                model.mesh.fine_dx, model.mesh.coarse_dx,
-                model.mesh.refinement_margin);
+            Workload fine_load=load;
+            if(completed_coarse_cell_visits > 0) {
+                if(completed_coarse_cell_visits >=
+                   load.get_max_cell_updates())
+                    throw std::runtime_error(
+                        "Native workload preflight: coarse stage exhausted "
+                        "simulation.max_updates before fine mesh allocation.");
+                fine_load.set_max_cell_updates(
+                    load.get_max_cell_updates()-
+                    completed_coarse_cell_visits);
+            }
             mesh = Mesh().build_adaptive_mesh(
-                rack, plan.dxs, plan.dys, plan.dzs, env, load);
+                rack, fine_mesh_plan->dxs, fine_mesh_plan->dys,
+                fine_mesh_plan->dzs, env, fine_load);
             // Grapher remains a lightweight uniform ASCII geometry preview.
             // Use the fine spacing so it does not hide resolved features.
             graph_dx = graph_dy = graph_dz = model.mesh.fine_dx;
         } else {
+            Workload fine_load=load;
+            if(completed_coarse_cell_visits > 0) {
+                if(completed_coarse_cell_visits >=
+                   load.get_max_cell_updates())
+                    throw std::runtime_error(
+                        "Native workload preflight: coarse stage exhausted "
+                        "simulation.max_updates before fine mesh allocation.");
+                fine_load.set_max_cell_updates(
+                    load.get_max_cell_updates()-
+                    completed_coarse_cell_visits);
+            }
             mesh = Mesh().build_mesh(
-                rack, model.mesh.dx, model.mesh.dy, model.mesh.dz, env, load);
+                rack, model.mesh.dx, model.mesh.dy, model.mesh.dz, env,
+                fine_load);
         }
-        Grapher grapher(rack, graph_dx, graph_dy, graph_dz);
-
         for(const Component& component : components) {
             if(model.openfoam_solver.enabled) {
                 mesh.stamp_component_for_openfoam(component);
@@ -1657,7 +1997,6 @@ struct ModelLoader {
             } else {
                 mesh.stamp_component(component);
             }
-            grapher.add_component(component);
         }
         for(const Fan& fan : fans) {
             if(model.openfoam_solver.enabled) {
@@ -1667,7 +2006,6 @@ struct ModelLoader {
             } else {
                 mesh.stamp_fan(fan);
             }
-            grapher.add_fan(fan);
         }
         for(const Vent& vent : vents) {
             if(model.openfoam_solver.enabled) {
@@ -1677,7 +2015,6 @@ struct ModelLoader {
             } else {
                 mesh.stamp_vent(vent);
             }
-            grapher.add_vent(vent);
         }
         for(const PorousRegion& region:porous_regions)
             mesh.stamp_porous_region(region,model.openfoam_solver.enabled);
@@ -1687,6 +2024,8 @@ struct ModelLoader {
             OpenFoamExportOptions options{
                 .case_directory=cfg.case_directory,
                 .overwrite=cfg.overwrite,
+                .allow_determinant_warnings=
+                    cfg.allow_determinant_warnings,
                 .parallel_processes=cfg.parallel_processes,
                 .end_time=model.simulation.duration,
                 .initial_time_step=model.simulation.dt,
@@ -1708,6 +2047,8 @@ struct ModelLoader {
                 .pimple_outer_correctors=cfg.pimple_outer_correctors,
                 .pimple_pressure_correctors=
                     cfg.pimple_pressure_correctors,
+                .thermal_only_pimple_outer_correctors=
+                    cfg.thermal_only_pimple_outer_correctors,
                 .fan_curve_extension_multiplier=
                     cfg.fan_curve_extension_multiplier,
                 .use_multirate_thermal=cfg.use_multirate_thermal,
@@ -1780,14 +2121,113 @@ struct ModelLoader {
                     "'. Set openfoam_solver.case_directory to an absolute "
                     "path without spaces (for example "
                     "\"C:/OpenFOAM/my_model\").");
-            OpenFoamExporter::export_mesh(mesh,options);
-            write_openfoam_provenance(absolute_case_directory);
+            // All deterministic exporter validation, including the
+            // overwrite=false refusal, must finish before the geometry
+            // transaction changes any existing case sidecar.
+            OpenFoamExporter::preflight(mesh,options);
             // Keep the source geometry beside the exact OpenFOAM mesh. The
             // Python visualizer uses this for component names, internal-region
             // boxes, and fan/vent arrows without relying on a stale output.txt
-            // from another model run.
-            grapher.export_to_file(
-                (absolute_case_directory/"geometry.txt").string());
+            // from another model run. Stage it before export so a predictable
+            // Grapher allocation or file-output failure cannot clear an
+            // existing case's generated solution/checkpoint state.
+            std::filesystem::create_directories(absolute_case_directory);
+            const std::filesystem::path staged_geometry_path=
+                absolute_case_directory/
+                ".thermal_sim_geometry_staging.txt";
+            const std::filesystem::path geometry_path=
+                absolute_case_directory/"geometry.txt";
+            const std::filesystem::path previous_geometry_path=
+                absolute_case_directory/
+                ".thermal_sim_geometry_previous.txt";
+            if(std::filesystem::exists(staged_geometry_path) ||
+               std::filesystem::exists(previous_geometry_path))
+                throw std::runtime_error(
+                    "OpenFOAM geometry transaction recovery file already "
+                    "exists. Inspect and resolve '"+
+                    staged_geometry_path.string()+"' or '"+
+                    previous_geometry_path.string()+
+                    "' before retrying; no case state was cleared.");
+            try {
+                Grapher grapher(
+                    rack,graph_dx,graph_dy,graph_dz,
+                    static_cast<std::size_t>(
+                        model.simulation.max_cell_count),
+                    load.get_megabyte_threshold());
+                for(const Component& component : components)
+                    grapher.add_component(component);
+                for(const Fan& fan : fans)
+                    grapher.add_fan(fan);
+                for(const Vent& vent : vents)
+                    grapher.add_vent(vent);
+                grapher.export_to_file(staged_geometry_path.string());
+            } catch(...) {
+                std::error_code cleanup_error;
+                std::filesystem::remove(staged_geometry_path,cleanup_error);
+                throw;
+            }
+
+            const bool had_previous_geometry=
+                std::filesystem::exists(geometry_path);
+            if(had_previous_geometry &&
+               !std::filesystem::is_regular_file(geometry_path))
+                throw std::runtime_error(
+                    "OpenFOAM geometry target is not a regular file: '"+
+                    geometry_path.string()+
+                    "'. The staged geometry was preserved and no case state "
+                    "was cleared.");
+            if(had_previous_geometry) {
+                std::error_code backup_error;
+                std::filesystem::rename(
+                    geometry_path,previous_geometry_path,backup_error);
+                if(backup_error)
+                    throw std::runtime_error(
+                        "Unable to back up existing OpenFOAM geometry before "
+                        "case export: "+backup_error.message()+
+                        ". The staged geometry was preserved and no case "
+                        "state was cleared.");
+            }
+            std::error_code install_error;
+            std::filesystem::rename(
+                staged_geometry_path,geometry_path,install_error);
+            if(install_error) {
+                std::string recovery_message;
+                if(had_previous_geometry) {
+                    std::error_code restore_error;
+                    std::filesystem::rename(
+                        previous_geometry_path,geometry_path,restore_error);
+                    recovery_message=restore_error
+                        ? " Automatic restoration also failed: "+
+                          restore_error.message()+
+                          "; the backup and staged files were preserved."
+                        : " The previous geometry was restored and the staged "
+                          "file was preserved.";
+                } else {
+                    recovery_message=" The staged file was preserved.";
+                }
+                throw std::runtime_error(
+                    "Unable to install staged OpenFOAM geometry before case "
+                    "export: "+install_error.message()+"."+
+                    recovery_message+" No case state was cleared.");
+            }
+
+            // Geometry is now committed before export. If the exporter or
+            // provenance writer fails after clearing generated state, leave
+            // both the matching new geometry and any prior backup for manual
+            // recovery instead of deleting the only valid sidecar.
+            OpenFoamExporter::export_mesh(mesh,options);
+            write_openfoam_provenance(absolute_case_directory);
+            if(had_previous_geometry) {
+                std::error_code cleanup_error;
+                std::filesystem::remove(
+                    previous_geometry_path,cleanup_error);
+                if(cleanup_error)
+                    std::cerr
+                        << "Warning: OpenFOAM export succeeded, but prior "
+                        << "geometry backup could not be removed: "
+                        << previous_geometry_path << " ("
+                        << cleanup_error.message() << ").\n";
+            }
             std::string launch_directory=absolute_case_directory.string();
 #ifdef _WIN32
             if(launch_directory.size()>=3 &&
@@ -2251,30 +2691,56 @@ struct ModelLoader {
                       << wall_face_transfers << " wall-face, "
                       << ambient_fallbacks << " ambient fallbacks.\n";
         }
-        grapher.stamp_components();
-        grapher.stamp_fans();
-        grapher.stamp_vents();
-        grapher.export_to_file("output.txt");
-        if(model.flow_solver.enable_flow_solver) {
-            FlowSolver flow_solver(mesh, *model.flow_solver.resistivity, *model.flow_solver.tolerance, *model.flow_solver.max_iterations, 
-                                *model.flow_solver.sor_omega, *model.flow_solver.max_outer_iters, *model.flow_solver.flow_tolerance,
-                                model.flow_solver.pressure_method);
-            flow_solver.solve(); // pre populate all velocity cells
+        // Temperature transfer is complete. Release the retained coarse Cell
+        // payload before the fine Solver creates its second working mesh.
+        coarse_warm_start.reset();
+        // The uniform ASCII preview owns three full-domain bitmaps. Keep that
+        // payload out of both the retained coarse-mesh lifetime above and the
+        // Solver's two-mesh lifetime below.
+        {
+            Grapher grapher(
+                rack,graph_dx,graph_dy,graph_dz,
+                static_cast<std::size_t>(
+                    model.simulation.max_cell_count),
+                load.get_megabyte_threshold());
+            for(const Component& component : components)
+                grapher.add_component(component);
+            for(const Fan& fan : fans)
+                grapher.add_fan(fan);
+            for(const Vent& vent : vents)
+                grapher.add_vent(vent);
+            grapher.stamp_components();
+            grapher.stamp_fans();
+            grapher.stamp_vents();
+            grapher.export_to_file(native_geometry_path.string());
         }
-        int update_flow_interval = model.flow_solver.enable_flow_solver
+        const int update_flow_interval = model.flow_solver.enable_flow_solver
             ? model.simulation.update_flow_interval.value_or(1)
             : -1;
 
+        Solver solver(std::move(mesh), model.simulation.dt,
+                    model.simulation.duration, false,
+                    model.simulation.output_interval,
+                    update_flow_interval,
+                    *model.flow_solver.resistivity, *model.flow_solver.tolerance,
+                    *model.flow_solver.max_iterations, *model.flow_solver.sor_omega,
+                    *model.flow_solver.max_outer_iters, *model.flow_solver.flow_tolerance,
+                    model.simulation.advection_subcycling,
+                    model.simulation.advection_cfl_target,
+                    model.simulation.max_advection_substeps,
+                    native_simulation_path.string(),
+                    model.flow_solver.pressure_method);
+        if(model.flow_solver.enable_flow_solver)
+            solver.initialize_flow();
+
         // Estimate from the fully stamped, geometry-aligned mesh. Run this
-        // after the initial flow solve so the advection limit sees populated
-        // velocities as well as the exact wall/region cell dimensions.
+        // after the Solver-owned initial flow solve so the advection limit
+        // sees populated velocities without discarding the conservative face
+        // fluxes that the transient will consume.
         std::cout << "\n===== Fine-stage thermal estimate =====\n";
         const ThermalTimeEstimate thermal_estimate =
-            ThermalTimeEstimator::estimate(mesh);
+            ThermalTimeEstimator::estimate(solver.get_mesh());
         thermal_estimate.print();
-        const std::size_t fine_timestep_count =
-            static_cast<std::size_t>(std::ceil(
-                model.simulation.duration / model.simulation.dt));
         std::cout << "Configured fine dt:         "
                   << model.simulation.dt << " s\n";
         std::cout << "Configured fine duration:   "
@@ -2285,15 +2751,17 @@ struct ModelLoader {
             model.simulation.advection_subcycling
                 ? 0.8*thermal_estimate.max_stable_dt_conduction_s
                 : thermal_estimate.recommended_dt_s;
-        if(model.simulation.advection_subcycling &&
-           std::isfinite(thermal_estimate.max_stable_dt_advection_s)) {
-            const int estimated_substeps=std::max(1,
-                static_cast<int>(std::ceil(
-                    model.simulation.dt /
-                    (model.simulation.advection_cfl_target *
-                     thermal_estimate.max_stable_dt_advection_s))));
-            std::cout << "Estimated fine advection substeps: "
-                      << estimated_substeps << "\n";
+        std::size_t fine_estimated_advection_substeps =
+            model.simulation.advection_subcycling ? 1u : 0u;
+        if(model.simulation.advection_subcycling) {
+            fine_estimated_advection_substeps =
+                static_cast<std::size_t>(
+                    solver.planned_advection_substeps_for_current_flow());
+            std::cout << "Exact current-"
+                      << (solver.has_face_flux_solution()
+                              ? "face-flux" : "cell-velocity")
+                      << " fine advection substeps: "
+                      << fine_estimated_advection_substeps << "\n";
         }
         if(std::isfinite(fine_dt_limit) &&
            model.simulation.dt > fine_dt_limit) {
@@ -2305,48 +2773,67 @@ struct ModelLoader {
         }
 
         if(coarse_thermal_estimate.has_value()) {
-            const std::size_t coarse_updates =
-                coarse_thermal_estimate->mesh_cell_count *
-                coarse_timestep_count;
-            const std::size_t fine_updates =
-                thermal_estimate.mesh_cell_count *
-                fine_timestep_count;
-            const std::size_t peak_mesh_bytes = 2u * std::max(
+            const std::size_t coarse_base_updates =
+                checked_native_multiply(
+                    coarse_thermal_estimate->mesh_cell_count,
+                    coarse_timestep_count,"coarse base cell updates");
+            const std::size_t fine_base_updates =
+                checked_native_multiply(
+                    thermal_estimate.mesh_cell_count,
+                    fine_timestep_count,"fine base cell updates");
+            const std::size_t coarse_visits =
+                completed_coarse_cell_visits;
+            const std::size_t fine_visits = checked_native_multiply(
+                fine_base_updates,
+                checked_native_add(
+                    1u,fine_estimated_advection_substeps,
+                    "fine visit factor"),
+                "projected fine cell visits");
+            const std::size_t total_visits=checked_native_add(
+                coarse_visits,fine_visits,
+                "combined current-flow cell visits");
+            const std::size_t peak_mesh_bytes = checked_native_multiply(
+                2u,std::max(
                 coarse_thermal_estimate->mesh_memory_bytes,
-                thermal_estimate.mesh_memory_bytes);
+                thermal_estimate.mesh_memory_bytes),
+                "peak two-mesh memory");
             std::cout << "\n===== Combined multistage estimate =====\n";
-            std::cout << "Coarse cell updates:        "
-                      << coarse_updates << "\n";
-            std::cout << "Fine cell updates:          "
-                      << fine_updates << "\n";
-            std::cout << "Total cell updates:         "
-                      << coarse_updates + fine_updates << "\n";
-            std::cout << "Approx. peak two-mesh memory: "
+            std::cout << "Coarse base cell updates:   "
+                      << coarse_base_updates << "\n";
+            std::cout << "Fine base cell updates:     "
+                      << fine_base_updates << "\n";
+            std::cout << "Completed coarse cell visits: "
+                      << coarse_visits << "\n";
+            std::cout << "Projected fine cell visits at current flow: "
+                      << fine_visits << "\n";
+            std::cout << "Projected total cell visits at current flow: "
+                      << total_visits << "\n";
+            std::cout << "Planned peak live Cell payload: "
                       << peak_mesh_bytes << " bytes ("
                       << peak_mesh_bytes/(1024.0*1024.0)
                       << " MiB)\n";
             std::cout << "========================================\n";
+            if(total_visits > load.get_max_cell_updates())
+                throw std::runtime_error(
+                    "Native workload preflight: completed coarse plus "
+                    "current-flow projected fine cell visits ("+
+                    std::to_string(total_visits)+
+                    ") exceed simulation.max_updates ("+
+                    std::to_string(load.get_max_cell_updates())+
+                    "); fine thermal advancement was refused.");
         }
 
-        Solver solver(mesh, model.simulation.dt, model.simulation.duration, false,
-                    model.simulation.output_interval,
-                    update_flow_interval,
-                    *model.flow_solver.resistivity, *model.flow_solver.tolerance,
-                    *model.flow_solver.max_iterations, *model.flow_solver.sor_omega,
-                    *model.flow_solver.max_outer_iters, *model.flow_solver.flow_tolerance,
-                    model.simulation.advection_subcycling,
-                    model.simulation.advection_cfl_target,
-                    model.simulation.max_advection_substeps,
-                    "simulation.csv",
-                    model.flow_solver.pressure_method);
-
-
-        SimulationLogger logger(config);
-        logger.initialize(mesh);
+        LoggingConfig native_logging_config=config;
+        if(native_logging_config.output_directory.is_relative())
+            native_logging_config.output_directory=
+                native_output_directory/
+                native_logging_config.output_directory;
+        SimulationLogger logger(std::move(native_logging_config));
+        logger.initialize(solver.get_mesh());
         solver.set_logger(logger);
         solver.solve();
 
-        mesh.check_stamps();
+        solver.get_mesh().check_stamps();
     }
 };
 

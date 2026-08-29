@@ -173,28 +173,63 @@ public:
         validate_widths(dxs, "x");
         validate_widths(dys, "y");
         validate_widths(dzs, "z");
-        cells.resize(
-            static_cast<size_t>(nx) *
-            static_cast<size_t>(ny) *
-            static_cast<size_t>(nz)
-        );
+        // Reject unsafe plans before allocating the Cell vector. The public
+        // build front doors perform the same check before allocating their
+        // axis vectors, while this constructor-level check protects direct
+        // callers.
+        validate_planned_mesh_density(
+            static_cast<std::size_t>(nx),
+            static_cast<std::size_t>(ny),
+            static_cast<std::size_t>(nz),load);
+        cells.resize(get_cell_count());
         build_bounds();
-        validate_mesh_density();
     }
 
-    void validate_mesh_density() {
-        int CELL_COUNT_THRESHOLD = load.get_cell_count_threshold();
-        int MEGABYTE_THRESHOLD = load.get_megabyte_threshold();// 4 Mb
-        int cell_count = get_cell_count();
-        int byte_count = get_memory_byte() * 2;// current and next mesh are both used
-        std::cout << "Mesh cell count: " << cell_count << " cells." << std::endl;
-        std::cout << "Memory from cell count: " << byte_count << " bytes." << std::endl;
-        std::string cell_count_msg = "Mesh: cell count exceeds the max of " + std::to_string(CELL_COUNT_THRESHOLD);
-        if(cell_count > CELL_COUNT_THRESHOLD) {
+    void validate_mesh_density() const {
+        validate_planned_mesh_density(
+            static_cast<std::size_t>(nx),
+            static_cast<std::size_t>(ny),
+            static_cast<std::size_t>(nz),load);
+    }
+
+    static void validate_planned_mesh_density(
+        std::size_t planned_nx,
+        std::size_t planned_ny,
+        std::size_t planned_nz,
+        const Workload& planned_load,
+        bool report=true) {
+        const std::size_t maximum_axis=
+            static_cast<std::size_t>(
+                std::numeric_limits<int>::max())-1u;
+        if(planned_nx > maximum_axis || planned_ny > maximum_axis ||
+           planned_nz > maximum_axis)
+            throw std::overflow_error(
+                "Mesh: axis cell count exceeds INT_MAX-1 before axis "
+                "allocation.");
+        const std::size_t cell_count_threshold =
+            static_cast<std::size_t>(
+                planned_load.get_cell_count_threshold());
+        const std::size_t byte_threshold =
+            planned_load.get_megabyte_threshold();
+        const std::size_t cell_count = planned_cell_count(
+            planned_nx,planned_ny,planned_nz);
+        const std::size_t byte_count = planned_two_mesh_cell_bytes(cell_count);
+        if(report) {
+            std::cout << "Mesh cell count: " << cell_count
+                      << " cells." << std::endl;
+            std::cout << "Memory from cell count: " << byte_count
+                      << " bytes." << std::endl;
+        }
+        std::string cell_count_msg = "Mesh: cell count exceeds the max of " +
+            std::to_string(cell_count_threshold) +
+            " before cell allocation";
+        if(cell_count > cell_count_threshold) {
             throw std::invalid_argument(cell_count_msg);
         }
-        std::string byte_count_msg = "Mesh: cell memory exceeds the max of " + std::to_string(MEGABYTE_THRESHOLD);
-        if(byte_count > MEGABYTE_THRESHOLD) {
+        std::string byte_count_msg =
+            "Mesh: two-mesh cell payload exceeds the max of " +
+            std::to_string(byte_threshold) + " bytes before cell allocation";
+        if(byte_count > byte_threshold) {
             throw std::invalid_argument(byte_count_msg);
         }
     }
@@ -203,15 +238,62 @@ public:
         return load;
     }
 
-    double get_memory_byte() const {
-        const std::size_t bytes = get_cell_count() * sizeof(Cell);
-        return static_cast<double>(bytes);
+    std::size_t get_memory_byte() const {
+        return checked_size_multiply(
+            get_cell_count(), sizeof(Cell), "single-mesh cell payload");
     }
 
     std::size_t get_cell_count() const {
-        return static_cast<std::size_t>(nx)
-            * static_cast<std::size_t>(ny)
-            * static_cast<std::size_t>(nz);
+        return planned_cell_count(
+            static_cast<std::size_t>(nx),
+            static_cast<std::size_t>(ny),
+            static_cast<std::size_t>(nz));
+    }
+
+    static std::size_t planned_cell_count(
+        std::size_t nx,
+        std::size_t ny,
+        std::size_t nz) {
+        return checked_size_multiply(
+            checked_size_multiply(nx,ny,"mesh x-y cell count"),
+            nz,"mesh x-y-z cell count");
+    }
+
+    static std::size_t planned_two_mesh_cell_bytes(
+        std::size_t cell_count) {
+        return checked_size_multiply(
+            planned_single_mesh_cell_bytes(cell_count),
+            2u,"two-mesh cell payload");
+    }
+
+    static std::size_t planned_single_mesh_cell_bytes(
+        std::size_t cell_count) {
+        return checked_size_multiply(
+            cell_count,sizeof(Cell),"single-mesh cell payload");
+    }
+
+    static std::size_t planned_uniform_axis_count(
+        double extent,
+        double spacing,
+        const char* axis) {
+        if(!std::isfinite(extent) || extent <= 0.0)
+            throw std::invalid_argument(
+                std::string("Mesh ")+axis+
+                " extent must be finite and positive before axis allocation.");
+        if(!std::isfinite(spacing) || spacing <= 0.0)
+            throw std::invalid_argument(
+                std::string("Mesh ")+axis+
+                " spacing must be finite and positive before axis allocation.");
+        const double raw_count=std::ceil(extent/spacing);
+        const std::size_t maximum_axis=
+            static_cast<std::size_t>(
+                std::numeric_limits<int>::max())-1u;
+        if(!std::isfinite(raw_count) || raw_count < 1.0 ||
+           raw_count > static_cast<double>(maximum_axis))
+            throw std::overflow_error(
+                std::string("Mesh ")+axis+
+                " axis count is out of range before axis allocation.");
+        return static_cast<std::size_t>(raw_count);
     }
 
     const Environment& get_env() const { return env; }
@@ -443,9 +525,20 @@ public:
     double cell_center_z(int k) const { return 0.5 * (z_bounds[k] + z_bounds[k+1]); }
 
     Mesh build_mesh(const Rack& rack, double dx, double dy, double dz, Environment env, Workload load){
-        int nx = std::ceil(rack.get_width_m()  / dx);
-        int ny = std::ceil(rack.get_depth_m()  / dy);
-        int nz = std::ceil(rack.get_height_m() / dz);
+        const std::size_t planned_nx=planned_uniform_axis_count(
+            rack.get_width_m(),dx,"x");
+        const std::size_t planned_ny=planned_uniform_axis_count(
+            rack.get_depth_m(),dy,"y");
+        const std::size_t planned_nz=planned_uniform_axis_count(
+            rack.get_height_m(),dz,"z");
+        // Enforce both configured guards before constructing even the much
+        // smaller per-axis vectors, and therefore before any narrowing to the
+        // implementation's int indices.
+        validate_planned_mesh_density(
+            planned_nx,planned_ny,planned_nz,load,false);
+        const int nx=static_cast<int>(planned_nx);
+        const int ny=static_cast<int>(planned_ny);
+        const int nz=static_cast<int>(planned_nz);
 
         // Stage 1: still uniform everywhere - every entry is the same
         // scalar. This is the seam a future refinement planner (Stage 3)
@@ -487,13 +580,29 @@ public:
     // one scalar dx/dy/dz. build_mesh() itself is completely untouched -
     // this is purely additive, a second front door into the same Mesh.
     Mesh build_adaptive_mesh(const Rack& rack,
-                              std::vector<double> dxs, std::vector<double> dys, std::vector<double> dzs,
+                              const std::vector<double>& dxs,
+                              const std::vector<double>& dys,
+                              const std::vector<double>& dzs,
                               Environment env, Workload load) {
         auto validate_extent = [](const std::vector<double>& widths,
                                   double expected,
                                   const char* axis) {
+            if(!std::isfinite(expected) || expected <= 0.0)
+                throw std::invalid_argument(
+                    std::string("Adaptive mesh ")+axis+
+                    " extent must be finite and positive.");
             double actual = 0.0;
-            for (double width : widths) actual += width;
+            for (double width : widths) {
+                if(!std::isfinite(width) || width <= 0.0)
+                    throw std::invalid_argument(
+                        std::string("Adaptive mesh ")+axis+
+                        " cell widths must be finite and positive.");
+                actual += width;
+                if(!std::isfinite(actual))
+                    throw std::overflow_error(
+                        std::string("Adaptive mesh ")+axis+
+                        " extent overflow.");
+            }
             const double tolerance = 1e-9 * std::max(1.0, std::abs(expected));
             if (std::abs(actual - expected) > tolerance) {
                 throw std::invalid_argument(
@@ -505,9 +614,11 @@ public:
         validate_extent(dys, rack.get_depth_m(), "y");
         validate_extent(dzs, rack.get_height_m(), "z");
 
-        int nx = static_cast<int>(dxs.size());
-        int ny = static_cast<int>(dys.size());
-        int nz = static_cast<int>(dzs.size());
+        validate_planned_mesh_density(
+            dxs.size(),dys.size(),dzs.size(),load,false);
+        const int nx = static_cast<int>(dxs.size());
+        const int ny = static_cast<int>(dys.size());
+        const int nz = static_cast<int>(dzs.size());
 
         Mesh mesh(nx, ny, nz, dxs, dys, dzs, env, load);
         for(int i=0;i<nx;i++)
@@ -542,6 +653,34 @@ public:
     // sibling instead when the finished mesh will be exported.
     void stamp_component_for_openfoam(const Component& component) {
         enable_openfoam_export_metadata();
+
+        // The current OpenFOAM topology creates one solid region per outer
+        // component, so it cannot preserve different material properties on
+        // nested solid heat-source regions. Make that approximation explicit
+        // instead of silently exporting the outer material everywhere.
+        const auto materially_different = [](double lhs, double rhs) {
+            const double scale = std::max({1.0, std::abs(lhs), std::abs(rhs)});
+            return std::abs(lhs-rhs) > 1e-9*scale;
+        };
+        bool heterogeneous_solid_material = false;
+        for(const InternalRegion& region : component.get_regions()) {
+            if(region.get_region_type() != RegionType::HeatSource)
+                continue;
+            if(materially_different(region.get_rho(),component.get_rho()) ||
+               materially_different(region.get_cp(),component.get_cp()) ||
+               materially_different(region.get_k(),component.get_k())) {
+                heterogeneous_solid_material = true;
+                break;
+            }
+        }
+        if(heterogeneous_solid_material) {
+            std::cerr
+                << "OpenFOAM material warning: component '"
+                << component.get_name()
+                << "' has heterogeneous internal solid materials; the "
+                   "exported solid region uses the outer component rho/cp/k "
+                   "and retains only the internal geometry and heat loads.\n";
+        }
 
         const int component_id =
             static_cast<int>(openfoam_component_regions.size());
@@ -623,9 +762,12 @@ public:
             const int si0 = std::max(0, index_x(position[0]));
             const int sj0 = std::max(0, index_y(position[1]));
             const int sk0 = std::max(0, index_z(position[2]));
-            const int si1 = std::min(nx, end_index_x(position[0] + size[0]));
-            const int sj1 = std::min(ny, end_index_y(position[1] + size[1]));
-            const int sk1 = std::min(nz, end_index_z(position[2] + size[2]));
+            int si1 = std::min(nx, end_index_x(position[0] + size[0]));
+            int sj1 = std::min(ny, end_index_y(position[1] + size[1]));
+            int sk1 = std::min(nz, end_index_z(position[2] + size[2]));
+            if(si1<=si0 && si0<std::min(i1,nx)) si1=si0+1;
+            if(sj1<=sj0 && sj0<std::min(j1,ny)) sj1=sj0+1;
+            if(sk1<=sk0 && sk0<std::min(k1,nz)) sk1=sk0+1;
             for(int i = si0; i < si1; ++i) {
                 for(int j = sj0; j < sj1; ++j) {
                     for(int k = sk0; k < sk1; ++k) {
@@ -1026,6 +1168,8 @@ public:
             if(r.get_region_type() == RegionType::Vent) {
                 auto [cx, cy, cz] = r.get_global_position();
                 auto [nnx, nny, nnz] = r.get_direction();
+                const bool is_circular = r.is_circular();
+                const double rad = r.get_diameter() / 2.0;
 
                 std::vector<std::array<int, 3>> covered;
 
@@ -1050,9 +1194,24 @@ public:
                     int i1 = static_cast<int>(std::ceil ((cx+w)/dx));
                     int j0 = static_cast<int>(std::floor((cy-h)/dy));
                     int j1 = static_cast<int>(std::ceil ((cy+h)/dy));
+                    if(is_circular) {
+                        i0 = static_cast<int>(std::floor((cx-rad)/dx));
+                        i1 = static_cast<int>(std::ceil ((cx+rad)/dx));
+                        j0 = static_cast<int>(std::floor((cy-rad)/dy));
+                        j1 = static_cast<int>(std::ceil ((cy+rad)/dy));
+                    }
                     for(int i = i0; i < i1; ++i) {
                         for(int j = j0; j < j1; ++j) {
-                            stamp_cell(i, j, k, {false, false, true});
+                            if(!is_circular) {
+                                stamp_cell(i, j, k, {false, false, true});
+                            } else {
+                                const double xc = (i+0.5)*dx;
+                                const double yc = (j+0.5)*dy;
+                                const double dist2 =
+                                    (xc-cx)*(xc-cx) + (yc-cy)*(yc-cy);
+                                if(dist2 <= rad*rad)
+                                    stamp_cell(i, j, k, {false, false, true});
+                            }
                         }
                     }
                 }
@@ -1065,9 +1224,24 @@ public:
                     int i1 = static_cast<int>(std::ceil ((cx+w)/dx));
                     int j0 = static_cast<int>(std::floor((cz-h)/dz));
                     int j1 = static_cast<int>(std::ceil ((cz+h)/dz));
+                    if(is_circular) {
+                        i0 = static_cast<int>(std::floor((cx-rad)/dx));
+                        i1 = static_cast<int>(std::ceil ((cx+rad)/dx));
+                        j0 = static_cast<int>(std::floor((cz-rad)/dz));
+                        j1 = static_cast<int>(std::ceil ((cz+rad)/dz));
+                    }
                     for(int i = i0; i < i1; ++i) {
                         for(int j = j0; j < j1; ++j) {
-                            stamp_cell(i, k, j, {false, true, false});
+                            if(!is_circular) {
+                                stamp_cell(i, k, j, {false, true, false});
+                            } else {
+                                const double xc = (i+0.5)*dx;
+                                const double zc = (j+0.5)*dz;
+                                const double dist2 =
+                                    (xc-cx)*(xc-cx) + (zc-cz)*(zc-cz);
+                                if(dist2 <= rad*rad)
+                                    stamp_cell(i, k, j, {false, true, false});
+                            }
                         }
                     }
                 }
@@ -1080,16 +1254,37 @@ public:
                     int i1 = static_cast<int>(std::ceil ((cy+w)/dy));
                     int j0 = static_cast<int>(std::floor((cz-h)/dz));
                     int j1 = static_cast<int>(std::ceil ((cz+h)/dz));
+                    if(is_circular) {
+                        i0 = static_cast<int>(std::floor((cy-rad)/dy));
+                        i1 = static_cast<int>(std::ceil ((cy+rad)/dy));
+                        j0 = static_cast<int>(std::floor((cz-rad)/dz));
+                        j1 = static_cast<int>(std::ceil ((cz+rad)/dz));
+                    }
                     for(int i = i0; i < i1; ++i) {
                         for(int j = j0; j < j1; ++j) {
-                            stamp_cell(k, i, j, {true, false, false});
+                            if(!is_circular) {
+                                stamp_cell(k, i, j, {true, false, false});
+                            } else {
+                                const double yc = (i+0.5)*dy;
+                                const double zc = (j+0.5)*dz;
+                                const double dist2 =
+                                    (yc-cy)*(yc-cy) + (zc-cz)*(zc-cz);
+                                if(dist2 <= rad*rad)
+                                    stamp_cell(k, i, j, {true, false, false});
+                            }
                         }
                     }
                 }
                 // apply vent conductance
                 double C_total = r.get_cd() * r.free_area();
-                double C_per_cell = covered.empty() ? 0.0 : C_total / covered.size();
-                for(auto& [i, j, k] : covered) {
+                const std::vector<double> weights = opening_area_weights(
+                    covered, r.get_direction(), r.get_name(),
+                    r.is_circular(), r.get_diameter());
+                for(std::size_t covered_index = 0;
+                    covered_index < covered.size(); ++covered_index) {
+                    auto [i, j, k] = covered[covered_index];
+                    const double C_per_cell =
+                        C_total * weights[covered_index];
                     Cell& cell = at(i, j, k);
                     // Overlap already validated at the geometry level.
                     cell.set_T(env.get_T_ambient());
@@ -1232,11 +1427,17 @@ public:
                 }
                 // apply init velocities
                 double Q_total = r.flow_m3s();
-                double Q_per_cell = covered.empty() ? 0.0 : Q_total / covered.size();
                 const int sx = nnx > 0.0 ? 1 : (nnx < 0.0 ? -1 : 0);
                 const int sy = nny > 0.0 ? 1 : (nny < 0.0 ? -1 : 0);
                 const int sz = nnz > 0.0 ? 1 : (nnz < 0.0 ? -1 : 0);
-                for (auto& [i, j, k] : covered) {
+                const std::vector<double> weights = opening_area_weights(
+                    covered, {nnx, nny, nnz}, r.get_name(),
+                    r.is_circular(), r.get_diameter());
+                for(std::size_t covered_index = 0;
+                    covered_index < covered.size(); ++covered_index) {
+                    auto [i, j, k] = covered[covered_index];
+                    const double weight = weights[covered_index];
+                    const double Q_per_cell = Q_total * weight;
                     Cell& cell = at(i, j, k);
                     cell.set_T(env.get_T_ambient());
                     cell.set_rho(env.get_rho());
@@ -1261,11 +1462,16 @@ public:
                                 "' has no fluid cell immediately upstream. "
                                 "Add an internal air region that reaches the fan face.");
                         }
+                        const ParallelFanCurve cell_curve = r.has_curve()
+                            ? scale_parallel_fan_curve(
+                                  r.get_curve_a(), r.get_curve_b(),
+                                  r.get_curve_c(), weight, r.get_name())
+                            : ParallelFanCurve{};
                         internal_fans.push_back(
                             {upstream, downstream, Q_per_cell, {nnx, nny, nnz},
-                             r.get_curve_a(),
-                             r.get_curve_b() * covered.size(),
-                             r.get_curve_c() * covered.size() * covered.size(),
+                             cell_curve.a,
+                             cell_curve.b,
+                             cell_curve.c,
                              r.get_fan_rho_rated(),
                              Q_per_cell});
                     }
@@ -1355,9 +1561,20 @@ public:
                 const int hs_i0 = std::max(hs_mx, mx);
                 const int hs_j0 = std::max(hs_my, my);
                 const int hs_k0 = std::max(hs_mz, mz);
-                const int hs_i1 = std::min({hs_mx1, mx1, nx});
-                const int hs_j1 = std::min({hs_my1, my1, ny});
-                const int hs_k1 = std::min({hs_mz1, mz1, nz});
+                int hs_i1 = std::min({hs_mx1, mx1, nx});
+                int hs_j1 = std::min({hs_my1, my1, ny});
+                int hs_k1 = std::min({hs_mz1, mz1, nz});
+
+                // Feature-cut snapping can map both faces of a positive-volume
+                // thin source to one realized boundary. Retain at least one
+                // in-component cell per axis and conserve the requested watts
+                // over that effective coarse-grid volume.
+                if(hs_i1<=hs_i0 && hs_i0<std::min(mx1,nx))
+                    hs_i1=hs_i0+1;
+                if(hs_j1<=hs_j0 && hs_j0<std::min(my1,ny))
+                    hs_j1=hs_j0+1;
+                if(hs_k1<=hs_k0 && hs_k0<std::min(mz1,nz))
+                    hs_k1=hs_k0+1;
 
                 // Conserve the requested total power after discretization:
                 // sum(qdot * cell.volume()) over all stamped cells == region
@@ -1400,6 +1617,8 @@ public:
             if(r.get_region_type() == RegionType::Vent) {
                 auto [cx, cy, cz] = r.get_global_position();
                 auto [nnx, nny, nnz] = r.get_direction();
+                const bool is_circular = r.is_circular();
+                const double rad = r.get_diameter() / 2.0;
 
                 std::vector<std::array<int, 3>> covered;
 
@@ -1424,9 +1643,24 @@ public:
                     int i1 = end_index_x(cx+w);
                     int j0 = index_y(cy-h);
                     int j1 = end_index_y(cy+h);
+                    if(is_circular) {
+                        i0 = index_x(cx-rad);
+                        i1 = end_index_x(cx+rad);
+                        j0 = index_y(cy-rad);
+                        j1 = end_index_y(cy+rad);
+                    }
                     for(int i = i0; i < i1; ++i) {
                         for(int j = j0; j < j1; ++j) {
-                            stamp_cell(i, j, k, {false, false, true});
+                            if(!is_circular) {
+                                stamp_cell(i, j, k, {false, false, true});
+                            } else {
+                                const double xc = cell_center_x(i);
+                                const double yc = cell_center_y(j);
+                                const double dist2 =
+                                    (xc-cx)*(xc-cx) + (yc-cy)*(yc-cy);
+                                if(dist2 <= rad*rad)
+                                    stamp_cell(i, j, k, {false, false, true});
+                            }
                         }
                     }
                 }
@@ -1439,9 +1673,24 @@ public:
                     int i1 = end_index_x(cx+w);
                     int j0 = index_z(cz-h);
                     int j1 = end_index_z(cz+h);
+                    if(is_circular) {
+                        i0 = index_x(cx-rad);
+                        i1 = end_index_x(cx+rad);
+                        j0 = index_z(cz-rad);
+                        j1 = end_index_z(cz+rad);
+                    }
                     for(int i = i0; i < i1; ++i) {
                         for(int j = j0; j < j1; ++j) {
-                            stamp_cell(i, k, j, {false, true, false});
+                            if(!is_circular) {
+                                stamp_cell(i, k, j, {false, true, false});
+                            } else {
+                                const double xc = cell_center_x(i);
+                                const double zc = cell_center_z(j);
+                                const double dist2 =
+                                    (xc-cx)*(xc-cx) + (zc-cz)*(zc-cz);
+                                if(dist2 <= rad*rad)
+                                    stamp_cell(i, k, j, {false, true, false});
+                            }
                         }
                     }
                 }
@@ -1454,17 +1703,39 @@ public:
                     int i1 = end_index_y(cy+w);
                     int j0 = index_z(cz-h);
                     int j1 = end_index_z(cz+h);
+                    if(is_circular) {
+                        i0 = index_y(cy-rad);
+                        i1 = end_index_y(cy+rad);
+                        j0 = index_z(cz-rad);
+                        j1 = end_index_z(cz+rad);
+                    }
                     for(int i = i0; i < i1; ++i) {
                         for(int j = j0; j < j1; ++j) {
-                            stamp_cell(k, i, j, {true, false, false});
+                            if(!is_circular) {
+                                stamp_cell(k, i, j, {true, false, false});
+                            } else {
+                                const double yc = cell_center_y(i);
+                                const double zc = cell_center_z(j);
+                                const double dist2 =
+                                    (yc-cy)*(yc-cy) + (zc-cz)*(zc-cz);
+                                if(dist2 <= rad*rad)
+                                    stamp_cell(k, i, j, {true, false, false});
+                            }
                         }
                     }
                 }
                 // apply vent conductance
                 double C_total = r.get_cd() * r.free_area();
-                double C_per_cell = covered.empty() ? 0.0 : C_total / covered.size();
-                for(auto& [i, j, k] : covered) {
+                const std::vector<double> weights = opening_area_weights(
+                    covered, r.get_direction(), r.get_name(),
+                    r.is_circular(), r.get_diameter());
+                for(std::size_t covered_index = 0;
+                    covered_index < covered.size(); ++covered_index) {
+                    auto [i, j, k] = covered[covered_index];
+                    const double C_per_cell =
+                        C_total * weights[covered_index];
                     Cell& cell = at(i, j, k);
+                    const bool opening_cell_was_fluid = cell.is_fluid();
                     // Overlap already validated at the geometry level.
                     cell.set_T(env.get_T_ambient());
                     cell.set_rho(env.get_rho());
@@ -1497,14 +1768,39 @@ public:
                                 vent_center[normal_axis]
                             ? 1 : -1;
                     int cursor[3]{i,j,k};
-                    while(true) {
+                    bool reaches_fluid = opening_cell_was_fluid;
+                    std::vector<std::array<int,3>> tunnel_cells;
+                    while(!reaches_fluid) {
                         cursor[normal_axis] += inward_step;
                         if(cursor[0] < mx || cursor[0] >= mx1 ||
                            cursor[1] < my || cursor[1] >= my1 ||
                            cursor[2] < mz || cursor[2] >= mz1)
                             break;
-                        Cell& wall_cell=at(cursor[0],cursor[1],cursor[2]);
-                        if(wall_cell.is_fluid()) break;
+                        const Cell& candidate =
+                            at(cursor[0],cursor[1],cursor[2]);
+                        if(candidate.is_fluid()) {
+                            reaches_fluid = true;
+                            break;
+                        }
+                        tunnel_cells.push_back(
+                            {cursor[0],cursor[1],cursor[2]});
+                    }
+                    if(!reaches_fluid) {
+                        throw std::runtime_error(
+                            "Component '" + c.get_name() +
+                            "' internal vent '" + r.get_name() +
+                            "' has no fluid path from stamped cell (" +
+                            std::to_string(i) + ", " + std::to_string(j) +
+                            ", " + std::to_string(k) + ") at center (" +
+                            std::to_string(cell_center_x(i)) + ", " +
+                            std::to_string(cell_center_y(j)) + ", " +
+                            std::to_string(cell_center_z(k)) +
+                            ") m; refusing to carve through the full "
+                            "component depth.");
+                    }
+                    for(const auto& tunnel_cell : tunnel_cells) {
+                        Cell& wall_cell = at(
+                            tunnel_cell[0], tunnel_cell[1], tunnel_cell[2]);
                         wall_cell.set_T(env.get_T_ambient());
                         wall_cell.set_rho(env.get_rho());
                         wall_cell.set_cp(env.get_cp());
@@ -1645,11 +1941,17 @@ public:
                 }
                 // apply init velocities
                 double Q_total = r.flow_m3s();
-                double Q_per_cell = covered.empty() ? 0.0 : Q_total / covered.size();
                 const int sx = nnx > 0.0 ? 1 : (nnx < 0.0 ? -1 : 0);
                 const int sy = nny > 0.0 ? 1 : (nny < 0.0 ? -1 : 0);
                 const int sz = nnz > 0.0 ? 1 : (nnz < 0.0 ? -1 : 0);
-                for (auto& [i, j, k] : covered) {
+                const std::vector<double> weights = opening_area_weights(
+                    covered, {nnx, nny, nnz}, r.get_name(),
+                    r.is_circular(), r.get_diameter());
+                for(std::size_t covered_index = 0;
+                    covered_index < covered.size(); ++covered_index) {
+                    auto [i, j, k] = covered[covered_index];
+                    const double weight = weights[covered_index];
+                    const double Q_per_cell = Q_total * weight;
                     Cell& cell = at(i, j, k);
                     // A component-owned fan is an internal transfer device,
                     // not an exchange with ambient. The fan cell represents
@@ -1690,11 +1992,16 @@ public:
                                 ". Add an internal air region that reaches the fan face."
                             );
                         }
+                        const ParallelFanCurve cell_curve = r.has_curve()
+                            ? scale_parallel_fan_curve(
+                                  r.get_curve_a(), r.get_curve_b(),
+                                  r.get_curve_c(), weight, r.get_name())
+                            : ParallelFanCurve{};
                         internal_fans.push_back(
                             {upstream, downstream, Q_per_cell, {nnx, nny, nnz},
-                             r.get_curve_a(),
-                             r.get_curve_b() * covered.size(),
-                             r.get_curve_c() * covered.size() * covered.size(),
+                             cell_curve.a,
+                             cell_curve.b,
+                             cell_curve.c,
                              r.get_fan_rho_rated(),
                              Q_per_cell});
                     }
@@ -1714,22 +2021,46 @@ public:
             const int i0=index_x(position[0]);
             const int j0=index_y(position[1]);
             const int k0=index_z(position[2]);
-            const int i1=end_index_x(position[0]+size[0]);
-            const int j1=end_index_y(position[1]+size[1]);
-            const int k1=end_index_z(position[2]+size[2]);
+            int i1=end_index_x(position[0]+size[0]);
+            int j1=end_index_y(position[1]+size[1]);
+            int k1=end_index_z(position[2]+size[2]);
+            if(i1<=i0 && i0<nx) i1=i0+1;
+            if(j1<=j0 && j0<ny) j1=j0+1;
+            if(k1<=k0 && k0<nz) k1=k0+1;
             double selected_volume=0.0;
+            std::array<std::size_t,8> state_counts{};
             for(int i=i0;i<i1;++i) for(int j=j0;j<j1;++j)
-                for(int k=k0;k<k1;++k)
+                for(int k=k0;k<k1;++k) {
+                    const auto state_index=static_cast<std::size_t>(
+                        at(i,j,k).get_state());
+                    if(state_index<state_counts.size())
+                        ++state_counts[state_index];
                     if(at(i,j,k).is_solid() ==
                        (region.get_region_type()==RegionType::HeatSource))
                         selected_volume += at(i,j,k).volume();
+                }
             if(region.get_watts()>0.0 && selected_volume<=0.0) {
+                std::ostringstream states;
+                for(std::size_t state=0;state<state_counts.size();++state)
+                    if(state_counts[state]>0)
+                        states << (states.tellp()>0 ? "," : "")
+                               << state << ":" << state_counts[state];
                 throw std::runtime_error(
                     "Internal heat source '" + region.get_name() +
                     "' has no remaining " +
                     (region.get_region_type()==RegionType::HeatSource
                          ? std::string("solid") : std::string("fluid")) +
-                    " cells after fan/vent stamping.");
+                    " cells after fan/vent stamping; bounds=[(" +
+                    std::to_string(position[0]) + "," +
+                    std::to_string(position[1]) + "," +
+                    std::to_string(position[2]) + ")..(" +
+                    std::to_string(position[0]+size[0]) + "," +
+                    std::to_string(position[1]+size[1]) + "," +
+                    std::to_string(position[2]+size[2]) + ")], indices=[(" +
+                    std::to_string(i0) + "," + std::to_string(j0) + "," +
+                    std::to_string(k0) + ")..(" + std::to_string(i1) + "," +
+                    std::to_string(j1) + "," + std::to_string(k1) +
+                    ")], state_counts={" + states.str() + "}.");
             }
             const double qdot=selected_volume>0.0
                 ? region.get_watts()/selected_volume : 0.0;
@@ -1904,6 +2235,141 @@ public:
         }
     }
 
+private:
+    static std::size_t checked_size_multiply(
+        std::size_t first,
+        std::size_t second,
+        const char* context) {
+        if(first != 0 &&
+           second > std::numeric_limits<std::size_t>::max()/first) {
+            throw std::overflow_error(
+                std::string("Mesh: overflow while computing ") +
+                context + ".");
+        }
+        return first*second;
+    }
+
+    struct ParallelFanCurve {
+        double a = 0.0;
+        double b = 0.0;
+        double c = 0.0;
+    };
+
+    static ParallelFanCurve scale_parallel_fan_curve(
+        double a,
+        double b,
+        double c,
+        double flow_fraction,
+        const std::string& fan_name) {
+        if(!std::isfinite(flow_fraction) || flow_fraction <= 0.0 ||
+           flow_fraction > 1.0) {
+            throw std::runtime_error(
+                "Fan '" + fan_name +
+                "' has an invalid parallel-cell flow fraction.");
+        }
+        const double scaled_b = b / flow_fraction;
+        const double scaled_c = c / (flow_fraction * flow_fraction);
+        if(!std::isfinite(a) || !std::isfinite(b) || !std::isfinite(c) ||
+           !std::isfinite(scaled_b) || !std::isfinite(scaled_c)) {
+            throw std::runtime_error(
+                "Fan '" + fan_name +
+                "' curve cannot be represented after area-weighted "
+                "parallel-cell scaling.");
+        }
+        return {a, scaled_b, scaled_c};
+    }
+
+    std::vector<double> opening_area_weights(
+        const std::vector<std::array<int, 3>>& covered,
+        const std::array<double, 3>& direction,
+        const std::string& opening_name,
+        bool circular,
+        double diameter) const {
+        if(covered.empty()) {
+            throw std::runtime_error(
+                "Opening '" + opening_name +
+                "' selected no mesh cells.");
+        }
+        std::vector<double> areas;
+        areas.reserve(covered.size());
+        const double ax = std::abs(direction[0]);
+        const double ay = std::abs(direction[1]);
+        const double az = std::abs(direction[2]);
+        const int normal_axis =
+            ax >= ay && ax >= az ? 0 : (ay >= az ? 1 : 2);
+        const std::array<int,2> tangent_axes = normal_axis == 0
+            ? std::array<int,2>{1,2}
+            : (normal_axis == 1 ? std::array<int,2>{0,2}
+                                : std::array<int,2>{0,1});
+
+        double total_area = 0.0;
+        std::array<double,2> maximum_tangent_width{};
+        for(const auto& index : covered) {
+            const Cell& cell = at(index[0], index[1], index[2]);
+            const double area = normal_axis == 0 ? cell.area_x() :
+                (normal_axis == 1 ? cell.area_y() : cell.area_z());
+            if(!std::isfinite(area) || area <= 0.0 ||
+               !std::isfinite(total_area + area)) {
+                throw std::runtime_error(
+                    "Opening '" + opening_name +
+                    "' has an invalid stamped face area.");
+            }
+            areas.push_back(area);
+            total_area += area;
+            const auto width = [&](int axis) {
+                return axis == 0 ? cell.get_dx() :
+                    (axis == 1 ? cell.get_dy() : cell.get_dz());
+            };
+            maximum_tangent_width[0] = std::max(
+                maximum_tangent_width[0], width(tangent_axes[0]));
+            maximum_tangent_width[1] = std::max(
+                maximum_tangent_width[1], width(tangent_axes[1]));
+        }
+        if(!std::isfinite(total_area) || total_area <= 0.0) {
+            throw std::runtime_error(
+                "Opening '" + opening_name +
+                "' has no finite positive stamped face area.");
+        }
+        if(circular) {
+            constexpr double pi = 3.14159265358979323846;
+            const double exact_area = pi * diameter * diameter / 4.0;
+            const double cells_across_0 =
+                diameter / maximum_tangent_width[0];
+            const double cells_across_1 =
+                diameter / maximum_tangent_width[1];
+            const double relative_area_error =
+                std::abs(total_area / exact_area - 1.0);
+            if(!std::isfinite(diameter) || diameter <= 0.0 ||
+               !std::isfinite(exact_area) || exact_area <= 0.0 ||
+               !std::isfinite(cells_across_0) ||
+               !std::isfinite(cells_across_1) ||
+               cells_across_0 < 4.0 - 1.0e-12 ||
+               cells_across_1 < 4.0 - 1.0e-12 ||
+               !std::isfinite(relative_area_error) ||
+               relative_area_error > 0.05 + 1.0e-12) {
+                throw std::runtime_error(
+                    "Opening '" + opening_name +
+                    "' circular footprint is under-resolved: diameter=" +
+                    std::to_string(diameter) +
+                    " m, maximum tangent widths=(" +
+                    std::to_string(maximum_tangent_width[0]) + ", " +
+                    std::to_string(maximum_tangent_width[1]) +
+                    ") m, cells across=(" +
+                    std::to_string(cells_across_0) + ", " +
+                    std::to_string(cells_across_1) +
+                    "), selected area=" + std::to_string(total_area) +
+                    " m^2, analytic area=" + std::to_string(exact_area) +
+                    " m^2, relative area error=" +
+                    std::to_string(relative_area_error) +
+                    "; require at least 4 cells across each tangent and "
+                    "no more than 5% absolute area error.");
+            }
+        }
+        for(double& area : areas) area /= total_area;
+        return areas;
+    }
+
+public:
     void stamp_fan(const Fan& f) {
         if (!is_uniform()) { stamp_fan_adaptive(f); return; }
 
@@ -2052,10 +2518,16 @@ public:
 
         // apply init velocites
         double Q_total = f.flow_m3s();
-        double Q_per_cell = covered.empty() ? 0.0 : Q_total / covered.size();
         double sign = (f.get_type_t() == FlowType::Intake) ? +1.0 : -1.0;
-        double area_per_cell = covered.empty() ? 0.0 : f.area() / covered.size();
-        for (auto& [i, j,k ] : covered) {
+        const std::vector<double> weights = opening_area_weights(
+            covered, f.get_velocity_dir(), f.get_name(),
+            f.is_circular(), f.get_diameter());
+        for (std::size_t covered_index = 0;
+             covered_index < covered.size(); ++covered_index) {
+            auto [i, j, k] = covered[covered_index];
+            const double weight = weights[covered_index];
+            const double Q_per_cell = Q_total * weight;
+            const double area_per_cell = f.area() * weight;
             Cell& cell = at(i, j, k);
             // Overlap already validated at the geometry level.
             cell.set_state(
@@ -2067,10 +2539,13 @@ public:
             cell.set_vy(f.velocity_y());
             cell.set_vz(f.velocity_z());
             if (f.has_curve()) {
+                const ParallelFanCurve cell_curve = scale_parallel_fan_curve(
+                    f.curve_a, f.curve_b, f.curve_c, weight, f.get_name());
                 // Curve-driven fan: FlowSolver derives flow from the network's
                 // backpressure each outer iteration. Do NOT set flow_source --
                 // that path is mutually exclusive with the curve network element.
-                cell.set_fan_curve(f.curve_a, f.curve_b, f.curve_c, f.rho_rated);
+                cell.set_fan_curve(
+                    cell_curve.a, cell_curve.b, cell_curve.c, f.rho_rated);
                 cell.set_fan_Q_ref(Q_per_cell);   // free-air CFM as initial guess
                 cell.set_fan_dir(f.get_velocity_dir()[0], f.get_velocity_dir()[1], f.get_velocity_dir()[2]);
                 cell.set_fan_area(area_per_cell);
@@ -2223,10 +2698,16 @@ public:
 
         // apply init velocites
         double Q_total = f.flow_m3s();
-        double Q_per_cell = covered.empty() ? 0.0 : Q_total / covered.size();
         double sign = (f.get_type_t() == FlowType::Intake) ? +1.0 : -1.0;
-        double area_per_cell = covered.empty() ? 0.0 : f.area() / covered.size();
-        for (auto& [i, j,k ] : covered) {
+        const std::vector<double> weights = opening_area_weights(
+            covered, f.get_velocity_dir(), f.get_name(),
+            f.is_circular(), f.get_diameter());
+        for (std::size_t covered_index = 0;
+             covered_index < covered.size(); ++covered_index) {
+            auto [i, j, k] = covered[covered_index];
+            const double weight = weights[covered_index];
+            const double Q_per_cell = Q_total * weight;
+            const double area_per_cell = f.area() * weight;
             Cell& cell = at(i, j, k);
             // Overlap already validated at the geometry level.
             cell.set_state(
@@ -2238,7 +2719,10 @@ public:
             cell.set_vy(f.velocity_y());
             cell.set_vz(f.velocity_z());
             if (f.has_curve()) {
-                cell.set_fan_curve(f.curve_a, f.curve_b, f.curve_c, f.rho_rated);
+                const ParallelFanCurve cell_curve = scale_parallel_fan_curve(
+                    f.curve_a, f.curve_b, f.curve_c, weight, f.get_name());
+                cell.set_fan_curve(
+                    cell_curve.a, cell_curve.b, cell_curve.c, f.rho_rated);
                 cell.set_fan_Q_ref(Q_per_cell);
                 cell.set_fan_dir(f.get_velocity_dir()[0], f.get_velocity_dir()[1], f.get_velocity_dir()[2]);
                 cell.set_fan_area(area_per_cell);
@@ -2394,8 +2878,13 @@ public:
 
         // apply vent conductance
         double C_total = v.get_cd() * v.free_area();
-        double C_per_cell = covered.empty() ? 0.0 : C_total / covered.size();
-        for(auto& [i, j, k] : covered) {
+        const std::vector<double> weights = opening_area_weights(
+            covered, v.get_direction(), v.get_name(),
+            v.is_circular(), v.get_diameter());
+        for(std::size_t covered_index = 0;
+            covered_index < covered.size(); ++covered_index) {
+            auto [i, j, k] = covered[covered_index];
+            const double C_per_cell = C_total * weights[covered_index];
             Cell& cell = at(i, j, k);
             // Overlap already validated at the geometry level.
             cell.set_state(Cell::State::Vent);
@@ -2545,8 +3034,13 @@ public:
 
         // apply vent conductance
         double C_total = v.get_cd() * v.free_area();
-        double C_per_cell = covered.empty() ? 0.0 : C_total / covered.size();
-        for(auto& [i, j, k] : covered) {
+        const std::vector<double> weights = opening_area_weights(
+            covered, v.get_direction(), v.get_name(),
+            v.is_circular(), v.get_diameter());
+        for(std::size_t covered_index = 0;
+            covered_index < covered.size(); ++covered_index) {
+            auto [i, j, k] = covered[covered_index];
+            const double C_per_cell = C_total * weights[covered_index];
             Cell& cell = at(i, j, k);
             // Overlap already validated at the geometry level.
             cell.set_state(Cell::State::Vent);
@@ -2633,7 +3127,7 @@ public:
     }
 
 private:
-    int nx, ny, nz;
+    int nx=0, ny=0, nz=0;
     // Per-axis cell widths. Right now build_mesh() always fills these with
     // nx/ny/nz identical copies of a single scalar, so behavior is byte-for-
     // byte the same as the old flat dx/dy/dz members - this is groundwork

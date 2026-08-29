@@ -1,3 +1,4 @@
+import importlib.util
 import math
 import tempfile
 import unittest
@@ -23,6 +24,8 @@ from plot.recirculation_report import (
     solver_postprocess_command,
     write_internal_device_csv,
 )
+
+NUMPY_AVAILABLE = importlib.util.find_spec("numpy") is not None
 
 
 class RecirculationReportTest(unittest.TestCase):
@@ -349,6 +352,7 @@ fluid_to_solid
             self.assertEqual(rows[0][3], "Outlet")
             self.assertAlmostEqual(rows[0][5], 306.0)
 
+    @unittest.skipUnless(NUMPY_AVAILABLE, "optional NumPy dependency unavailable")
     def test_exact_center_alignment_maps_reordered_cells(self):
         import numpy as np
 
@@ -361,6 +365,7 @@ fluid_to_solid
             np.array([10, 20, 30])[alignment], [30, 10, 20]
         )
 
+    @unittest.skipUnless(NUMPY_AVAILABLE, "optional NumPy dependency unavailable")
     def test_exact_center_alignment_rejects_mismatch_and_duplicates(self):
         import numpy as np
 

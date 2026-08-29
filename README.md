@@ -200,6 +200,72 @@ solver, exporter, loader, or plotting utilities:
 powershell -ExecutionPolicy Bypass -File .\tests\run_added_feature_tests.ps1
 ```
 
+The research-lab evidence and exact hashes are indexed in
+`validation/README.md`. The last complete runner-state harness exited zero in
+516.584 s under processor-affinity mask 3 (two logical processors) and
+BelowNormal priority. Its 333,651-byte, 4,115-line stdout log has SHA-256
+`03d781c9abe21ec3722e038672ef4c6587bed734cc896d97ddde3ed17a7bd81c`
+and ends `All added-feature tests passed.` The paired 2,946-byte stderr has 125
+lines (100 non-empty) and SHA-256
+`f4dba93c473013728126639c6b07f4c86196eeba63b61600c3abab37dc051d23`;
+it contains expected successful unittest summaries and explicit skips. The
+1,903-byte run record has SHA-256
+`246620007dff4b6f7dea50b22bcc9bc987e359aa575310134a9930da672a6c8c`.
+All invoked checks passed for that source snapshot; optional NumPy/PyVista
+comparisons and real-WSL flock integration were explicit skips rather than
+passes. The test tree now additionally includes the exact inline shelf in the
+default O2 component campaign. That later C++ change has not been compiled
+because available memory stayed below 1 GiB, so the 516.584 s run is not a
+current-test-tree pass. A separate ANSYS-Python continuation passed 77/77 core
+plot/field-comparison tests and reverified all 23 plot artifacts; runtime tests
+requiring `vtkmodules` or `imageio` remain explicit dependency gaps.
+
+The paired historical post-audit O2 campaign exited zero in 74.651 s wrapper time (74.4218 s internal)
+with all 11 canonical reusable templates passing its functional topology, flow,
+continuity, fan-domain, and short thermal gates, plus one expected pre-flow
+geometry rejection for the inactive provisional NI separator sensitivity. The
+installed 1,838,877-byte `model.exe` (SHA-256
+`335efd17d7f000e90d13b4a2594cfade4ab68bde524b2910f81c73df7b00eb12`)
+belongs to that historical post-audit source snapshot. It predates the current
+low-memory, attestation, and transactional runner-state changes and is not a
+current-source production exporter. No current-source production exporter
+binary has been built and qualified. Fan-input fidelity remains separate: the
+Dell nominal flow is about 0.912% above its provisional curve zero, the
+Thruster nominal flow about 30.77% above, and the canonical NI result retains 42 stalled
+interfaces plus a 22.7193 m/s maximum. The retained 1.600 s OpenFOAM fields
+still predate the current N5766A and Trenton repairs; the new 2026-08-26 plot
+manifest is the current geometry authority, while the 2026-08-25 plots remain
+historical.
+
+The fail-closed pre-export gate is implemented in
+`tools/openfoam_resource_gate.ps1` and covered by the last complete harness. A
+fresh goal-completion invocation found no competing CFD/MPI process and passed
+disk at 17,020,313,600 free bytes versus the 10,737,418,240-byte floor, but its
+first memory sample measured only 379,506,688 available bytes versus the
+mandatory 5,368,709,120-byte floor. It exited 21; WSL was requested but was not
+queried after the host failure, and no corrected export, mesh, build, or solve
+started. The immutable 3,426-byte evidence has SHA-256
+`0b9e7b4ad797b456b188bd88aa9ca568bc429525e3518ff3423573e189f5046a`.
+The current lab model and reusable screening thermal-only cap remain 20 s; the
+24 s measurement is retained only as a failed strict-temperature-gate
+experiment on the exact old case.
+
+The older hashed `final_runtime_hardening`, `post_audit_runtime_hardening`, and
+resource-gate artifacts, including the 397.559 s acceleration-gates and
+303.075 s resource-gate runs, remain valid only as historical evidence for
+their pinned source snapshots. The 2026-08-27 runner-state-gates regression is
+the last complete production-source software run; it predates the uncompiled
+inline-shelf/current-component test additions and is not a complete validation
+of the present test tree.
+
+Those 12 historical selected-template runs are isolated, short software-path
+microcases. The current campaign adds the inline shelf as a thirteenth selected
+component case, but its O2 compile and runtime remain pending a safe memory
+window.
+They do not exercise full-rack interaction or demonstrate OpenFOAM agreement,
+mesh/timestep independence, a thermal soak, transient first-law closure, or
+agreement with laboratory measurements.
+
 The broader legacy unit suite is built from `src/test_runner.cpp`:
 
 ```powershell
@@ -238,13 +304,36 @@ max_advection_substeps = 10000
 | `duration` | Fine production-stage duration in seconds. |
 | `output_interval` | Interval for the legacy `simulation.csv` output. |
 | `max_timesteps` | Workload safety limit. |
-| `max_updates` | Safety limit on timestep × cell work. |
+| `max_updates` | Safety limit on native cell work. With advection subcycling this counts one non-advection pass plus every advection substep, so a run with `N` substeps consumes approximately `cells × timesteps × (N + 1)` visits. |
 | `max_cell_count` | Mesh cell-count safety limit. |
 | `max_megabyte_usage` | Mesh memory safety limit. |
-| `update_flow_interval` | Re-solve flow every N thermal steps. Use `-1` to retain the initial flow field. |
+| `update_flow_interval` | Re-solve flow every N thermal steps. Use `-1` to solve once on the final `Solver`-owned mesh and retain that initial face-flux field. |
 | `advection_subcycling` | Split air advection into smaller stable substeps while keeping the configured global thermal `dt`. |
 | `advection_cfl_target` | Maximum target CFL per advection substep; must be in `(0,1]`. |
 | `max_advection_substeps` | Fail-safe against an unexpectedly enormous substep count. |
+
+`max_updates` is one cumulative native-run budget, including both coarse and
+fine stages. Before allocating either mesh, the loader computes the minimum
+possible visits (one non-advection pass and, when subcycling is enabled, one
+mandatory advection pass per global step). After airflow is available, the
+solver replaces that lower bound with the exact current face-flux substep count,
+rechecks it after each flow refresh, and refuses thermal advancement before the
+remaining budget can be exceeded. Mesh cell count and two-Mesh `Cell` payload
+are likewise checked with overflow-safe `size_t` arithmetic before allocating
+the cell vector; the payload is not a prediction of total process RSS.
+
+On the current full rack, this preflight plans 2,847,663 fine cells and 216,580
+coarse cells. At 300 steps per stage, the mandatory one non-advection plus one
+advection pass requires at least 1,838,545,800 cell visits, versus the configured
+30,000,000 limit. The production runner therefore refuses the native run before
+mesh allocation or solver construction. This is a workload result; it produces
+no full-rack native flow or temperature field.
+
+The pinned historical post-audit binary preflight reproduced those counts and
+the expected exit 1 in 0.109 s. It preserved all four root sentinels; at that
+snapshot `.thermal_sim_last_run.json` was 609 bytes with SHA-256
+`39ae95c8825c855dd03bbd233747cb95000bb49c888ca918c185b2f655ccd1e7`.
+The preflight produced no flow or temperature field.
 
 When subcycling is disabled, `dt` must satisfy advection, conduction, and
 convection stability limits. When it is enabled, only advection is subcycled;
@@ -253,7 +342,11 @@ limits.
 
 `update_flow_interval = -1` is appropriate when temperature-dependent density
 changes are not expected to change the airflow enough to justify another
-expensive pressure solve.
+expensive pressure solve. When the flow solver is enabled, it does not disable
+initial airflow: the production loader initializes the final `Solver` exactly
+once, uses that same solution for the CFL/thermal estimate, and retains its face
+fluxes for the transient. If the initial pressure or nonlinear solve fails, no
+flux field is published and thermal advancement is refused.
 
 ### 3.2 Flow solver
 
@@ -278,7 +371,7 @@ flow_tolerance = 1e-3
 | `max_iterations` | Maximum PCG or SOR iterations for each pressure solve. |
 | `sor_omega` | SOR relaxation parameter. It is accepted but not used by PCG. Must remain in `(0,2)`. |
 | `max_outer_iters` | Maximum nonlinear conductance/fan operating-point iterations. |
-| `flow_tolerance` | Relative face-flow change target for nonlinear convergence. |
+| `flow_tolerance` | Per-face mixed relative/absolute face- and fan-flow change target for nonlinear convergence. |
 
 PCG is recommended for large meshes. SOR remains useful as a simple reference
 method and for very small cases.
@@ -609,7 +702,10 @@ The implemented curve is:
 
 where pressure is Pa and flow is m³/s. `rho_rated` is the air density at which
 the manufacturer curve was measured. The solver scales pressure for the local
-density.
+density by multiplying all three pressure coefficients by
+`rho_local/rho_rated`. This leaves the zero-pressure/free-air flow root
+unchanged, while reducing available pressure and therefore reducing the
+installed operating flow against nonzero system resistance at lower density.
 
 `cfm` remains required by the parser and supplies the initial/reference flow,
 even when a curve is present.
@@ -867,6 +963,19 @@ The logger writes under its output directory, including field, summary, and
 probe CSV files. The solver also writes the legacy `simulation.csv`. A
 multistage run writes `coarse_simulation.csv` for the warm-start stage.
 
+Logger initialization validates the configuration and resolves probes but does
+not create or truncate CSV files. The legacy and structured CSV streams open
+only after flow, stability, exact-CFL, and workload preflight succeeds. A
+pre-advancement refusal therefore preserves their existing bytes. Geometry
+export has a separate lifecycle: `--geometry-only` intentionally writes
+`output.txt`, and a later solver-stage rejection must not be assumed to preserve
+every non-CSV artifact.
+
+Probe names are also validated as portable filename stems, including
+case-insensitive collision rejection, before any probe stream opens. The
+post-audit regression closes both this filename contract and the OpenFOAM
+preflight/geometry transaction contract.
+
 If the `[logger]` table is omitted, built-in logging defaults are used. To keep
 output small, include a logger table and explicitly disable unwanted streams:
 
@@ -1071,11 +1180,14 @@ once or contains detailed internal regions.
 `main.cpp` is useful for experiments that construct objects directly rather
 than loading a complete TOML model.
 
-Its current active example runs the component loader:
+Its current active path runs the component loader. The component and fan-curve
+library may be selected at runtime, so inspecting a new component does not
+require editing and recompiling `main.cpp`:
 
 ```cpp
 ComponentLoader loader;
-loader.load_component("library/components/eaton_2U_UPS.toml");
+loader.load_fan_curves(fan_curve_path);
+loader.load_component(component_path);
 loader.run();
 ```
 
@@ -1084,7 +1196,16 @@ Build and run it with:
 ```powershell
 g++ -std=c++17 -O3 -DNDEBUG -fopenmp .\main.cpp -o main.exe
 .\main.exe
+.\main.exe .\library\components\NI_PXIe_Chassis.toml
+.\main.exe .\library\components\NI_PXIe_Chassis.toml `
+  .\library\fan_curves\fan_curves.toml
 ```
+
+The defaults remain `library/components/eaton_2U_UPS.toml` and
+`library/fan_curves/fan_curves.toml`. The exporter writes `output.txt`; use
+`python .\plot\plot_component.py --save` to render the first component, or
+`python .\plot\plot_component.py --component "unique name" --save --output component.png`
+to select a component from a full rack export.
 
 To run a TOML model from `main.cpp`, replace the active loader block with:
 
@@ -1106,10 +1227,13 @@ To build a simulation entirely in C++:
 6. Stamp components, fans, and vents.
 7. Optionally run `ThermalTimeEstimator::estimate`.
 8. Construct `Solver`.
-9. Optionally attach `SimulationLogger`.
-10. Call `solver.solve()`.
+9. Initialize airflow once with `solver.initialize_flow()`, or set the final
+   constructor flag to `true`, when a native flow field is required.
+10. Optionally attach `SimulationLogger`.
+11. Call `solver.solve()`.
 
-For PCG, the final `Solver` constructor argument is `"pcg"`:
+For PCG, pass `"pcg"` as the pressure-method argument; the following final
+Boolean enables the one-time initial flow solve:
 
 ```cpp
 Solver solver(
@@ -1129,11 +1253,15 @@ Solver solver(
     0.8,                  // subcycling CFL target
     10000,                // maximum substeps
     "simulation.csv",
-    "pcg"
+    "pcg",
+    true                    // initialize flow before thermal advancement
 );
 ```
 
-The default final argument is `"sor"`, preserving older direct C++ calls.
+The pressure-method argument defaults to `"sor"`, preserving older direct C++
+calls. The final initialization flag defaults to `false`; direct callers using
+`update_flow_interval=-1` must either set it to `true` as above or explicitly
+call the idempotent `initialize_flow()` method before `solve()`.
 
 ## 8. How the implementation works
 
@@ -1226,6 +1354,26 @@ Qij = Cij(Pi - Pj)
 
 Face flows are converted into cell-centered velocity components.
 
+The conservative transport field is stored separately as signed volumetric
+face flows `qx`, `qy`, and `qz`. An internal fan suppresses the coincident
+ordinary fluid-face conductance, so the fan publishes the single physical
+interface flux rather than adding fan transport on top of a normal mesh face.
+
+Nonlinear outer iterations use relaxed candidate flows to update resistance and
+fan operating points. Once that iteration converges, the solver rebuilds the
+network from the final state, solves pressure once more, and publishes exact
+ordinary and fan face flows from the same network. Publication is refused if
+the final pressure solve fails or any fluid cell exceeds the local continuity
+tolerance; a partially converged flow field is never passed to thermal
+transport.
+
+Grounding is checked for every connected pressure component. A vent or an
+eligible boundary fan supplies an ambient pressure path. Active or source-
+bearing components without a ground fail closed, fixed internal fans require
+both sides to be grounded independently, and passive source-free sealed pockets
+receive deterministic zero-pressure gauges. This permits harmless isolated
+pockets without hiding an unsolvable active flow network.
+
 ### 8.6 Vents
 
 A vent connects the stamped fluid cells to ambient pressure. Its open area is:
@@ -1247,6 +1395,8 @@ fluid cell. An internal fixed-flow fan is a two-node element:
 - add the same flow to the downstream cell
 
 This preserves internal mass balance while enforcing the specified direction.
+The prescribed internal-fan flow is also the published interface face flux;
+the ordinary face at that plane remains suppressed.
 
 ### 8.8 Fan curves
 
@@ -1264,6 +1414,15 @@ downstream pressure nodes.
 After each pressure solve, the operating flow is updated from the new pressure
 difference. This is why the solver has nonlinear outer iterations even though
 each individual pressure system is linear.
+
+The physical positive-pressure fan domain is bounded. The interior active set
+uses the linearized curve; the lower set enforces `Q=0`, and the upper set
+enforces the first positive-pressure zero `Q=qzero`. A bounded fan contributes
+fixed flow rather than its interior tangent conductance, keeping its pressure
+equation and published flow consistent. Bound states can release back to the
+interior solution when the pressure head re-enters the curve domain. This is
+not a post-solve clamp: lower, upper, and released states must each satisfy the
+same local continuity gate.
 
 ### 8.9 SOR pressure method
 
@@ -1308,8 +1467,10 @@ Disadvantages:
 - each iteration performs several complete vector/network passes
 - fine adaptive meshes may still require hundreds or thousands of iterations
 
-The current pressure reference is held at zero. PCG checks for a singular or
-non-positive-definite system and reports likely disconnected fluid regions.
+Each independently solvable pressure component receives the grounding or gauge
+described in Section 8.5. PCG checks for a singular or non-positive-definite
+system and reports an invalid active/source-bearing disconnected region rather
+than silently anchoring it to an unrelated component.
 
 The pressure tolerance and nonlinear flow tolerance are different:
 
@@ -1318,7 +1479,8 @@ The pressure tolerance and nonlinear flow tolerance are different:
   between nonlinear outer iterations
 
 Mass balance is reported using effective fan/source flow rather than raw
-Norton source terms.
+Norton source terms. That global diagnostic supplements, but does not replace,
+the exact per-cell continuity gate used before face-flux publication.
 
 ### 8.11 Thermal conduction
 
@@ -1350,26 +1512,43 @@ correlation rather than using one constant rack-wide value.
 
 ### 8.13 Air advection
 
-Air advection uses a first-order upwind temperature gradient:
+When a solved face-flux field is available, air transport uses a conservative
+finite-volume first-order upwind enthalpy balance:
 
 ```text
-dT/dt = -vx dT/dx - vy dT/dy - vz dT/dz
+dT/dt = [sum(qin * rho*cp*Tupwind)
+         - sum(qout * rho*cp*Tcell)
+         + ambient enthalpy exchange] / (rho*cp*Vcell)
 ```
 
-The upstream neighbor is chosen separately for each velocity component. Solid
-cells are not advected. Blocked face walls prevent advection across the face.
-Intake cells are pinned to ambient temperature.
+The signed `qx`, `qy`, and `qz` value on a shared internal face is consumed by
+both adjacent cells, giving equal-and-opposite enthalpy transport for frozen
+properties. Ambient inflow uses the environment's `rho`, `cp`, and temperature;
+ambient outflow carries the cell's current enthalpy. Solid cells are not
+advected, and a nonzero published flux across a solid, rack exterior without an
+ambient-flow model, or blocked face wall is a fatal consistency error.
+
+Cell-centered velocity-gradient advection remains only as a legacy fallback
+for direct callers that provide velocity without a solved face-flux field.
+Intake-cell temperature pinning likewise applies only to that fallback. A
+normal solved-flow run represents intake temperature through the ambient
+enthalpy flux instead of overwriting the cell temperature.
 
 With subcycling enabled, each global step is split:
 
 1. Advance conduction, convection, and generation once using global `dt`.
-2. Compute global advection CFL.
+2. Compute global advection CFL from each fluid cell's actual volumetric
+   outflow divided by its volume.
 3. Choose `ceil(CFL / advection_cfl_target)` substeps.
 4. Advance only advection using the smaller substep.
 
 This is a Lie-split explicit method. It removes the need to reduce the global
 thermal timestep solely because of fast airflow, but it does not remove
-conduction or convection stability limits.
+conduction or convection stability limits. Internal face transport is
+conservative for the `rho` and `cp` frozen within one substep. Because air
+density and viscosity are refreshed after temperature updates, this property
+does not by itself establish full multistep first-law closure; a run-level
+source, boundary, and storage ledger is still required.
 
 ### 8.14 Heat generation
 
@@ -1484,14 +1663,18 @@ when advection subcycling is enabled.
 
 - This is a rack-level engineering model, not a full Navier-Stokes CFD solver.
 - Airflow is quasi-steady and network-based.
-- Cell-centered velocity is derived from face flow and is intended for thermal
-  transport, not detailed turbulence visualization.
+- Cell-centered velocity is derived from face flow and is intended for local
+  convection correlations and screening visualization, not detailed turbulence
+  interpretation. Conservative air-energy transport uses the face fluxes
+  directly.
 - PCG currently uses Jacobi preconditioning, not incomplete Cholesky or
   multigrid.
 - Coarse face walls are snapped approximations.
 - The coarse stage transfers temperature, not pressure, into the fine stage.
 - Explicit conduction and convection still restrict the global timestep.
-- First-order upwind advection is stable and robust but numerically diffusive.
+- First-order upwind face-flux advection is stable and robust but numerically
+  diffusive. Its frozen-property substep conservation is not a substitute for a
+  complete transient first-law audit.
 - Geometry and fan curves should be calibrated against measurements when
   absolute accuracy matters.
 
@@ -1538,10 +1721,26 @@ when advection subcycling is enabled.
 
 ## 12. OpenFOAM backend overview
 
-The OpenFOAM path uses the same rack, component, internal-region, material,
+The OpenFOAM path uses the same rack, component, internal-region geometry,
 heat-load, fan, vent, fan-curve, environment, and simulation-duration data as
 the native solver. It is an alternative backend selected from the model TOML;
-it does not remove or replace the native solver.
+it does not remove or replace the native solver. One material limitation is
+important: each exported component is currently one homogeneous solid solver
+region and uses the outer component's `rho`, `cp`, and `k`. Internal solid
+regions retain their geometry and watts but not distinct material properties in
+OpenFOAM. The native backend does retain per-cell internal-region materials.
+Audit a model before export with:
+
+```powershell
+python tools\openfoam_material_fidelity_audit.py library\models\new_model.toml
+```
+
+The audit lists every active component instance and each distinct internal
+solid material that the current one-region-per-component OpenFOAM topology will
+homogenize. Where source dimensions are available, it also reports exact-region
+volume and the mass and heat-capacity deltas caused by substituting the outer
+material. These are source-geometry deltas, not discretized-mesh measurements.
+The audit diagnoses fidelity loss; it does not correct that loss.
 
 The workflow is:
 
@@ -1550,11 +1749,13 @@ The workflow is:
 3. The normal mesh planner builds the rectilinear rack mesh.
 4. Components, internal air/solid regions, rack openings, and internal devices
    are stamped into that mesh.
-5. The OpenFOAM exporter creates fluid and solid regions, boundary patches,
+5. The post-audit OpenFOAM preflight/geometry transaction is completed before
+   case output is committed.
+6. The OpenFOAM exporter creates fluid and solid regions, boundary patches,
    material dictionaries, heat sources, fan/porosity sources, initial fields,
    solver dictionaries, geometry metadata, and run scripts.
-6. The generated case is run inside WSL2 with OpenFOAM 2606.
-7. Results can be opened in ParaView or plotted directly with
+7. The generated case is run inside WSL2 with OpenFOAM 2606.
+8. Results can be opened in ParaView or plotted directly with
    `plot/heat_animation.py`.
 
 The exported solver is a compressible conjugate heat-transfer model:
@@ -1565,7 +1766,9 @@ The exported solver is a compressible conjugate heat-transfer model:
   `temperature_dependent_air = true`
 - gravity is included through `p_rgh`
 - k-omega SST supplies the RANS turbulence closure
-- component material `rho`, `cp`, and `k` become solid-region properties
+- outer component material `rho`, `cp`, and `k` become homogeneous
+  solid-region properties; heterogeneous internal materials require separate
+  solver regions and are not yet represented
 - internal-region and component watts become volumetric energy sources
 - fan curves find their operating points against system resistance
 - vents use their existing `free_area_ratio` and
@@ -1738,8 +1941,12 @@ screening mesh by 24.8% and the in-depth mesh by 16.2%, but the current generic
 production model now passes full `checkMesh` in the fluid and all four solid
 regions. Minimum determinants are 0.001384 in fluid, 0.0534 in Eaton, 0.0133
 in Dell, 0.0704 in Trenton, and 0.00840 in KVM on screening. The preparation
-script still saves `checkMesh.prepare.log` and warns explicitly if a different
-model fails, because OpenFOAM can return status zero despite reported failures.
+script always saves `checkMesh.prepare.log`, because OpenFOAM can return status
+zero despite reported failures. Default, in-depth, and validation profiles fail
+before solver launch on any determinant failure. Only the screening profile
+sets `allow_determinant_warnings = true`; it may continue when every failed
+check is exactly accounted for by a determinant diagnostic, and the generated
+script labels that mesh exploratory rather than validation-ready.
 
 The fanless generic KVM uses an air-tunnel cross-section exactly equal to its
 front passive vent and extending to the front face, with a 5 mm rear wall. This
@@ -1780,9 +1987,10 @@ OpenFOAM-profile `[mesh]` directly controls the exported OpenFOAM case.
 | `template` | Reusable OpenFOAM TOML profile loaded before inline overrides. |
 | `case_directory` | Destination for the generated case. Relative paths are relative to the project; absolute Windows paths are supported. |
 | `overwrite` | Allows a new export to replace the existing case directory and old restart markers. |
+| `allow_determinant_warnings` | Screening-only escape hatch for reduced-determinant cells. Defaults to `false`; default, in-depth, and validation profiles reject them before creating the prepared-case marker. Screening sets it to `true` but still rejects every non-determinant or inconsistently parsed mesh failure. |
 | `parallel_processes` | Default MPI process count written into instructions and decomposition settings. |
-| `maximum_time_step` | Largest timestep during fully coupled airflow/CHT stages. |
-| `maximum_courant_number` | Coupled-stage Courant limit. Multirate live-flow stages measure the saved field's global `max(Co)`, apply a 20% safety margin, and use an exact divisible fixed timestep no larger than the configured airflow cap. |
+| `maximum_time_step` | Broad coupled-stage ceiling written to `controlDict`; stage-specific airflow caps below may be smaller. |
+| `maximum_courant_number` | Coupled-stage Courant limit. Multirate live-flow stages measure the saved field's global `max(Co)`, target 50% of that limit, and use an exact divisible fixed timestep no larger than the configured airflow cap. The headroom accommodates acceleration during a long fixed-step live-flow window; postflight still rejects a stage that exceeds the hard limit. |
 | `field_write_interval` | Simulated seconds between full restart/visualization field writes. |
 | `saved_time_directories` | Number of recent nonzero processor checkpoints retained; time `0` is also preserved. |
 | `report_interval` | Simulated seconds between function-object reports such as temperature extrema, component averages, mass flow, and y-plus. |
@@ -1802,6 +2010,9 @@ small diagnostic output. They do not have to match.
 | `sutherland_temperature` | Sutherland temperature constant in kelvin. |
 | `use_vent_pressure_loss` | Converts vent free area and discharge coefficient into porous/orifice resistance. |
 | `use_fan_curves` | Uses referenced P-Q curves instead of treating every fan as fixed flow. |
+| `pimple_outer_correctors` | Outer PIMPLE passes used during live airflow/CHT stages. Fan-curve screening currently retains three. |
+| `pimple_pressure_correctors` | Pressure-correction passes inside each live-flow outer iteration. |
+| `thermal_only_pimple_outer_correctors` | Outer energy-coupling passes used only while airflow is frozen. `0` inherits the live count; an explicit value must be at least two. The screening profile uses two; default, in-depth, and validation profiles inherit their live count until matched full-case evidence supports promotion. |
 | `fan_curve_extension_multiplier` | Limits how far the numerical fan curve may be extended beyond its nominal flow range. |
 | `gravity.x/y/z` | Gravity vector in m/s²; the default is `(0, 0, -9.80665)`. |
 
@@ -1821,6 +2032,8 @@ remain in the component/model TOML.
 | `fan_startup_ramp_steps` | Number of discrete fan-scale stages in the ramp. |
 | `initial_airflow_check_interval` | Physical seconds between initial-airflow convergence checks. |
 | `minimum_initial_airflow_duration` | Minimum post-ramp physical airflow duration before convergence can be accepted. |
+| `airflow_maximum_time_step` | Cap for the fan ramp, fixed warm-up, and adaptive initial-airflow stages. |
+| `airflow_refresh_maximum_time_step` | Independent cap for later live-airflow refresh windows. |
 | `thermal_only_maximum_time_step` | Maximum implicit timestep while velocity/pressure are held fixed. This is the main thermal acceleration control. |
 | `thermal_only_maximum_courant_number` | Safety Courant bound used in thermal-only mode. The velocity field is frozen, so this is intentionally much larger than coupled `maxCo`. |
 | `airflow_refresh_interval` | Thermal simulated seconds between fully coupled airflow refreshes. |
@@ -1830,32 +2043,80 @@ larger than the fully coupled CFD timestep. A large implicit step can be stable
 without being accurate; use screening for tuning and in-depth results for final
 claims.
 
+The retained research-lab 22.5 mm case launcher has an exact-case 24 s
+thermal-only cap. The current lab model and reusable screening profile remain
+at 20 s; the default and strict validation profiles use 5 s, while the
+independent in-depth profile uses 30 s.
+Identical-checkpoint testing against 20 s reduced cumulative
+solver wall time by 22.19% over 600 simulated seconds (13.73% on the longer
+480 s confirmation segment). At 601.6 s, whole-domain temperature RMS differed
+by 0.00678 K, the largest component-average difference was 0.05494 K, and the
+largest cell difference was 0.1233 K; an earlier 121.6 s checkpoint differed by
+up to 0.1863 K. For this exact retained 22.5 mm campaign, caps of 30, 40, and
+60 s were rejected. This is a rapid-screen
+tradeoff, not a validation setting: the reusable screening profile retains a
+20 s cap and all validation timestep caps remain unchanged. The benchmark starts
+from the preserved 1.600 s case, whose N5766A intake predates the current
+`z=21.8 mm`, `height=33.6 mm` correction; reconfirm the cap on any newly exported
+current-geometry case. The
+runner divides each stage into equal steps that land exactly on its endpoint,
+so a requested cap is an upper bound rather than a promise that every step has
+that size.
+
+The 24 s cap applies only after airflow-freeze gates permit a thermal-only
+stage. It cannot accelerate the retained unfinished initial-airflow
+continuation, whose ramp/initial cap remains 0.0005 s; later screening refresh
+windows are independently capped at 0.001 s. At 1.600 s, the retained case has
+only about 0.875 nominal air replacements and 8.8677% whole-fluid velocity RMS
+drift, above the 3% freeze gate. No convergence or freeze criterion is weakened
+to enter thermal-only mode sooner.
+
+Thermal-only screening now has a second, independently controlled performance
+candidate: two outer energy-coupling passes instead of the three required by
+live fan/pressure coupling. The custom solver still relinearizes temperature-
+dependent properties and retains its energy-coupling loop with two passes; a
+single pass is deliberately not enabled. The generated runner restores three
+outer passes before every live-airflow window and on exit, and records both
+counts in `run_summary.log`. This reduces 13-solid-region energy work in
+principle, but it is not yet a corrected-full-rack accuracy result. Compare
+three versus two from byte-identical early-heating and near-steady checkpoints
+before using the two-pass result for any claim beyond rapid screening.
+
+For an identical-checkpoint control branch, set
+`THERMAL_ONLY_OUTER_CORRECTORS=3` when invoking `run_parallel.sh`; omit it to
+use the exported screening value of two. The override must be an integer of at
+least two and is recorded in `run_summary.log`. It changes only frozen-flow
+thermal stages. Live stages and the exit cleanup always restore the configured
+live count of three.
+
 Do not shorten startup acceptance based only on a small change across one
 0.01 s window. In the generic-rack benchmark, the former 0.02 s minimum
 accepted the operating point at 0.16 s even though the nine rack-fan flows were
 about 29% below the result obtained after a 0.30 s post-ramp minimum. Internal
 device flow also overshot and slowly reversed while adjacent changes were less
-than 1%. The supplied profiles therefore require at least 0.30 s of post-ramp
-airflow and retain a conservative 0.001 s coupled-flow timestep.
+than 1%. The reusable supplied profiles therefore require at least 0.30 s of
+post-ramp airflow. Screening uses 0.0005 s for fan-ramp/initial airflow and
+0.001 s for later refreshes. Default and in-depth use 0.001 s for both; the
+validation profile uses 0.001 s initially and its independently matched 0.005 s
+refresh cap. The preserved research-lab continuation inherits the screening
+initial-airflow value.
 
-During the fan ramp, the runner seeds `deltaT` below the configured Courant
-limit and enables OpenFOAM adaptive stepping with `maxCo` and
-`airflow_maximum_time_step` as hard caps. Each ramp stage uses
-`adjustableRunTime`, so its requested endpoint is still written exactly. The
-former fixed rule used `maxCo/10` of the airflow timestep cap: on the current
-288,757-cell production rack it forced 50 steps to reach 0.005 s even though
-peak Co was only 0.095. Adaptive startup reached the same endpoint in 10 steps,
-kept peak Co at 0.454 (below the in-depth limit of 1), and reduced end-to-end
-wall time from 443.47 s to 204.79 s (53.8%). The ramp is a numerical startup
-device, so transient velocity fields inside the ramp are not expected to match
-step-for-step; validate the fully established airflow operating point.
+During the fan ramp, the runner divides each fan-scale interval into equal,
+fixed steps no larger than the conservative Courant-based cap. It uses
+`writeControl timeStep`, checks the actual saved endpoint symmetrically, and
+post-processes the terminal Courant number. This prevents
+`adjustableRunTime` write alignment from silently enlarging the advertised
+live-airflow cap. The earlier adaptive-ramp experiment was faster on one
+288,757-cell rack, but its write policy did not prove the cap was authoritative;
+that result remains historical performance evidence rather than the production
+policy.
 
 ### 15.4 Adaptive airflow refresh
 
 | Setting | Meaning |
 |---|---|
 | `airflow_refresh_duration` | Minimum physical duration of a refresh before flow metrics may accept it. |
-| `use_adaptive_airflow_refresh` | Stops a refresh when mass balance, device-flow change, and direction checks pass. Within one runner invocation, the first live window is compared with the last accepted operating point before the thermal-only interval. |
+| `use_adaptive_airflow_refresh` | Stops a refresh when mass balance, device-flow change, and direction checks pass. It is mandatory when `use_multirate_thermal = true`; the exporter rejects the non-adaptive combination. Within one runner invocation, the first live window is compared with the last accepted operating point before the thermal-only interval. |
 | `airflow_refresh_maximum_courant_number` | `maxCo` during refresh windows. |
 | `airflow_refresh_check_interval` | Physical seconds added between refresh convergence checks. |
 | `maximum_airflow_refresh_duration` | Safety limit; failure to converge before this duration stops the run with an error. |
@@ -2041,14 +2302,8 @@ cd ~/OpenFOAM/cases/production_rack_screening
 From inside the case directory:
 
 ```bash
-# Serial preparation and conventional coupled run
-./run_cht.sh
-
-# Parallel conventional coupled run to the TOML duration
+# A multirate export defaults to the accelerated schedule and TOML duration
 ./run_parallel.sh 4
-
-# Parallel conventional run with an explicit end time
-./run_parallel.sh 4 run 18000
 
 # Restartable initial warm start
 ./run_parallel.sh 4 --warm-start 5
@@ -2060,42 +2315,58 @@ From inside the case directory:
 ./run_parallel.sh 4 --multirate 100000 10000
 ```
 
+For a multirate-enabled export, `run_cht.sh` and explicit parallel `run` mode
+fail before environment launch, case locking, or case writes because those
+paths would bypass the stage-specific live-airflow caps. Conventional serial
+and parallel modes remain available only on exports created with
+`use_multirate_thermal = false`.
+
 The optional fourth argument overrides `airflow_refresh_interval` for that
 invocation. It changes only the spacing between completed thermal-only stages;
 the initial operating-point solve and each adaptive airflow refresh still use
 the profile's convergence limits. Do not use a long override when temperatures
 or buoyancy are changing rapidly.
 
-`airflow_maximum_time_step` independently caps every live-airflow step. Before
-each restarted live-flow stage, the runner evaluates `CourantNo` from the saved
-parallel `phi` and `rho` fields, reduces the proposed timestep to 80% of the
-configured `maxCo` when necessary, and divides the stage into equal fixed steps
-that land exactly on the refresh target. A conservative `maxCo/10` fallback is
-used before a usable saved flow field exists. This avoids OpenFOAM
+Multirate export requires `use_adaptive_airflow_refresh = true`. The exporter
+rejects a multirate configuration that selects the fixed-duration refresh path,
+because that path cannot establish the same restart-safe terminal validation
+contract.
+
+`airflow_maximum_time_step` caps fan-ramp, fixed warm-up, and adaptive initial
+airflow. `airflow_refresh_maximum_time_step` separately caps later refresh
+windows. Before each restarted live-flow stage, the runner evaluates
+`CourantNo` from the saved parallel `phi` and `rho` fields, reduces the proposed
+timestep to 50% of the stage's configured `maxCo` when necessary, and divides
+the stage into equal fixed steps that land exactly on the target. A conservative
+`maxCo/10` fallback is used before a usable saved flow field exists. This avoids OpenFOAM
 `adjustableRunTime` write alignment enlarging a timestep beyond `maxDeltaT`.
 The runner re-evaluates the final saved field after every live-flow stage and
 stops with a diagnostic if the measured `max(Co)` exceeds the stage limit.
 Fan-startup-ramp stages use the same conservative fixed-step fallback because
 no established operating-point field exists yet.
-Keep this cap separate from
+Keep both timestep caps separate from
 `airflow_refresh_check_interval`: a 1 s in-depth comparison window still needs
-many Courant-safe flow steps, not ten 0.1 s steps. The shipped profiles use
-0.001 s. Increase it only after measuring the maximum Courant number and field
-differences on the actual hot rack; changing the comparison interval must never
-silently enlarge the CFD timestep.
+many Courant-safe flow steps, not ten 0.1 s steps. Screening uses 0.0005 s
+initially and 0.001 s for refreshes; default/in-depth use 0.001 s for both; the
+validation profile retains its separately matched refresh setting. Increase a
+stage cap only after measuring maximum Courant number, field differences, and
+fan operating points on the actual hot rack. Changing the comparison interval
+must never silently enlarge the CFD timestep.
 
 Each airflow convergence line also reports `estimatedAirExchangeTime`. The
-runner calculates it as exported fluid volume times configured ambient density
-divided by one-way exterior mass throughput (half the sum of absolute exterior
-patch flows). This is a nominal transport timescale, not a convergence test:
+runner calculates it as ambient-connected exported fluid volume times configured
+ambient density divided by one-way exterior mass throughput (half the sum of
+absolute exterior patch flows). Sealed fluid cavities without an ambient fan or
+vent seed are deliberately excluded because exterior throughput cannot exchange
+their air. This is a nominal transport timescale, not a convergence test:
 compare it with the actual coupled-flow window and verify internal `U` fields
 before treating recirculation as settled.
 
-Both generated solver launchers take an exclusive per-case lock before they
-prepare, decompose, or advance a case. A second `run_cht.sh` or
-`run_parallel.sh` process exits instead of concurrently writing the same time
-directories. Plotting and report scripts remain usable while the solver runs
-because they do not acquire this write lock. The hidden
+Every enabled generated solver path takes an exclusive per-case lock before it
+prepares, decomposes, or advances a case. A second solver process exits instead
+of concurrently writing the same time directories. Disabled multirate bypass
+paths exit even earlier. Plotting and report scripts remain usable while the
+solver runs because they do not acquire this write lock. The hidden
 `.thermal_solver_run.lock` file may remain after a run; the operating-system
 lock, not the file's presence, determines whether a solver is active.
 
@@ -2109,11 +2380,39 @@ The multirate sequence is:
 6. evaluate thermal and airflow convergence
 7. stop early when configured criteria pass, or continue to the requested end
    time
+
+The runner never advances beyond the requested end merely to obtain a terminal
+airflow validation window. Before every thermal-only stage it atomically writes
+`.airflow_refresh_pending` as `owed <start> <target>`. The stage changes that
+journal to `active <checkpoint>` only after the solver, exact-endpoint, and
+source-restoration checks pass. A restart with an unadvanced `owed` journal
+safely retries the thermal stage; an advanced but uncommitted journal fails
+closed because successful stage validation cannot be inferred from a time
+directory alone. If the requested end coincides with a successfully committed
+thermal-only endpoint, the `active` journal remains and its live-flow validation
+runs first when a later continuation is requested.
+
+During an unmapped initial-airflow solve, the runner installs the fluid
+`fvOptions.flowOnly` dictionary: fans and passive-flow resistance remain, while
+direct volumetric heat sources located in fluid zones are suppressed. Solid-
+region heat sources remain active and the CHT energy equations continue to
+advance, so this is not a globally heat-off or isothermal “cold-flow” solve.
+That behavior allows solid heating and buoyancy to influence the operating
+point. Treat the saved temperature field as the thermal baseline when the full
+fluid-source dictionary is restored.
+If a model has no direct fluid-zone heat sources, `fvOptions.flowOnly` and
+`fvOptions.fullFan` are identical and this switch suppresses zero watts; all
+configured solid power remains active from startup. Use the exported heat-
+source audit to determine the actual split instead of inferring it from the
+runner's generic fluid-source message.
 8. reconstruct the latest result for visualization
 
-The script reuses valid processor partitions and the latest saved time. If a
-refresh was interrupted, `.airflow_refresh_pending` causes it to be retried.
-Do not delete hidden marker/state files when you intend to resume.
+The script reuses valid processor partitions and the latest saved time. If an
+active refresh was interrupted, `.airflow_refresh_pending` causes it to be
+retried. Legacy one-number refresh markers are upgraded to `active` journals;
+malformed, future-dated, or advanced-uncommitted journal state stops the run
+instead of being discarded. Do not delete hidden marker/state files when you
+intend to resume.
 
 `plot/recirculation_report.py` merges every OpenFOAM restart-segment report,
 including suffixed `surfaceFieldValue_<time>.dat` files. In addition to signed
@@ -2184,6 +2483,17 @@ The important time controls are:
   This second layer is required to bound disk usage across adaptive airflow
   windows, fan-ramp stages, and thermal segments.
 
+Audit retained internal-fan operating points across every processor rank and
+write a Markdown trend table with:
+
+```bash
+python3 tools/openfoam_fan_flow_audit.py CASE --markdown fan_flows.md
+```
+
+The command fails when any retained operating point is zero or reversed. It
+also rejects ambiguous numeric time-directory spellings, missing per-rank fan
+files, and rank-inconsistent values rather than silently reporting processor 0.
+
 Therefore, the segment from 300 to 600 seconds uses `startTime = 300` and
 `endTime = 600`; it does **not** use `endTime = 300` again. Time and thermal
 history continue from the saved 300-second fields.
@@ -2211,21 +2521,52 @@ than the latest saved time. It also updates the saved `uniform/time` timestep
 metadata so OpenFOAM does not inherit an inappropriate timestep from the
 previous mode.
 
-For short warm starts after a thermal-only segment, the runner also seeds
-`deltaT` to no more than the requested interval before launching the coupled
-solver. This prevents a retained 100 s or 1000 s thermal timestep from making
-OpenFOAM treat a 0.01 s warm start as already complete.
+For warm starts after a thermal-only segment, the runner divides the request
+into independently restartable windows no wider than
+`airflow_checkpoint_interval`. Each window uses equal fixed steps no larger
+than `THERMAL_WARM_START_MAX_DT`, lands exactly on its own endpoint, runs a
+Courant postflight, and is summarized before the next window starts. This
+prevents a retained 100 s or 1000 s thermal timestep from making OpenFOAM treat
+a short live-flow warm start as already complete, while bounding the amount of
+work lost to interruption.
 
 Warm-start timing is configured only after processor reuse or reconstruction
-has selected the authoritative checkpoint. This matters when processor data is
-newer than the last reconstructed root time. Absolute `startTime`, `endTime`,
-and fractional write intervals are written at 17-digit precision. Later
-dictionary updates use the same precision, so they cannot round an earlier
-value. A request such as `--warm-start 22800.08` cannot be rounded to `22800.1`
-and is guaranteed to write the requested endpoint.
+has selected the authoritative checkpoint and is replanned after any fan ramp,
+because the ramp changes both the restart time and `controlDict`. The runner
+writes fixed-step controls at 17-digit precision, requires and updates
+`uniform/time` on every rank for every nonzero source checkpoint, checks both
+endpoint undershoot and overshoot, and post-processes Courant number after every
+window. A request such as `--warm-start 22800.08` is therefore rejected if the
+actual checkpoint misses that endpoint by more than
+`min(1e-9 * max(1, |target|), 1e-8)` seconds. The absolute cap prevents a large
+simulation time from making a complete live-flow timestep look “exact.”
+
+Normal exit restores the full fan dictionary and production solver controls.
+`INT` and `TERM` use dedicated handlers that perform the same best-effort
+restoration and then terminate with status 130 or 143; they do not return to a
+later solver stage. Preparation, solver, and post-processing children run in a
+tracked process group. Signals received while the group PID is being registered
+are deferred until registration completes, and a bounded watchdog escalates
+from the requested signal to `TERM` and finally `KILL` only for that exact group
+if it does not stop.
 
 These manual warm-start segments are fully coupled CHT runs. For long thermal
 transients, multirate mode is normally faster.
+
+For a controlled timestep-sensitivity branch, the generated runner accepts a
+scoped environment override without changing the exported production default:
+
+```bash
+THERMAL_WARM_START_MAX_DT=0.00075 \
+  ./run_parallel.sh 4 --warm-start 1.605 2>&1 | tee benchmark.dt0p00075.log
+```
+
+`THERMAL_WARM_START_MAX_DT` must be a positive finite number, applies only to
+`--warm-start`, and is recorded as `warmStartMaxDt` in `run_summary.log`. Use it
+only from an identical complete checkpoint and compare Courant number, mass
+balance, fan operating points, and terminal fields against the configured
+timestep. A passing short branch is a sensitivity screen, not authorization to
+change the production profile by itself.
 
 When mapping a solution onto a different mesh with `mapFields`, do not enter
 thermal-only mode directly. `mapFields` interpolates volume fields such as `U`
@@ -2325,9 +2666,10 @@ Important generated files include:
 | `system/controlDict` | Time, write, function-object, and run controls. |
 | `system/<region>/fvSchemes` | Discretization schemes. |
 | `system/<region>/fvSolution` | Linear solvers and coupling controls. |
-| `prepare_regions.sh` | Region preparation helper. |
-| `run_cht.sh` | Serial case runner. |
-| `run_parallel.sh` | Parallel, restart, warm-start, and multirate runner. |
+| `prepare_regions.sh` | Generated topology/checkMesh helper; component cases normally reach it through the bounded-memory wrapper. |
+| `prepare_regions_low_memory.sh`, `openfoam_stream_region_selectors.py` | Case-local, content-bound split and streaming selector-materialization path. |
+| `run_cht.sh` | Serial runner for non-multirate exports; a multirate export emits a fail-closed diagnostic instead. |
+| `run_parallel.sh` | Parallel restart/warm-start/multirate runner; multirate is the default when enabled and explicit conventional mode is rejected. |
 | `postProcessing` | Temperature ranges/averages, flow reports, and y-plus data. |
 
 ## 17. Viewing and plotting temperatures
@@ -2611,11 +2953,19 @@ Use:
 - adaptive initial-airflow convergence
 - multirate thermal mode
 - larger implicit thermal-only steps
+- two thermal-only outer energy-coupling passes in the screening profile
 - periodic short airflow refreshes
 - a screening mesh/profile for tuning
 
 Do not simply raise coupled `maximum_courant_number` until the solver becomes
 unstable. Check pressure residuals, continuity, directions, and fan flows.
+For the updated research-lab campaign, retain the measured 0.0005 s
+fan-ramp/initial-airflow cap and the separate 0.001 s screening refresh cap. The
+24 s thermal-only acceleration setting belongs only to the retained exact
+pre-correction 22.5 mm case and begins only after its airflow-freeze gates pass;
+the canonical 19 mm model still inherits 20 s. The larger setting is
+screening-grade rather than validation-grade, and the current 1.600 s field is
+not freeze-eligible.
 
 ### Results are implausibly hot
 

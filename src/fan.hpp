@@ -2,8 +2,36 @@
 #define THERMAL_SOLVER_FAN_HPP
 
 #include <array>
+#include <algorithm>
 #include <cmath>
+#include <limits>
 #include <string>
+
+inline double fan_curve_first_positive_zero(
+    double a,double b,double c) {
+    double zero=std::numeric_limits<double>::infinity();
+    if(c!=0.0) {
+        const double discriminant=b*b+4.0*c*a;
+        if(std::isfinite(discriminant) && discriminant>=0.0) {
+            const double root=std::sqrt(discriminant);
+            const double first=(-b-root)/(2.0*c);
+            const double second=(-b+root)/(2.0*c);
+            if(std::isfinite(first) && first>0.0) zero=first;
+            if(std::isfinite(second) && second>0.0)
+                zero=std::min(zero,second);
+        }
+    } else if(b>0.0) {
+        zero=a/b;
+    }
+    return zero;
+}
+
+inline double bounded_fan_curve_pressure(
+    double a,double b,double c,double flow) {
+    const double zero=fan_curve_first_positive_zero(a,b,c);
+    if(std::isfinite(zero) && flow>=zero) return 0.0;
+    return std::max(0.0,a-b*flow-c*flow*flow);
+}
 
 enum class FlowType {
     Intake,
@@ -238,8 +266,8 @@ struct Fan {
 
     // Density-corrected available pressure at a candidate flow rate.
     double curve_pressure(double Q, double rho_local) const {
-        double dP = curve_a - curve_b * Q - curve_c * Q * Q;
-        dP = std::max(dP, 0.0); // curve shouldn't go negative
+        const double dP = bounded_fan_curve_pressure(
+            curve_a,curve_b,curve_c,Q);
         return dP * (rho_local / rho_rated);
     }
 };

@@ -27,6 +27,8 @@
 
 int main(int argc, char* argv[]) {
 
+  try {
+
 
   // ComponentLoader loader;
   // loader.load_component("library/components/cisco_7603_network_switch.toml");
@@ -66,7 +68,7 @@ int main(int argc, char* argv[]) {
       }
     } else if(argument == "--help" || argument == "-h") {
       std::cout
-          << "Usage: model_runner.exe [--native] [--geometry-only] "
+          << "Usage: " << argv[0] << " [--native] [--geometry-only] "
              "[--plot-existing] [--case-name NAME] "
              "[model.toml] [fan_curves.toml]\n"
           << "  --native  Run the built-in solver even when the model enables "
@@ -139,7 +141,7 @@ int main(int argc, char* argv[]) {
     return 0;
   }
   
-  std::string load_model_path = "library/models/validation_fan_rack.toml";
+  std::string load_model_path = "library/models/new_model_updated.toml";
 
   ModelLoader loader;
   const std::filesystem::path model_path = positional_arguments.empty()
@@ -147,7 +149,7 @@ int main(int argc, char* argv[]) {
   const std::filesystem::path fan_curve_path = positional_arguments.size() < 2
       ? "library/fan_curves/fan_curves.toml" : positional_arguments[1];
   loader.load_fan_curves(fan_curve_path);
-  loader.load_model(model_path);
+  loader.load_model(model_path, force_native);
   if(!openfoam_case_name.empty()) {
     const std::filesystem::path configured =
         loader.model.openfoam_solver.case_directory;
@@ -162,11 +164,21 @@ int main(int argc, char* argv[]) {
   }
   loader.run(geometry_only);
 
-  const bool openfoam=loader.model.openfoam_solver.enabled;
+  // Geometry-only always uses the native grapher, even when the model's
+  // production backend is OpenFOAM.
+  const bool openfoam=
+      loader.model.openfoam_solver.enabled && !geometry_only;
+  const std::filesystem::path native_output_directory=
+      std::filesystem::absolute(
+          loader.model.simulation.native_output_directory.empty()
+              ? std::filesystem::path(".")
+              : loader.model.simulation.native_output_directory);
   const std::filesystem::path metadata_path=
       std::filesystem::current_path()/".thermal_sim_last_run.json";
+  const std::filesystem::path native_metadata_path=
+      native_output_directory/".thermal_sim_last_run.json";
   try {
-    write_run_metadata(metadata_path,{
+    const RunMetadata metadata{
       .executable=std::filesystem::absolute(argv[0]),
       .working_directory=std::filesystem::current_path(),
       .model=std::filesystem::absolute(model_path),
@@ -178,14 +190,24 @@ int main(int argc, char* argv[]) {
       .geometry=openfoam
           ? std::filesystem::absolute(
                 loader.model.openfoam_solver.case_directory)/"geometry.txt"
-          : std::filesystem::absolute("output.txt"),
-      .simulation=openfoam ? std::filesystem::path()
-                           : std::filesystem::absolute("simulation.csv"),
+          : native_output_directory/"output.txt",
+      .simulation=(openfoam || geometry_only)
+          ? std::filesystem::path()
+          : native_output_directory/"simulation.csv",
       .backend=openfoam ? "openfoam" : "native",
       .mode=geometry_only ? "geometry-only" :
             (force_native ? "forced-native" : "normal")
-    });
+    };
+    // Keep the canonical working-directory record current so plotting tools
+    // cannot silently resolve a stale prior OpenFOAM run.
+    write_run_metadata(metadata_path,metadata);
     std::cout << "Last-run metadata: " << metadata_path << "\n";
+    if(!openfoam &&
+       native_metadata_path.lexically_normal()!=metadata_path.lexically_normal()) {
+      write_run_metadata(native_metadata_path,metadata);
+      std::cout << "Archived native run metadata: "
+                << native_metadata_path << "\n";
+    }
     if(openfoam) {
       std::cout
           << "Short plotting commands (use the last-run metadata):\n"
@@ -200,4 +222,11 @@ int main(int argc, char* argv[]) {
   }
 
   return 0;
+  } catch(const std::exception& error) {
+    std::cerr << "Model run failed: " << error.what() << "\n";
+    return 1;
+  } catch(...) {
+    std::cerr << "Model run failed: unknown exception.\n";
+    return 1;
+  }
 }

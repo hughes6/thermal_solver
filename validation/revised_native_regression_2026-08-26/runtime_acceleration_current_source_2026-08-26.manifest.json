@@ -1,0 +1,1958 @@
+{
+  "schema_version": 1,
+  "created_utc": "2026-08-27T03:50:52.7152458Z",
+  "campaign": "updated research-lab runtime acceleration, convection/NI hardening, native energy closure, plot recovery, OpenFOAM provenance gating, and current-source verification",
+  "integrity": {
+    "manifest_path": "validation/revised_native_regression_2026-08-26/runtime_acceleration_current_source_2026-08-26.manifest.json",
+    "self_hash_excluded": true,
+    "generator_path": "tools/create_runtime_acceleration_manifest.ps1",
+    "generator_is_hashed": true,
+    "exclusions": [
+      {
+        "path": "validation/revised_native_regression_2026-08-26/runtime_acceleration_current_source_2026-08-26.manifest.json",
+        "reason": "A file cannot contain a stable hash of its own final bytes."
+      }
+    ]
+  },
+  "source_state": {
+    "git_head": "8465c86e8ceb2c2914e0ce37c4957430266717e0",
+    "git_branch": "v2.2",
+    "working_tree_clean": false,
+    "porcelain_entry_count": 153,
+    "note": "The working tree is intentionally dirty; authoritative source and evidence are pinned by the sorted per-file SHA-256 rows below."
+  },
+  "toolchain": {
+    "powershell": "Core 7.6.4",
+    "operating_system": "Microsoft Windows NT 10.0.26200.0",
+    "python": "Python 3.12.1",
+    "compiler": "g++.exe (Rev5, Built by MSYS2 project) 16.1.0",
+    "git": "git version 2.46.1.windows.1",
+    "bash": "GNU bash, version 5.2.32(1)-release (x86_64-pc-msys)",
+    "plot_python": "ANSYS Python 3.12.11; Matplotlib 3.10.0; NumPy 1.26.4; pandas 2.2.2 (versions captured in plot evidence)",
+    "openfoam": "OpenFOAM v2606; installed custom solver is stale and heavy rebuild/runtime launch was withheld by the 5 GiB memory gate"
+  },
+  "commands": [
+    {
+      "purpose": "complete current-source regression",
+      "command": "powershell.exe -NoProfile -ExecutionPolicy Bypass -File tests/run_added_feature_tests.ps1",
+      "result": "exit 0; All added-feature tests passed",
+      "evidence": "validation/revised_native_regression_2026-08-26/added_feature_regression_energy_provenance_2026-08-26.stdout.log"
+    },
+    {
+      "purpose": "generated runner override and restoration regression",
+      "command": "powershell.exe -NoProfile -ExecutionPolicy Bypass -File tests/generated_runner_thermal_outer_test.ps1 -CasePath validation/thermal_outer_microcase_2026-08-26",
+      "result": "passed; overrides 0 and 1 rejected before launch/write and EXIT trap restored live count 3",
+      "evidence": "validation/revised_native_regression_2026-08-26/added_feature_regression_energy_provenance_2026-08-26.stdout.log"
+    },
+    {
+      "purpose": "latest exact O2 reusable-component campaign",
+      "command": "g++ -std=c++17 -O2 -I src tests/native_template_microcase_test.cpp -o validation/revised_native_regression_2026-08-26/native_template_microcase_energy_provenance_2026-08-26.exe",
+      "result": "compile exit 0",
+      "evidence": "validation/revised_native_regression_2026-08-26/native_template_microcase_energy_provenance_2026-08-26.exe"
+    },
+    {
+      "purpose": "latest exact O2 reusable-component campaign execution",
+      "command": "validation/revised_native_regression_2026-08-26/native_template_microcase_energy_provenance_2026-08-26.exe",
+      "result": "exit 0; 11 functional passes and 1 expected NI geometry rejection across 12 selected templates in 70.7681 s",
+      "evidence": "validation/revised_native_regression_2026-08-26/native_template_microcase_energy_provenance_2026-08-26.stdout.log"
+    },
+    {
+      "purpose": "latest-versus-prior component-campaign drift audit",
+      "command": "compare normalized prior and current component-campaign output line by line",
+      "result": "PASS; 628/629 lines identical and the sole mismatch is elapsed time, 68.2119 s versus 70.7681 s",
+      "evidence": "validation/revised_native_regression_2026-08-26/native_template_campaign_drift_2026-08-26.stdout.log"
+    },
+    {
+      "purpose": "adaptive solid/air convection conservation and stability guards",
+      "command": "tests/run_added_feature_tests.ps1 (adaptive_convection_conservation_test and convection_stability_guard_test)",
+      "result": "exit 0; 12/12 conservation/property cases and 8/8 safe/unsafe stability cases passed",
+      "evidence": "validation/revised_native_regression_2026-08-26/added_feature_regression_energy_provenance_2026-08-26.stdout.log"
+    },
+    {
+      "purpose": "native discrete frozen-capacity energy/update ledger",
+      "command": "tests/run_added_feature_tests.ps1 (native_thermal_energy_ledger_test)",
+      "result": "exit 0; uniform and adaptive 4-step ledgers closed source, solid/fluid conduction, solid-air convection, x-directed face-flux advection, ambient exchange, and frozen-capacity storage to below 1.5e-11 J",
+      "evidence": "validation/revised_native_regression_2026-08-26/native_thermal_energy_ledger_2026-08-26.stdout.log"
+    },
+    {
+      "purpose": "NI separator mesh ladder and vent-tunnel controls",
+      "command": "validation/revised_native_regression_2026-08-26/ni_separator_mesh_ladder_test_2026-08-26.exe",
+      "result": "exit 0; seven spacings and six controls per spacing isolate the invariant 0.000018 m^3 wall-1 loss to the provisional wall-3/top-right-vent topology",
+      "evidence": "validation/revised_native_regression_2026-08-26/ni_separator_mesh_ladder_2026-08-26.stdout.log"
+    },
+    {
+      "purpose": "semi-frozen OpenFOAM invocation-mode policy",
+      "command": "python -m unittest tests.semifrozen_solver_policy_test -v",
+      "result": "exit 0; 10/10 static source-policy tests passed, including the deployed-binary marker contract",
+      "evidence": "validation/revised_native_regression_2026-08-26/openfoam_provenance_gate_2026-08-26.stdout.log"
+    },
+    {
+      "purpose": "generated-runner deployed-solver provenance rejection",
+      "command": "powershell.exe -NoProfile -ExecutionPolicy Bypass -File tests/generated_runner_solver_provenance_test.ps1 -CasePath validation/thermal_outer_microcase_2026-08-26",
+      "result": "exit 0; missing and stale binaries rejected with exit 14 after one environment setup and before case locking or writes",
+      "evidence": "validation/revised_native_regression_2026-08-26/openfoam_provenance_gate_2026-08-26.stdout.log"
+    },
+    {
+      "purpose": "installed OpenFOAM custom-solver provenance audit",
+      "command": "WSL read-only byte-count, SHA-256, timestamp, and embedded-string audit",
+      "result": "installed binary SHA-256 4dad80e5f4c3b4a9a37599d06291dd8c93cdf9a49053c9a2582f90cd5a5c2e6d contains historical isothermal strings and lacks the hardened marker; do not run",
+      "evidence": "validation/revised_native_regression_2026-08-26/installed_openfoam_solver_provenance_2026-08-26.stdout.log"
+    },
+    {
+      "purpose": "provisional NI minimum-separator geometry-only export",
+      "command": "model.exe --geometry-only library/models/validation_ni_minimum_separator_sensitivity.toml library/fan_curves/fan_curves_updated_2026_08_24.toml",
+      "result": "exit 0; geometry exported without running mesh or transient solvers",
+      "evidence": "validation/ni_minimum_separator_sensitivity_2026-08-26/geometry_only.stdout.log"
+    },
+    {
+      "purpose": "provisional NI minimum-separator native microcase guard",
+      "command": "native_template_microcase_convection_hardening_2026-08-26.exe updated_NI_PXIe_Chassis_minimum_separator_sensitivity",
+      "result": "exit 0; expected fail-closed geometry rejection because Card Slot wall 1 realized volume differs from its request",
+      "evidence": "validation/revised_native_regression_2026-08-26/native_template_microcase_ni_separator_sensitivity_2026-08-26.stdout.log"
+    },
+    {
+      "purpose": "component and rack geometry audit",
+      "command": "python tools/audit_component_geometry.py library/models/new_model_updated.toml",
+      "result": "exit 0; 11 reusable components, 0 errors, 1 expected NI air/air warning",
+      "evidence": "validation/revised_native_regression_2026-08-26/geometry_audit_canonical_hardening_2026-08-26.stdout.log"
+    },
+    {
+      "purpose": "geometry and unified-air-color plot regression",
+      "command": "C:/Program Files/ANSYS Inc/ANSYS Student/v261/CEI/apex261/machines/win64/Python-3.12.11/python.exe tests/plot_geometry_test.py -v",
+      "result": "exit 0; 10/10 tests passed, including artist-level same-color verification",
+      "evidence": "validation/ni_minimum_separator_sensitivity_2026-08-26/plot_geometry_ansys_python_2026-08-26.stdout.log"
+    },
+    {
+      "purpose": "actual provisional-NI plot artist verification",
+      "command": "ANSYS Python validation/ni_minimum_separator_sensitivity_2026-08-26/verify_actual_ni_air_artists.py",
+      "result": "exit 0; 17 regions drawn and both Air artists use identical tab:cyan fill and edge colors",
+      "evidence": "validation/ni_minimum_separator_sensitivity_2026-08-26/verify_actual_ni_air_artists_2026-08-26.stdout.log"
+    },
+    {
+      "purpose": "production geometry-only rebuild check",
+      "command": "model.exe --geometry-only",
+      "result": "exit 0; production model rebuilt from current source and canonical output SHA-256 remained dbcaaa237fb8bf59c4841cf4e3a8b0a226d28208d23560c72900ce113d2ff2ea",
+      "evidence": "validation/revised_native_regression_2026-08-26/production_geometry_rebuild_2026-08-26.stdout.log"
+    },
+    {
+      "purpose": "generated runner shell syntax",
+      "command": "C:/Program Files/Git/bin/bash.exe -n validation/thermal_outer_microcase_2026-08-26/run_parallel.sh",
+      "result": "exit 0",
+      "evidence": "validation/thermal_outer_microcase_2026-08-26/run_parallel.sh"
+    },
+    {
+      "purpose": "manifest generation",
+      "command": "powershell.exe -NoProfile -ExecutionPolicy Bypass -File tools/create_runtime_acceleration_manifest.ps1",
+      "result": "generated and verified by per-file byte count and SHA-256",
+      "evidence": "validation/revised_native_regression_2026-08-26/runtime_acceleration_current_source_2026-08-26.manifest.json"
+    }
+  ],
+  "results": {
+    "software_verification": {
+      "full_harness": "PASS",
+      "adaptive_convection_conservation": "PASS 12/12",
+      "convection_stability_guard": "PASS 8/8",
+      "native_thermal_energy_ledger": "PASS; uniform and adaptive 4-step discrete frozen-capacity energy/update ledgers close to below 1.5e-11 J; all-axis convection is covered by its separate 12-case conservation suite",
+      "openfoam_invocation_mode_policy": "PASS 10/10 static source-policy tests; installed binary is proven stale and a rebuilt marker-bearing binary has not been runtime-proven",
+      "generated_runner_guards": "PASS; invalid outer overrides and missing/stale deployed binaries reject before case writes",
+      "generated_case_bash_syntax": "PASS",
+      "native_component_campaign": "PASS 11 functional; 1 expected NI geometry rejection; 12 selected; 70.7681 s",
+      "geometry_audit": "PASS with one expected unfinished-NI air/air warning",
+      "plot_geometry": "PASS 10/10 under ANSYS Python; rendered component/rack artifacts and actual two-Air artist equality independently verified",
+      "ni_separator_sensitivity": "PROVISIONAL and inactive; seven-spacing ladder proves the 0.000018 m^3 wall-1 loss is caused by the added wall 3 sealing the canonical corridor and the top-right vent tunnel, not by missing source cuts alone",
+      "ni_separator_plot": "RENDERED and hashed; both actual Air-region artists use tab:cyan. The plot is nominal geometry evidence, not stamped-topology or flow validation.",
+      "explicit_harness_skips": [
+        "optional NumPy/PyVista-dependent comparisons",
+        "real WSL flock lifetime integration in the non-escalated harness environment"
+      ]
+    },
+    "runtime_decisions": {
+      "live_timestep_s": 0.0005,
+      "live_timestep_decision": "retain; 0.00075 s was 9.79% slower and failed field/fan equivalence",
+      "exact_legacy_thermal_cap_s": 24,
+      "exact_legacy_thermal_cap_decision": "exploratory screening only; 22.190252% cumulative and 13.725195% sustained speed gains versus 20 s, but strict temperature gates failed",
+      "reusable_screening_thermal_cap_s": 20,
+      "thermal_only_outer_correctors": 2,
+      "thermal_only_outer_decision": "screening candidate only; corrected-full-rack 3-versus-2 A/B remains unmeasured",
+      "live_outer_correctors": 3,
+      "resource_gate": "FAIL; latest snapshots found 1442 MiB Windows-available and 3245 MiB WSL-available, both below the 5120 MiB launch requirement",
+      "heavy_openfoam_run_launched": false
+    },
+    "current_case_limits": [
+      "The retained 1.600 s state has about 0.875 nominal air replacements and 8.8677% whole-fluid velocity RMS drift, so it is not eligible for frozen-flow thermal acceleration.",
+      "The retained 22.5 mm case predates corrected geometry and has 39,878 below-threshold determinant cells.",
+      "The canonical NI chassis remains active and unchanged; its minimum-separator sensitivity is provisional, inactive, and intentionally rejected by native geometry stamping pending measurements and vent topology.",
+      "The exact native ledger verifies the solver's discrete beginning-of-step frozen rho*cp*V storage convention; it is not endpoint-density thermodynamics, a long-transient accuracy result, radiation validation, or OpenFOAM validation.",
+      "The installed OpenFOAM custom solver is definitely stale: it lacks the required policy marker and contains historical isothermal-mode strings. The current source has not been rebuilt and runtime-proven under current memory headroom.",
+      "No runtime control in this manifest is an industry-readiness or validation sign-off."
+    ]
+  },
+  "file_summary": {
+    "file_count": 352,
+    "total_bytes": 33383144,
+    "ordering": "workspace-relative paths, forward slashes, ordinal ascending",
+    "digest": "SHA-256 lowercase hexadecimal"
+  },
+  "authoritative_files": [
+    {
+      "path": "README.md",
+      "bytes": 126505,
+      "sha256": "7a80637cd1aace153b7828fc28434e57fff80fe22937c4ebdd00521b5b0432c7"
+    },
+    {
+      "path": "library/components/EATON_PDU_PDUMNH30.toml",
+      "bytes": 2216,
+      "sha256": "f674e74a57246566e94175cffa08da462e6206225d32fd6cdadfd5d335f28b3b"
+    },
+    {
+      "path": "library/components/Fan_control_kit_PS.toml",
+      "bytes": 1495,
+      "sha256": "70cc1cbaa910041654550563ec13d2adb077d9bd8bc2c5307d80edec8ff35e04"
+    },
+    {
+      "path": "library/components/eaton_KVM.toml",
+      "bytes": 1706,
+      "sha256": "9e29094ac8dc87481ad76502a2ccd5c1cd5b8ab421f978589f0ab10274e473f0"
+    },
+    {
+      "path": "library/components/updated_DELL_R360.toml",
+      "bytes": 5420,
+      "sha256": "58c30c45794b89e590afcce46f98b63addbea5b5f9dbf23e5123926aedc85c25"
+    },
+    {
+      "path": "library/components/updated_DELL_R470.toml",
+      "bytes": 5484,
+      "sha256": "f82f56ffa6ba3104fba8e0afcdc829dbcbc4e9300ca1ee3f1182c7a20cb88b48"
+    },
+    {
+      "path": "library/components/updated_Keysight_N5766A.toml",
+      "bytes": 8971,
+      "sha256": "17ab6fa85ca1619b555ed55b824a9dc242bc4af8ec572350e2a174d50dcbaa1d"
+    },
+    {
+      "path": "library/components/updated_NI_PXIe_Chassis.toml",
+      "bytes": 5784,
+      "sha256": "5bbb6ddc13c8ea49f73c2c8f54dda2959f87196c5a75082d1ec9e874134c029c"
+    },
+    {
+      "path": "library/components/updated_NI_PXIe_Chassis_minimum_separator_sensitivity.toml",
+      "bytes": 6716,
+      "sha256": "6a154c7c936f4c98186c6aed90f0f96e33a967e3244618d4e2ff37949f063ffc"
+    },
+    {
+      "path": "library/components/updated_Thruster_Load_Box.toml",
+      "bytes": 2569,
+      "sha256": "529c5b436ec40786df1c8104a49947275446d205f259976ca4c8d5212aa3114e"
+    },
+    {
+      "path": "library/components/updated_cisco_catalyst_9300_24.toml",
+      "bytes": 4216,
+      "sha256": "b41354a7ab8af0857e2128150c8e6cecfa2784da207b6027a1213c482ef65b19"
+    },
+    {
+      "path": "library/components/updated_eaton_UPS.toml",
+      "bytes": 3754,
+      "sha256": "a359589388dc2976ac690d50c61c0cf4b06491ab76dd74bd275c85755ade6b55"
+    },
+    {
+      "path": "library/components/updated_keysight_N6701C.toml",
+      "bytes": 9027,
+      "sha256": "e318a606d0ce79a832348c0d474b758601cd77b45e44225908b86c535b1f0c76"
+    },
+    {
+      "path": "library/components/updated_trenton_3u_bam.toml",
+      "bytes": 11717,
+      "sha256": "10aa7d722d00115ec33ea7961fe17aac57bc27e7e0ec1d03ccd3e8b6d6bcd635"
+    },
+    {
+      "path": "library/fan_curves/fan_curves.toml",
+      "bytes": 3951,
+      "sha256": "2a64aba798205a9eff061ba1e9edd2d62b94baeafe740ee16b636f333fd483d4"
+    },
+    {
+      "path": "library/fan_curves/fan_curves_updated_2026_08_24.toml",
+      "bytes": 2392,
+      "sha256": "0365c4e75a11aae906878c60d68f4e69e532d6ad9e836474b126705d87eb35cf"
+    },
+    {
+      "path": "library/models/new_model_updated.toml",
+      "bytes": 9860,
+      "sha256": "a6448cc3a6ee00fdc72a3f6d49a27b7aeedb89a66e71b06e525f7190a335a05a"
+    },
+    {
+      "path": "library/models/new_model_updated_native_regression.toml",
+      "bytes": 9490,
+      "sha256": "61bec8c4a5cd6519ea9767fddd7e72848f9fe72f5d705127bb389b2412a9bbd3"
+    },
+    {
+      "path": "library/models/new_model_updated_native_smoke.toml",
+      "bytes": 9355,
+      "sha256": "bff6b1408c9b9287fcd7f44d3842ee7692c5ca23a9f9119fe9c10b9675486c22"
+    },
+    {
+      "path": "library/models/new_model_updated_openfoam_export_test.toml",
+      "bytes": 9863,
+      "sha256": "078a750be6bcdd13573f0c7d0ea14b6781d867f852d87ce935f49e669f4cb57d"
+    },
+    {
+      "path": "library/models/validation_ni_minimum_separator_sensitivity.toml",
+      "bytes": 2650,
+      "sha256": "9b632f7d9a664f851653a6f3d161170e4f89b54db335c131fe09c2907fb786c9"
+    },
+    {
+      "path": "library/openfoam_cfg/default_foam_cfg.toml",
+      "bytes": 2640,
+      "sha256": "1b061b1c70ee470fa4cd35716dc8d27771dcd096fd5c2693f34730156a62cb9e"
+    },
+    {
+      "path": "library/openfoam_cfg/indepth_foam_cfg.toml",
+      "bytes": 3970,
+      "sha256": "d7a159fd880d3b77f4e2e6be12dbf8a8e1b609ea82c8509f93870484f15936aa"
+    },
+    {
+      "path": "library/openfoam_cfg/screening_foam_cfg.toml",
+      "bytes": 5061,
+      "sha256": "8df8a4840d3081dd9f6c362662d98d6d5b993ddedb0edeee97590fb4f0ca3101"
+    },
+    {
+      "path": "library/openfoam_cfg/validation_foam_cfg.toml",
+      "bytes": 2507,
+      "sha256": "81b5fe938c95cdc7cb843cdb84e43f95f54434030bc312d4a3b6654a2e2c0b1e"
+    },
+    {
+      "path": "main.cpp",
+      "bytes": 14333,
+      "sha256": "5e8b4e503536ee1f771ac25972061a520783fff839d023647f1ae61b9c8940a6"
+    },
+    {
+      "path": "model.exe",
+      "bytes": 1771040,
+      "sha256": "2ea1b5af3834923c9585a19533f33ca599c5b05cb1c903b9f9fb79488f09e9dc"
+    },
+    {
+      "path": "model_runner.cpp",
+      "bytes": 9363,
+      "sha256": "c780d1987793b450f6a56364eb70fe20a56c6af77927987c85818cf7508ab406"
+    },
+    {
+      "path": "openfoam_semifrozen_solver/Make/files",
+      "bytes": 243,
+      "sha256": "9e2742e1036cc712637bacaf937af468249e343e74f7bdbca9b9c9c5dde512b1"
+    },
+    {
+      "path": "openfoam_semifrozen_solver/Make/options",
+      "bytes": 1732,
+      "sha256": "8bded424e8d95fb75d592d9133f364a8d2c43d507e80e99b337d27deb1f0ca0b"
+    },
+    {
+      "path": "openfoam_semifrozen_solver/semiFrozenChtMultiRegionFoam.C",
+      "bytes": 10667,
+      "sha256": "1560290c774faeabe354159c038bf1793aab43d49833df645f0155afea7bf09e"
+    },
+    {
+      "path": "output.txt",
+      "bytes": 39808,
+      "sha256": "dbcaaa237fb8bf59c4841cf4e3a8b0a226d28208d23560c72900ce113d2ff2ea"
+    },
+    {
+      "path": "plot/plot.py",
+      "bytes": 21050,
+      "sha256": "1531dfd558a08e1c731d2658cd998e67d9dcb0892c25501e7474eda4414d1277"
+    },
+    {
+      "path": "plot/plot_component.py",
+      "bytes": 10788,
+      "sha256": "43a7dd8817e6fd6577386bcc50052b0bdcf46d7174ee7a80bb579d05a8f7fdb1"
+    },
+    {
+      "path": "src/component.hpp",
+      "bytes": 28225,
+      "sha256": "94d4cf5c4e3f9b6b2d2d42230228371e10d06e7dc8aaf383a956597cf036e920"
+    },
+    {
+      "path": "src/convection.hpp",
+      "bytes": 2385,
+      "sha256": "dc053e5e6e6bad97c739c9a2686db74262099f89d6eabf99c0d0f75a121e62c0"
+    },
+    {
+      "path": "src/fan.hpp",
+      "bytes": 10497,
+      "sha256": "72987cd7f06cbc7a26970335ecee41dabd21ca6e433c35ec6aa92ef66be896b2"
+    },
+    {
+      "path": "src/flow_solver.hpp",
+      "bytes": 79171,
+      "sha256": "8417640398f791debef9aee79f3eaa435d1e8920adfc9264cbb2f41c00ade8d2"
+    },
+    {
+      "path": "src/grapher.hpp",
+      "bytes": 24598,
+      "sha256": "d48d04db7b3a9e6ab380c1b4ecdca93c767b436a853c6e96a31762d9de12f057"
+    },
+    {
+      "path": "src/input/input_types.hpp",
+      "bytes": 10640,
+      "sha256": "a20b2ddc08b6c257d6c20c5adfc853354e9c1ee28a2262f67f887534f9fa3288"
+    },
+    {
+      "path": "src/input/model_loader.hpp",
+      "bytes": 126759,
+      "sha256": "145610e5414131e0d9e84f0de10d0609c6f6ff4ffe1413e2ddfde44f21c70167"
+    },
+    {
+      "path": "src/mesh.hpp",
+      "bytes": 145385,
+      "sha256": "75f9d9b72e97d0828361e6b57a1ed99da1bbf086e38db26d77805215bf85d065"
+    },
+    {
+      "path": "src/openfoam_exporter.hpp",
+      "bytes": 318238,
+      "sha256": "87bcac4f0083d48d94ba7a39051ed8cea73338de8e87b56c3a8b602bd5a43951"
+    },
+    {
+      "path": "src/solver.hpp",
+      "bytes": 51652,
+      "sha256": "c104a64780930162854ccdb2e8f083ec014ee033942aabe94fdfac5542cd5666"
+    },
+    {
+      "path": "src/thermal_estimator.hpp",
+      "bytes": 11738,
+      "sha256": "328f21912c66e66ab2374ee3043d5f46d3d98a2d56a76c5448e435a364c88505"
+    },
+    {
+      "path": "tests/adaptive_convection_conservation_test.cpp",
+      "bytes": 7023,
+      "sha256": "1b070b3783dc3cb2b32c3c6934e9109859d1d38cd99f45402264f1bf98ba78de"
+    },
+    {
+      "path": "tests/component_geometry_audit_test.py",
+      "bytes": 8917,
+      "sha256": "299d0c703452baa5d257f4a1ed2af35861a762d3206df2705c9261934c47667d"
+    },
+    {
+      "path": "tests/convection_stability_guard_test.cpp",
+      "bytes": 9213,
+      "sha256": "7e0f552499ec751b97c44f1670c0f942f05068411908c873e1f4accb9fb7f2f9"
+    },
+    {
+      "path": "tests/generated_runner_solver_provenance_test.ps1",
+      "bytes": 9712,
+      "sha256": "68caab63d8dd37a5176886645f2a6808d48ac519a3d1ea770365d702d1f69d08"
+    },
+    {
+      "path": "tests/generated_runner_thermal_outer_test.ps1",
+      "bytes": 15047,
+      "sha256": "9c6cd22bcca8b826003ad12ea24b15cb36a230a6370d958f038afb490990c400"
+    },
+    {
+      "path": "tests/lab_model_contract_test.py",
+      "bytes": 14083,
+      "sha256": "4cbb4eb857f4ac6e747907c57ddfe481cabc144d4e745e6e58c79274a3c39a17"
+    },
+    {
+      "path": "tests/model_config_test.cpp",
+      "bytes": 58648,
+      "sha256": "482da93116cab634b734bf45e761cddc8f1288f3b1872ad63398af90c3cb2c85"
+    },
+    {
+      "path": "tests/native_template_microcase_test.cpp",
+      "bytes": 38652,
+      "sha256": "a777edbdda92b62e7c953859336751b3c68d37d77adf9e78ce29d4c1a476d4cd"
+    },
+    {
+      "path": "tests/native_thermal_energy_ledger_test.cpp",
+      "bytes": 20370,
+      "sha256": "e95594cb743de223b6e6fe5880ed446b0205ccb280408905f3b0dbb88980f268"
+    },
+    {
+      "path": "tests/ni_separator_mesh_ladder_test.cpp",
+      "bytes": 24216,
+      "sha256": "3cec1f73dd894c73c8474feccd15d977b92edd6ba09233c7ef8a5876ebb8c1aa"
+    },
+    {
+      "path": "tests/openfoam_export_test.cpp",
+      "bytes": 46760,
+      "sha256": "35ff149537ca75dd057dc3a05b862840f48429ac19bbaa0afdffc67354e3485a"
+    },
+    {
+      "path": "tests/openfoam_profile_policy_test.py",
+      "bytes": 6472,
+      "sha256": "dcb6d70f53075b332a2f364fe0aad7f9b0bb4c3b425fe026411970dde0f6ba9f"
+    },
+    {
+      "path": "tests/plot_geometry_test.py",
+      "bytes": 7396,
+      "sha256": "28f0b2c7c16e0b06aebda9c6640bc877ccddf7699b49b440ee06243ed6d78ac6"
+    },
+    {
+      "path": "tests/run_added_feature_tests.ps1",
+      "bytes": 12465,
+      "sha256": "49e5d1e85d321007c4983dd4c585c6bc6e4810dc23b98edd82138e9f6ad051b5"
+    },
+    {
+      "path": "tests/semifrozen_solver_policy_test.py",
+      "bytes": 5251,
+      "sha256": "10e5db94af58c0ce2d055a7fe0563543ebafeab614e9a2b7883807e17c3d3138"
+    },
+    {
+      "path": "tests/updated_lab_model_contract_test.py",
+      "bytes": 28162,
+      "sha256": "623cf1e8e3193094bf5fdd81d3f58bccc5faf7bfc0379e54c98d9b1952e237be"
+    },
+    {
+      "path": "tools/audit_component_geometry.py",
+      "bytes": 17522,
+      "sha256": "1bb75d79a12d0c481aaab0f265608078499e3bec438de4770ac8157e1bd1162f"
+    },
+    {
+      "path": "tools/benchmark_openfoam_thermal_timestep.sh",
+      "bytes": 7357,
+      "sha256": "fbfb6b76bef093990ac8a557f1de4d8fefa8b9681d168596a10e57c75d649722"
+    },
+    {
+      "path": "tools/create_runtime_acceleration_manifest.ps1",
+      "bytes": 33535,
+      "sha256": "d9ebe217b1856af2ed4400e7e9bffde5e76860566153da1ebf1d47e6b3af6719"
+    },
+    {
+      "path": "tools/render_component_plots.py",
+      "bytes": 7903,
+      "sha256": "819ffd98c7298f6fb1d1140f0334733640fa9ef42ea90fa94956d5f30e8f251e"
+    },
+    {
+      "path": "validation/OPENFOAM_CORRECTED_RUN_READINESS_2026-08-26.md",
+      "bytes": 12822,
+      "sha256": "fb25cfbd21df5b3cbad2d1125a3232784843ba5960fa6a325d03c99bb22c6d3f"
+    },
+    {
+      "path": "validation/README.md",
+      "bytes": 36110,
+      "sha256": "49e517c59123930f022b19b163d25b6fbdd8df9d454a05098043e679d0fbcd2e"
+    },
+    {
+      "path": "validation/current_geometry_export_2026-08-26/.thermal_sim_last_run.json",
+      "bytes": 657,
+      "sha256": "9e5dcee04d296f7a9510b28db8f183a84ff2f0bb89d1cf5f61d37b85516faac6"
+    },
+    {
+      "path": "validation/current_geometry_export_2026-08-26/README.md",
+      "bytes": 1783,
+      "sha256": "9f450981f2ee77b4ed2093728714f227509fbd3254e0ad69c55388b1e18042bc"
+    },
+    {
+      "path": "validation/current_geometry_export_2026-08-26/output.txt",
+      "bytes": 39609,
+      "sha256": "4e3c4a4b96b12929ab141b7975aabb08db9b4d84d86a5d04e3f42db35f25d676"
+    },
+    {
+      "path": "validation/ni_minimum_separator_sensitivity_2026-08-26/.thermal_sim_last_run.json",
+      "bytes": 768,
+      "sha256": "2bb71d8e9044d7e0a14dc172f48df1077e78da48bf78b6b1dd26b3a4bab56e0a"
+    },
+    {
+      "path": "validation/ni_minimum_separator_sensitivity_2026-08-26/geometry_audit.stdout.log",
+      "bytes": 251,
+      "sha256": "98b6db6d6746eb4b9a078aa2e7fd00decaafd3449469f7e7d5685e7659f42573"
+    },
+    {
+      "path": "validation/ni_minimum_separator_sensitivity_2026-08-26/geometry_only.stdout.log",
+      "bytes": 384,
+      "sha256": "cd96746c6e37b7f4518bf316e98c05e8cd40efe9420bfd3eb2b847f3445fdb42"
+    },
+    {
+      "path": "validation/ni_minimum_separator_sensitivity_2026-08-26/output.txt",
+      "bytes": 4604,
+      "sha256": "356f4080ff8f76d9e1c9514778e7c6cf470ce301df471b5a1c6ab40d0a503821"
+    },
+    {
+      "path": "validation/ni_minimum_separator_sensitivity_2026-08-26/plot_artifact_hashes_2026-08-26.stdout.log",
+      "bytes": 1320,
+      "sha256": "563f96c5e53777c1142447a99c0520c620ce04feaa7f3a985c9d1b77cf7aed99"
+    },
+    {
+      "path": "validation/ni_minimum_separator_sensitivity_2026-08-26/plot_geometry_ansys_python_2026-08-26.stdout.log",
+      "bytes": 2880,
+      "sha256": "3c7209dfbb3c07474c36e71fecd960ffcfae972baf8e5a5544143a880753fb4f"
+    },
+    {
+      "path": "validation/ni_minimum_separator_sensitivity_2026-08-26/plots/PLOT_MANIFEST.json",
+      "bytes": 3493,
+      "sha256": "f391d5b74095755ca45153804fadfe0cfcd8f0045615a123f466a4c7f75352e8"
+    },
+    {
+      "path": "validation/ni_minimum_separator_sensitivity_2026-08-26/plots/README.md",
+      "bytes": 656,
+      "sha256": "895a0533288043b817e0446f32a6f093d71b78e652430a6d0c8c97af35e30bc0"
+    },
+    {
+      "path": "validation/ni_minimum_separator_sensitivity_2026-08-26/plots/component_01_ni_pxie_784782_01_chassis_provisional_minimum_separator_sensitivity.png",
+      "bytes": 463599,
+      "sha256": "8d6a7549d8d88ba8031025060b04e202988d964cb82c75a1555be7d75f25116c"
+    },
+    {
+      "path": "validation/ni_minimum_separator_sensitivity_2026-08-26/plots/geometry_input.txt",
+      "bytes": 4604,
+      "sha256": "356f4080ff8f76d9e1c9514778e7c6cf470ce301df471b5a1c6ab40d0a503821"
+    },
+    {
+      "path": "validation/ni_minimum_separator_sensitivity_2026-08-26/plots/rack.png",
+      "bytes": 367959,
+      "sha256": "eb583d097ddf79cb1b14a0319a4411bbf1e64e8b50bf6c8dbe272ff238d4b26f"
+    },
+    {
+      "path": "validation/ni_minimum_separator_sensitivity_2026-08-26/render_plots.stdout.log",
+      "bytes": 1312,
+      "sha256": "bb75211e83aee83a5dee07a45ad3d4a1ef3f4e7a771f15a320d58a0ca3551c2b"
+    },
+    {
+      "path": "validation/ni_minimum_separator_sensitivity_2026-08-26/render_plots_ansys_python_2026-08-26.stdout.log",
+      "bytes": 257,
+      "sha256": "9880818df40462a04d15d8fa453e74538b5870c0606014395ba4a2e90a41a007"
+    },
+    {
+      "path": "validation/ni_minimum_separator_sensitivity_2026-08-26/verify_actual_ni_air_artists.py",
+      "bytes": 4444,
+      "sha256": "f0e847fb43052b122306861a7d1624135c46adedc3239d1fb6b2a465a1674166"
+    },
+    {
+      "path": "validation/ni_minimum_separator_sensitivity_2026-08-26/verify_actual_ni_air_artists_2026-08-26.stdout.log",
+      "bytes": 668,
+      "sha256": "35743ae1d189df205fc7af48060b351b5a0a67736de5bf9ac7bee9756c2a7dff"
+    },
+    {
+      "path": "validation/ni_minimum_separator_sensitivity_2026-08-26/verify_plot_manifest_2026-08-26.stdout.log",
+      "bytes": 948,
+      "sha256": "5082c2d30d40f1aa22ee0d80ead579bdcfabec76ad0cbf19e3fc6d64ff424b85"
+    },
+    {
+      "path": "validation/revised_native_regression_2026-08-26/CONVECTION_AND_NI_HARDENING_2026-08-26.md",
+      "bytes": 11836,
+      "sha256": "4f53838d032e83de15461b422baf5a54d4da6f56497f6a91fa2606891c2b80e6"
+    },
+    {
+      "path": "validation/revised_native_regression_2026-08-26/ENERGY_PLOTTING_PROVENANCE_AND_NI_LADDER_2026-08-26.md",
+      "bytes": 12602,
+      "sha256": "9e2114d9e9d1dbd3b78c3e261d8e0eeaafb3119ba58d42bada1262192bca8541"
+    },
+    {
+      "path": "validation/revised_native_regression_2026-08-26/NI_SEPARATOR_MESH_LADDER_2026-08-26.md",
+      "bytes": 7497,
+      "sha256": "3cb0fe9bc170adfc9cb91a14d12c35c46eaee5c1fc1fe642c6aa4c1b01200427"
+    },
+    {
+      "path": "validation/revised_native_regression_2026-08-26/RUN_REPORT.md",
+      "bytes": 15033,
+      "sha256": "ae8a4aed0fea7cd77f4606a68804b973d3055fcc1dd19c488f1243f867089cc2"
+    },
+    {
+      "path": "validation/revised_native_regression_2026-08-26/added_feature_regression_convection_hardening_2026-08-26.failed_initial.log",
+      "bytes": 299509,
+      "sha256": "6f5068020ff4d716ec2aba263a166686fe4ff31c7c37d22d040ed4186f00f05e"
+    },
+    {
+      "path": "validation/revised_native_regression_2026-08-26/added_feature_regression_convection_hardening_2026-08-26.stdout.log",
+      "bytes": 301654,
+      "sha256": "bb573ac51bc8d9037b5e50b08e1199c2e2040bfbf15115b1fdc1a8139c999576"
+    },
+    {
+      "path": "validation/revised_native_regression_2026-08-26/added_feature_regression_energy_provenance_2026-08-26.stdout.log",
+      "bytes": 327008,
+      "sha256": "1c1dc85928631b4713ab401309f0f4206e11b653bca989c803d5576c2ea76f12"
+    },
+    {
+      "path": "validation/revised_native_regression_2026-08-26/added_feature_regression_runtime_accel_2026-08-26.stdout.log",
+      "bytes": 295556,
+      "sha256": "933922b1cbfa191a42e95cbe6e20e4439d86575959ba327d9d5f2492f0f36379"
+    },
+    {
+      "path": "validation/revised_native_regression_2026-08-26/geometry_audit_canonical_hardening_2026-08-26.stdout.log",
+      "bytes": 192,
+      "sha256": "e3aff0f60fbc9f3ad53e53727d0279c6a7e3878c1da47045675d83eebfda37e9"
+    },
+    {
+      "path": "validation/revised_native_regression_2026-08-26/installed_openfoam_solver_provenance_2026-08-26.stdout.log",
+      "bytes": 877,
+      "sha256": "4c65d643057ce5762cd6f39fadb16f2966e0c4ff5d1883481bb81171464f28e2"
+    },
+    {
+      "path": "validation/revised_native_regression_2026-08-26/model_config_thermal_outer_test.exe",
+      "bytes": 1833374,
+      "sha256": "ed8ffe229101909e6091a35ebf05e38e552fb120aad5feb9b301533cbfddb2e0"
+    },
+    {
+      "path": "validation/revised_native_regression_2026-08-26/native_conservative_flow_active_set_2026-08-26.manifest.json",
+      "bytes": 9061,
+      "sha256": "76ed26c1fcbbf5fac8b064590d9b42fd6ea2446a9e6df44b34437fdea68f75de"
+    },
+    {
+      "path": "validation/revised_native_regression_2026-08-26/native_template_campaign_drift_2026-08-26.stdout.log",
+      "bytes": 3976,
+      "sha256": "d6300519a272dc4799b3fb21fa2b18f17742fadd1bf96790c847d11336afc526"
+    },
+    {
+      "path": "validation/revised_native_regression_2026-08-26/native_template_microcase_convection_hardening_2026-08-26.exe",
+      "bytes": 1086574,
+      "sha256": "514b76ab53429773383b5ac2eaf11480c31cf15a33f5cdcf55084061928d0027"
+    },
+    {
+      "path": "validation/revised_native_regression_2026-08-26/native_template_microcase_convection_hardening_2026-08-26.stdout.log",
+      "bytes": 58145,
+      "sha256": "9d9f6182059470ea4a7ff89fa300b574c411814832a0b17793ba2e0571668c95"
+    },
+    {
+      "path": "validation/revised_native_regression_2026-08-26/native_template_microcase_energy_provenance_2026-08-26.exe",
+      "bytes": 1086574,
+      "sha256": "63f3c3e64ca4509941ff397cdfcea0bb4effbfb9beeba16343bd27fa92a0ef51"
+    },
+    {
+      "path": "validation/revised_native_regression_2026-08-26/native_template_microcase_energy_provenance_2026-08-26.stdout.log",
+      "bytes": 58145,
+      "sha256": "6005a082afabfb60549b2904bc359db82cccf226d6b23c2393cf259f8a99637d"
+    },
+    {
+      "path": "validation/revised_native_regression_2026-08-26/native_template_microcase_final_verified_2026-08-26.manifest.json",
+      "bytes": 6262,
+      "sha256": "ef967d3ea16ac82c8d49cf8c70ef2e82046daf2ee7a66668b7a7c9bc9e456b8e"
+    },
+    {
+      "path": "validation/revised_native_regression_2026-08-26/native_template_microcase_ni_separator_mesh_diagnosis_2026-08-26.stdout.log",
+      "bytes": 541,
+      "sha256": "e8c064582749d463fe606ba0a04f5441590ecc3e5f675458e544a795c553ae27"
+    },
+    {
+      "path": "validation/revised_native_regression_2026-08-26/native_template_microcase_ni_separator_sensitivity_2026-08-26.stdout.log",
+      "bytes": 542,
+      "sha256": "6dc457f4be400f50aa6e8fdcb256200487e18264dbc909417a0ab14dd976dcc6"
+    },
+    {
+      "path": "validation/revised_native_regression_2026-08-26/native_template_microcase_runtime_accel_2026-08-26.exe",
+      "bytes": 1079239,
+      "sha256": "b421dc714036340d0c5575a174ba249803e401ceba37b80a8276f2bb9d517ef9"
+    },
+    {
+      "path": "validation/revised_native_regression_2026-08-26/native_template_microcase_runtime_accel_2026-08-26.stdout.log",
+      "bytes": 57670,
+      "sha256": "e4b99873a92ce411cb731e48abd622e66ad90e658280696c2c8c1b984ce0518e"
+    },
+    {
+      "path": "validation/revised_native_regression_2026-08-26/native_thermal_energy_ledger_2026-08-26.stdout.log",
+      "bytes": 19657,
+      "sha256": "48411a50929c52a7c18b758c2dfb20ef02f461d9027805c8d3d03bbff3f17464"
+    },
+    {
+      "path": "validation/revised_native_regression_2026-08-26/ni_separator_mesh_ladder_2026-08-26.stdout.log",
+      "bytes": 5105,
+      "sha256": "b56091b77c61f0f622591dbf0ab9a7f150307165d2f4cc7d3634a1a6393a1c34"
+    },
+    {
+      "path": "validation/revised_native_regression_2026-08-26/ni_separator_mesh_ladder_test_2026-08-26.exe",
+      "bytes": 793556,
+      "sha256": "19f61689aacfa6fef635e275434c74aaf16fbd020b306eded2c5904b9a46636f"
+    },
+    {
+      "path": "validation/revised_native_regression_2026-08-26/openfoam_export_thermal_outer_test.exe",
+      "bytes": 985924,
+      "sha256": "708222969308eae0ad4a19e54866119a2262a968d106d4fca5157810f5b0933e"
+    },
+    {
+      "path": "validation/revised_native_regression_2026-08-26/openfoam_provenance_gate_2026-08-26.stdout.log",
+      "bytes": 2722,
+      "sha256": "1df20347f07683a9d22270f86faed4f28a4087767b801c8d0199308147f33dca"
+    },
+    {
+      "path": "validation/revised_native_regression_2026-08-26/openfoam_resource_recheck_2026-08-26.stdout.log",
+      "bytes": 295,
+      "sha256": "e7a6cdacc2c5ca1d3d05ca243be78e46d46007e2bebc216b504c4a6150ae203f"
+    },
+    {
+      "path": "validation/revised_native_regression_2026-08-26/plot_geometry_hardening_2026-08-26.stdout.log",
+      "bytes": 1388,
+      "sha256": "72e2d3594242ed741e67a5d92365bd6d0e3cba1f02dc14c0fc32f1219305364e"
+    },
+    {
+      "path": "validation/revised_native_regression_2026-08-26/post_regression_resource_recheck_2026-08-26.stdout.log",
+      "bytes": 174,
+      "sha256": "3114e9b8e8cbfa2bf7c3bec0d8ce4e10d4dae8c1170ccf7cae28681f3486191e"
+    },
+    {
+      "path": "validation/revised_native_regression_2026-08-26/production_geometry_rebuild_2026-08-26.stdout.log",
+      "bytes": 272,
+      "sha256": "664849782a065fcdda6988f03a171126171a92e74dc81346c92281829b459454"
+    },
+    {
+      "path": "validation/revised_native_regression_2026-08-26/semifrozen_solver_policy_hardening_2026-08-26.stdout.log",
+      "bytes": 1447,
+      "sha256": "89a22aa39a28a61a79a64ce143a8c1b6a436837705e0136f554815f746311d39"
+    },
+    {
+      "path": "validation/revised_openfoam_22p5mm_2026-08-25/MESH_QUALITY_AUDIT.md",
+      "bytes": 3674,
+      "sha256": "506688cc5c0a4982fd67f83a8455cd62305d7c2d9086347f282f93d1f48945a7"
+    },
+    {
+      "path": "validation/revised_openfoam_22p5mm_2026-08-25/OPENFOAM_ARCHIVE_COMPLETION_2026-08-26.md",
+      "bytes": 5853,
+      "sha256": "b98cae00e7e7a6ed08cd4ef0186a126a805863fb34e417a8f0e8106fc2ef872e"
+    },
+    {
+      "path": "validation/revised_openfoam_22p5mm_2026-08-25/PERFORMANCE_AUDIT.md",
+      "bytes": 9694,
+      "sha256": "f94be5264e5cbb1d6a60ca94a375658a238731450cdde9f35b2991b090ff5558"
+    },
+    {
+      "path": "validation/revised_openfoam_22p5mm_2026-08-25/RUNTIME_ACCELERATION_POLICY_2026-08-26.md",
+      "bytes": 15751,
+      "sha256": "8c2c56e8d92c3f8fefc65958011a4b0aa4f7cce28df7068ab4c39874d4d66c34"
+    },
+    {
+      "path": "validation/revised_openfoam_22p5mm_2026-08-25/RUN_STATUS.md",
+      "bytes": 48552,
+      "sha256": "bf1b54d85b80aec9bf024ebcde4dfb9a3fcd7682d4af2adc806c630b50054e2b"
+    },
+    {
+      "path": "validation/revised_openfoam_22p5mm_2026-08-25/THERMAL_TIMESTEP_ACCELERATION_2026-08-26.md",
+      "bytes": 8652,
+      "sha256": "b1e02baac0023dafd8a26f6dde9218f8dbab918a20017c70b0ab9ea414f522d4"
+    },
+    {
+      "path": "validation/revised_openfoam_22p5mm_2026-08-25/TRANSIENT_FIRST_LAW_AUDIT_STATUS_1P50_1P60.md",
+      "bytes": 3014,
+      "sha256": "1a1cc7eb2ed84381377d4e312e019f76a19c12c40a9735d46bdadb78028d1d81"
+    },
+    {
+      "path": "validation/revised_openfoam_22p5mm_2026-08-25/actual_case_audit_evidence_manifest.csv",
+      "bytes": 2661,
+      "sha256": "b0084ef1db479b49c684704f5783746aa09b080cb0fa06af4e9b91c51a6f373f"
+    },
+    {
+      "path": "validation/revised_openfoam_22p5mm_2026-08-25/boundary_mass_balance_through_1p60.csv",
+      "bytes": 4724,
+      "sha256": "45a16e9e1570845a7c47d2e1c9fc22cca73a983764486353843f4bf9f0420ec3"
+    },
+    {
+      "path": "validation/revised_openfoam_22p5mm_2026-08-25/fan_operating_domain_1p60.csv",
+      "bytes": 7087,
+      "sha256": "7ab6faeb69810deb31821508d2b88795fa1ae9c97feef925cfcced4f194f8ba2"
+    },
+    {
+      "path": "validation/revised_openfoam_22p5mm_2026-08-25/fan_operating_domain_1p60.md",
+      "bytes": 4441,
+      "sha256": "d24af0093ef34e0ea36a9c29d3191c49905edf7ed5a4726ff6cd488e0349209e"
+    },
+    {
+      "path": "validation/revised_openfoam_22p5mm_2026-08-25/field_convergence_1p40_1p50_to_1p60.csv",
+      "bytes": 44007,
+      "sha256": "36c94cf99f89a6a883e66bdfadef196ee38b3d74d65661ef96bf94599fb5ddfa"
+    },
+    {
+      "path": "validation/revised_openfoam_22p5mm_2026-08-25/field_plots_1p60/README.md",
+      "bytes": 6338,
+      "sha256": "e235bb875cbceeb179b4ee5bd3890f16116e9c4ef014e9fd41272c0d81a76354"
+    },
+    {
+      "path": "validation/revised_openfoam_22p5mm_2026-08-25/field_plots_1p60/dell_air_temperature_early_transient_x0p291.png",
+      "bytes": 165620,
+      "sha256": "f3addb9873af02d33e8c9482dbd5ffee691f542296140078643964e5cb30740c"
+    },
+    {
+      "path": "validation/revised_openfoam_22p5mm_2026-08-25/field_plots_1p60/dell_speed_vectors_x0p291.png",
+      "bytes": 368104,
+      "sha256": "6148df1f124ae70cf77b2c6ba234268a2fc5adbd6e22ce99c50d5d9c9bf64efe"
+    },
+    {
+      "path": "validation/revised_openfoam_22p5mm_2026-08-25/field_plots_1p60/field_statistics.csv",
+      "bytes": 1874,
+      "sha256": "c26f571b7aa3a69d577a902d61215dc88849d79af90707bd5029a01c514afd09"
+    },
+    {
+      "path": "validation/revised_openfoam_22p5mm_2026-08-25/field_plots_1p60/global_air_temperature_early_transient_x0p291.png",
+      "bytes": 312309,
+      "sha256": "89da294846b9d297d4648a47effc954c9a32744228e254d5011f498a47e43031"
+    },
+    {
+      "path": "validation/revised_openfoam_22p5mm_2026-08-25/field_plots_1p60/global_p_rgh_gauge_x0p291.png",
+      "bytes": 296502,
+      "sha256": "3d3c70abd3549022b9147d2b6f1beac4517cc998a6b4332e56bd49b5f59e83ad"
+    },
+    {
+      "path": "validation/revised_openfoam_22p5mm_2026-08-25/field_plots_1p60/global_speed_vectors_x0p291.png",
+      "bytes": 1557526,
+      "sha256": "d482fdaf6d7301f20626d5302e9e08266edb9c9f6b8e2717307faa3dce06a3cd"
+    },
+    {
+      "path": "validation/revised_openfoam_22p5mm_2026-08-25/field_plots_1p60/integrity_verification.stdout.log",
+      "bytes": 474,
+      "sha256": "bbae4ba4bdf61fe69f2602fe24ebcc17e6874b9149b83797e39cc5e8363c08ad"
+    },
+    {
+      "path": "validation/revised_openfoam_22p5mm_2026-08-25/field_plots_1p60/manifest.json",
+      "bytes": 11486,
+      "sha256": "989d58cc85288cf1237a1bee1a855490036c71f8e77df5b925ae22334383d3ad"
+    },
+    {
+      "path": "validation/revised_openfoam_22p5mm_2026-08-25/field_plots_1p60/ni_air_temperature_early_transient_x0p222.png",
+      "bytes": 179428,
+      "sha256": "122c777a4dcf45d20ae8aa910ba7a1e4aec97714c2ac9837f5f6fd4849ae9b70"
+    },
+    {
+      "path": "validation/revised_openfoam_22p5mm_2026-08-25/field_plots_1p60/ni_speed_vectors_x0p222.png",
+      "bytes": 816786,
+      "sha256": "e04d7b292097107e5540db19d6042cc3c576da6f7b468329778ca43eb156541e"
+    },
+    {
+      "path": "validation/revised_openfoam_22p5mm_2026-08-25/field_plots_1p60/postprocess_sampling.stdout.log",
+      "bytes": 2279,
+      "sha256": "230dfa3ff471d2c219719e36f618d166dd149c1a7ac48a9dd3d18e50ecd16cb7"
+    },
+    {
+      "path": "validation/revised_openfoam_22p5mm_2026-08-25/field_plots_1p60/postprocess_sampling_vtk.stdout.log",
+      "bytes": 2131,
+      "sha256": "f27578dbfee04f47b4b07de16a5fc876a7662b12d4cbb524cb513ff8e31317c0"
+    },
+    {
+      "path": "validation/revised_openfoam_22p5mm_2026-08-25/field_plots_1p60/render_checkpoint_fields.py",
+      "bytes": 24145,
+      "sha256": "e9215f08081e5fead278002b159f3b7fb7c721e6f0f3dbc4bbe6d3d72dde6c46"
+    },
+    {
+      "path": "validation/revised_openfoam_22p5mm_2026-08-25/field_plots_1p60/render_checkpoint_fields.stdout.log",
+      "bytes": 410,
+      "sha256": "11b77b39fc05aee4e42eeeda5f10a62cdd96ca22dd40a98263b1ce6839291a7a"
+    },
+    {
+      "path": "validation/revised_openfoam_22p5mm_2026-08-25/field_plots_1p60/sampled_data/1.6000000000000001/T_niCenterX.raw",
+      "bytes": 365413,
+      "sha256": "5feab20b05dc647b880a29fe5a0951add7ad06dc9ac600862b2f1330ccd45b6f"
+    },
+    {
+      "path": "validation/revised_openfoam_22p5mm_2026-08-25/field_plots_1p60/sampled_data/1.6000000000000001/T_rackAndDellCenterX.raw",
+      "bytes": 367672,
+      "sha256": "b90753e26c4cafcf874337f5e35435f16805036aba8e5e7b7e1598fa2913b546"
+    },
+    {
+      "path": "validation/revised_openfoam_22p5mm_2026-08-25/field_plots_1p60/sampled_data/1.6000000000000001/U_niCenterX.raw",
+      "bytes": 620125,
+      "sha256": "d6ee67a3fcaa936bd66d0ed30864889176c295aa409375946936afe3b9e6cfda"
+    },
+    {
+      "path": "validation/revised_openfoam_22p5mm_2026-08-25/field_plots_1p60/sampled_data/1.6000000000000001/U_rackAndDellCenterX.raw",
+      "bytes": 635171,
+      "sha256": "0ac10028b80b4fdd73f056f6cb4f54280f5674d6bfd6d9b44213b9c89435348f"
+    },
+    {
+      "path": "validation/revised_openfoam_22p5mm_2026-08-25/field_plots_1p60/sampled_data/1.6000000000000001/p_rgh_niCenterX.raw",
+      "bytes": 365532,
+      "sha256": "74384a66e90649b5fd06d6032f9e488ac6a9056b1d41ba97cc576601c907a036"
+    },
+    {
+      "path": "validation/revised_openfoam_22p5mm_2026-08-25/field_plots_1p60/sampled_data/1.6000000000000001/p_rgh_rackAndDellCenterX.raw",
+      "bytes": 367778,
+      "sha256": "876619452c503c2744af9eab7b7acfa84076bca94a7cfb3343ae602d945bce2a"
+    },
+    {
+      "path": "validation/revised_openfoam_22p5mm_2026-08-25/field_plots_1p60/sampled_vtk/1.6000000000000001/niCenterX.vtk",
+      "bytes": 1286523,
+      "sha256": "59d0ca07bccea7137dd0905a8b7b3d5404d7ea1f9dde3ed7afcad7b8a7f2cce4"
+    },
+    {
+      "path": "validation/revised_openfoam_22p5mm_2026-08-25/field_plots_1p60/sampled_vtk/1.6000000000000001/rackAndDellCenterX.vtk",
+      "bytes": 1306466,
+      "sha256": "49486f98d99a1567071aaac2dad4554943a5da8c1ec1472c346f513c9dff99a4"
+    },
+    {
+      "path": "validation/revised_openfoam_22p5mm_2026-08-25/field_plots_1p60/sampling_controlDict",
+      "bytes": 1780,
+      "sha256": "f15cd477e018c4822c330230d7beba0faddce91f9a769a48c43e0a247d133cfc"
+    },
+    {
+      "path": "validation/revised_openfoam_22p5mm_2026-08-25/field_plots_1p60/sampling_controlDict_vtk",
+      "bytes": 1662,
+      "sha256": "7e3fe8213238c7b1502d01e48f81b010f36b0728f7d2d9e8cfc9bf7c389268ea"
+    },
+    {
+      "path": "validation/revised_openfoam_22p5mm_2026-08-25/openfoam_archive_remote_reverification_2026-08-26.json",
+      "bytes": 1400,
+      "sha256": "18e051888e25b24d28d1a7c7c431eaa0b8a96e2c2aa1cc820578099f4b727e9c"
+    },
+    {
+      "path": "validation/revised_openfoam_22p5mm_2026-08-25/performance_benchmarks_1p60/ACTIVE_CASE_LAUNCHER_HARDENING.md",
+      "bytes": 4185,
+      "sha256": "7e547bce7db7aedbe74c3366c0e08426906075e582984665dd3137622d1d9911"
+    },
+    {
+      "path": "validation/revised_openfoam_22p5mm_2026-08-25/performance_benchmarks_1p60/ACTIVE_CASE_RECOVERY_1P600.md",
+      "bytes": 3551,
+      "sha256": "f4693718708d535a7f90ed3f1494c6955bf741f1111d8e1e9977be94d6830bf9"
+    },
+    {
+      "path": "validation/revised_openfoam_22p5mm_2026-08-25/performance_benchmarks_1p60/DECOMPOSITION_BENCHMARK.md",
+      "bytes": 4286,
+      "sha256": "9826e8961a97c6d2ef0ff2c5428e6da232ed0c79b2433a0748b9418d2c6dbd3c"
+    },
+    {
+      "path": "validation/revised_openfoam_22p5mm_2026-08-25/performance_benchmarks_1p60/DECOMPOSITION_LONG_CONFIRMATION_ATTEMPT.md",
+      "bytes": 3260,
+      "sha256": "f082fd81d9e547d346f2ec854f1a33bc8314ad85d2f8445ed146013fee2ef7ee"
+    },
+    {
+      "path": "validation/revised_openfoam_22p5mm_2026-08-25/performance_benchmarks_1p60/PIMPLE_BENCHMARK.md",
+      "bytes": 4987,
+      "sha256": "5ef22175aef1beeafd3d547f2c9e27b7260ab0c724256420b0c99f4a9f51ad99"
+    },
+    {
+      "path": "validation/revised_openfoam_22p5mm_2026-08-25/performance_benchmarks_1p60/THREE_RANK_RESOURCE_BENCHMARK.md",
+      "bytes": 5921,
+      "sha256": "654600b365baa0070977db9b1a29e8534388712bf70e2b0214001d0d65f72bf4"
+    },
+    {
+      "path": "validation/revised_openfoam_22p5mm_2026-08-25/performance_benchmarks_1p60/TIMESTEP_BENCHMARK.md",
+      "bytes": 3362,
+      "sha256": "bd1cabc194dd50766d80f33eeb77e9358dd5061eda649bd67ca3143547f9b82b"
+    },
+    {
+      "path": "validation/revised_openfoam_22p5mm_2026-08-25/performance_benchmarks_1p60/active_case_lineage_scan_1p600.sh",
+      "bytes": 3134,
+      "sha256": "7389795b6c9a562a2e7ae4b14ee317d29195a51daac43e2959beaa1ec93fb717"
+    },
+    {
+      "path": "validation/revised_openfoam_22p5mm_2026-08-25/performance_benchmarks_1p60/active_case_lineage_scan_1p600.stdout.log",
+      "bytes": 214,
+      "sha256": "2610e04e20b1b0ad76d452dea795dba6bb150baaa6d666be3c384e26cc070f02"
+    },
+    {
+      "path": "validation/revised_openfoam_22p5mm_2026-08-25/performance_benchmarks_1p60/active_case_recovered_run_summary.log",
+      "bytes": 4405,
+      "sha256": "249ae497c5590b696b98de26c98ccb9f51a99a91bdcc735d768fdecbeb1e930d"
+    },
+    {
+      "path": "validation/revised_openfoam_22p5mm_2026-08-25/performance_benchmarks_1p60/active_case_restored_controlDict",
+      "bytes": 84669,
+      "sha256": "29d2941c87e5c40854742fd8942b59b0786d1442021a3d777633ae675b5f7c97"
+    },
+    {
+      "path": "validation/revised_openfoam_22p5mm_2026-08-25/performance_benchmarks_1p60/active_case_run_parallel_hardened_preflight.sh",
+      "bytes": 96763,
+      "sha256": "7d41624a89720edbc42fa52eab0a22495f90d58654b84c68ad9a61e96c7306ac"
+    },
+    {
+      "path": "validation/revised_openfoam_22p5mm_2026-08-25/performance_benchmarks_1p60/active_case_run_parallel_pre_hardening.sh",
+      "bytes": 90077,
+      "sha256": "546912c9237604852c4e6800a5349b53125f43b84352f9ef233c030f592f5d6b"
+    },
+    {
+      "path": "validation/revised_openfoam_22p5mm_2026-08-25/performance_benchmarks_1p60/active_case_run_parallel_pre_thermal_dt24_2026-08-26.sh",
+      "bytes": 96763,
+      "sha256": "e47c392ea50572dca29c48681ec7d3457baf871b5d22cdc8d1b229b9ade5d7cd"
+    },
+    {
+      "path": "validation/revised_openfoam_22p5mm_2026-08-25/performance_benchmarks_1p60/baseline_boundary_mass_through_1p610.csv",
+      "bytes": 4913,
+      "sha256": "6a43fd51385b0a374b472cf667893e8e5852d5e25ef2f5954847d7bcb55c7dd3"
+    },
+    {
+      "path": "validation/revised_openfoam_22p5mm_2026-08-25/performance_benchmarks_1p60/baseline_fan_flow_through_1p610.md",
+      "bytes": 7061,
+      "sha256": "b9190876d3216657278c4ddfebb426f61ad134205bb6a683c2e325de7c0dfb57"
+    },
+    {
+      "path": "validation/revised_openfoam_22p5mm_2026-08-25/performance_benchmarks_1p60/baseline_opening_directions_1p610.csv",
+      "bytes": 3970,
+      "sha256": "d675e1b5900897e0101b03b7b6193026dddf720211eb20967dc419b6cde6db4b"
+    },
+    {
+      "path": "validation/revised_openfoam_22p5mm_2026-08-25/performance_benchmarks_1p60/baseline_snapshot_identity.csv",
+      "bytes": 8548,
+      "sha256": "83f00dc598158599131065347ef64998178d15b9f73318de449b3c944eb892d4"
+    },
+    {
+      "path": "validation/revised_openfoam_22p5mm_2026-08-25/performance_benchmarks_1p60/baseline_validation_1p610.json",
+      "bytes": 1124,
+      "sha256": "cb91c300291d7997daf6cc6609f13ca5f91b1a88d8e3da2b2fffaadaee11dedb"
+    },
+    {
+      "path": "validation/revised_openfoam_22p5mm_2026-08-25/performance_benchmarks_1p60/baseline_validation_1p610.md",
+      "bytes": 1231,
+      "sha256": "4fde985a1a42b8d13a80984d5182036ba3460b7b8a86313859643ca5138e08f2"
+    },
+    {
+      "path": "validation/revised_openfoam_22p5mm_2026-08-25/performance_benchmarks_1p60/benchmark_dt_0p00075_1p600_to_1p610.stdout.log",
+      "bytes": 308147,
+      "sha256": "9e54de94d57416ef3f4adbe1a9d16b8a30900b5f5f804c1ee0be703a93858d7b"
+    },
+    {
+      "path": "validation/revised_openfoam_22p5mm_2026-08-25/performance_benchmarks_1p60/benchmark_dt_baseline_1p600_to_1p610.stdout.log",
+      "bytes": 381052,
+      "sha256": "0d346b93b160ceb3039583ef5e1590a5f86773a088d05bc16d59df0d0ea7600a"
+    },
+    {
+      "path": "validation/revised_openfoam_22p5mm_2026-08-25/performance_benchmarks_1p60/decompose_3rank.stdout.log",
+      "bytes": 14878,
+      "sha256": "532a18ac3199e381b668011d5e60469dbd0857771fe7866c019e613256d5e7fa"
+    },
+    {
+      "path": "validation/revised_openfoam_22p5mm_2026-08-25/performance_benchmarks_1p60/decompose_auto.stdout.log",
+      "bytes": 16545,
+      "sha256": "7cd27df3511269539d8abee539b112a3e8ae0d9c3df646148d8253a87a5cbec0"
+    },
+    {
+      "path": "validation/revised_openfoam_22p5mm_2026-08-25/performance_benchmarks_1p60/decomposition_auto_1p600_to_1p610.stdout.log",
+      "bytes": 381064,
+      "sha256": "fe9c6785c92f4b29d3d29ddf63f2078ddd71cb4f5023b43507c805d03bdbc655"
+    },
+    {
+      "path": "validation/revised_openfoam_22p5mm_2026-08-25/performance_benchmarks_1p60/decomposition_auto_aborted_restart_link_audit.stdout.log",
+      "bytes": 80098,
+      "sha256": "d7fb94661e520dd19b10859b9d3be8fa70bd8a4a1471716f537ec8c2775c7b84"
+    },
+    {
+      "path": "validation/revised_openfoam_22p5mm_2026-08-25/performance_benchmarks_1p60/decomposition_auto_boundary_mass_through_1p610.csv",
+      "bytes": 418,
+      "sha256": "be7f291988d63d041f1418ab16a021628bfd5e58eaeac8cfc48ea5ad7c3acdef"
+    },
+    {
+      "path": "validation/revised_openfoam_22p5mm_2026-08-25/performance_benchmarks_1p60/decomposition_auto_fan_flow_through_1p610.md",
+      "bytes": 1925,
+      "sha256": "051aa78e735bec50f19996da6d1eba45de2d0203b70f68a580838cd95cae02bf"
+    },
+    {
+      "path": "validation/revised_openfoam_22p5mm_2026-08-25/performance_benchmarks_1p60/decomposition_auto_long_aborted_memory_pressure.stdout.log",
+      "bytes": 144452,
+      "sha256": "bebfd1e780d77c3952a74eb7e09fccbbd2c1caeae2b46341b471e07452af7428"
+    },
+    {
+      "path": "validation/revised_openfoam_22p5mm_2026-08-25/performance_benchmarks_1p60/decomposition_auto_opening_directions_1p610.csv",
+      "bytes": 3968,
+      "sha256": "6add6e8e5599fd1ad9d0887d8677a83b160c62877e74eda77efc5d46f24fe8da"
+    },
+    {
+      "path": "validation/revised_openfoam_22p5mm_2026-08-25/performance_benchmarks_1p60/decomposition_auto_partition_1p60.json",
+      "bytes": 3347,
+      "sha256": "a6e32ea67ce110fd00dcf980f555fd70d592beba2de93f3b7c56320d3264b3ea"
+    },
+    {
+      "path": "validation/revised_openfoam_22p5mm_2026-08-25/performance_benchmarks_1p60/decomposition_auto_partition_1p60.md",
+      "bytes": 579,
+      "sha256": "4edb89055c48b28b3b61b90bb62c6bb02ab76282b0d1994ca235314eb88eb34c"
+    },
+    {
+      "path": "validation/revised_openfoam_22p5mm_2026-08-25/performance_benchmarks_1p60/decomposition_auto_validation_1p610.json",
+      "bytes": 1135,
+      "sha256": "42e2bd3cc1e855f7273a27b0265eb43d606505086adb1fa18637b870e5a3a155"
+    },
+    {
+      "path": "validation/revised_openfoam_22p5mm_2026-08-25/performance_benchmarks_1p60/decomposition_auto_validation_1p610.md",
+      "bytes": 1231,
+      "sha256": "78995c012b4b8298856a38f8a1c46b75311e890afdd12ce70e996ac853a36ab0"
+    },
+    {
+      "path": "validation/revised_openfoam_22p5mm_2026-08-25/performance_benchmarks_1p60/decomposition_auto_vs_baseline_boundary.csv",
+      "bytes": 598,
+      "sha256": "fc91db7ceb5e6040f182491379eb5bc540c9d4122b4a2668b5c3ad8875023e54"
+    },
+    {
+      "path": "validation/revised_openfoam_22p5mm_2026-08-25/performance_benchmarks_1p60/decomposition_auto_vs_baseline_fans.csv",
+      "bytes": 3318,
+      "sha256": "3c27615f770bbb9ddfa398cb4c74f74cca27de4333c5012983b01a8000c7e9eb"
+    },
+    {
+      "path": "validation/revised_openfoam_22p5mm_2026-08-25/performance_benchmarks_1p60/decomposition_auto_vs_baseline_fields.csv",
+      "bytes": 8925,
+      "sha256": "e0b95925f0f203de045f315417eaf710822fae752b1571a43a0c356ce7a382f8"
+    },
+    {
+      "path": "validation/revised_openfoam_22p5mm_2026-08-25/performance_benchmarks_1p60/decomposition_cell_addressing_manifest.csv",
+      "bytes": 755,
+      "sha256": "40d2c5e05d22ce672702dcedfde1f88877da7b85ed84162c9d3f9ffea5e4fa46"
+    },
+    {
+      "path": "validation/revised_openfoam_22p5mm_2026-08-25/performance_benchmarks_1p60/decomposition_long_resource_observations.csv",
+      "bytes": 786,
+      "sha256": "0b42e98b31c3af919a84d00c0b525ea0abde166bb933f95877f2ebc0f94621dd"
+    },
+    {
+      "path": "validation/revised_openfoam_22p5mm_2026-08-25/performance_benchmarks_1p60/decomposition_post_abort_controlDict",
+      "bytes": 84688,
+      "sha256": "2c34a1b3712d9e8284f0f77efd84d6a42013a7b4542fb023f4a2074df29e3fc6"
+    },
+    {
+      "path": "validation/revised_openfoam_22p5mm_2026-08-25/performance_benchmarks_1p60/decomposition_restart_state_identity.csv",
+      "bytes": 16986,
+      "sha256": "fa4f6d84c53c128583b4ae24a4a203467a14e75a0e32df28b12d64b07c0e9e5b"
+    },
+    {
+      "path": "validation/revised_openfoam_22p5mm_2026-08-25/performance_benchmarks_1p60/decomposition_short_benchmark_retained_controlDict",
+      "bytes": 84648,
+      "sha256": "38fba8f6a1f79f28c944dc3b1a920d2e377b72f0d7cef5716916bd8feb7a953e"
+    },
+    {
+      "path": "validation/revised_openfoam_22p5mm_2026-08-25/performance_benchmarks_1p60/decomposition_system_manifest.csv",
+      "bytes": 30547,
+      "sha256": "afe95d78f32e245bc4bfda10bea9fdf80984d94f99e3a28f39b6183f7e7b451d"
+    },
+    {
+      "path": "validation/revised_openfoam_22p5mm_2026-08-25/performance_benchmarks_1p60/decomposition_timing_comparison.csv",
+      "bytes": 449,
+      "sha256": "5df8e835e405a80570f122bd2fab8ad792a12858ce6b0ac8e51853aa43bc97d6"
+    },
+    {
+      "path": "validation/revised_openfoam_22p5mm_2026-08-25/performance_benchmarks_1p60/dt_0p00075_vs_0p0005_fans.csv",
+      "bytes": 4207,
+      "sha256": "0a3284e524c9d8fa42d0b53c7873bd0b96983faf1d5861f1437be193c4a3d3ef"
+    },
+    {
+      "path": "validation/revised_openfoam_22p5mm_2026-08-25/performance_benchmarks_1p60/dt_0p00075_vs_0p0005_fields.csv",
+      "bytes": 9173,
+      "sha256": "8c55053b2d54ed4462628eaf9b1d3ec078c1e463b8dd0eba94fbd9dd2e3b4203"
+    },
+    {
+      "path": "validation/revised_openfoam_22p5mm_2026-08-25/performance_benchmarks_1p60/dt_timing_comparison.csv",
+      "bytes": 330,
+      "sha256": "ebe54bf202a2eb73cba6cd84058eb423d63901739e253d2cbfa04b61e49ece89"
+    },
+    {
+      "path": "validation/revised_openfoam_22p5mm_2026-08-25/performance_benchmarks_1p60/pimple_outer2_auto_1p600_to_1p610.stdout.log",
+      "bytes": 308644,
+      "sha256": "a828413600df3eb45e43b071f4ab2145dcd58e4cd2f66fca780785e408e49904"
+    },
+    {
+      "path": "validation/revised_openfoam_22p5mm_2026-08-25/performance_benchmarks_1p60/pimple_outer2_boundary_mass_through_1p610.csv",
+      "bytes": 416,
+      "sha256": "1b7ee80f8822bc273f16cdd014cb48d30abf4d611710cf02b5bdf9c11ce65394"
+    },
+    {
+      "path": "validation/revised_openfoam_22p5mm_2026-08-25/performance_benchmarks_1p60/pimple_outer2_fan_flow_through_1p610.md",
+      "bytes": 1921,
+      "sha256": "9720dd15a12b0b0ff82adac1a47e2a4a7d9e19ba0bd88ae7990a96c8375a3403"
+    },
+    {
+      "path": "validation/revised_openfoam_22p5mm_2026-08-25/performance_benchmarks_1p60/pimple_outer2_opening_directions_1p610.csv",
+      "bytes": 3972,
+      "sha256": "52cd42217b810c1aed49abfde4cc3fdcce1b20d5b59e24c7055457427e79a814"
+    },
+    {
+      "path": "validation/revised_openfoam_22p5mm_2026-08-25/performance_benchmarks_1p60/pimple_outer2_system_manifest.csv",
+      "bytes": 30547,
+      "sha256": "8542587f895951a40cc26c9e313ce447fde4232e79269553a2a439eb21574add"
+    },
+    {
+      "path": "validation/revised_openfoam_22p5mm_2026-08-25/performance_benchmarks_1p60/pimple_outer2_validation_1p610.json",
+      "bytes": 1124,
+      "sha256": "991645d65b8ce35491222eaebf05228a4331e178f4157575885c5b931809f993"
+    },
+    {
+      "path": "validation/revised_openfoam_22p5mm_2026-08-25/performance_benchmarks_1p60/pimple_outer2_validation_1p610.md",
+      "bytes": 1232,
+      "sha256": "738011f6f3d708840a9b25be6dae2c5d0a6c2daa9c7b0589aa16f91761900f59"
+    },
+    {
+      "path": "validation/revised_openfoam_22p5mm_2026-08-25/performance_benchmarks_1p60/pimple_outer2_vs_outer3_boundary.csv",
+      "bytes": 585,
+      "sha256": "62f9282cbe4295fcac1b7a408d81997c2b3ce60e193f8a8b495d580a95173edc"
+    },
+    {
+      "path": "validation/revised_openfoam_22p5mm_2026-08-25/performance_benchmarks_1p60/pimple_outer2_vs_outer3_fans.csv",
+      "bytes": 4173,
+      "sha256": "a59978c8b31eb1765ced7c001c31117f9589f438ba70c0e8fd51b042c7ff34c3"
+    },
+    {
+      "path": "validation/revised_openfoam_22p5mm_2026-08-25/performance_benchmarks_1p60/pimple_outer2_vs_outer3_fields.csv",
+      "bytes": 9004,
+      "sha256": "6b36c2930a06431aee131792680c63e2c830c05e566fb8b1eff5b8a89eb11ca0"
+    },
+    {
+      "path": "validation/revised_openfoam_22p5mm_2026-08-25/performance_benchmarks_1p60/pimple_timing_comparison.csv",
+      "bytes": 933,
+      "sha256": "87352bca76f46f767cfe55b6aeea9f83fc923836eca0b5efda8bf4e405c8a8a2"
+    },
+    {
+      "path": "validation/revised_openfoam_22p5mm_2026-08-25/performance_benchmarks_1p60/postprocess_dt_0p00075_1p610_refresh.stdout.log",
+      "bytes": 79554,
+      "sha256": "04819f36fab141523aa8c61e4d4dc6c9d2e887c8382c54b2edacfd02360b14b5"
+    },
+    {
+      "path": "validation/revised_openfoam_22p5mm_2026-08-25/performance_benchmarks_1p60/thermal_dt_confirm_20_121p6_to_601p6.stdout.log",
+      "bytes": 367780,
+      "sha256": "356a98b2fbca6c056e7414d579e07dc4fde28d9823fc1a4b99dce40be33e6e3e"
+    },
+    {
+      "path": "validation/revised_openfoam_22p5mm_2026-08-25/performance_benchmarks_1p60/thermal_dt_confirm_20_121p6_to_601p6.stdout.reconstruct.log",
+      "bytes": 5832,
+      "sha256": "72fec0191a03f659b99208460099e9b260eb9e40d14bdfa5af2e9c4c0197e557"
+    },
+    {
+      "path": "validation/revised_openfoam_22p5mm_2026-08-25/performance_benchmarks_1p60/thermal_dt_confirm_20_121p6_to_601p6.stdout.result.tsv",
+      "bytes": 197,
+      "sha256": "728bc080be62a479799b2adc12ddf2d8d5492818a7b8ccea5f378c3f79508fcd"
+    },
+    {
+      "path": "validation/revised_openfoam_22p5mm_2026-08-25/performance_benchmarks_1p60/thermal_dt_confirm_24_vs_20_component_temperatures_at_601p6.csv",
+      "bytes": 7771,
+      "sha256": "f86fe809aaaeb8994a1931abc9a5ce2e46a9bce260f70df58a71a207c509dbf8"
+    },
+    {
+      "path": "validation/revised_openfoam_22p5mm_2026-08-25/performance_benchmarks_1p60/thermal_dt_confirm_25_121p6_to_601p6.stdout.log",
+      "bytes": 333551,
+      "sha256": "a5121e8d5355d036031ed1a5c5118e1ce4086096a972f80dbcd746ef16c0e37f"
+    },
+    {
+      "path": "validation/revised_openfoam_22p5mm_2026-08-25/performance_benchmarks_1p60/thermal_dt_confirm_25_121p6_to_601p6.stdout.reconstruct.log",
+      "bytes": 5832,
+      "sha256": "e4e49064bb691de78423da8e2bda3f4a4c28d2eb09a31d0fa6c7d9b146dbe105"
+    },
+    {
+      "path": "validation/revised_openfoam_22p5mm_2026-08-25/performance_benchmarks_1p60/thermal_dt_confirm_25_121p6_to_601p6.stdout.result.tsv",
+      "bytes": 197,
+      "sha256": "3dde278d1258801676d2af826b5fc0b3cd5a9fe56635061b75d720902b416241"
+    },
+    {
+      "path": "validation/revised_openfoam_22p5mm_2026-08-25/performance_benchmarks_1p60/thermal_dt_confirm_25_vs_20_at_601p6.csv",
+      "bytes": 9757,
+      "sha256": "5a6dcb0fce6bc61f6670f3221ecddd799e06fa1e8a753ed7ff1e80c320a0de9b"
+    },
+    {
+      "path": "validation/revised_openfoam_22p5mm_2026-08-25/performance_benchmarks_1p60/thermal_dt_screen_20.stdout.log",
+      "bytes": 184152,
+      "sha256": "d0e0b508967153116ee84cb9e3a4415116724ff5a1471f903e906fb8807c3c30"
+    },
+    {
+      "path": "validation/revised_openfoam_22p5mm_2026-08-25/performance_benchmarks_1p60/thermal_dt_screen_20.stdout.reconstruct.log",
+      "bytes": 5832,
+      "sha256": "fcfda5553aacdcdb78c8d7c47eb4cd2615db05cc3fd9267766bbf2b6ab72df01"
+    },
+    {
+      "path": "validation/revised_openfoam_22p5mm_2026-08-25/performance_benchmarks_1p60/thermal_dt_screen_20.stdout.result.tsv",
+      "bytes": 197,
+      "sha256": "2377cfaad15c94a75f4e5848ac927ef242ce6b461b3297aebe6363364939b9cc"
+    },
+    {
+      "path": "validation/revised_openfoam_22p5mm_2026-08-25/performance_benchmarks_1p60/thermal_dt_screen_25.stdout.log",
+      "bytes": 175613,
+      "sha256": "a94fe8cee0d453327df429c171a5f80ca83081cc01d622b20cb3b17c0d5930d6"
+    },
+    {
+      "path": "validation/revised_openfoam_22p5mm_2026-08-25/performance_benchmarks_1p60/thermal_dt_screen_25.stdout.reconstruct.log",
+      "bytes": 5832,
+      "sha256": "7658bb8c7233522f4f66730d6c0189a16cbe5aa33359a77167bbeacd49fb990c"
+    },
+    {
+      "path": "validation/revised_openfoam_22p5mm_2026-08-25/performance_benchmarks_1p60/thermal_dt_screen_25.stdout.result.tsv",
+      "bytes": 195,
+      "sha256": "e6f0c235ea8e11c124ad5c322f96eb3145c3c3ae872311bdecff2dbbef13efed"
+    },
+    {
+      "path": "validation/revised_openfoam_22p5mm_2026-08-25/performance_benchmarks_1p60/thermal_dt_screen_25_vs_20.csv",
+      "bytes": 9608,
+      "sha256": "2f1fc6ea9a8cc733a927259bd16266337ad65513c96be70978eed29eef77843c"
+    },
+    {
+      "path": "validation/revised_openfoam_22p5mm_2026-08-25/performance_benchmarks_1p60/thermal_dt_screen_30.stdout.log",
+      "bytes": 167121,
+      "sha256": "7af94df93e4c2d12517c16dc7079120030f607065e3c9e7a3594ee79e572fcbe"
+    },
+    {
+      "path": "validation/revised_openfoam_22p5mm_2026-08-25/performance_benchmarks_1p60/thermal_dt_screen_30.stdout.reconstruct.log",
+      "bytes": 5832,
+      "sha256": "84c6391e49469bf6716566f520a015020184bf203ef120d8b720cc3285c7082e"
+    },
+    {
+      "path": "validation/revised_openfoam_22p5mm_2026-08-25/performance_benchmarks_1p60/thermal_dt_screen_30.stdout.result.tsv",
+      "bytes": 195,
+      "sha256": "d2af623503da33d2f21fe24b607bf7e75b0cc164df34919548596de767f1598e"
+    },
+    {
+      "path": "validation/revised_openfoam_22p5mm_2026-08-25/performance_benchmarks_1p60/thermal_dt_screen_30_vs_20.csv",
+      "bytes": 9602,
+      "sha256": "5aa3b215ed45e573a56ec3ccab9c8adb56f58da89817b128133b4474d2734d27"
+    },
+    {
+      "path": "validation/revised_openfoam_22p5mm_2026-08-25/performance_benchmarks_1p60/thermal_dt_screen_40.stdout.log",
+      "bytes": 158609,
+      "sha256": "d44f332cd12c7de1e93a09003cc9687f3d6fd86fede791fa2e899ae200620dac"
+    },
+    {
+      "path": "validation/revised_openfoam_22p5mm_2026-08-25/performance_benchmarks_1p60/thermal_dt_screen_40.stdout.reconstruct.log",
+      "bytes": 5832,
+      "sha256": "dbac13dc0fe7eb0fab7769e14dcb25cc2b913540c108ca6aacd84be5e7001e2c"
+    },
+    {
+      "path": "validation/revised_openfoam_22p5mm_2026-08-25/performance_benchmarks_1p60/thermal_dt_screen_40.stdout.result.tsv",
+      "bytes": 195,
+      "sha256": "7ea8adbfa26dfd1268c44e0ec5fad293a5dc173c4ecd5bbab0d0e5021b505eef"
+    },
+    {
+      "path": "validation/revised_openfoam_22p5mm_2026-08-25/performance_benchmarks_1p60/thermal_dt_screen_40_vs_20.csv",
+      "bytes": 9596,
+      "sha256": "164d50536fd66244047310ea645c44b70127578635a13b382c1f5cdcde9adcb3"
+    },
+    {
+      "path": "validation/revised_openfoam_22p5mm_2026-08-25/performance_benchmarks_1p60/thermal_dt_screen_60.stdout.log",
+      "bytes": 150597,
+      "sha256": "41eb506df86b7f52deab72ab1a1378c53edb866f0a9be94ff40e4a8652e64b2c"
+    },
+    {
+      "path": "validation/revised_openfoam_22p5mm_2026-08-25/performance_benchmarks_1p60/thermal_dt_screen_60.stdout.reconstruct.log",
+      "bytes": 5847,
+      "sha256": "7ff1251e0c4c9a047fcaa96e103e33d37c80b74a735ef5b85f0de62933117620"
+    },
+    {
+      "path": "validation/revised_openfoam_22p5mm_2026-08-25/performance_benchmarks_1p60/thermal_dt_screen_60.stdout.result.tsv",
+      "bytes": 196,
+      "sha256": "835e17b5e7e2e84578b5c4373dddb4e7810b9f0e2124f3f8ccc74e77520b1374"
+    },
+    {
+      "path": "validation/revised_openfoam_22p5mm_2026-08-25/performance_benchmarks_1p60/thermal_dt_screen_60_attempt1_time_spelling_guard.stdout.log",
+      "bytes": 150596,
+      "sha256": "658740b4d2682e8fa90fa34c45a7476001aa71196cac0055a4590fc931d79e79"
+    },
+    {
+      "path": "validation/revised_openfoam_22p5mm_2026-08-25/performance_benchmarks_1p60/thermal_dt_screen_60_vs_20.csv",
+      "bytes": 9577,
+      "sha256": "d763f01bd7682d5a434f8e769f44bd63184d89852817d1a2d60afe4d30e06b4a"
+    },
+    {
+      "path": "validation/revised_openfoam_22p5mm_2026-08-25/performance_benchmarks_1p60/three_rank_clone_identity.csv",
+      "bytes": 152977,
+      "sha256": "d601fba3a6e5bee3adb740fbc445beee536bd2b5a7331ae6ee462a71453ad6ba"
+    },
+    {
+      "path": "validation/revised_openfoam_22p5mm_2026-08-25/performance_benchmarks_1p60/three_rank_decomposeParDict",
+      "bytes": 3218,
+      "sha256": "e27a65169fd79b3f4b9e9dac22eabcdb34ed34d7505e9528eff0a85fee975161"
+    },
+    {
+      "path": "validation/revised_openfoam_22p5mm_2026-08-25/performance_benchmarks_1p60/three_rank_evidence_manifest.csv",
+      "bytes": 1235,
+      "sha256": "acbe40604d96c2e82a83ee21aa215ccb3317cf03c5e4ca3305af6c99ed0259c0"
+    },
+    {
+      "path": "validation/revised_openfoam_22p5mm_2026-08-25/performance_benchmarks_1p60/three_rank_partition_1p60.json",
+      "bytes": 2635,
+      "sha256": "296566b97f07c59ad6c00eb45e9bdcbfeed442419b7c3bf4935ab2829c247139"
+    },
+    {
+      "path": "validation/revised_openfoam_22p5mm_2026-08-25/performance_benchmarks_1p60/three_rank_partition_1p60.md",
+      "bytes": 544,
+      "sha256": "6cbb98a029901e8a202613e35f1432406aa28b9b19dacde73e10b286f681d1e1"
+    },
+    {
+      "path": "validation/revised_openfoam_22p5mm_2026-08-25/performance_benchmarks_1p60/three_rank_post_abort_controlDict",
+      "bytes": 84703,
+      "sha256": "1a6d66b0ee3b5113468297820d329408faeffabf2a0d19d0fd311c0487ed38d3"
+    },
+    {
+      "path": "validation/revised_openfoam_22p5mm_2026-08-25/performance_benchmarks_1p60/three_rank_postdecompose_start_identity.csv",
+      "bytes": 14451,
+      "sha256": "5cabc7b087c682f9beb3682bbaa2493be32f9f05cc06d304215f0380b5b0aad7"
+    },
+    {
+      "path": "validation/revised_openfoam_22p5mm_2026-08-25/performance_benchmarks_1p60/three_rank_resource_aborted.stdout.log",
+      "bytes": 65098,
+      "sha256": "bc7cd2f877c56af7c34eebfe7aa37efa3b49727f05abf013ec0af234e6b0303e"
+    },
+    {
+      "path": "validation/revised_openfoam_22p5mm_2026-08-25/performance_benchmarks_1p60/three_rank_resource_samples.csv",
+      "bytes": 1071,
+      "sha256": "af63820941efb932c8f6906b6792dbe55531712d35202584fe41ac38f2e4cd95"
+    },
+    {
+      "path": "validation/revised_openfoam_22p5mm_2026-08-25/performance_benchmarks_1p60/three_rank_system_manifest.csv",
+      "bytes": 28946,
+      "sha256": "d5bd0df440f9f8f34566afe1c34de1692efd046a5afce3135cac03bca8b3d7f7"
+    },
+    {
+      "path": "validation/revised_openfoam_22p5mm_2026-08-25/performance_benchmarks_1p60/variant_0p00075_boundary_mass_through_1p610.csv",
+      "bytes": 4906,
+      "sha256": "3a7a9ebb98701d10261f322e1582f5ec2d6c991c6690e69c1de5a5fdb065f1c9"
+    },
+    {
+      "path": "validation/revised_openfoam_22p5mm_2026-08-25/performance_benchmarks_1p60/variant_0p00075_fan_flow_through_1p610.md",
+      "bytes": 7060,
+      "sha256": "925ce2310c3d27f64259d225c5f9850e9c26f6bb0f7eae73edc639ea4d2b5c98"
+    },
+    {
+      "path": "validation/revised_openfoam_22p5mm_2026-08-25/performance_benchmarks_1p60/variant_0p00075_opening_directions_1p610.csv",
+      "bytes": 3971,
+      "sha256": "e329e3958f711afd75235a9a47404f2726ba1448f43047ae67382390cd1761d5"
+    },
+    {
+      "path": "validation/revised_openfoam_22p5mm_2026-08-25/performance_benchmarks_1p60/variant_0p00075_validation_1p610.json",
+      "bytes": 1135,
+      "sha256": "9f72e7ac58f516b8fd9cdcd49bab558f9192672d6c0ba3485f942702089d5211"
+    },
+    {
+      "path": "validation/revised_openfoam_22p5mm_2026-08-25/performance_benchmarks_1p60/variant_0p00075_validation_1p610.md",
+      "bytes": 1230,
+      "sha256": "6d442621b17ed277a1e469204bda1b10e91f135c9b958b0bd048f79e8b6d9fdf"
+    },
+    {
+      "path": "validation/revised_openfoam_22p5mm_2026-08-25/performance_benchmarks_1p60/variant_snapshot_file_identity.csv",
+      "bytes": 16014,
+      "sha256": "b3d645f03891b9d2f7f74d17d51893e5cb8a6ea021a1a948cfa29e7802989207"
+    },
+    {
+      "path": "validation/revised_openfoam_22p5mm_2026-08-25/performance_benchmarks_1p60/variant_snapshot_postprocessing_identity.csv",
+      "bytes": 51872,
+      "sha256": "2fe8d503e3a39865806620d1bd6d2e3a40b5e3cd936ed1c157f51132bc50953d"
+    },
+    {
+      "path": "validation/revised_openfoam_22p5mm_2026-08-25/validation_1p60.json",
+      "bytes": 1125,
+      "sha256": "7a87369a2ab7bf69ef08f2ac7208ec6722984295ebb9aabc802a6097b84e8d4e"
+    },
+    {
+      "path": "validation/revised_openfoam_22p5mm_2026-08-25/validation_1p60.md",
+      "bytes": 1657,
+      "sha256": "d2912396d1ff5bfc9948e3f4af68bc64adea16a0cbb059bafc00410efab2f548"
+    },
+    {
+      "path": "validation/thermal_outer_microcase_2026-08-26/0/air_side_heater_2/T",
+      "bytes": 472,
+      "sha256": "1d0cf4cbb8dac1961721d752479301bfb87d2b8fcdf4b761466adf975fbf6c6f"
+    },
+    {
+      "path": "validation/thermal_outer_microcase_2026-08-26/0/air_side_heater_2/p",
+      "bytes": 350,
+      "sha256": "0b8a1fe8f37659a0f38c1ff05c0d229b61b5c91abbe22917d4784732654c5fd0"
+    },
+    {
+      "path": "validation/thermal_outer_microcase_2026-08-26/0/fluid/T",
+      "bytes": 1076,
+      "sha256": "73a70143711cb2b4db7e8c8270a16a8356b92f5356d5d5a385bb398da9a2f60b"
+    },
+    {
+      "path": "validation/thermal_outer_microcase_2026-08-26/0/fluid/U",
+      "bytes": 562,
+      "sha256": "4e75d640088fd8027547f6268f9db1c317415a89b48e787cc9e2c17664ed11d9"
+    },
+    {
+      "path": "validation/thermal_outer_microcase_2026-08-26/0/fluid/alphat",
+      "bytes": 786,
+      "sha256": "ce4604aa4b57592c6058016266bc027d9496e44b597a17c8f9ebfd4096acad78"
+    },
+    {
+      "path": "validation/thermal_outer_microcase_2026-08-26/0/fluid/k",
+      "bytes": 797,
+      "sha256": "378a95d2a0667702c2ddd8779b624542e7f79b57ecef5d46e0e402595930cd55"
+    },
+    {
+      "path": "validation/thermal_outer_microcase_2026-08-26/0/fluid/nut",
+      "bytes": 610,
+      "sha256": "bd8989ad14ee7fc96d5297ceea423f26dae6f09ea834839563d4d848b5be9a55"
+    },
+    {
+      "path": "validation/thermal_outer_microcase_2026-08-26/0/fluid/omega",
+      "bytes": 777,
+      "sha256": "19278ff757720b8d219c2728ff830d73f8b3cfa070e0d591afcf39a71698bea7"
+    },
+    {
+      "path": "validation/thermal_outer_microcase_2026-08-26/0/fluid/p",
+      "bytes": 539,
+      "sha256": "5656a07b186b6c63c41e3aa386588978b4c46d709255461821e0a1917a99c141"
+    },
+    {
+      "path": "validation/thermal_outer_microcase_2026-08-26/0/fluid/p_rgh",
+      "bytes": 1118,
+      "sha256": "7c0ae33e5666874e94dc4ad872e207fc03d6d4077e0738407a279fc4613c180c"
+    },
+    {
+      "path": "validation/thermal_outer_microcase_2026-08-26/0/heatSourceMask_0",
+      "bytes": 378,
+      "sha256": "ee24bc47eeedc3cfd0fcd726af5f0048abccfde737c77b23f39dbe7199c71be6"
+    },
+    {
+      "path": "validation/thermal_outer_microcase_2026-08-26/0/heatSourceMask_1",
+      "bytes": 378,
+      "sha256": "a3147091068df1879960f9406b6affe12231ad5d8a5e0d3ff5766e680b268c2c"
+    },
+    {
+      "path": "validation/thermal_outer_microcase_2026-08-26/0/heatSourceMask_2",
+      "bytes": 378,
+      "sha256": "455e754ba1a8a66bb31da8d98ffa0bea78120f8a676678fa7e1935053d7b9834"
+    },
+    {
+      "path": "validation/thermal_outer_microcase_2026-08-26/0/homogeneous_heater_1/T",
+      "bytes": 478,
+      "sha256": "c25bebeb56c9e9b932ef0f6d2153841033c680a60583b517cd4ae1ef23bbd4e4"
+    },
+    {
+      "path": "validation/thermal_outer_microcase_2026-08-26/0/homogeneous_heater_1/p",
+      "bytes": 356,
+      "sha256": "fe3e4470893cb7c108fe596efdeb6c231014c088d12eb6634374cb6fd84ed788"
+    },
+    {
+      "path": "validation/thermal_outer_microcase_2026-08-26/0/porous_perforated_tray_0_mask",
+      "bytes": 354,
+      "sha256": "42c246a4c996b4788a26d267b2cd86e6208ff986b51de4a6237e33945e503588"
+    },
+    {
+      "path": "validation/thermal_outer_microcase_2026-08-26/0/test_heater_0/T",
+      "bytes": 464,
+      "sha256": "445ba1811a2b6577cd7c6c93e53444fc743ec644fa646b40df3c7b51216a9396"
+    },
+    {
+      "path": "validation/thermal_outer_microcase_2026-08-26/0/test_heater_0/p",
+      "bytes": 342,
+      "sha256": "ace87c4aa87a3802da102e1b4f2e572dce4db393f35afaa332cfdf4483b5a0c9"
+    },
+    {
+      "path": "validation/thermal_outer_microcase_2026-08-26/airflow_devices.txt",
+      "bytes": 851,
+      "sha256": "6296b94604152521cbd578bb04280601e755b25a093a5d765c660102671c1ea5"
+    },
+    {
+      "path": "validation/thermal_outer_microcase_2026-08-26/constant/air_side_heater_2/fvOptions",
+      "bytes": 175,
+      "sha256": "828308953eb24809c745487b80ab0ae97475fc7eb0e83a1188c2751c42fc85da"
+    },
+    {
+      "path": "validation/thermal_outer_microcase_2026-08-26/constant/air_side_heater_2/radiationProperties",
+      "bytes": 194,
+      "sha256": "754c7abadbb1c52c3f2921c6663c0434dba4b0f892e39ea7e48bf165b4806b62"
+    },
+    {
+      "path": "validation/thermal_outer_microcase_2026-08-26/constant/air_side_heater_2/thermophysicalProperties",
+      "bytes": 470,
+      "sha256": "b895721d3a69df1a1cd173a6c681427036184bcc00a0faa68b52412a5add0434"
+    },
+    {
+      "path": "validation/thermal_outer_microcase_2026-08-26/constant/fluid/fvOptions",
+      "bytes": 652,
+      "sha256": "defc9b9a118a0fb09313bce930ff148973b422a3ba6dd10b15cfae9eb548cee0"
+    },
+    {
+      "path": "validation/thermal_outer_microcase_2026-08-26/constant/fluid/fvOptions.flowOnly",
+      "bytes": 462,
+      "sha256": "b7bf6fac79deb4435d623233f01787b63feed99efcc9d33fb115842652f20119"
+    },
+    {
+      "path": "validation/thermal_outer_microcase_2026-08-26/constant/fluid/fvOptions.fullFan",
+      "bytes": 652,
+      "sha256": "defc9b9a118a0fb09313bce930ff148973b422a3ba6dd10b15cfae9eb548cee0"
+    },
+    {
+      "path": "validation/thermal_outer_microcase_2026-08-26/constant/fluid/radiationProperties",
+      "bytes": 182,
+      "sha256": "1e6896409f2dd823ef247338337ae779d0416a918a94f6a429f254e4239a512a"
+    },
+    {
+      "path": "validation/thermal_outer_microcase_2026-08-26/constant/fluid/thermophysicalProperties",
+      "bytes": 507,
+      "sha256": "998ec5f60335e4d90b2ceb926ad47a5d72e1b4139b76124d65273d6738d43ab7"
+    },
+    {
+      "path": "validation/thermal_outer_microcase_2026-08-26/constant/fluid/turbulenceProperties",
+      "bytes": 234,
+      "sha256": "79dbb8ada65dfb5dfd65725dc11b5a7b308972621286b716b0f9809fc9ce2b1a"
+    },
+    {
+      "path": "validation/thermal_outer_microcase_2026-08-26/constant/g",
+      "bytes": 185,
+      "sha256": "16f84e1d926ccad3c1795dd3eaf02938990b791393bc0a2a1281bcf9e5d9eab6"
+    },
+    {
+      "path": "validation/thermal_outer_microcase_2026-08-26/constant/homogeneous_heater_1/fvOptions",
+      "bytes": 347,
+      "sha256": "97c1dfb3c8bd2b3e6664af7e5f7a7fb54ffee7d6f6676848bda7d3474da4009a"
+    },
+    {
+      "path": "validation/thermal_outer_microcase_2026-08-26/constant/homogeneous_heater_1/radiationProperties",
+      "bytes": 197,
+      "sha256": "d48a5e1622bbe069500577a2e66fc046a0f01ccefb004978aac8bcf4950c2b71"
+    },
+    {
+      "path": "validation/thermal_outer_microcase_2026-08-26/constant/homogeneous_heater_1/thermophysicalProperties",
+      "bytes": 474,
+      "sha256": "938f088b24f568da4d977a817996871fbbea828e149122c2d043a2b093e775aa"
+    },
+    {
+      "path": "validation/thermal_outer_microcase_2026-08-26/constant/openfoamExportProperties",
+      "bytes": 899,
+      "sha256": "42bd607a2ad8080e75e3ff6fdae46a5b32cb509c34e28477b52cf65b29b6e77f"
+    },
+    {
+      "path": "validation/thermal_outer_microcase_2026-08-26/constant/polyMesh/boundary",
+      "bytes": 392,
+      "sha256": "6e52cd7c778dd3c9b66a82f0103a68d16495990dabbd5da660ed635acf39e5be"
+    },
+    {
+      "path": "validation/thermal_outer_microcase_2026-08-26/constant/polyMesh/cellZones",
+      "bytes": 745,
+      "sha256": "9a7e742ac64e676bc6760eae29cccb3a1893bf29b5b871842af7c5272ff80f11"
+    },
+    {
+      "path": "validation/thermal_outer_microcase_2026-08-26/constant/polyMesh/faces",
+      "bytes": 1440,
+      "sha256": "ba464a8f98d33a07cf901b3b8538b1c0a91b192679e628493b60036d2b816a6b"
+    },
+    {
+      "path": "validation/thermal_outer_microcase_2026-08-26/constant/polyMesh/neighbour",
+      "bytes": 309,
+      "sha256": "7e0ffb7bab639bb86e94c2ec3cc2f387a5acbc97a14edf84003b11d66b9a05ee"
+    },
+    {
+      "path": "validation/thermal_outer_microcase_2026-08-26/constant/polyMesh/owner",
+      "bytes": 459,
+      "sha256": "ea9d049daa4deb8071800090f82398164512daa706f526a166659d0f3ea62a06"
+    },
+    {
+      "path": "validation/thermal_outer_microcase_2026-08-26/constant/polyMesh/points",
+      "bytes": 2593,
+      "sha256": "ac83a5c0158705a58a271db7cf63b605e0ddc5d89b954b732a189486eddcb873"
+    },
+    {
+      "path": "validation/thermal_outer_microcase_2026-08-26/constant/polyMesh/sets/heated_internal_air_2",
+      "bytes": 164,
+      "sha256": "6b371adac957b0c88d69e27027ca3f1cc6284d0d46fdd63b4e2fa3591223c9ab"
+    },
+    {
+      "path": "validation/thermal_outer_microcase_2026-08-26/constant/polyMesh/sets/homogeneous_heater_load_1",
+      "bytes": 167,
+      "sha256": "3ea305508d7a103402ea4ab4c38b176d374c41042e594dc139247c7018ae454a"
+    },
+    {
+      "path": "validation/thermal_outer_microcase_2026-08-26/constant/polyMesh/sets/test_heat_source_0",
+      "bytes": 160,
+      "sha256": "6ff0dc57c02411929ea87318b86eb67adf0acee70e23483f19f837ead4c10039"
+    },
+    {
+      "path": "validation/thermal_outer_microcase_2026-08-26/constant/regionProperties",
+      "bytes": 248,
+      "sha256": "94382796c3420be1b3f93e30739d6fa4318929eb9c87d36da56ed8cfea7c33aa"
+    },
+    {
+      "path": "validation/thermal_outer_microcase_2026-08-26/constant/test_heater_0/fvOptions",
+      "bytes": 327,
+      "sha256": "a8d046af948866d7b34f981c46256978af069a6856c8f48b25ec5ee4adc3b8bc"
+    },
+    {
+      "path": "validation/thermal_outer_microcase_2026-08-26/constant/test_heater_0/radiationProperties",
+      "bytes": 190,
+      "sha256": "5880d815cb416239da5c52e59eded655adbbb1e02b58540f69e22be2e44416ef"
+    },
+    {
+      "path": "validation/thermal_outer_microcase_2026-08-26/constant/test_heater_0/thermophysicalProperties",
+      "bytes": 467,
+      "sha256": "67ac4078d758396d80781cbb31c5775924c72a95f5ee06f8731f9a41699c6640"
+    },
+    {
+      "path": "validation/thermal_outer_microcase_2026-08-26/engineering_notes.md",
+      "bytes": 10,
+      "sha256": "58780403103715dc0b7457006bd701587057c6c02ae0e2b24fa228f78c529bae"
+    },
+    {
+      "path": "validation/thermal_outer_microcase_2026-08-26/internal_airflow_devices.csv",
+      "bytes": 104,
+      "sha256": "8e9af32fbc8b6ae4224e7002f87f8bf13a7db4c98f775b49384fa1d92e248105"
+    },
+    {
+      "path": "validation/thermal_outer_microcase_2026-08-26/prepare_regions.sh",
+      "bytes": 3216,
+      "sha256": "f795b1d610abb5e8807ec2e966eff1b9b0fdd8c25dea9eb4745e2a6677e2eedb"
+    },
+    {
+      "path": "validation/thermal_outer_microcase_2026-08-26/run_cht.sh",
+      "bytes": 630,
+      "sha256": "f911f77cc17ef586bad701d1b89814547695864710e8fdc53404aaf2254afe84"
+    },
+    {
+      "path": "validation/thermal_outer_microcase_2026-08-26/run_parallel.sh",
+      "bytes": 98104,
+      "sha256": "0f3ca317a4beea4d091ef2b93c804d39c3bf8634527a4449efde46f9cf89a399"
+    },
+    {
+      "path": "validation/thermal_outer_microcase_2026-08-26/system/air_side_heater_2/decomposeParDict",
+      "bytes": 183,
+      "sha256": "4cf79526fb5cd8d21cdc6fa5882a533f604e9a4b1179633a007b016356639a3c"
+    },
+    {
+      "path": "validation/thermal_outer_microcase_2026-08-26/system/air_side_heater_2/fvSchemes",
+      "bytes": 409,
+      "sha256": "02de5334b718dfa53b2dd196e10908c14353a4acc7bac69aa0878be35b17e0e6"
+    },
+    {
+      "path": "validation/thermal_outer_microcase_2026-08-26/system/air_side_heater_2/fvSolution",
+      "bytes": 295,
+      "sha256": "2660cb3268ff610b97917818d5e6fc0dfff787832688f19f5c48d48999240fe6"
+    },
+    {
+      "path": "validation/thermal_outer_microcase_2026-08-26/system/controlDict",
+      "bytes": 6253,
+      "sha256": "91484205001dc744430185b594254beca5c093c4e4725dad98e13dca056af4c6"
+    },
+    {
+      "path": "validation/thermal_outer_microcase_2026-08-26/system/decomposeParDict",
+      "bytes": 555,
+      "sha256": "4c7a0b1e644ebcf88d3bce4705353d34bf66fd41f608b7a6c3bf75568fec7d61"
+    },
+    {
+      "path": "validation/thermal_outer_microcase_2026-08-26/system/fluid/decomposeParDict",
+      "bytes": 331,
+      "sha256": "4c1f0508ee1de58e7515cb54dc352255dcd3881d25745a8936ea9f0c23dd5eeb"
+    },
+    {
+      "path": "validation/thermal_outer_microcase_2026-08-26/system/fluid/fvSchemes",
+      "bytes": 617,
+      "sha256": "533f07bb1f2cd8c59e17d33040cf4ca4dcaf693c0090bf09ec6e48026cb04b0c"
+    },
+    {
+      "path": "validation/thermal_outer_microcase_2026-08-26/system/fluid/fvSolution",
+      "bytes": 759,
+      "sha256": "e74f46ca7a1ea266ba35b9c1cb2d68c6f1833fdcd6773f99590bda5f4b05cae9"
+    },
+    {
+      "path": "validation/thermal_outer_microcase_2026-08-26/system/fvSchemes",
+      "bytes": 440,
+      "sha256": "a135292def27d6e0ab73183e446bbf17233cc5454ce85d7a0bc8be547984d0ce"
+    },
+    {
+      "path": "validation/thermal_outer_microcase_2026-08-26/system/fvSolution",
+      "bytes": 206,
+      "sha256": "51e52874f7d7347115027e7d66bea43a7dea01fa506eef5b95c5a833d71745a7"
+    },
+    {
+      "path": "validation/thermal_outer_microcase_2026-08-26/system/homogeneous_heater_1/decomposeParDict",
+      "bytes": 186,
+      "sha256": "e121fb3e262c77cee8c67abe36e62837bd4abb99d067d2174ced1b4ffc4e3532"
+    },
+    {
+      "path": "validation/thermal_outer_microcase_2026-08-26/system/homogeneous_heater_1/fvSchemes",
+      "bytes": 412,
+      "sha256": "882518a478879fba37b07de969f3839d0686ef89bca8c89d5ee63767c96ab2bd"
+    },
+    {
+      "path": "validation/thermal_outer_microcase_2026-08-26/system/homogeneous_heater_1/fvSolution",
+      "bytes": 298,
+      "sha256": "f6c52e0f2ca741807bb62c4603166e965c581d9a0e8db4f0c0f213e723947869"
+    },
+    {
+      "path": "validation/thermal_outer_microcase_2026-08-26/system/spatialConvergenceDict",
+      "bytes": 1320,
+      "sha256": "051cb8c6978863a8b22e6906d0031d48c7f5ff72d7ac60d3c9561edc76ff9939"
+    },
+    {
+      "path": "validation/thermal_outer_microcase_2026-08-26/system/test_heater_0/decomposeParDict",
+      "bytes": 179,
+      "sha256": "1bbbf9c3a66b65dcfc59941091a8e534ac180b2a7ee6e50d9fe6bb516553c19f"
+    },
+    {
+      "path": "validation/thermal_outer_microcase_2026-08-26/system/test_heater_0/fvSchemes",
+      "bytes": 405,
+      "sha256": "437b0ace471f716aa9ffe2dc92c098cb12fa3f02422e523603f7117dd5279851"
+    },
+    {
+      "path": "validation/thermal_outer_microcase_2026-08-26/system/test_heater_0/fvSolution",
+      "bytes": 291,
+      "sha256": "d8add128d6671bf637bff66284e460f77f526441804587d79571819179a544db"
+    },
+    {
+      "path": "validation/thermal_outer_microcase_2026-08-26/system/topoSetDict_fluid_interfaces",
+      "bytes": 658,
+      "sha256": "863e9a757fc75a7e52ad1699265d3cee9eb247ed3eb6937b483b9ddcbb3ea89b"
+    },
+    {
+      "path": "validation/thermal_outer_microcase_2026-08-26/system/topoSetDict_heated_internal_air_2",
+      "bytes": 555,
+      "sha256": "0e2fcfc0450daad238737d2c8c8a09dea3ece724f8c5d072d9e3328daeecb5c9"
+    },
+    {
+      "path": "validation/thermal_outer_microcase_2026-08-26/system/topoSetDict_homogeneous_heater_load_1",
+      "bytes": 571,
+      "sha256": "d2f9a331a4bf854556b736584580f44d85452320dce489778addab408cbf04bc"
+    },
+    {
+      "path": "validation/thermal_outer_microcase_2026-08-26/system/topoSetDict_porous_perforated_tray_0",
+      "bytes": 430,
+      "sha256": "6e136575e8e3d64b65ada199f4e1879ca50d567f1d71e5b8eef11c4bb73c847a"
+    },
+    {
+      "path": "validation/thermal_outer_microcase_2026-08-26/system/topoSetDict_test_heat_source_0",
+      "bytes": 543,
+      "sha256": "150839a948f61de96d8de73324c0d2f9e7c6849aef7bf4f6eff271ffdc727d93"
+    },
+    {
+      "path": "validation/updated_component_plots_current_2026-08-26/PLOT_MANIFEST.json",
+      "bytes": 16641,
+      "sha256": "7a872709ae676bad1dad91bd67fb1c7f34af28fa4abdc6a59ec24e811a2ddb85"
+    },
+    {
+      "path": "validation/updated_component_plots_current_2026-08-26/README.md",
+      "bytes": 1036,
+      "sha256": "460987bba97ee321668865eca3f679d081cdf7cca9b1f6cc7b047c85cc062c39"
+    },
+    {
+      "path": "validation/updated_component_plots_current_2026-08-26/component_01_eaton_su3000rtxlcd2utaa_ups.png",
+      "bytes": 458886,
+      "sha256": "bc9121a08dd0d516868e200f81e793072cc39c0512c81a6f45b6e23ed1479df1"
+    },
+    {
+      "path": "validation/updated_component_plots_current_2026-08-26/component_02_dell_poweredge_r470_1u.png",
+      "bytes": 484352,
+      "sha256": "0c1ee6387a8d2b8bbd9bfee5fd7e7689987b61a1b66adc7d924646bcb0e8ec2f"
+    },
+    {
+      "path": "validation/updated_component_plots_current_2026-08-26/component_03_keysight_n5766a_ps.png",
+      "bytes": 626743,
+      "sha256": "bc053bd604a53a1a70abcf636c13ed3268fdd0a4314bb4ba918d866577756a2a"
+    },
+    {
+      "path": "validation/updated_component_plots_current_2026-08-26/component_04_keysight_n6701c_ps.png",
+      "bytes": 580318,
+      "sha256": "4c3f05cc0babed8859f796fcaa2b02985b76f33ff148cecb86ccb8aaca904efb"
+    },
+    {
+      "path": "validation/updated_component_plots_current_2026-08-26/component_05_trenton_3u_bam.png",
+      "bytes": 602105,
+      "sha256": "7cb51a68af41c28910be7b40f99d72cf29cc9e299ddc96aca92e07d6d27ef1eb"
+    },
+    {
+      "path": "validation/updated_component_plots_current_2026-08-26/component_06_tripp_lite_b020_u08_19_ip_kvm.png",
+      "bytes": 365047,
+      "sha256": "16a062f961f4db6d3188fba8ad8794786d244139ee9ba9863cddbaa17120a8fb"
+    },
+    {
+      "path": "validation/updated_component_plots_current_2026-08-26/component_07_3u_storage_shelf.png",
+      "bytes": 262042,
+      "sha256": "a7c28570472b77b743893c8a60c3ce962e556c708d8e51d042b76be9a4d82d44"
+    },
+    {
+      "path": "validation/updated_component_plots_current_2026-08-26/component_08_thruster_load_box_2u.png",
+      "bytes": 408336,
+      "sha256": "1ae50e483814186e2ea8e4ceb04e19bbb398881d282137c13ed08a0b237f2406"
+    },
+    {
+      "path": "validation/updated_component_plots_current_2026-08-26/component_09_cisco_9300_network_switch.png",
+      "bytes": 475050,
+      "sha256": "89c4b6dbb5be204612068f94a1284dae6591f15a46d9d403c059c5e5a1dfc759"
+    },
+    {
+      "path": "validation/updated_component_plots_current_2026-08-26/component_10_eaton_pdumnh30_pdu.png",
+      "bytes": 357955,
+      "sha256": "f60358be4874079230e1b033c018b1642ecb642aef8e2959da09b56d719a0ac7"
+    },
+    {
+      "path": "validation/updated_component_plots_current_2026-08-26/component_11_meanwell_edr_120_24.png",
+      "bytes": 375790,
+      "sha256": "922d86e244fb7f1de893d08878b032b5a7c037874a750096f7d3abeef70237e7"
+    },
+    {
+      "path": "validation/updated_component_plots_current_2026-08-26/component_12_meanwell_edr_120_24.png",
+      "bytes": 375790,
+      "sha256": "922d86e244fb7f1de893d08878b032b5a7c037874a750096f7d3abeef70237e7"
+    },
+    {
+      "path": "validation/updated_component_plots_current_2026-08-26/component_13_ni_pxie_784782_01_chassis.png",
+      "bytes": 696672,
+      "sha256": "88c84058ebcf0a10df9dd50e3a4c19c678f6973935473bb73e967df7f3576f94"
+    },
+    {
+      "path": "validation/updated_component_plots_current_2026-08-26/geometry_input.txt",
+      "bytes": 39808,
+      "sha256": "dbcaaa237fb8bf59c4841cf4e3a8b0a226d28208d23560c72900ce113d2ff2ea"
+    },
+    {
+      "path": "validation/updated_component_plots_current_2026-08-26/rack.png",
+      "bytes": 566575,
+      "sha256": "78a28281028a71740edecbbfbbe8b86d3a104291551e690665e1d258c5ea920d"
+    }
+  ]
+}

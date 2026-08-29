@@ -13,6 +13,10 @@ refinement_margin = 0.02
 [openfoam_solver]
 enabled = true
 overwrite = true
+# Screening is exploratory and may retain a coarse mesh after all non-
+# determinant checkMesh checks pass. The generated runner labels this state
+# explicitly; use an in-depth or validation profile for quantitative results.
+allow_determinant_warnings = true
 # On the 8 GB validation workstation, two ranks avoided paging and completed
 # the same 30-step checkpoint 44.8% faster than four ranks. In-depth also uses
 # two ranks; the separate strict validation profile retains four ranks.
@@ -37,6 +41,11 @@ use_fan_curves = true
 # 0.0045%, and mass imbalance below 0.1% relative to the 3x3 reference.
 pimple_outer_correctors = 3
 pimple_pressure_correctors = 2
+# Frozen-flow screening keeps two energy relinearization/coupling passes while
+# avoiding the third pass that live fan/pressure coupling requires.  This is a
+# speed-screen candidate, not yet a corrected-full-rack validation result; the
+# runner restores 3 outer passes before every airflow window.
+thermal_only_pimple_outer_correctors = 2
 fan_curve_extension_multiplier = 2.0
 use_vent_pressure_loss = true
 
@@ -49,7 +58,10 @@ initial_airflow_check_interval = 0.01
 minimum_initial_airflow_duration = 0.30
 # Require one rack air replacement before accepting the initial spatial flow field.
 minimum_initial_air_exchange_fraction = 1.0
-airflow_maximum_time_step = 0.001
+# The full-pressure 1.7 M-cell lab rack reached Co=4.579 at 0.001 s during its
+# startup ramp. Keep screening airflow below that marginal regime; this also
+# gives the adaptive controller useful headroom below maximum_courant_number.
+airflow_maximum_time_step = 0.0005
 airflow_refresh_maximum_time_step = 0.001
 airflow_checkpoint_interval = 0.1
 

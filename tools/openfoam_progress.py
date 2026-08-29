@@ -32,7 +32,9 @@ CONTINUITY_RE = re.compile(
     r"time step continuity errors \(fluid\):.*cumulative = ([0-9.eE+-]+)"
 )
 SOLID_REGION_RE = re.compile(r"^Solving for solid region (\S+)$")
-FLUID_REGION_RE = re.compile(r"^Solving (?:thermal-only )?fluid region (\S+)$")
+FLUID_REGION_RE = re.compile(
+    r"^Solving (?:(?:for|thermal-only) )?fluid region (\S+)$"
+)
 TEMPERATURE_RANGE_RE = re.compile(
     r"^Min/max T:([0-9.eE+-]+)\s+([0-9.eE+-]+)$"
 )
@@ -106,6 +108,9 @@ INITIAL_EXCHANGE_REQUIREMENT_RE = re.compile(
     r'-v completed="\$air_exchange_fraction" '
     r'-v required="([0-9.eE+-]+)"'
 )
+COURANT_SAFETY_RE = re.compile(
+    r"safe=\(observed>0\?dt\*([0-9.eE+-]+)\*limit/observed:hard\)"
+)
 
 
 def read_samples(log_path: Path) -> list[tuple[float, float]]:
@@ -123,6 +128,25 @@ def read_samples(log_path: Path) -> list[tuple[float, float]]:
                 logged_wall_time = match.group(2) or match.group(1)
                 samples.append((current_time, float(logged_wall_time)))
     return samples
+
+
+def read_latest_logged_time(log_path: Path) -> float | None:
+    """Return the newest time marker, including an in-progress timestep.
+
+    Appended solver logs can contain an abandoned segment whose last completed
+    timestep is later than the durable checkpoint used by a restarted solver.
+    Reading only completed ``ExecutionTime`` samples then temporarily reports
+    the abandoned time until the restarted step finishes.  The newest ``Time``
+    marker identifies the active segment immediately and is safe to use for
+    progress display; completed samples remain authoritative for rate fitting.
+    """
+    latest: float | None = None
+    with log_path.open("r", encoding="utf-8", errors="ignore") as stream:
+        for raw_line in stream:
+            match = TIME_RE.match(raw_line.strip())
+            if match:
+                latest = float(match.group(1))
+    return latest
 
 
 def read_health(log_path: Path) -> tuple[float | None, float | None, list[str]]:
@@ -218,6 +242,14 @@ def current_stage_samples(
     return [sample for sample in samples if sample[0] > start_time + tolerance]
 
 
+def active_time_precedes_last_completed_sample(
+    active_time: float, completed_time: float
+) -> bool:
+    """Detect the gap before a restarted solver completes its first step."""
+    tolerance = 1.0e-9 * max(1.0, abs(active_time), abs(completed_time))
+    return active_time < completed_time - tolerance
+
+
 def eta_remaining_simulated(
     current_time: float,
     overall_end_time: float,
@@ -290,7 +322,7 @@ def read_thermal_only_flow(case_directory: Path) -> bool:
 def courant_timestep_headroom(
     case_directory: Path,
     observed_maximum_courant: float,
-    safety_fraction: float = 0.8,
+    safety_fraction: float = 0.5,
 ) -> tuple[float, float, float, float] | None:
     """Estimate a safe diagnostic dt without changing the configured stage."""
     if observed_maximum_courant <= 0 or not 0 < safety_fraction <= 1:
@@ -308,6 +340,20 @@ def courant_timestep_headroom(
         return None
     safe = current * values["maxCo"] / observed_maximum_courant * safety_fraction
     return current, values["maxDeltaT"], safe, safe / current
+
+
+def read_courant_safety_fraction(case_directory: Path) -> float:
+    """Read the live-stage factor emitted into the generated runner."""
+    runner = case_directory / "run_parallel.sh"
+    if runner.is_file():
+        match = COURANT_SAFETY_RE.search(
+            runner.read_text(encoding="utf-8", errors="ignore")
+        )
+        if match:
+            value = float(match.group(1))
+            if math.isfinite(value) and 0 < value <= 1:
+                return value
+    return 0.5
 
 
 def read_latest_run_request(case_directory: Path) -> tuple[str, float] | None:
@@ -444,6 +490,29 @@ def read_recent_exchange_wall_rate(
             if span > 0.0 and seconds > 0.0:
                 samples.append((span, seconds))
             awaiting_stage = False
+    selected = samples[-max(1, window):]
+    total_span = sum(span for span, _ in selected)
+    if total_span <= 0.0:
+        return None
+    return sum(seconds for _, seconds in selected) / total_span
+
+
+def read_recent_airflow_wall_rate(
+    case_directory: Path, window: int = 3
+) -> float | None:
+    """Return wall seconds per simulated second from durable airflow stages."""
+    summary = case_directory / "run_summary.log"
+    if not summary.is_file():
+        return None
+    samples: list[tuple[float, float]] = []
+    for line in summary.read_text(encoding="utf-8", errors="ignore").splitlines():
+        match = AIRFLOW_STAGE_RE.search(line)
+        if not match:
+            continue
+        span = float(match.group(2)) - float(match.group(1))
+        seconds = float(match.group(3))
+        if span > 0.0 and seconds > 0.0:
+            samples.append((span, seconds))
     selected = samples[-max(1, window):]
     total_span = sum(span for span, _ in selected)
     if total_span <= 0.0:
@@ -838,14 +907,12 @@ def is_stale_run(
     return current_time < end_time and log_age_seconds > stale_after_seconds
 
 
-def choose_log(case_directory: Path, explicit: Path | None) -> Path:
+def choose_log(case_directory: Path, explicit: Path | None) -> Path | None:
     if explicit is not None:
         return explicit
     candidates = list(case_directory.glob("*.stdout.log"))
     if not candidates:
-        raise FileNotFoundError(
-            f"no *.stdout.log files found in {case_directory}; use --log"
-        )
+        return None
     return max(candidates, key=lambda path: path.stat().st_mtime)
 
 
@@ -893,25 +960,54 @@ def main() -> int:
 
     case_directory = args.case.resolve()
     log_path = choose_log(case_directory, args.log.resolve() if args.log else None)
-    samples = read_samples(log_path)
-    current_time, logged_wall_time = samples[-1]
-    log_age_seconds = max(0.0, time.time() - log_path.stat().st_mtime)
+    durable_airflow_slope = read_recent_airflow_wall_rate(case_directory)
     start_time, configured_end_time = read_control_times(case_directory)
-    slope = recent_slope_or_none(
-        current_stage_samples(samples, start_time), args.window
-    )
+    if log_path is None:
+        (checkpoints, processor_count, checkpoints_aligned, latest_file_counts,
+         incomplete_checkpoints) = processor_checkpoints(case_directory)
+        current_time = checkpoints[-1] if checkpoints else start_time
+        logged_wall_time = None
+        log_age_seconds = None
+        slope = durable_airflow_slope
+        maximum_courant = None
+        cumulative_continuity = None
+        fatal_signatures = []
+        temperature_ranges = {}
+    else:
+        samples = read_samples(log_path)
+        current_time = read_latest_logged_time(log_path)
+        if samples:
+            completed_time, logged_wall_time = samples[-1]
+        else:
+            # A new solver can write "Time = ..." before its first execution
+            # summary. That is a valid initializing state, not a corrupt log.
+            completed_time = None
+            logged_wall_time = None
+        if current_time is None:
+            current_time = (
+                completed_time if completed_time is not None else start_time
+            )
+        log_age_seconds = max(0.0, time.time() - log_path.stat().st_mtime)
+        slope = recent_slope_or_none(
+            current_stage_samples(samples, start_time), args.window
+        )
+        if (completed_time is not None and
+            active_time_precedes_last_completed_sample(
+                current_time, completed_time
+            )):
+            slope = None
+        (checkpoints, processor_count, checkpoints_aligned, latest_file_counts,
+         incomplete_checkpoints) = processor_checkpoints(
+            case_directory, current_time
+        )
+        maximum_courant, cumulative_continuity, fatal_signatures = read_health(log_path)
+        temperature_ranges = read_latest_temperature_ranges(log_path)
     end_time = args.end_time if args.end_time is not None else configured_end_time
-    (checkpoints, processor_count, checkpoints_aligned, latest_file_counts,
-     incomplete_checkpoints) = processor_checkpoints(
-        case_directory, current_time
-    )
     checkpoint_stride = read_checkpoint_stride(case_directory)
     thermal_only_flow = read_thermal_only_flow(case_directory)
     current_series_count = current_checkpoint_series_count(
         checkpoints, checkpoint_stride
     )
-    maximum_courant, cumulative_continuity, fatal_signatures = read_health(log_path)
-    temperature_ranges = read_latest_temperature_ranges(log_path)
     run_state = read_latest_run_state(case_directory)
     run_request = (
         (run_state[0], run_state[1]) if run_state is not None else None
@@ -934,8 +1030,11 @@ def main() -> int:
     case_bytes, free_bytes = storage_usage(case_directory, args.fast)
 
     print(f"Case: {case_directory}")
-    print(f"Log: {log_path}")
-    print(f"Log last updated: {format_duration(log_age_seconds)} ago")
+    if log_path is None:
+        print("Log: unavailable (no *.stdout.log); reporting durable checkpoint state only")
+    else:
+        print(f"Log: {log_path}")
+        print(f"Log last updated: {format_duration(log_age_seconds)} ago")
     print(f"Simulation: {current_time:.9g} / {end_time:.9g} s")
     if run_completion is not None:
         completion_fraction = (
@@ -993,21 +1092,33 @@ def main() -> int:
             f"component average {average_rate:.6g}{average_gate} K/300s "
             f"[{average_region}]"
         )
-    if slope is None:
+    if log_path is None and slope is None:
+        print("Recent rate: unavailable without stdout log or completed stage timing")
+    elif log_path is None:
+        print(f"Recent durable airflow rate: {slope:.1f} wall s / simulated s")
+    elif slope is None:
         print("Recent rate: warming up after solver-stage restart")
     else:
         print(f"Recent rate: {slope:.1f} wall s / simulated s")
-    print(f"Solver logged wall time: {format_duration(logged_wall_time)}")
+    if logged_wall_time is None:
+        print("Solver logged wall time: unavailable without stdout log")
+    else:
+        print(f"Solver logged wall time: {format_duration(logged_wall_time)}")
     if run_completion is not None:
         print("Estimated remaining wall time: complete")
+    elif log_path is None and slope is None:
+        print("Estimated remaining wall time: unavailable without stdout log or completed stage timing")
     elif slope is None:
         print("Estimated remaining wall time: unavailable until two new timesteps complete")
     else:
-        eta_label = (
-            "Current solver-stage estimated remaining wall time"
-            if eta_is_stage_only or initial_airflow is not None
-            else "Estimated remaining wall time"
-        )
+        if log_path is None:
+            eta_label = "Estimated wall time from latest durable checkpoint"
+        else:
+            eta_label = (
+                "Current solver-stage estimated remaining wall time"
+                if eta_is_stage_only or initial_airflow is not None
+                else "Estimated remaining wall time"
+            )
         print(
             f"{eta_label}: "
             f"{format_duration(eta_remaining * slope)}"
@@ -1040,17 +1151,29 @@ def main() -> int:
             )
         else:
             print(f"Latest fluid max Courant: {maximum_courant:.6g}")
-            headroom = courant_timestep_headroom(case_directory, maximum_courant)
+            safety_fraction = read_courant_safety_fraction(case_directory)
+            headroom = courant_timestep_headroom(
+                case_directory, maximum_courant, safety_fraction
+            )
             if headroom is not None:
                 current_dt, stage_cap, safe_dt, multiplier = headroom
                 print(
-                    "Diagnostic Courant-safe timestep (80% margin): "
+                    "Diagnostic Courant-safe timestep "
+                    f"({100.0 * safety_fraction:.0f}% of limit): "
                     f"{safe_dt:.9g} s ({multiplier:.3g}x current "
                     f"{current_dt:.9g} s; stage cap {stage_cap:.9g} s)"
                 )
     if cumulative_continuity is not None:
         print(f"Latest cumulative continuity error: {cumulative_continuity:.6g}")
     if temperature_ranges:
+        if "fluid" in temperature_ranges:
+            fluid_minimum, fluid_maximum = temperature_ranges["fluid"]
+            print(
+                "Latest fluid temperature range: "
+                f"{fluid_minimum:.6g}--{fluid_maximum:.6g} K "
+                f"({fluid_minimum - 273.15:.6g}--"
+                f"{fluid_maximum - 273.15:.6g} C)"
+            )
         hottest_region, (_, hottest_temperature) = max(
             temperature_ranges.items(), key=lambda item: item[1][1]
         )
@@ -1064,11 +1187,14 @@ def main() -> int:
         )
         if warning:
             print(warning)
-    print(
-        "Fatal signatures: "
-        + (", ".join(fatal_signatures) if fatal_signatures else "none")
-    )
-    if run_completion is None and is_stale_run(
+    if log_path is None:
+        print("Fatal signatures: unavailable without stdout log")
+    else:
+        print(
+            "Fatal signatures: "
+            + (", ".join(fatal_signatures) if fatal_signatures else "none")
+        )
+    if log_path is not None and run_completion is None and is_stale_run(
         log_age_seconds, current_time, end_time, args.stale_after
     ):
         print(
@@ -1106,9 +1232,16 @@ def main() -> int:
             if next_checkpoint > current_time + 1e-12:
                 eta = (
                     format_duration((next_checkpoint-current_time)*slope)
-                    if slope is not None else "warming up"
+                    if slope is not None else (
+                        "unavailable without stdout log"
+                        if log_path is None else "warming up"
+                    )
                 )
-                print(f"Next checkpoint: {next_checkpoint:.9g} s (ETA {eta})")
+                eta_prefix = (
+                    "ETA from durable checkpoint "
+                    if log_path is None and slope is not None else "ETA "
+                )
+                print(f"Next checkpoint: {next_checkpoint:.9g} s ({eta_prefix}{eta})")
     else:
         print(
             "Processor checkpoints: none"

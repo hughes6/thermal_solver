@@ -1,0 +1,35 @@
+| Internal fan | t=0.2 s | t=0.3 s |
+|---|---:|---:|
+| `internal_Bottom_fan_1_49` | 0.0734401 | 0.073196 |
+| `internal_Bottom_fan_2_50` | 0.0730435 | 0.0728109 |
+| `internal_Cooling_fan_1_2` | 0.0143906 | 0.0140743 |
+| `internal_Cooling_fan_2_3` | 0.0140074 | 0.0138439 |
+| `internal_Cooling_fan_3_4` | 0.0144657 | 0.0142135 |
+| `internal_Cooling_fan_4_5` | 0.0144854 | 0.0141278 |
+| `internal_Cooling_fan_5_6` | 0.0138522 | 0.0137963 |
+| `internal_Cooling_fan_6_7` | 0.0140451 | 0.0141578 |
+| `internal_Exhaust_fan_1_33` | 0.0259476 | 0.0211467 |
+| `internal_Exhaust_fan_1_37` | 0.0103577 | 0.0103028 |
+| `internal_Exhaust_fan_2_34` | 0.027427 | 0.022531 |
+| `internal_Exhaust_fan_2_38` | 0.00918726 | 0.00919954 |
+| `internal_Exhaust_fan_3_39` | 0.0105133 | 0.0105092 |
+| `internal_Front_fan_1_11` | 0.00543726 | 0.00525792 |
+| `internal_Front_fan_1_22` | 0.00627556 | 0.00614976 |
+| `internal_Front_fan_2_12` | 0.0049281 | 0.00485652 |
+| `internal_Front_fan_2_23` | 0.00535882 | 0.00542114 |
+| `internal_Front_fan_3_13` | 0.00443984 | 0.00442905 |
+| `internal_Front_fan_3_24` | 0.00500463 | 0.00490843 |
+| `internal_Module_1_fan_15` | 0.00462934 | 0.00436726 |
+| `internal_Module_1_fan_26` | 0.00369028 | 0.0040109 |
+| `internal_Module_2_fan_16` | 0.00363687 | 0.00371246 |
+| `internal_Module_2_fan_27` | 0.00346872 | 0.00373385 |
+| `internal_Module_3_fan_17` | 0.00343727 | 0.00342668 |
+| `internal_Module_3_fan_28` | 0.00352421 | 0.00378164 |
+| `internal_Module_4_fan_18` | 0.00347309 | 0.00342404 |
+| `internal_Module_4_fan_29` | 0.00313558 | 0.00359632 |
+| `internal_PS_Exhaust_Fan_14` | 0.00358031 | 0.00355625 |
+| `internal_PS_Exhaust_Fan_25` | 0.00332447 | 0.00357783 |
+| `internal_Power_Supply_fan_51` | 0.032609 | 0.0328844 |
+| `internal_Power_supply_exhaust_fan_40` | 0.00898327 | 0.00910171 |
+| `internal_Rear_exhaust_32` | 0.0305523 | 0.0324784 |
+| `internal_Rear_exhaust_fan_0` | 0.0373694 | 0.0370957 |

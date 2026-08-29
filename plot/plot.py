@@ -6,6 +6,7 @@ import numpy as np
 import re
 from mpl_toolkits.mplot3d import art3d
 import argparse
+from pathlib import Path
 
 
 def centered_surface_rectangle(center, size, direction):
@@ -27,11 +28,23 @@ def centered_surface_rectangle(center, size, direction):
 
 anim = False
 
-parser = argparse.ArgumentParser()
+parser = argparse.ArgumentParser(description="Plot an exported rack geometry.")
 parser.add_argument("-s", "--save", action="store_true")
+parser.add_argument(
+    "--input",
+    type=Path,
+    default=Path("output.txt"),
+    help="exported geometry input (default: output.txt)",
+)
+parser.add_argument(
+    "--output",
+    type=Path,
+    default=Path("rack_plot.png"),
+    help="PNG path used with --save (default: rack_plot.png)",
+)
 args = parser.parse_args()
 
-filename = "output.txt"
+filename = args.input
 
 rack_dim = []
 component_names = []
@@ -333,6 +346,8 @@ for i in range(len(component_coords)):
     )
 
 internal_region_colors = {
+    "Air": "tab:cyan",
+    "Solid": "tab:gray",
     "Vent": "tab:blue",
     "Intake": "tab:green",
     "Exhaust": "tab:red",
@@ -353,11 +368,17 @@ for i in range(len(internal_region_global_positions)):
     flow_type = internal_region_flow_types[i]
 
     # Assign one consistent color to each airflow category.
-    if region_type == "Vent":
+    normalized_region_type = region_type.casefold()
+    normalized_flow_type = (flow_type or "").casefold()
+    if normalized_region_type == "air":
+        category = "Air"
+    elif normalized_region_type == "solid":
+        category = "Solid"
+    elif normalized_region_type == "vent":
         category = "Vent"
-    elif region_type == "Fan" and flow_type == "Intake":
+    elif normalized_region_type == "fan" and normalized_flow_type == "intake":
         category = "Intake"
-    elif region_type == "Fan" and flow_type == "Exhaust":
+    elif normalized_region_type == "fan" and normalized_flow_type == "exhaust":
         category = "Exhaust"
     else:
         category = "Other"
@@ -443,7 +464,7 @@ for i in range(len(internal_region_global_positions)):
             zdir="x",
         )
 
-for category in ("Vent", "Intake", "Exhaust"):
+for category in ("Air", "Solid", "Vent", "Intake", "Exhaust"):
     legend_handles.append(
         mpatches.Patch(
             color=internal_region_colors[category],
@@ -622,4 +643,9 @@ ax.legend(
     borderaxespad=0.0
 )
 plt.subplots_adjust(right=0.95)   # leave space for legend
-plt.show()
+if args.save:
+    args.output.parent.mkdir(parents=True, exist_ok=True)
+    fig.savefig(args.output, dpi=200, bbox_inches="tight")
+    print(f"Saved plot to '{args.output}'.")
+else:
+    plt.show()

@@ -1,0 +1,3638 @@
+new model
+
+
+name = "noew model"
+
+# -------------------------------------------------------------
+# Simulation
+# -------------------------------------------------------------
+[simulation]
+advection_subcycling = true
+advection_cfl_target = 0.8
+max_advection_substeps = 10000
+
+dt = 0.1
+duration = 10
+output_interval = 100
+max_timesteps = 1000000
+max_updates = 30000000
+max_cell_count = 10000000
+max_megabyte_usage = 500
+update_flow_interval = 100
+
+# -------------------------------------------------------------
+# Flow Solver
+# -------------------------------------------------------------
+
+[flow_solver]
+enable_flow_solver = true
+pressure_method = "pcg"
+#pressure_method = "sor"
+resistivity = 4.6
+tolerance = 1e-6
+max_iterations = 3500
+sor_omega = 1.1
+max_outer_iters = 20
+flow_tolerance = 1e-3
+
+
+# -------------------------------------------------------------
+# Environment - air properties
+# -------------------------------------------------------------
+
+[environment]
+humidity = 30.0
+elevation = 5500.0
+T_ambient = 20.0
+cp = 1005.5
+k = 0.02587
+mu = 1.81e-5
+pr = 0.71
+rho = 1.225 
+
+# -------------------------------------------------------------
+# Fine production mesh
+# -------------------------------------------------------------
+
+[mesh]
+adaptive = true
+fine_dx = 0.02
+coarse_dx = 0.050
+refinement_margin = 0.02
+
+# -------------------------------------------------------------
+# OpenFOAM backend
+# -------------------------------------------------------------
+
+[openfoam_solver]
+enabled = true
+# For rapid tuning, switch to screening_foam_cfg.toml and use a separate
+# The model filename is appended to case_root_directory. For example, copying
+# this file to alternate_layout.toml exports to .../alternate_layout instead
+# of overwriting or reusing this model's results.
+# A profile's top-level [mesh] overrides the root [mesh] for OpenFOAM export
+# only. The root mesh still controls the native explicit solver.
+template = "library/openfoam_cfg/screening_foam_cfg.toml"
+case_root_directory = "C:/OpenFOAM/thermal_sim_newmodel"
+
+# -------------------------------------------------------------
+# Coarse warm-start stage
+# -------------------------------------------------------------
+
+[multistage]
+enabled = true
+coarse_dt = 0.1
+coarse_duration = 30.0
+coarse_update_flow_interval = -1
+
+[multistage.coarse_mesh]
+fine_dx = 0.05
+coarse_dx = 0.20
+refinement_margin = 0.02
+
+# -------------------------------------------------------------
+# Logger
+# -------------------------------------------------------------
+
+[logger]
+template = "library/loggers/logger1.toml"
+
+# -------------------------------------------------------------
+# Rack
+# -------------------------------------------------------------
+
+[rack] 
+name = "default single bay, double depth rack"
+
+[rack.size]
+units = "u"
+width = 13.1
+depth = 24.6
+height = 40.0
+
+# -------------------------------------------------------------
+# Components
+# -------------------------------------------------------------
+# =========================RAIL 1==============================
+[[components]]
+template = "library/components/eaton_2U_UPS.toml"
+[components.position]
+units = "u"
+x = 1.6
+y = 0.0
+z = 0
+
+# see vent below
+
+[[components]]
+template = "library/components/DELL_R470.toml"
+[components.position]
+units = "u"
+x = 1.128
+y = 0.0
+z = 4
+
+[[components]]
+template = "library/components/Keysight_N5766A.toml"
+[components.position]
+units = "u"
+x = 1.79
+y = 0.0
+z = 6
+
+[[components]]
+template = "library/components/Keysight_N6701C.toml"
+[components.position]
+units = "u"
+x = 1.769
+y = 0.0
+z = 7
+
+[[components]]
+template = "library/components/trenton_3u_bam.toml"
+[components.position]
+units = "u"
+x = 1.12
+y = 0.0
+z = 9
+
+[[components]]
+template = "library/components/eaton_KVM.toml"
+[components.position]
+units = "u"
+x = 1.15
+y = 0
+z = 14
+
+[[components]]
+name = "3U storage Shelf"
+watts = 0.0
+[components.position]
+units = "u"
+x = 1.55
+y = 0.0
+z = 15.0
+[components.size]
+units = "u"
+width = 10
+depth = 9.3
+height = 3.0
+[components.material]
+rho = 2700
+cp = 900
+k = 150
+
+# model the MAU box here
+
+[[components]]
+template = "library/components/Thruster_Load_Box.toml"
+[components.position]
+units = "u"
+x = 1.12
+y = 0.0
+z = 30.0
+
+[[components]]
+template = "library/components/cisco_catalyst_9300_24.toml"
+[components.position]
+units = "u"
+x = 1.544
+y = 0
+z = 34
+
+# =========================RAIL 2==============================
+[[components]]
+template = "library/components/Eaton_PDU_PDUMNH30.toml"
+[components.position]
+units = "u"
+x = 1.55
+y = 16
+z = 2.0
+
+# [[components]]
+# name = "DIN rail obstructions"
+# watts = 0.0
+# [components.position]
+# units = "u"
+# x = 1.55
+# y = 9.0
+# z = 13.0
+# [components.size]
+# units = "u"
+# width = 10
+# depth = 9.0
+# height = 3.0
+# [components.material]
+# rho = 2700
+# cp = 900
+# k = 150
+
+# MODEL THE DIN RAIL OBSTRUCTIONS
+
+[[components]]
+template = "library/components/Fan_control_kit_PS.toml"
+[components.position]
+units = "u"
+x = 6.0
+y = 21
+z = 31
+[[components]]
+template = "library/components/Fan_control_kit_PS.toml"
+[components.position]
+units = "u"
+x = 5.0
+y = 21
+z = 31
+
+[[components]]
+template = "library/components/NI_PXIe_Chassis.toml"
+[components.position]
+units = "u"
+x = 1.0
+y = 18
+z = 35
+
+# =========================RAIL 3==============================
+# nothing -> its just panels
+
+# -------------------------------------------------------------
+# Fans
+# -------------------------------------------------------------
+[[fans]]
+name = "Fan 1"
+shape = "circular"
+diameter = 4.7
+diameter_units = "in"
+
+cfm = 271.0
+flow_type = "exhaust"
+curve = "top_fan_MS1238E-H"
+
+[fans.position]
+units = "u"
+x = 3.05
+y = 17.8
+z = 40.0
+
+[fans.direction]
+x = 0.0
+y = 0.0
+z = 1.0
+
+[[fans]]
+name = "Fan 2"
+shape = "circular"
+diameter = 4.7
+diameter_units = "in"
+
+cfm = 271.0
+flow_type = "exhaust"
+curve = "top_fan_MS1238E-H"
+
+[fans.position]
+units = "u"
+x = 3.05
+y = 14.8
+z = 40.0
+
+[fans.direction]
+x = 0.0
+y = 0.0
+z = 1.0
+
+
+[[fans]]
+name = "Fan 3"
+shape = "circular"
+diameter = 4.7
+diameter_units = "in"
+
+cfm = 271.0
+flow_type = "exhaust"
+curve = "top_fan_MS1238E-H"
+
+[fans.position]
+units = "u"
+x = 9.05
+y = 20.8
+z = 40.0
+
+[fans.direction]
+x = 0.0
+y = 0.0
+z = 1.0
+
+[[fans]]
+name = "Fan 4"
+shape = "circular"
+diameter = 4.7
+diameter_units = "in"
+
+cfm = 271.0
+flow_type = "exhaust"
+curve = "top_fan_MS1238E-H"
+
+[fans.position]
+units = "u"
+x = 6.05
+y = 20.8
+z = 40.0
+
+[fans.direction]
+x = 0.0
+y = 0.0
+z = 1.0
+
+[[fans]]
+name = "Fan 5"
+shape = "circular"
+diameter = 4.7
+diameter_units = "in"
+
+cfm = 271.0
+flow_type = "exhaust"
+curve = "top_fan_MS1238E-H"
+
+[fans.position]
+units = "u"
+x = 6.05
+y = 17.8
+z = 40.0
+
+[fans.direction]
+x = 0.0
+y = 0.0
+z = 1.0
+
+[[fans]]
+name = "Fan 6"
+shape = "circular"
+diameter = 4.7
+diameter_units = "in"
+
+cfm = 271.0
+flow_type = "exhaust"
+curve = "top_fan_MS1238E-H"
+
+[fans.position]
+units = "u"
+x = 6.05
+y = 14.8
+z = 40.0
+
+[fans.direction]
+x = 0.0
+y = 0.0
+z = 1.0
+
+[[fans]]
+name = "Fan 7"
+shape = "circular"
+diameter = 4.7
+diameter_units = "in"
+
+cfm = 271.0
+flow_type = "exhaust"
+curve = "top_fan_MS1238E-H"
+
+[fans.position]
+units = "u"
+x = 3.05
+y = 20.8
+z = 40.0
+
+[fans.direction]
+x = 0.0
+y = 0.0
+z = 1.0
+
+[[fans]]
+name = "Fan 8"
+shape = "circular"
+diameter = 4.7
+diameter_units = "in"
+
+cfm = 271.0
+flow_type = "exhaust"
+curve = "top_fan_MS1238E-H"
+
+[fans.position]
+units = "u"
+x = 9.05
+y = 17.8
+z = 40.0
+
+[fans.direction]
+x = 0.0
+y = 0.0
+z = 1.0
+
+[[fans]]
+name = "Fan 9"
+shape = "circular"
+diameter = 4.7
+diameter_units = "in"
+
+cfm = 271.0
+flow_type = "exhaust"
+curve = "top_fan_MS1238E-H"
+
+[fans.position]
+units = "u"
+x = 9.05
+y = 14.8
+z = 40.0
+
+[fans.direction]
+x = 0.0
+y = 0.0
+z = 1.0
+
+# -------------------------------------------------------------
+# Vents
+# -------------------------------------------------------------
+[[vents]]
+name = "Vent main 2U 74% perforation"
+shape = "rectangular"
+free_area_ratio = 0.74
+vent_discharge_coeff = 0.5
+
+[vents.position]
+units = "u"
+x = 6.55
+y = 0.0
+z = 3.0
+
+[vents.size]
+units = "u"
+width = 9.5
+depth = 0.0
+height = 2.0 
+
+[vents.normal]
+x = 0.0
+y = 1.0
+z = 0.0
+
+
+fan curves
+
+# fan_curves.toml
+# P-Q curve: dP(Q) = a - b*Q - c*Q^2   [Pa, as a function of m^3/s]
+# rho_rated: air density (kg/m^3) the manufacturer's curve was measured at
+
+[[fan_curve]]
+name = "default"
+rho_rated = 1.2
+a = 120.0     # Pa, shutoff pressure
+b = 300.0     # Pa / (m^3/s)
+c = 50.0      # Pa / (m^3/s)^2
+
+[[fan_curve]]
+name = "generic_80mm_low_speed"
+rho_rated = 1.2
+a = 60.0
+b = 400.0
+c = 0.0
+
+[[fan_curve]]
+name = "generic_120mm_high_static"
+rho_rated = 1.2
+a = 250.0
+b = 150.0
+c = 20.0
+
+[[fan_curve]]
+name = "generic_80mm_100cfm_05static"
+rho_rated = 1.2
+a = 124.544455
+b = 3694.52651985
+c = -22366.4521478
+
+[[fan_curve]]
+name = "top_fan_MS1238E-H" # rack top fans
+rho_rated = 1.2
+a = 300.0     # Pa, shutoff pressure
+b = 2170.0    # Pa / (m^3/s)
+c = 8300.0    # Pa / (m^3/s)^2
+
+[[fan_curve]]
+name = "delta_afb0812_12v"
+rho_rated = 1.2
+a = 300.0     # Pa, shutoff pressure
+b = 2170.0    # Pa / (m^3/s)
+c = 8300.0    # Pa / (m^3/s)^2
+
+[[fan_curve]]
+name = "NMB_12038VE-48R-GU-01" # eaton ups
+rho_rated = 1.2
+a = 351.226522757
+b = 2740.34289634
+c = 2434.31217871
+
+[[fan_curve]]
+name = "Delta_PFC0612DEF00" # trenton 3u front fans
+rho_rated = 1.2
+a = 524.982914974
+b = 16045.9679797
+c = -17013.7501552
+
+[[fan_curve]]
+name = "Delta_FFC1212D_F00" # trenton 3u back fan
+rho_rated = 1.2
+a = 106.895233162
+b = -146.384230954
+c = 23113.8737899
+
+[[fan_curve]]
+name = "Sanyo_Denki_9CRH0412P5J001" # dell poweredge 4--
+rho_rated = 1.2
+a = 1693.40354741
+b = -25518.3930472
+c = 8811122.94543
+
+[[fan_curve]]
+name = "Sunon_MA1062_HVL_GN" # thruster load box
+rho_rated = 1.2
+a = 850.817019845
+b = 186796.025315
+c = -8593176.71805
+
+[[fan_curve]]
+name = "Delta_FFB0412VHN_F00" # keysight 6701 main frame
+rho_rated = 1.2
+a = 125.732222023
+b = 20179.7283705
+c = -557536.086206
+
+[[fan_curve]]
+name = "Delta_FFB0412HN_R00" # keysight N67- modules 
+rho_rated = 1.2
+a = 61.77404968
+b = 13893.4056002
+c = -308861.316233
+
+[[fan_curve]]
+name = "AVC_DBTD0428B2U" # Cisco 24 port back fans 
+rho_rated = 1.2
+a = 470.8
+b = -369.85
+c = 4486233.85
+
+[[fan_curve]]
+name = "Sanyo_Denki_9GV1212P4G01" # NI PXIe Chassis card fans
+rho_rated = 1.2
+a = 224.180019
+b = 1172.17001519
+c = 19896.028597
+
+[[fan_curve]]
+name = "NMB_08025SS_12N_AL_D0"
+rho_rated = 1.2
+a = 37.61242541
+b = -135.117790878
+c = 105934.159697
+
+# Thermal-solver component model
+# Coordinate convention:
+#   x = width, left to right
+#   y = depth, front to rear
+#   z = height, bottom to top
+# External dimensions are based on manufacturer specifications where noted.
+# Internal geometry, heat allocation, vent free area, and fan CFM are engineering estimates
+# intended for rack-level thermal simulation and should be calibrated against measurements.
+
+
+# Trenton Systems 3U BAM rackmount computer
+# IMPORTANT: exact BAM mechanical drawing was not available in the source material used.
+# The 3U rack envelope below is an engineering placeholder and should be replaced
+# with the dimensions from the exact BAM drawing/configuration.
+name = "Trenton 3U BAM"
+watts = 0.0 # in walls
+
+[size]
+units = "mm"
+width = 482.6
+depth = 500.0
+height = 133.35
+
+[material]
+rho = 2700.0
+cp = 900.0
+k = 150.0
+
+#-------------------------AIR-------------------------
+[[internal_regions]]
+name = "Interior air"
+state = "air"
+
+[internal_regions.position]
+units = "mm"
+x = 5.0
+y = 5.0
+z = 5.0
+
+[internal_regions.size]
+units = "mm"
+width = 472.6
+depth = 490.0
+height = 123.35
+
+#-------------------------VENT-------------------------
+[[internal_regions]]
+name = "Front intake"
+state = "vent"
+shape = "rectangular"
+free_area_ratio = 0.50
+vent_discharge_coeff = 0.50
+[internal_regions.position]
+units = "mm"
+x = 440.0
+y = 0.0
+z = 66.675
+[internal_regions.size]
+units = "mm"
+width = 57.5
+depth = 0.0
+height = 100.0
+[internal_regions.normal]
+x = 0.0
+y = 1.0
+z = 0.0
+
+[[internal_regions]]
+name = "Rear vent 1"
+state = "vent"
+shape = "rectangular"
+free_area_ratio = 0.4
+vent_discharge_coeff = 0.80
+[internal_regions.position]
+units = "mm"
+x = 100.0
+y = 500.0
+z = 66.675
+[internal_regions.size]
+units = "mm"
+width = 180.0
+depth = 0.0
+height = 100.0
+[internal_regions.normal]
+x = 0.0
+y = 1.0
+z = 0.0
+
+[[internal_regions]]
+name = "Rear vent 2"
+state = "vent"
+shape = "rectangular"
+free_area_ratio = 0.4
+vent_discharge_coeff = 0.80
+[internal_regions.position]
+units = "mm"
+x = 380.0
+y = 500.0
+z = 66.675
+[internal_regions.size]
+units = "mm"
+width = 180.0
+depth = 0.0
+height = 100.0
+[internal_regions.normal]
+x = 0.0
+y = 1.0
+z = 0.0
+
+#-------------------------FAN-------------------------
+[[internal_regions]]
+name = "Rear exhaust"
+state = "fan"
+shape = "rectangular"
+flow_type = "exhaust"
+curve = "Delta_PFC0612DEF00"
+cfm = 67.85
+[internal_regions.position]
+units = "mm"
+x = 240.0
+y = 500.0
+z = 66.675
+[internal_regions.size]
+units = "mm"
+width = 60.0
+depth = 0.0
+height = 60.0
+[internal_regions.direction]
+x = 0.0
+y = 1.0
+z = 0.0
+
+[[internal_regions]]
+name = "Front fan 1"
+state = "fan"
+shape = "rectangular"
+flow_type = "intake"
+curve = "Delta_PFC0612DEF00"
+cfm = 67.85
+[internal_regions.position]
+units = "mm"
+x = 111.3
+y = 0.0
+z = 66.675
+[internal_regions.size]
+units = "mm"
+width = 60.0
+depth = 0.0
+height = 60.0
+[internal_regions.direction]
+x = 0.0
+y = 1.0
+z = 0.0
+
+[[internal_regions]]
+name = "Front fan 2"
+state = "fan"
+shape = "rectangular"
+flow_type = "intake"
+curve = "Delta_PFC0612DEF00"
+cfm = 67.85
+[internal_regions.position]
+units = "mm"
+x = 176.3
+y = 0.0
+z = 66.675
+[internal_regions.size]
+units = "mm"
+width = 60.0
+depth = 0.0
+height = 60.0
+[internal_regions.direction]
+x = 0.0
+y = 1.0
+z = 0.0
+
+[[internal_regions]]
+name = "Front fan 3"
+state = "fan"
+shape = "rectangular"
+flow_type = "intake"
+curve = "Delta_PFC0612DEF00"
+cfm = 67.85
+[internal_regions.position]
+units = "mm"
+x = 241.3
+y = 0.0
+z = 66.675
+[internal_regions.size]
+units = "mm"
+width = 60.0
+depth = 0.0
+height = 60.0
+[internal_regions.direction]
+x = 0.0
+y = 1.0
+z = 0.0
+
+[[internal_regions]]
+name = "Front fan 4"
+state = "fan"
+shape = "rectangular"
+flow_type = "intake"
+curve = "Delta_PFC0612DEF00"
+cfm = 67.85
+[internal_regions.position]
+units = "mm"
+x = 306.3
+y = 0.0
+z = 66.675
+[internal_regions.size]
+units = "mm"
+width = 60.0
+depth = 0.0
+height = 60.0
+[internal_regions.direction]
+x = 0.0
+y = 1.0
+z = 0.0
+
+[[internal_regions]]
+name = "Front fan 5"
+state = "fan"
+shape = "rectangular"
+flow_type = "intake"
+curve = "Delta_PFC0612DEF00"
+cfm = 67.85
+[internal_regions.position]
+units = "mm"
+x = 371.3
+y = 0.0
+z = 66.675
+[internal_regions.size]
+units = "mm"
+width = 60.0
+depth = 0.0
+height = 60.0
+[internal_regions.direction]
+x = 0.0
+y = 1.0
+z = 0.0
+
+#-------------------------SOLID-------------------------
+[[internal_regions]]
+name = "CPU and motherboard"
+state = "solid"
+watts = 10.0
+[internal_regions.position]
+units = "mm"
+x = 16.3
+y = 50.0
+z = 5.0
+[internal_regions.size]
+units = "mm"
+width = 400.0
+depth = 450.0
+height = 10.0
+[internal_regions.material]
+rho = 2330.0
+cp = 700.0
+k = 130.0
+
+[[internal_regions]]
+name = "Bottom front block"
+state = "solid"
+watts = 10.0
+[internal_regions.position]
+units = "mm"
+x = 5.0
+y = 5.0
+z = 5.0
+[internal_regions.size]
+units = "mm"
+width = 400.0
+depth = 150.0
+height = 30.0
+[internal_regions.material]
+rho = 1850.0
+cp = 900.0
+k = 8.0
+
+[[internal_regions]]
+name = "Top front block"
+state = "solid"
+watts = 10.0
+[internal_regions.position]
+units = "mm"
+x = 5.0
+y = 5.0
+z = 100.0
+[internal_regions.size]
+units = "mm"
+width = 400.0
+depth = 150.0
+height = 30.0
+[internal_regions.material]
+rho = 1850.0
+cp = 900.0
+k = 8.0
+
+[[internal_regions]]
+name = "PS Wall"
+state = "solid"
+watts = 0.0
+[internal_regions.position]
+units = "mm"
+x = 410.0
+y = 0.0
+z = 0.0
+[internal_regions.size]
+units = "mm"
+width = 5.0
+depth = 500.0
+height = 133.35
+[internal_regions.material]
+rho = 1850.0
+cp = 900.0
+k = 8.0
+
+[[internal_regions]]
+name = "PS Heat Block"
+state = "solid"
+watts = 10.0
+[internal_regions.position]
+units = "mm"
+x = 421.3
+y = 30.0
+z = 41.675
+[internal_regions.size]
+units = "mm"
+width = 50.0
+depth = 20.0
+height = 50.0
+[internal_regions.material]
+rho = 1850.0
+cp = 900.0
+k = 8.0
+
+# CARDS
+
+[[internal_regions]]
+name = "slot 1 card"
+state = "solid"
+watts = 30.0
+[internal_regions.position]
+units = "mm"
+x = 45.0
+y = 300.0
+z = 30.0
+[internal_regions.size]
+units = "mm"
+width = 5.0
+depth = 200.0
+height = 70.0
+[internal_regions.material]
+rho = 2700.0
+cp = 900.0
+k = 30.0
+
+[[internal_regions]]
+name = "slot 2 card"
+state = "solid"
+watts = 30.0
+[internal_regions.position]
+units = "mm"
+x = 75.0
+y = 300.0
+z = 30.0
+[internal_regions.size]
+units = "mm"
+width = 5.0
+depth = 200.0
+height = 70.0
+[internal_regions.material]
+rho = 2700.0
+cp = 900.0
+k = 30.0
+
+[[internal_regions]]
+name = "slot 3 card"
+state = "solid"
+watts = 30.0
+[internal_regions.position]
+units = "mm"
+x = 105.0
+y = 300.0
+z = 30.0
+[internal_regions.size]
+units = "mm"
+width = 5.0
+depth = 200.0
+height = 70.0
+[internal_regions.material]
+rho = 2700.0
+cp = 900.0
+k = 30.0
+
+[[internal_regions]]
+name = "slot 4 card"
+state = "solid"
+watts = 30.0
+[internal_regions.position]
+units = "mm"
+x = 135.0
+y = 300.0
+z = 30.0
+[internal_regions.size]
+units = "mm"
+width = 5.0
+depth = 200.0
+height = 70.0
+[internal_regions.material]
+rho = 2700.0
+cp = 900.0
+k = 30.0
+
+[[internal_regions]]
+name = "slot 5 card"
+state = "solid"
+watts = 30.0
+[internal_regions.position]
+units = "mm"
+x = 165.0
+y = 300.0
+z = 30.0
+[internal_regions.size]
+units = "mm"
+width = 5.0
+depth = 200.0
+height = 70.0
+[internal_regions.material]
+rho = 2700.0
+cp = 900.0
+k = 30.0
+
+[[internal_regions]]
+name = "slot 6 card"
+state = "solid"
+watts = 30.0
+[internal_regions.position]
+units = "mm"
+x = 300.0
+y = 300.0
+z = 30.0
+[internal_regions.size]
+units = "mm"
+width = 5.0
+depth = 200.0
+height = 70.0
+[internal_regions.material]
+rho = 2700.0
+cp = 900.0
+k = 30.0
+
+[[internal_regions]]
+name = "slot 7 card"
+state = "solid"
+watts = 30.0
+[internal_regions.position]
+units = "mm"
+x = 320.0
+y = 300.0
+z = 30.0
+[internal_regions.size]
+units = "mm"
+width = 5.0
+depth = 200.0
+height = 70.0
+[internal_regions.material]
+rho = 2700.0
+cp = 900.0
+k = 30.0
+
+[[internal_regions]]
+name = "slot 8 card"
+state = "solid"
+watts = 30.0
+[internal_regions.position]
+units = "mm"
+x = 340.0
+y = 300.0
+z = 30.0
+[internal_regions.size]
+units = "mm"
+width = 5.0
+depth = 200.0
+height = 70.0
+[internal_regions.material]
+rho = 2700.0
+cp = 900.0
+k = 30.0
+
+[[internal_regions]]
+name = "slot 9 card"
+state = "solid"
+watts = 30.0
+[internal_regions.position]
+units = "mm"
+x = 360.0
+y = 300.0
+z = 30.0
+[internal_regions.size]
+units = "mm"
+width = 5.0
+depth = 200.0
+height = 70.0
+[internal_regions.material]
+rho = 2700.0
+cp = 900.0
+k = 30.0
+
+[[internal_regions]]
+name = "slot 10 card"
+state = "solid"
+watts = 30.0
+[internal_regions.position]
+units = "mm"
+x = 380.0
+y = 300.0
+z = 30.0
+[internal_regions.size]
+units = "mm"
+width = 5.0
+depth = 200.0
+height = 70.0
+[internal_regions.material]
+rho = 2700.0
+cp = 900.0
+k = 30.0
+
+[[internal_regions]]
+name = "slot 11 card"
+state = "solid"
+watts = 30.0
+[internal_regions.position]
+units = "mm"
+x = 400.0
+y = 300.0
+z = 30.0
+[internal_regions.size]
+units = "mm"
+width = 5.0
+depth = 200.0
+height = 70.0
+[internal_regions.material]
+rho = 2700.0
+cp = 900.0
+k = 30.0
+
+
+name = "Thruster Load Box 2U"
+watts = 0.0 # in walls
+
+[size]
+units = "mm"
+width = 482.6
+depth = 228.6
+height = 88.9
+
+[material]
+rho = 2700.0
+cp = 900.0
+k = 150.0
+
+#-------------------------AIR-------------------------
+[[internal_regions]]
+name = "Interior air"
+state = "air"
+[internal_regions.position]
+units = "mm"
+x = 5.0
+y = 5.0
+z = 5.0
+[internal_regions.size]
+units = "mm"
+width = 472.6
+depth = 218.6
+height = 78.9
+
+#-------------------------VENT-------------------------
+[[internal_regions]]
+name = "Front intake 1"
+state = "vent"
+shape = "rectangular"
+free_area_ratio = 0.50
+vent_discharge_coeff = 0.20
+[internal_regions.position]
+units = "mm"
+x = 155.2
+y = 0.0
+z = 44.45
+[internal_regions.size]
+units = "mm"
+width = 86.1
+depth = 0.0
+height = 76.1
+[internal_regions.normal]
+x = 0.0
+y = 1.0
+z = 0.0
+
+[[internal_regions]]
+name = "Front intake 2"
+state = "vent"
+shape = "rectangular"
+free_area_ratio = 0.50
+vent_discharge_coeff = 0.20
+[internal_regions.position]
+units = "mm"
+x = 327.4
+y = 0.0
+z = 44.45
+[internal_regions.size]
+units = "mm"
+width = 86.1
+depth = 0.0
+height = 76.1
+[internal_regions.normal]
+x = 0.0
+y = 1.0
+z = 0.0
+
+#-------------------------FAN-------------------------
+[[internal_regions]]
+name = "Exhaust fan 1"
+state = "fan"
+shape = "rectangular"
+flow_type = "exhaust"
+cfm = 18.0
+curve = "Sunon_MA1062_HVL_GN"
+[internal_regions.position]
+units = "mm"
+x = 155.2
+y = 223.6
+z = 44.45
+[internal_regions.size]
+units = "mm"
+width = 86.1
+depth = 0.0
+height = 76.1
+[internal_regions.direction]
+x = 0.0
+y = 1.0
+z = 0.0
+
+[[internal_regions]]
+name = "Exhaust fan 2"
+state = "fan"
+shape = "rectangular"
+flow_type = "exhaust"
+cfm = 18.0
+curve = "Sunon_MA1062_HVL_GN"
+[internal_regions.position]
+units = "mm"
+x = 327.4
+y = 223.6
+z = 44.45
+[internal_regions.size]
+units = "mm"
+width = 86.1
+depth = 0.0
+height = 76.1
+[internal_regions.direction]
+x = 0.0
+y = 1.0
+z = 0.0
+
+#-------------------------SOLID-------------------------
+[[internal_regions]]
+name = "Resistors"
+state = "solid"
+watts = 10.0
+[internal_regions.position]
+units = "mm"
+x = 53.8
+y = 64.3
+z = 31.95
+[internal_regions.size]
+units = "mm"
+width = 375.0
+depth = 100.0
+height = 25.0
+[internal_regions.material]
+rho = 2330.0
+cp = 700.0
+k = 130.0
+
+name = "NI PXIe 784782-01 Chassis"
+watts = 0.0 # in walls
+
+[size]
+units = "mm"
+width = 355.6
+depth = 214.2
+height = 177.2
+
+[material]
+rho = 2700.0
+cp = 900.0
+k = 150.0
+
+#-------------------------AIR-------------------------
+[[internal_regions]]
+name = "Interior air"
+state = "air"
+[internal_regions.position]
+units = "mm"
+x = 5.0
+y = 5.0
+z = 5.0
+[internal_regions.size]
+units = "mm"
+width = 345.6
+depth = 204.2
+height = 167.2
+
+[[internal_regions]]
+name = "Card Slot air"
+state = "air"
+[internal_regions.position]
+units = "mm"
+x = 10.0
+y = 64.2
+z = 25.0
+[internal_regions.size]
+units = "mm"
+width = 240.0
+depth = 150.0
+height = 135.0
+
+# #-------------------------VENT-------------------------
+[[internal_regions]]
+name = "Back main vent"
+state = "vent"
+shape = "rectangular"
+free_area_ratio = 0.3
+vent_discharge_coeff = 0.50
+[internal_regions.position]
+units = "mm"
+x = 308.1
+y = 214.2
+z = 90.0
+[internal_regions.size]
+units = "mm"
+width = 65.0
+depth = 0.0
+height = 100.0
+[internal_regions.normal]
+x = 0.0
+y = 1.0
+z = 0.0
+
+[[internal_regions]]
+name = "Top main vent"
+state = "vent"
+shape = "rectangular"
+free_area_ratio = 0.52
+vent_discharge_coeff = 0.50
+[internal_regions.position]
+units = "mm"
+x = 130.0
+y = 110.0
+z = 177.2
+[internal_regions.size]
+units = "mm"
+width = 250.0
+depth = 170.0
+height = 0.0
+[internal_regions.normal]
+x = 0.0
+y = 0.0
+z = 1.0
+
+[[internal_regions]]
+name = "Top right side vent"
+state = "vent"
+shape = "rectangular"
+free_area_ratio = 0.52
+vent_discharge_coeff = 0.50
+[internal_regions.position]
+units = "mm"
+x = 0.0
+y = 110.0
+z = 160.0
+[internal_regions.size]
+units = "mm"
+width = 0.0
+depth = 170.0
+height = 15.0
+[internal_regions.normal]
+x = 1.0
+y = 0.0
+z = 0.0
+
+[[internal_regions]]
+name = "Top left side vent"
+state = "vent"
+shape = "rectangular"
+free_area_ratio = 0.52
+vent_discharge_coeff = 0.50
+[internal_regions.position]
+units = "mm"
+x = 355.6
+y = 110.0
+z = 160.0
+[internal_regions.size]
+units = "mm"
+width = 0.0
+depth = 170.0
+height = 15.0
+[internal_regions.normal]
+x = 1.0
+y = 0.0
+z = 0.0
+#-------------------------FAN-------------------------
+[[internal_regions]]
+name = "Bottom fan 1"
+state = "fan"
+shape = "rectangular"
+flow_type = "intake"
+curve = "Sanyo_Denki_9GV1212P4G01"
+cfm = 171.0
+[internal_regions.position]
+units = "mm"
+x = 70.0
+y = 135.0
+z = 0.0
+[internal_regions.size]
+units = "mm"
+width = 120.0
+depth = 120.0
+height = 0.0
+[internal_regions.direction]
+x = 0.0
+y = 0.0
+z = 1.0
+
+[[internal_regions]]
+name = "Bottom fan 2"
+state = "fan"
+shape = "rectangular"
+flow_type = "intake"
+curve = "Sanyo_Denki_9GV1212P4G01"
+cfm = 171.0
+[internal_regions.position]
+units = "mm"
+x = 190.0
+y = 135.0
+z = 0.0
+[internal_regions.size]
+units = "mm"
+width = 120.0
+depth = 120.0
+height = 0.0
+[internal_regions.direction]
+x = 0.0
+y = 0.0
+z = 1.0
+
+[[internal_regions]]
+name = "Power Supply fan"
+state = "fan"
+shape = "rectangular"
+flow_type = "intake"
+cfm = 171
+curve = "generic_80mm_100cfm_05static"
+[internal_regions.position]
+units = "mm"
+x = 308.1
+y = 0.0
+z = 90.0
+[internal_regions.size]
+units = "mm"
+width = 80.0
+depth = 0.0
+height = 80.0
+[internal_regions.direction]
+x = 0.0
+y = 0.0
+z = 1.0
+
+#-------------------------SOLID-------------------------
+[[internal_regions]]
+name = "Card Slot wall 1"
+state = "solid"
+watts = 0.0
+[internal_regions.position]
+units = "mm"
+x = 10.0
+y = 59.2
+z = 10.0
+[internal_regions.size]
+units = "mm"
+width = 240.0
+depth = 5.0
+height = 160.0
+[internal_regions.material]
+rho = 2700.0
+cp = 900.0
+k = 200.0
+
+[[internal_regions]]
+name = "Card Slot wall 2"
+state = "solid"
+watts = 0.0
+[internal_regions.position]
+units = "mm"
+x = 250.0
+y = 59.2
+z = 10.0
+[internal_regions.size]
+units = "mm"
+width = 5.0
+depth = 155.0
+height = 160.0
+[internal_regions.material]
+rho = 2700.0
+cp = 900.0
+k = 200.0
+
+[[internal_regions]]
+name = "Card End Filler"
+state = "solid"
+watts = 0.0
+[internal_regions.position]
+units = "mm"
+x = 10.0
+y = 209.2
+z = 25.0
+[internal_regions.size]
+units = "mm"
+width = 240.0
+depth = 5.0
+height = 135.0
+[internal_regions.material]
+rho = 2700.0
+cp = 900.0
+k = 200.0
+
+[[internal_regions]]
+name = "Power Supply"
+state = "solid"
+watts = 20.0
+[internal_regions.position]
+units = "mm"
+x = 280.0
+y = 79.2
+z = 50.0
+[internal_regions.size]
+units = "mm"
+width = 40.0
+depth = 80.0
+height = 40.0
+[internal_regions.material]
+rho = 2700.0
+cp = 900.0
+k = 200.0
+
+[[internal_regions]]
+name = "Connectors"
+state = "solid"
+watts = 5.0
+[internal_regions.position]
+units = "mm"
+x = 40.0
+y = 20.0
+z = 80.0
+[internal_regions.size]
+units = "mm"
+width = 150.0
+depth = 20.0
+height = 50.0
+[internal_regions.material]
+rho = 2700.0
+cp = 900.0
+k = 200.0
+
+# CARDS
+
+[[internal_regions]]
+name = "Card 1"
+state = "solid"
+watts = 20.0
+[internal_regions.position]
+units = "mm"
+x = 160.0
+y = 79.2
+z = 50.0
+[internal_regions.size]
+units = "mm"
+width = 5.0
+depth = 130.0
+height = 70.0
+[internal_regions.material]
+rho = 2700.0
+cp = 900.0
+k = 200.0
+
+[[internal_regions]]
+name = "Card 2"
+state = "solid"
+watts = 20.0
+[internal_regions.position]
+units = "mm"
+x = 130.0
+y = 79.2
+z = 50.0
+[internal_regions.size]
+units = "mm"
+width = 5.0
+depth = 130.0
+height = 70.0
+[internal_regions.material]
+rho = 2700.0
+cp = 900.0
+k = 200.0
+
+name = "Keysight N6701A PS"
+watts = 0.0 # in walls
+
+[size]
+units = "mm"
+width = 425.0
+depth = 549.7
+height = 44.45
+
+[material] 
+rho = 2700
+cp = 900.0
+k = 150.0
+
+#-------------------------AIR-------------------------
+[[internal_regions]]
+name = "air_region"
+state = "air"
+[internal_regions.position]
+units = "mm"
+x = 5.0
+y = 5.0
+z = 5.0
+[internal_regions.size]
+units = "mm"
+width = 415.0
+depth = 539.7
+height = 34.45
+
+#-------------------------FANS-------------------------
+[[internal_regions]]
+state = "fan"
+name = "Front fan 1"
+shape = "rectangular"
+flow_type = "intake"
+cfm = 15.8
+curve = "Delta_FFB0412VHN_F00"
+[internal_regions.size]
+units = "mm"
+width = 40.0
+depth = 0.0
+height = 40.0
+[internal_regions.position]
+units = "mm"
+x = 97.5
+y = 20.0
+z = 22.225
+[internal_regions.direction]
+x = 0.0
+y = -1.0
+z = 0.0
+
+[[internal_regions]]
+state = "fan"
+name = "Front fan 2"
+shape = "rectangular"
+flow_type = "intake"
+cfm = 15.8
+curve = "Delta_FFB0412VHN_F00"
+[internal_regions.size]
+units = "mm"
+width = 40.0
+depth = 0.0
+height = 40.0
+[internal_regions.position]
+units = "mm"
+x = 212.5
+y = 20.0
+z = 22.225
+[internal_regions.direction]
+x = 0.0
+y = -1.0
+z = 0.0
+
+[[internal_regions]]
+state = "fan"
+name = "Front fan 3"
+shape = "rectangular"
+flow_type = "intake"
+cfm = 15.8
+curve = "Delta_FFB0412VHN_F00"
+[internal_regions.size]
+units = "mm"
+width = 40.0
+depth = 0.0
+height = 40.0
+[internal_regions.position]
+units = "mm"
+x = 317.5
+y = 20.0
+z = 22.225
+[internal_regions.direction]
+x = 0.0
+y = -1.0
+z = 0.0
+
+[[internal_regions]]
+name = "PS Exhaust Fan"
+state = "fan"
+shape = "rectangular"
+flow_type = "exhaust"
+cfm = 10.6
+curve = "Delta_FFB0412HN_R00"
+[internal_regions.size]
+units = "mm"
+width = 40.0
+depth = 0.0
+height = 40.0
+[internal_regions.position]
+units = "mm"
+x = 50.0
+y = 549.7
+z = 22.225
+[internal_regions.direction]
+x = -1.0
+y = 0.0
+z = 0.0
+
+[[internal_regions]]
+name = "Module 1 fan"
+state = "fan"
+shape = "rectangular"
+flow_type = "exhaust"
+cfm = 10.6
+curve = "Delta_FFB0412HN_R00"
+[internal_regions.size]
+units = "mm"
+width = 40.0
+depth = 0.0
+height = 40.0
+[internal_regions.position]
+units = "mm"
+x = 147.5
+y = 549.7
+z = 22.225
+[internal_regions.direction]
+x = -1.0
+y = 0.0
+z = 0.0
+
+[[internal_regions]]
+name = "Module 2 fan"
+state = "fan"
+shape = "rectangular"
+flow_type = "exhaust"
+cfm = 10.6
+curve = "Delta_FFB0412HN_R00"
+[internal_regions.size]
+units = "mm"
+width = 40.0
+depth = 0.0
+height = 40.0
+[internal_regions.position]
+units = "mm"
+x = 227.5
+y = 549.7
+z = 22.225
+[internal_regions.direction]
+x = -1.0
+y = 0.0
+z = 0.0
+
+[[internal_regions]]
+name = "Module 3 fan"
+state = "fan"
+shape = "rectangular"
+flow_type = "exhaust"
+cfm = 10.6
+curve = "Delta_FFB0412HN_R00"
+[internal_regions.size]
+units = "mm"
+width = 40.0
+depth = 0.0
+height = 40.0
+[internal_regions.position]
+units = "mm"
+x = 307.5
+y = 549.7
+z = 22.225
+[internal_regions.direction]
+x = -1.0
+y = 0.0
+z = 0.0
+
+[[internal_regions]]
+name = "Module 4 fan"
+state = "fan"
+shape = "rectangular"
+flow_type = "exhaust"
+cfm = 10.6
+curve = "Delta_FFB0412HN_R00"
+[internal_regions.size]
+units = "mm"
+width = 40.0
+depth = 0.0
+height = 40.0
+[internal_regions.position]
+units = "mm"
+x = 387.5
+y = 549.7
+z = 22.225
+[internal_regions.direction]
+x = -1.0
+y = 0.0
+z = 0.0
+#-------------------------VENTS-------------------------
+[[internal_regions]]
+name = "Front intake"
+state = "vent"
+shape = "rectangular"
+free_area_ratio = 0.5
+vent_discharge_coeff = 0.85
+[internal_regions.position]
+units = "mm"
+x = 112.5
+y = 0.0
+z = 22.225
+[internal_regions.size]
+units = "mm"
+width = 15.0
+depth = 0.0
+height = 34.45
+[internal_regions.normal]
+x = 0.0
+y = 1.0
+z = 0.0
+
+[[internal_regions]]
+name = "Right front intake"
+state = "vent"
+shape = "rectangular"
+free_area_ratio = 0.5
+vent_discharge_coeff = 0.85
+[internal_regions.position]
+units = "mm"
+x = 425.0
+y = 150.0
+z = 22.225
+[internal_regions.size]
+units = "mm"
+width = 0.0
+depth = 240.0
+height = 22.225
+[internal_regions.normal]
+x = 1.0
+y = 0.0
+z = 0.0
+
+[[internal_regions]]
+name = "Left front intake"
+state = "vent"
+shape = "rectangular"
+free_area_ratio = 0.5
+vent_discharge_coeff = 0.85
+[internal_regions.position]
+units = "mm"
+x = 0.0
+y = 80.0
+z = 22.225
+[internal_regions.size]
+units = "mm"
+width = 0.0
+depth = 120.0
+height = 22.225
+[internal_regions.normal]
+x = 1.0
+y = 0.0
+z = 0.0
+
+
+[[internal_regions]]
+name = "Left back intake"
+state = "vent"
+shape = "rectangular"
+free_area_ratio = 0.5
+vent_discharge_coeff = 0.85
+[internal_regions.position]
+units = "mm"
+x = 0.0
+y = 420.0
+z = 22.225
+[internal_regions.size]
+units = "mm"
+width = 0.0
+depth = 150.0
+height = 22.225
+[internal_regions.normal]
+x = 1.0
+y = 0.0
+z = 0.0
+
+
+#-------------------------SOLIDS-------------------------
+[[internal_regions]]
+name = "Power block"
+state = "solid"
+watts = 120.0
+[internal_regions.position]
+units = "mm"
+x = 12.5
+y = 50.0
+z = 5.0
+[internal_regions.size]
+units = "mm"
+width = 400.0
+depth = 5.0
+height = 10.0
+[internal_regions.material]
+rho = 2330.0
+cp = 700.0
+k = 130.0
+
+[[internal_regions]]
+name = "Power Supply block"
+state = "solid"
+watts = 30.0
+[internal_regions.position]
+units = "mm"
+x = 5.0
+y = 250.0
+z = 0.0
+[internal_regions.size]
+units = "mm"
+width = 90.0
+depth = 270.0
+height = 5.0
+[internal_regions.material]
+rho = 2330.0
+cp = 700.0
+k = 130.0
+
+[[internal_regions]]
+name = "Wall 1"
+state = "solid"
+watts = 0
+[internal_regions.position]
+units = "mm"
+x = 100.0
+y = 250.0
+z = 0.0
+[internal_regions.size]
+units = "mm"
+width = 5.0
+depth = 299.7
+height = 44.45
+[internal_regions.material]
+rho = 2330.0
+cp = 700.0
+k = 130.0
+
+[[internal_regions]]
+name = "Module 1"
+state = "solid"
+watts = 30.0
+[internal_regions.position]
+units = "mm"
+x = 110.0
+y = 250.0
+z = 0.0
+[internal_regions.size]
+units = "mm"
+width = 75.0
+depth = 270.0
+height = 5.0
+[internal_regions.material]
+rho = 2330.0
+cp = 700.0
+k = 130.0
+
+[[internal_regions]]
+name = "Wall 2"
+state = "solid"
+watts = 0
+[internal_regions.position]
+units = "mm"
+x = 185.0
+y = 250.0
+z = 0.0
+[internal_regions.size]
+units = "mm"
+width = 5.0
+depth = 299.7
+height = 44.45
+[internal_regions.material]
+rho = 2330.0
+cp = 700.0
+k = 130.0
+
+[[internal_regions]]
+name = "Module 2"
+state = "solid"
+watts = 30.0
+[internal_regions.position]
+units = "mm"
+x = 190.0
+y = 250.0
+z = 0.0
+[internal_regions.size]
+units = "mm"
+width = 75.0
+depth = 270.0
+height = 5.0
+[internal_regions.material]
+rho = 2330.0
+cp = 700.0
+k = 130.0
+
+[[internal_regions]]
+name = "Wall 3"
+state = "solid"
+watts = 0
+[internal_regions.position]
+units = "mm"
+x = 265.0
+y = 250.0
+z = 0.0
+[internal_regions.size]
+units = "mm"
+width = 5.0
+depth = 299.7
+height = 44.45
+[internal_regions.material]
+rho = 2330.0
+cp = 700.0
+k = 130.0
+
+[[internal_regions]]
+name = "Module 3"
+state = "solid"
+watts = 30.0
+[internal_regions.position]
+units = "mm"
+x = 270.0
+y = 250.0
+z = 0.0
+[internal_regions.size]
+units = "mm"
+width = 75.0
+depth = 270.0
+height = 5.0
+[internal_regions.material]
+rho = 2330.0
+cp = 700.0
+k = 130.0
+
+[[internal_regions]]
+name = "Wall 4"
+state = "solid"
+watts = 0
+[internal_regions.position]
+units = "mm"
+x = 345.0
+y = 250.0
+z = 0.0
+[internal_regions.size]
+units = "mm"
+width = 5.0
+depth = 299.7
+height = 44.45
+[internal_regions.material]
+rho = 2330.0
+cp = 700.0
+k = 130.0
+
+
+[[internal_regions]]
+name = "Module 4"
+state = "solid"
+watts = 30.0
+[internal_regions.position]
+units = "mm"
+x =350.0
+y = 250.0
+z = 0.0
+[internal_regions.size]
+units = "mm"
+width = 70.0
+depth = 270.0
+height = 5.0
+[internal_regions.material]
+rho = 2330.0
+cp = 700.0
+k = 130.0
+
+name = "Keysight N5677A PS"
+watts = 0.0 # in walls
+
+[size]
+units = "mm"
+width = 422.8
+depth = 432.8
+height = 43.6
+
+[material] 
+rho = 2700
+cp = 900.0
+k = 150.0
+
+#-------------------------AIR-------------------------
+[[internal_regions]]
+name = "air_region"
+state = "air"
+[internal_regions.position]
+units = "mm"
+x = 5.0
+y = 5.0
+z = 5.0
+[internal_regions.size]
+units = "mm"
+width = 412.8
+depth = 422.8
+height = 33.6
+
+#-------------------------FANS-------------------------
+[[internal_regions]]
+state = "fan"
+name = "Front fan 1"
+shape = "rectangular"
+flow_type = "intake"
+cfm = 15.8
+curve = "Delta_FFB0412VHN_F00"
+[internal_regions.size]
+units = "mm"
+width = 40.0
+depth = 0.0
+height = 40.0
+[internal_regions.position]
+units = "mm"
+x = 97.5
+y = 20.0
+z = 22.225
+[internal_regions.direction]
+x = 0.0
+y = -1.0
+z = 0.0
+
+[[internal_regions]]
+state = "fan"
+name = "Front fan 2"
+shape = "rectangular"
+flow_type = "intake"
+cfm = 15.8
+curve = "Delta_FFB0412VHN_F00"
+[internal_regions.size]
+units = "mm"
+width = 40.0
+depth = 0.0
+height = 40.0
+[internal_regions.position]
+units = "mm"
+x = 212.5
+y = 20.0
+z = 22.225
+[internal_regions.direction]
+x = 0.0
+y = -1.0
+z = 0.0
+
+[[internal_regions]]
+state = "fan"
+name = "Front fan 3"
+shape = "rectangular"
+flow_type = "intake"
+cfm = 15.8
+curve = "Delta_FFB0412VHN_F00"
+[internal_regions.size]
+units = "mm"
+width = 40.0
+depth = 0.0
+height = 40.0
+[internal_regions.position]
+units = "mm"
+x = 317.5
+y = 20.0
+z = 22.225
+[internal_regions.direction]
+x = 0.0
+y = -1.0
+z = 0.0
+
+[[internal_regions]]
+name = "PS Exhaust Fan"
+state = "fan"
+shape = "rectangular"
+flow_type = "exhaust"
+cfm = 10.6
+curve = "Delta_FFB0412HN_R00"
+[internal_regions.size]
+units = "mm"
+width = 40.0
+depth = 0.0
+height = 40.0
+[internal_regions.position]
+units = "mm"
+x = 50.0
+y = 432.8
+z = 22.225
+[internal_regions.direction]
+x = -1.0
+y = 0.0
+z = 0.0
+
+[[internal_regions]]
+name = "Module 1 fan"
+state = "fan"
+shape = "rectangular"
+flow_type = "exhaust"
+cfm = 10.6
+curve = "Delta_FFB0412HN_R00"
+[internal_regions.size]
+units = "mm"
+width = 40.0
+depth = 0.0
+height = 40.0
+[internal_regions.position]
+units = "mm"
+x = 147.5
+y = 432.8
+z = 22.225
+[internal_regions.direction]
+x = -1.0
+y = 0.0
+z = 0.0
+
+[[internal_regions]]
+name = "Module 2 fan"
+state = "fan"
+shape = "rectangular"
+flow_type = "exhaust"
+cfm = 10.6
+curve = "Delta_FFB0412HN_R00"
+[internal_regions.size]
+units = "mm"
+width = 40.0
+depth = 0.0
+height = 40.0
+[internal_regions.position]
+units = "mm"
+x = 227.5
+y = 432.8
+z = 22.225
+[internal_regions.direction]
+x = -1.0
+y = 0.0
+z = 0.0
+
+[[internal_regions]]
+name = "Module 3 fan"
+state = "fan"
+shape = "rectangular"
+flow_type = "exhaust"
+cfm = 10.6
+curve = "Delta_FFB0412HN_R00"
+[internal_regions.size]
+units = "mm"
+width = 40.0
+depth = 0.0
+height = 40.0
+[internal_regions.position]
+units = "mm"
+x = 307.5
+y = 432.8
+z = 22.225
+[internal_regions.direction]
+x = -1.0
+y = 0.0
+z = 0.0
+
+[[internal_regions]]
+name = "Module 4 fan"
+state = "fan"
+shape = "rectangular"
+flow_type = "exhaust"
+cfm = 10.6
+curve = "Delta_FFB0412HN_R00"
+[internal_regions.size]
+units = "mm"
+width = 40.0
+depth = 0.0
+height = 40.0
+[internal_regions.position]
+units = "mm"
+x = 387.5
+y = 432.8
+z = 22.225
+[internal_regions.direction]
+x = -1.0
+y = 0.0
+z = 0.0
+#-------------------------VENTS-------------------------
+[[internal_regions]]
+name = "Front intake"
+state = "vent"
+shape = "rectangular"
+free_area_ratio = 0.5
+vent_discharge_coeff = 0.85
+[internal_regions.position]
+units = "mm"
+x = 112.5
+y = 0.0
+z = 22.225
+[internal_regions.size]
+units = "mm"
+width = 15.0
+depth = 0.0
+height = 34.45
+[internal_regions.normal]
+x = 0.0
+y = 1.0
+z = 0.0
+
+[[internal_regions]]
+name = "Right front intake"
+state = "vent"
+shape = "rectangular"
+free_area_ratio = 0.5
+vent_discharge_coeff = 0.85
+[internal_regions.position]
+units = "mm"
+x = 422.8
+y = 150.0
+z = 22.225
+[internal_regions.size]
+units = "mm"
+width = 0.0
+depth = 240.0
+height = 22.225
+[internal_regions.normal]
+x = 1.0
+y = 0.0
+z = 0.0
+
+[[internal_regions]]
+name = "Left front intake"
+state = "vent"
+shape = "rectangular"
+free_area_ratio = 0.5
+vent_discharge_coeff = 0.85
+[internal_regions.position]
+units = "mm"
+x = 0.0
+y = 80.0
+z = 22.225
+[internal_regions.size]
+units = "mm"
+width = 0.0
+depth = 120.0
+height = 22.225
+[internal_regions.normal]
+x = 1.0
+y = 0.0
+z = 0.0
+
+
+[[internal_regions]]
+name = "Left back intake"
+state = "vent"
+shape = "rectangular"
+free_area_ratio = 0.5
+vent_discharge_coeff = 0.85
+[internal_regions.position]
+units = "mm"
+x = 0.0
+y = 350.0
+z = 22.225
+[internal_regions.size]
+units = "mm"
+width = 0.0
+depth = 150.0
+height = 22.225
+[internal_regions.normal]
+x = 1.0
+y = 0.0
+z = 0.0
+
+
+#-------------------------SOLIDS-------------------------
+[[internal_regions]]
+name = "Power block"
+state = "solid"
+watts = 120.0
+[internal_regions.position]
+units = "mm"
+x = 12.5
+y = 50.0
+z = 5.0
+[internal_regions.size]
+units = "mm"
+width = 400.0
+depth = 5.0
+height = 10.0
+[internal_regions.material]
+rho = 2330.0
+cp = 700.0
+k = 130.0
+
+[[internal_regions]]
+name = "Power Supply block"
+state = "solid"
+watts = 30.0
+[internal_regions.position]
+units = "mm"
+x = 5.0
+y = 150.0
+z = 0.0
+[internal_regions.size]
+units = "mm"
+width = 90.0
+depth = 250.0
+height = 5.0
+[internal_regions.material]
+rho = 2330.0
+cp = 700.0
+k = 130.0
+
+[[internal_regions]]
+name = "Wall 1"
+state = "solid"
+watts = 0
+[internal_regions.position]
+units = "mm"
+x = 100.0
+y = 100.0
+z = 0.0
+[internal_regions.size]
+units = "mm"
+width = 5.0
+depth = 299.7
+height = 43.6
+[internal_regions.material]
+rho = 2330.0
+cp = 700.0
+k = 130.0
+
+[[internal_regions]]
+name = "Module 1"
+state = "solid"
+watts = 30.0
+[internal_regions.position]
+units = "mm"
+x = 110.0
+y = 100.0
+z = 0.0
+[internal_regions.size]
+units = "mm"
+width = 75.0
+depth = 270.0
+height = 5.0
+[internal_regions.material]
+rho = 2330.0
+cp = 700.0
+k = 130.0
+
+[[internal_regions]]
+name = "Wall 2"
+state = "solid"
+watts = 0
+[internal_regions.position]
+units = "mm"
+x = 185.0
+y = 100.0
+z = 0.0
+[internal_regions.size]
+units = "mm"
+width = 5.0
+depth = 299.7
+height = 43.6
+[internal_regions.material]
+rho = 2330.0
+cp = 700.0
+k = 130.0
+
+[[internal_regions]]
+name = "Module 2"
+state = "solid"
+watts = 30.0
+[internal_regions.position]
+units = "mm"
+x = 190.0
+y = 100.0
+z = 0.0
+[internal_regions.size]
+units = "mm"
+width = 75.0
+depth = 270.0
+height = 5.0
+[internal_regions.material]
+rho = 2330.0
+cp = 700.0
+k = 130.0
+
+[[internal_regions]]
+name = "Wall 3"
+state = "solid"
+watts = 0
+[internal_regions.position]
+units = "mm"
+x = 265.0
+y = 100.0
+z = 0.0
+[internal_regions.size]
+units = "mm"
+width = 5.0
+depth = 299.7
+height = 43.6
+[internal_regions.material]
+rho = 2330.0
+cp = 700.0
+k = 130.0
+
+[[internal_regions]]
+name = "Module 3"
+state = "solid"
+watts = 30.0
+[internal_regions.position]
+units = "mm"
+x = 270.0
+y = 100.0
+z = 0.0
+[internal_regions.size]
+units = "mm"
+width = 75.0
+depth = 270.0
+height = 5.0
+[internal_regions.material]
+rho = 2330.0
+cp = 700.0
+k = 130.0
+
+[[internal_regions]]
+name = "Wall 4"
+state = "solid"
+watts = 0
+[internal_regions.position]
+units = "mm"
+x = 345.0
+y = 100.0
+z = 0.0
+[internal_regions.size]
+units = "mm"
+width = 5.0
+depth = 299.7
+height = 43.6
+[internal_regions.material]
+rho = 2330.0
+cp = 700.0
+k = 130.0
+
+
+[[internal_regions]]
+name = "Module 4"
+state = "solid"
+watts = 30.0
+[internal_regions.position]
+units = "mm"
+x = 350.0
+y = 100.0
+z = 0.0
+[internal_regions.size]
+units = "mm"
+width = 70.0
+depth = 270.0
+height = 5.0
+[internal_regions.material]
+rho = 2330.0
+cp = 700.0
+k = 130.0
+
+# Thermal-solver component model
+# Coordinate convention:
+#   x = width, left to right
+#   y = depth, front to rear
+#   z = height, bottom to top
+# External dimensions are based on manufacturer specifications where noted.
+# Internal geometry, heat allocation, vent free area, and fan CFM are engineering estimates
+# intended for rack-level thermal simulation and should be calibrated against measurements.
+
+
+# Eaton ups, 3000 VA / 3000 W, 3U rack/tower UPS
+# watts below represents estimated thermal loss at a substantial operating load,
+# not the 3000 W electrical output rating.
+# Load ~ 2000W @ ~94% efficiency = ~150W thermal load
+
+name = "Eaton SU3000RTXLCD2UTAA UPS"
+watts = 0.0 # in walls
+
+[size]
+units = "mm"
+width = 440.0
+depth = 605.0
+height = 86.5
+
+[material]
+rho = 2700.0
+cp = 900.0
+k = 150.0
+
+#-------------------------AIR-------------------------
+[[internal_regions]]
+name = "Interior air"
+state = "air"
+
+[internal_regions.position]
+units = "mm"
+x = 5.0
+y = 5.0
+z = 5.0
+
+[internal_regions.size]
+units = "mm"
+width = 430.0
+depth = 595.0
+height = 76.5
+
+#------------------------VENTS------------------------
+[[internal_regions]]
+name = "Front left intake"
+state = "vent"
+shape = "rectangular"
+free_area_ratio = 0.45
+vent_discharge_coeff = 0.80
+
+[internal_regions.position]
+units = "mm"
+x = 75.0
+y = 0.0
+z = 43.25
+
+[internal_regions.size]
+units = "mm"
+width = 140.0
+depth = 0.0
+height = 76.5
+
+[internal_regions.normal]
+x = 0.0
+y = 1.0
+z = 0.0
+
+[[internal_regions]]
+name = "Front intake"
+state = "vent"
+shape = "rectangular"
+free_area_ratio = 0.45
+vent_discharge_coeff = 0.80
+
+[internal_regions.position]
+units = "mm"
+x = 365.0
+y = 0.0
+z = 43.25
+
+[internal_regions.size]
+units = "mm"
+width = 140.0
+depth = 0.0
+height = 76.5
+
+[internal_regions.normal]
+x = 0.0
+y = 1.0
+z = 0.0
+
+#-----------------------FAN------------------------
+[[internal_regions]]
+name = "Rear exhaust fan"
+state = "fan"
+shape = "rectangular"
+flow_type = "exhaust"
+cfm = 41.3
+curve = "NMB_08025SS_12N_AL_D0"
+[internal_regions.position]
+units = "mm"
+x = 340.0
+y = 605.0 
+z = 43.25
+[internal_regions.direction]
+x = 0.0
+y = 1.0
+z = 0.0
+[internal_regions.size]
+units = "mm"
+width = 80.0
+depth = 0.0
+height = 80.0
+
+#-----------------------SOLIDS----------------------
+[[internal_regions]]
+name = "Battery pack"
+state = "solid"
+watts = 40.0
+[internal_regions.position]
+units = "mm"
+x = 20.0
+y = 140.0
+z = 15.0
+[internal_regions.size]
+units = "mm"
+width = 200.0
+depth = 300.0
+height = 60.0
+[internal_regions.material]
+rho = 2200.0
+cp = 900.0
+k = 1.5
+
+
+[[internal_regions]]
+name = "block"
+state = "solid"
+watts = 40.0
+[internal_regions.position]
+units = "mm"
+x = 285.0
+y = 55.0
+z = 18.0
+[internal_regions.size]
+units = "mm"
+width = 125.0
+depth = 210.0
+height = 30.0
+[internal_regions.material]
+rho = 2330.0
+cp = 700.0
+k = 130.0
+
+[[internal_regions]]
+name = "block2"
+state = "solid"
+watts = 40.0
+[internal_regions.position]
+units = "mm"
+x = 285.0
+y = 300.0
+z = 18.0
+[internal_regions.size]
+units = "mm"
+width = 125.0
+depth = 105.0
+height = 30.0
+[internal_regions.material]
+rho = 5000.0
+cp = 500.0
+k = 20.0
+
+
+# Thermal-solver component model
+# Coordinate convention:
+#   x = width, left to right
+#   y = depth, front to rear
+#   z = height, bottom to top
+# External dimensions are based on manufacturer specifications where noted.
+# Internal geometry, heat allocation, vent free area, and fan CFM are engineering estimates
+# intended for rack-level thermal simulation and should be calibrated against measurements.
+
+
+# Eaton ups, 3000 VA / 3000 W, 3U rack/tower UPS
+# watts below represents estimated thermal loss at a substantial operating load,
+# not the 3000 W electrical output rating.
+# Load ~ 2000W @ ~94% efficiency = ~150W thermal load
+
+name = "Dell PowerEdge R470 1U"
+watts = 0.0 # in walls
+
+[size]
+units = "mm"
+width = 482.0
+depth = 817.0
+height = 43.0
+
+[material]
+rho = 2700.0
+cp = 900.0
+k = 150.0
+
+#-------------------------AIR-------------------------
+[[internal_regions]]
+name = "Interior air"
+state = "air"
+
+[internal_regions.position]
+units = "mm"
+x = 5.0
+y = 5.0
+z = 5.0
+
+[internal_regions.size]
+units = "mm"
+width = 472.0
+depth = 807.0
+height = 33.0
+
+#-------------------------SOLID-------------------------
+[[internal_regions]]
+name = "CPU and memory zone"
+state = "solid"
+watts = 600.0
+
+[internal_regions.position]
+units = "mm"
+x = 65.0
+y = 350.0
+z = 5.0
+
+[internal_regions.size]
+units = "mm"
+width = 352.0
+depth = 190.0
+height = 15.0
+
+[internal_regions.material]
+rho = 2330.0
+cp = 700.0
+k = 130.0
+
+[[internal_regions]]
+name = "Storage and front backplane"
+state = "solid"
+watts = 120.0
+
+[internal_regions.position]
+units = "mm"
+x = 35.0
+y = 35.0
+z = 5.0
+
+[internal_regions.size]
+units = "mm"
+width = 412.0
+depth = 130.0
+height = 30.0
+
+[internal_regions.material]
+rho = 2330.0
+cp = 700.0
+k = 130.0
+
+[[internal_regions]]
+name = "PCIe and system board rear zone"
+state = "solid"
+watts = 180.0
+
+[internal_regions.position]
+units = "mm"
+x = 35.0
+y = 600.0
+z = 5.0
+
+[internal_regions.size]
+units = "mm"
+width = 285.0
+depth = 180.0
+height = 30.0
+
+[internal_regions.material]
+rho = 2330.0
+cp = 700.0
+k = 130.0
+
+[[internal_regions]]
+name = "Power supply zone"
+state = "solid"
+watts = 100.0
+
+[internal_regions.position]
+units = "mm"
+x = 335.0
+y = 600.0
+z = 12.0
+
+[internal_regions.size]
+units = "mm"
+width = 112.0
+depth = 170.0
+height = 20.0
+
+[internal_regions.material]
+rho = 2700.0
+cp = 900.0
+k = 150.0
+
+
+#-------------------------VENT-------------------------
+[[internal_regions]]
+name = "Front intake"
+state = "vent"
+shape = "rectangular"
+free_area_ratio = 0.3
+vent_discharge_coeff = 0.82
+
+[internal_regions.position]
+units = "mm"
+x = 241.0
+y = 0.0
+z = 20.0
+
+[internal_regions.size]
+units = "mm"
+width = 430.0
+depth = 0.0
+height = 30.0
+
+[internal_regions.normal]
+x = 0.0
+y = 1.0
+z = 0.0
+
+[[internal_regions]]
+name = "Rear exhaust"
+state = "vent"
+shape = "rectangular"
+free_area_ratio = 0.55
+vent_discharge_coeff = 0.82
+
+[internal_regions.position]
+units = "mm"
+x = 241.0
+y = 817
+z = 23.0
+
+[internal_regions.size]
+units = "mm"
+width = 442.0
+depth = 0.0
+height = 30.0
+
+[internal_regions.normal]
+x = 0.0
+y = 1.0
+z = 0.0
+
+# -------------------------FANS------------------------- 
+[[internal_regions]]
+name = "Cooling fan 1"
+state = "fan"
+shape = "rectangular"
+flow_type = "exhaust"
+cfm = 32.9
+curve = "Sanyo_Denki_9CRH0412P5J001" 
+[internal_regions.position]
+units = "mm"
+x = 62.0
+y = 250.0
+z = 20.0
+[internal_regions.size]
+units = "mm"
+width = 40.0
+depth = 0.0
+height = 40.0
+[internal_regions.direction]
+x = 0.0
+y = 1.0
+z = 0.0
+
+[[internal_regions]]
+name = "Cooling fan 2"
+state = "fan"
+shape = "rectangular"
+flow_type = "exhaust"
+cfm = 32.9
+curve = "Sanyo_Denki_9CRH0412P5J001" 
+[internal_regions.position]
+units = "mm"
+x = 133.6
+y = 250.0
+z = 20.0
+[internal_regions.size]
+units = "mm"
+width = 40.0
+depth = 0.0
+height = 40.0
+[internal_regions.direction]
+x = 0.0
+y = 1.0
+z = 0.0
+
+[[internal_regions]]
+name = "Cooling fan 3"
+state = "fan"
+shape = "rectangular"
+flow_type = "exhaust"
+cfm = 32.9
+curve = "Sanyo_Denki_9CRH0412P5J001" 
+[internal_regions.position]
+units = "mm"
+x = 205.2
+y = 250.0
+z = 20.0
+[internal_regions.size]
+units = "mm"
+width = 40.0
+depth = 0.0
+height = 40.0
+[internal_regions.direction]
+x = 0.0
+y = 1.0
+z = 0.0
+
+[[internal_regions]]
+name = "Cooling fan 4"
+state = "fan"
+shape = "rectangular"
+flow_type = "exhaust"
+cfm = 32.9
+curve = "Sanyo_Denki_9CRH0412P5J001"
+[internal_regions.position]
+units = "mm"
+x = 276.8
+y = 250.0
+z = 20.0
+[internal_regions.size]
+units = "mm"
+width = 40.0
+depth = 0.0
+height = 40.0
+[internal_regions.direction]
+x = 0.0
+y = 1.0
+z = 0.0
+
+[[internal_regions]]
+name = "Cooling fan 5"
+state = "fan"
+shape = "rectangular"
+flow_type = "exhaust"
+cfm = 32.9
+curve = "Sanyo_Denki_9CRH0412P5J001"
+[internal_regions.position]
+units = "mm"
+x = 348.4
+y = 250.0
+z = 20.0
+[internal_regions.size]
+units = "mm"
+width = 40.0
+depth = 0.0
+height = 40.0
+[internal_regions.direction]
+x = 0.0
+y = 1.0
+z = 0.0
+
+[[internal_regions]]
+name = "Cooling fan 6"
+state = "fan"
+shape = "rectangular"
+flow_type = "exhaust"
+cfm = 32.9
+curve = "Sanyo_Denki_9CRH0412P5J001"
+[internal_regions.position]
+units = "mm"
+x = 420.0
+y = 250.0
+z = 20.0
+[internal_regions.size]
+units = "mm"
+width = 40.0
+depth = 0.0
+height = 40.0
+[internal_regions.direction]
+x = 0.0
+y = 1.0
+z = 0.0
+
+name = "Dell PowerEdge R360 2U"
+watts = 0.0 # in walls
+
+[size]
+units = "mm"
+width = 482.0
+depth = 817.0
+height = 43.0
+
+[material]
+rho = 2700.0
+cp = 900.0
+k = 150.0
+
+#-------------------------AIR-------------------------
+[[internal_regions]]
+name = "Interior air"
+state = "air"
+
+[internal_regions.position]
+units = "mm"
+x = 5.0
+y = 5.0
+z = 5.0
+
+[internal_regions.size]
+units = "mm"
+width = 472.0
+depth = 807.0
+height = 33.0
+
+#-------------------------SOLID-------------------------
+[[internal_regions]]
+name = "CPU and memory zone"
+state = "solid"
+watts = 600.0
+
+[internal_regions.position]
+units = "mm"
+x = 65.0
+y = 350.0
+z = 5.0
+
+[internal_regions.size]
+units = "mm"
+width = 352.0
+depth = 190.0
+height = 15.0
+
+[internal_regions.material]
+rho = 2330.0
+cp = 700.0
+k = 130.0
+
+[[internal_regions]]
+name = "Storage and front backplane"
+state = "solid"
+watts = 120.0
+
+[internal_regions.position]
+units = "mm"
+x = 35.0
+y = 35.0
+z = 5.0
+
+[internal_regions.size]
+units = "mm"
+width = 412.0
+depth = 130.0
+height = 30.0
+
+[internal_regions.material]
+rho = 2330.0
+cp = 700.0
+k = 130.0
+
+[[internal_regions]]
+name = "PCIe and system board rear zone"
+state = "solid"
+watts = 180.0
+
+[internal_regions.position]
+units = "mm"
+x = 35.0
+y = 600.0
+z = 5.0
+
+[internal_regions.size]
+units = "mm"
+width = 285.0
+depth = 180.0
+height = 30.0
+
+[internal_regions.material]
+rho = 2330.0
+cp = 700.0
+k = 130.0
+
+[[internal_regions]]
+name = "Power supply zone"
+state = "solid"
+watts = 100.0
+
+[internal_regions.position]
+units = "mm"
+x = 335.0
+y = 600.0
+z = 12.0
+
+[internal_regions.size]
+units = "mm"
+width = 112.0
+depth = 170.0
+height = 20.0
+
+[internal_regions.material]
+rho = 2700.0
+cp = 900.0
+k = 150.0
+
+
+#-------------------------VENT-------------------------
+[[internal_regions]]
+name = "Front intake"
+state = "vent"
+shape = "rectangular"
+free_area_ratio = 0.3
+vent_discharge_coeff = 0.82
+
+[internal_regions.position]
+units = "mm"
+x = 241.0
+y = 0.0
+z = 20.0
+
+[internal_regions.size]
+units = "mm"
+width = 430.0
+depth = 0.0
+height = 30.0
+
+[internal_regions.normal]
+x = 0.0
+y = 1.0
+z = 0.0
+
+[[internal_regions]]
+name = "Rear exhaust"
+state = "vent"
+shape = "rectangular"
+free_area_ratio = 0.55
+vent_discharge_coeff = 0.82
+
+[internal_regions.position]
+units = "mm"
+x = 241.0
+y = 817
+z = 23.0
+
+[internal_regions.size]
+units = "mm"
+width = 442.0
+depth = 0.0
+height = 30.0
+
+[internal_regions.normal]
+x = 0.0
+y = 1.0
+z = 0.0
+
+# -------------------------FANS------------------------- 
+[[internal_regions]]
+name = "Cooling fan 1"
+state = "fan"
+shape = "rectangular"
+flow_type = "exhaust"
+cfm = 45.0
+curve = "generic_80mm_low_speed" # provisional until manufacturer P-Q data is available
+
+[internal_regions.position]
+units = "mm"
+x = 62.0
+y = 250.0
+z = 20.0
+
+[internal_regions.size]
+units = "mm"
+width = 60.0
+depth = 0.0
+height = 30.0
+
+[internal_regions.direction]
+x = 0.0
+y = 1.0
+z = 0.0
+
+
+[[internal_regions]]
+name = "Cooling fan 2"
+state = "fan"
+shape = "rectangular"
+flow_type = "exhaust"
+cfm = 45.0
+curve = "generic_80mm_low_speed" # provisional until manufacturer P-Q data is available
+
+[internal_regions.position]
+units = "mm"
+x = 133.6
+y = 250.0
+z = 20.0
+
+[internal_regions.size]
+units = "mm"
+width = 60.0
+depth = 0.0
+height = 30.0
+
+[internal_regions.direction]
+x = 0.0
+y = 1.0
+z = 0.0
+
+[[internal_regions]]
+name = "Cooling fan 3"
+state = "fan"
+shape = "rectangular"
+flow_type = "exhaust"
+cfm = 45.0
+curve = "generic_80mm_low_speed" # provisional until manufacturer P-Q data is available
+
+[internal_regions.position]
+units = "mm"
+x = 205.2
+y = 250.0
+z = 20.0
+
+[internal_regions.size]
+units = "mm"
+width = 60.0
+depth = 0.0
+height = 30.0
+
+[internal_regions.direction]
+x = 0.0
+y = 1.0
+z = 0.0
+
+[[internal_regions]]
+name = "Cooling fan 4"
+state = "fan"
+shape = "rectangular"
+flow_type = "exhaust"
+cfm = 45.0
+curve = "generic_80mm_low_speed" # provisional until manufacturer P-Q data is available
+
+[internal_regions.position]
+units = "mm"
+x = 276.8
+y = 250.0
+z = 20.0
+
+[internal_regions.size]
+units = "mm"
+width = 60.0
+depth = 0.0
+height = 30.0
+
+[internal_regions.direction]
+x = 0.0
+y = 1.0
+z = 0.0
+
+[[internal_regions]]
+name = "Cooling fan 5"
+state = "fan"
+shape = "rectangular"
+flow_type = "exhaust"
+cfm = 45.0
+curve = "generic_80mm_low_speed" # provisional until manufacturer P-Q data is available
+
+[internal_regions.position]
+units = "mm"
+x = 348.4
+y = 250.0
+z = 20.0
+
+[internal_regions.size]
+units = "mm"
+width = 60.0
+depth = 0.0
+height = 30.0
+
+[internal_regions.direction]
+x = 0.0
+y = 1.0
+z = 0.0
+
+[[internal_regions]]
+name = "Cooling fan 6"
+state = "fan"
+shape = "rectangular"
+flow_type = "exhaust"
+cfm = 45.0
+curve = "generic_80mm_low_speed" # provisional until manufacturer P-Q data is available
+
+[internal_regions.position]
+units = "mm"
+x = 420.0
+y = 250.0
+z = 20.0
+
+[internal_regions.size]
+units = "mm"
+width = 60.0
+depth = 0.0
+height = 30.0
+
+[internal_regions.direction]
+x = 0.0
+y = 1.0
+z = 0.0
+
+
+name = "Cisco 9300 Network Switch"
+watts = 0.0 # in walls
+
+[size]
+units = "mm"
+width = 445.0
+depth = 488.0
+height = 44.0
+
+[material]
+rho = 2700.0
+cp = 900.0
+k = 150.0
+
+#-----------------------AIR--------------------
+[[internal_regions]]
+name = "Interior air"
+state = "air"
+[internal_regions.position]
+units = "mm"
+x = 5.0
+y = 5.0
+z = 5.0
+[internal_regions.size]
+units = "mm"
+width = 435.0
+depth = 478.0
+height = 34.0
+
+#---------------------VENT--------------------
+[[internal_regions]]
+name = "Front intake"
+state = "vent"
+shape = "rectangular"
+free_area_ratio = 0.52
+vent_discharge_coeff = 0.80
+[internal_regions.position]
+units = "mm"
+x = 222.5
+y = 0.0
+z = 27.5
+[internal_regions.size]
+units = "mm"
+width = 300.0
+depth = 0.0
+height = 10.0
+[internal_regions.normal]
+x = 0.0
+y = 1.0
+z = 0.0
+
+[[internal_regions]]
+name = "Side left intake"
+state = "vent"
+shape = "rectangular"
+free_area_ratio = 0.62
+vent_discharge_coeff = 0.80
+[internal_regions.position]
+units = "mm"
+x = 0.0
+y = 80.0
+z = 22.0
+[internal_regions.size]
+units = "mm"
+width = 0.0
+depth = 100.0
+height = 34.0
+[internal_regions.normal]
+x = 1.0
+y = 0.0
+z = 0.0
+
+[[internal_regions]]
+name = "Side right intake"
+state = "vent"
+shape = "rectangular"
+free_area_ratio = 0.62
+vent_discharge_coeff = 0.80
+[internal_regions.position]
+units = "mm"
+x = 445.0
+y = 80.0
+z = 22.0
+[internal_regions.size]
+units = "mm"
+width = 0.0
+depth = 100.0
+height = 34.0
+[internal_regions.normal]
+x = 1.0
+y = 0.0
+z = 0.0
+
+#---------------------FANS---------------------
+[[internal_regions]]
+name = "Exhaust fan 1"
+state = "fan"
+shape = "rectangular"
+flow_type = "exhaust"
+cfm = 21.8
+curve = "AVC_DBTD0428B2U"
+[internal_regions.position]
+units = "mm"
+x = 263.0
+y = 483.0
+z = 22.0
+[internal_regions.size]
+units = "mm"
+width = 40.0
+depth = 0.0
+height = 40.0
+[internal_regions.direction]
+x = 0.0
+y = 1.0
+z = 0.0
+
+[[internal_regions]]
+name = "Exhaust fan 2"
+state = "fan"
+shape = "rectangular"
+flow_type = "exhaust"
+cfm = 21.8
+curve = "AVC_DBTD0428B2U"
+[internal_regions.position]
+units = "mm"
+x = 315.0
+y = 483.0
+z = 22.0
+[internal_regions.size]
+units = "mm"
+width = 40.0
+depth = 0.0
+height = 40.0
+[internal_regions.direction]
+x = 0.0
+y = 1.0
+z = 0.0
+
+[[internal_regions]]
+name = "Exhaust fan 3"
+state = "fan"
+shape = "rectangular"
+flow_type = "exhaust"
+cfm = 21.8
+curve = "AVC_DBTD0428B2U"
+[internal_regions.position]
+units = "mm"
+x = 367.0
+y = 483.0
+z = 22.0
+[internal_regions.size]
+units = "mm"
+width = 40.0
+depth = 0.0
+height = 40.0
+[internal_regions.direction]
+x = 0.0
+y = 1.0
+z = 0.0
+
+[[internal_regions]]
+name = "Power supply exhaust fan"
+state = "fan"
+shape = "rectangular"
+flow_type = "exhaust"
+cfm = 21.8
+curve = "AVC_DBTD0428B2U"
+[internal_regions.position]
+units = "mm"
+x = 100.0
+y = 483.0
+z = 22.0
+[internal_regions.size]
+units = "mm"
+width = 40.0
+depth = 0.0
+height = 40.0
+[internal_regions.direction]
+x = 0.0
+y = 1.0
+z = 0.0
+
+#---------------------SOLID--------------------
+[[internal_regions]]
+name = "Heat region 1"
+state = "solid"
+watts = 50.0
+[internal_regions.position]
+units = "mm"
+x = 230.0
+y = 250.0
+z = 5.0
+[internal_regions.size]
+units = "mm"
+width = 180.0
+depth = 125.0
+height = 20.0
+[internal_regions.material]
+rho = 2330.0
+cp = 700.0
+k = 30.0
+
+[[internal_regions]]
+name = "Heat region 2"
+state = "solid"
+watts = 50.0
+[internal_regions.position]
+units = "mm"
+x = 230.0
+y = 100.0
+z = 5.0
+[internal_regions.size]
+units = "mm"
+width = 180.0
+depth = 125.0
+height = 20.0
+[internal_regions.material]
+rho = 2330.0
+cp = 700.0
+k = 30.0
+
+[[internal_regions]]
+name = "Power supply zone"
+state = "solid"
+watts = 50.0
+[internal_regions.position]
+units = "mm"
+x = 30.0
+y = 100.0
+z = 5.0
+[internal_regions.size]
+units = "mm"
+width = 115.0
+depth = 265.0
+height = 30.0
+[internal_regions.material]
+rho = 2700.0
+cp = 900.0
+k = 80.0

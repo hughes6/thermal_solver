@@ -39,9 +39,14 @@ struct DirectionInput {
 struct SimulationInput {
     double dt = 0.0;
     double duration = 0.0;
+    // Native geometry/state CSV and the archival metadata copy are rooted
+    // here. Relative structured-log paths are rebased here; absolute logger
+    // destinations remain explicit. The defaults preserve legacy behavior.
+    std::filesystem::path native_output_directory = ".";
+    bool native_overwrite = true;
     int output_interval = 0.0;
-    int max_timesteps = 0;
-    int max_updates = 0;
+    std::size_t max_timesteps = 0;
+    std::size_t max_updates = 0;
     int max_cell_count = 0;
     int max_megabyte_usage = 0;
     std::optional<int> update_flow_interval = 0;
@@ -131,6 +136,7 @@ struct OpenFoamSolverInput {
     std::optional<std::string> template_file;
     std::filesystem::path case_directory = "openfoam_cases/model";
     bool overwrite = false;
+    bool allow_determinant_warnings = false;
     int parallel_processes = 4;
     double maximum_time_step = 1.0;
     double maximum_courant_number = 1.0;
@@ -150,6 +156,10 @@ struct OpenFoamSolverInput {
     // 3x3 PIMPLE correction and fixed-flow cases use 1x2.
     int pimple_outer_correctors = 0;
     int pimple_pressure_correctors = 0;
+    // Zero inherits pimple_outer_correctors.  An explicit value of at least
+    // two is installed only while velocity and face flux are frozen in
+    // thermal-only stages.
+    int thermal_only_pimple_outer_correctors = 0;
     double fan_curve_extension_multiplier = 2.0;
     bool use_multirate_thermal = true;
     double airflow_warmup_time = 20.0;

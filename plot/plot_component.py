@@ -4,13 +4,62 @@ from pathlib import Path
 from mpl_toolkits.mplot3d import art3d
 import matplotlib.patches as mpatches
 import matplotlib.pyplot as plt
+from matplotlib.ticker import MaxNLocator
+
+
+def component_region_color(region_kind, default_color):
+    """Use one stable color for every component air volume."""
+    return "tab:cyan" if region_kind.casefold() == "air" else default_color
+
+
+def select_component_block(lines, component_name=None, component_index=None):
+    """Return one exported component block selected by name or 1-based index."""
+    starts = [
+        index for index, line in enumerate(lines)
+        if line.startswith("Component ")
+    ]
+    if component_index is not None:
+        if component_index < 1 or component_index > len(starts):
+            raise ValueError(
+                f"--component-index {component_index} is outside the exported "
+                f"component range 1..{len(starts)}"
+            )
+        matches = [starts[component_index - 1]]
+    elif component_name:
+        matches = [
+            index for index in starts
+            if component_name.casefold() in
+            lines[index].split(":", 1)[1].strip().casefold()
+        ]
+        if len(matches) != 1:
+            raise ValueError(
+                f"--component {component_name!r} matched {len(matches)} "
+                "components; use a unique name substring or --component-index."
+            )
+    else:
+        return lines
+    start = matches[0]
+    end = next((index for index in starts if index > start), len(lines))
+    return lines[start:end]
 
 
 parser = argparse.ArgumentParser(description="Plot one exported component and its internal regions.")
 parser.add_argument("-s", "--save", action="store_true", help="Save the plot as component_plot.png.")
+parser.add_argument(
+    "--input",
+    type=Path,
+    default=Path("output.txt"),
+    help="exported geometry input (default: output.txt)",
+)
+selector = parser.add_mutually_exclusive_group()
+selector.add_argument("--component", help="Component name (or unique substring) from a rack export.")
+selector.add_argument("--component-index", type=int,
+                      help="1-based component number from a rack export; useful for duplicate names.")
+parser.add_argument("--output", type=Path, default=Path("component_plot.png"),
+                    help="PNG path used with --save (default: component_plot.png).")
 args = parser.parse_args()
 
-filename = Path("output.txt")
+filename = args.input
 
 
 # =========================
@@ -21,6 +70,11 @@ try:
         lines = [line.strip() for line in file if line.strip()]
 except FileNotFoundError:
     raise SystemExit(f"Error: File '{filename}' not found.")
+
+try:
+    lines = select_component_block(lines, args.component, args.component_index)
+except ValueError as error:
+    raise SystemExit(f"Error: {error}") from error
 
 
 # =========================
@@ -36,6 +90,11 @@ while index < len(lines):
     line = lines[index]
 
     if line.startswith("Component "):
+        # Rack exports can contain many components. This plotter displays one
+        # component, so stop after the first complete component block instead
+        # of silently combining every component's local coordinate system.
+        if component_name is not None:
+            break
         component_name = line.split(":", 1)[1].strip()
 
     elif line.startswith("dimensions:"):
@@ -58,7 +117,9 @@ while index < len(lines):
         }
 
         index += 1
-        while index < len(lines) and not lines[index].startswith("Internal Region "):
+        while index < len(lines) and not lines[index].startswith(
+            ("Internal Region ", "Component ", "Fan ", "Vent ")
+        ):
             region_line = lines[index]
 
             if region_line.startswith("type:"):
@@ -94,11 +155,11 @@ while index < len(lines):
 
 
 if component_name is None:
-    raise ValueError("Could not find the component name in output.txt.")
+    raise ValueError(f"Could not find the component name in {filename}.")
 if component_dims is None or len(component_dims) != 3:
-    raise ValueError("Could not find valid component dimensions in output.txt.")
+    raise ValueError(f"Could not find valid component dimensions in {filename}.")
 if component_coords is None or len(component_coords) != 3:
-    raise ValueError("Could not find valid component coordinates in output.txt.")
+    raise ValueError(f"Could not find valid component coordinates in {filename}.")
 
 width, depth, height = component_dims
 if width <= 0.0 or depth <= 0.0 or height <= 0.0:
@@ -145,6 +206,7 @@ for region in internal_regions:
     # positions are centers, so shift rectangular footprints by half of
     # each non-normal dimension before passing them to bar3d().
     region_kind = region["type"].rsplit("/", 1)[-1]
+    color = component_region_color(region_kind, color)
     is_centered_surface = region_kind in ("Fan", "Vent")
 
     plot_x = x - region_width / 2.0 if is_centered_surface else x
@@ -236,6 +298,12 @@ ax.set_ylim(0.0, depth)
 ax.set_zlim(0.0, height)
 ax.set_box_aspect((width, depth, height))
 
+# Thin rack components can otherwise receive a tick at every centimetre,
+# producing an unreadable stack of labels beside the external legend.
+for axis in (ax.xaxis, ax.yaxis):
+    axis.set_major_locator(MaxNLocator(nbins=6, min_n_ticks=3))
+ax.zaxis.set_major_locator(MaxNLocator(nbins=3, min_n_ticks=3))
+
 ax.set_xlabel("Width (m)")
 ax.set_ylabel("Depth (m)")
 ax.set_zlabel("Height (m)")
@@ -244,14 +312,15 @@ ax.set_title(f"Component Model: {component_name}")
 ax.legend(
     handles=legend_handles,
     loc="upper left",
-    bbox_to_anchor=(1.02, 1.0),
+    bbox_to_anchor=(1.12, 1.0),
     borderaxespad=0.0,
 )
 
 fig.tight_layout()
 
 if args.save:
-    output_path = Path("component_plot.png")
+    output_path = args.output
+    output_path.parent.mkdir(parents=True, exist_ok=True)
     fig.savefig(output_path, dpi=200, bbox_inches="tight")
     print(f"Saved plot to '{output_path}'.")
 else:

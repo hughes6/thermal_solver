@@ -1,15 +1,51 @@
 import tempfile
 import unittest
 import struct
+from types import SimpleNamespace
 from pathlib import Path
 
 from tools.validate_openfoam_case import (
     internal_values,
     expected_fluid_regions,
     latest_result_paths,
+    mesh_connectivity,
+    markdown,
     patch_values,
     signed_weighted_average,
 )
+
+
+class ReportSemanticsTests(unittest.TestCase):
+    def test_outlet_power_metric_is_not_called_transient_conservation(self):
+        result = SimpleNamespace(
+            passed=False,
+            fluent_temperature_k=None,
+            connected_fluid_regions=1,
+            cells=10,
+            expected_connected_fluid_regions=1,
+            pass_connectivity=True,
+            inlet_mass_flow_kg_s=-0.1,
+            outlet_mass_flow_kg_s=0.1,
+            mass_imbalance_fraction=0.0,
+            pass_mass_balance=True,
+            transported_power_w=1.0,
+            applied_power_w=100.0,
+            energy_error_fraction=0.99,
+            pass_energy_balance=False,
+            time_s=1.0,
+            inlet_temperature_k=293.15,
+            outlet_temperature_k=293.16,
+            expected_outlet_temperature_k=294.15,
+            solid_average_temperature_k=293.2,
+            solid_min_temperature_k=293.15,
+            solid_max_temperature_k=293.3,
+            outlet_gross_mass_flow_kg_s=0.1,
+            outlet_reverse_flow_fraction=0.0,
+        )
+        rendered = markdown(result)
+        self.assertIn("Steady-state heat removal", rendered)
+        self.assertIn("transient first-law conservation audit", rendered)
+        self.assertNotIn("| Energy conservation |", rendered)
 
 
 class SignedOutletAverageTests(unittest.TestCase):
@@ -104,6 +140,36 @@ class LatestResultTests(unittest.TestCase):
             value, paths = latest_result_paths(case)
         self.assertEqual(value, 100.2)
         self.assertEqual([path.name for path in paths], ["100.2", "100.2"])
+
+
+class MeshConnectivityTests(unittest.TestCase):
+    def test_cyclic_patch_pair_is_counted_as_connected(self):
+        with tempfile.TemporaryDirectory() as directory:
+            mesh = Path(directory)
+            header = "FoamFile\n{\nformat ascii;\n}\n"
+            # Two cells have no internal face.  Boundary faces 0 and 1 are a
+            # coupled cyclic pair, so the physical mesh has one component.
+            (mesh / "owner").write_text(header + "2\n(\n0\n1\n)\n")
+            (mesh / "neighbour").write_text(header + "0\n(\n)\n")
+            (mesh / "boundary").write_text(header + """2
+(
+    fan_master
+    {
+        type cyclic;
+        neighbourPatch fan_slave;
+        nFaces 1;
+        startFace 0;
+    }
+    fan_slave
+    {
+        type cyclic;
+        neighbourPatch fan_master;
+        nFaces 1;
+        startFace 1;
+    }
+)
+""")
+            self.assertEqual(mesh_connectivity(mesh), (2, 1))
 
 
 if __name__ == "__main__":

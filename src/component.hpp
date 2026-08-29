@@ -284,6 +284,8 @@ struct InternalRegion {
 
     // vent fxns
     double gross_area() const {
+        if(is_circular()) return PI * diameter * diameter / 4.0;
+
         const double ax = std::abs(direction[0]);
         const double ay = std::abs(direction[1]);
         const double az = std::abs(direction[2]);
@@ -324,6 +326,10 @@ struct InternalRegion {
         if(shape_type == ShapeType::Rectangular) validate_size();
         if(shape_type == ShapeType::Rectangular && diameter != 0.0) throw std::invalid_argument("InternalRegion: rectangular fan has diameter defined.");
         if(shape_type == ShapeType::Circular && (size_m[0] != 0.0 || size_m[1] != 0.0 || size_m[2] != 0.0)) throw std::invalid_argument("InternalRegion: circular fan has size vector");
+        if(shape_type == ShapeType::Circular &&
+           (!std::isfinite(diameter) || diameter <= 0.0))
+            throw std::invalid_argument(
+                "InternalRegion: circular fan diameter must be finite and > 0.0.");
         if(cfm < 0.0) throw std::invalid_argument("InternalRegion: fan cfm cannot be < 0.0.");
     }
 
@@ -331,6 +337,10 @@ struct InternalRegion {
         if(shape_type == ShapeType::Rectangular) validate_size();
         if(shape_type == ShapeType::Rectangular && diameter != 0.0) throw std::invalid_argument("InternalRegion: recangular vent has diameter defined.");
         if(shape_type == ShapeType::Circular && (size_m[0] != 0.0 || size_m[1] != 0.0 || size_m[2] != 0.0)) throw std::invalid_argument("InternalRegion: circular vent has size vector");
+        if(shape_type == ShapeType::Circular &&
+           (!std::isfinite(diameter) || diameter <= 0.0))
+            throw std::invalid_argument(
+                "InternalRegion: circular vent diameter must be finite and > 0.0.");
         if(free_area_ratio < 0.0 || free_area_ratio > 1.0) throw std::invalid_argument("InternalRegion: vent free area ration needs to be > 0.0 and < 1.0.");
     }
 

@@ -1,6 +1,9 @@
 import unittest
 
-import numpy as np
+try:
+    import numpy as np
+except ModuleNotFoundError:
+    np = None
 
 from tools.openfoam_cross_case_comparison import (
     CSV_HEADINGS,
@@ -10,6 +13,7 @@ from tools.openfoam_cross_case_comparison import (
 from tools.openfoam_field_convergence import compare_snapshots
 
 
+@unittest.skipUnless(np is not None, "optional NumPy dependency unavailable")
 class OpenFoamCrossCaseComparisonTest(unittest.TestCase):
     def snapshots(self):
         reference = {

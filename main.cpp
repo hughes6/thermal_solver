@@ -25,10 +25,20 @@
 
 int main(int argc, char* argv[]) {
 
-
+  if (argc > 3) {
+    std::cerr << "Usage: " << argv[0]
+              << " [component.toml] [fan_curves.toml]\n";
+    return 2;
+  }
+  const std::string component_path =
+      argc >= 2 ? argv[1] : "library/components/eaton_2U_UPS.toml";
+  const std::string fan_curve_path =
+      argc == 3 ? argv[2] : "library/fan_curves/fan_curves.toml";
   ComponentLoader loader;
-  loader.load_component("library/components/eaton_2U_UPS.toml");
+  loader.load_fan_curves(fan_curve_path);
+  loader.load_component(component_path);
   loader.run();
+  return 0;
 
   // ModelLoader loader;
   // loader.load_fan_curves("library/components/fan_curves.toml");  

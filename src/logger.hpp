@@ -3,6 +3,7 @@
 
 #include <algorithm>
 #include <array>
+#include <cctype>
 #include <cmath>
 #include <cstddef>
 #include <filesystem>
@@ -11,6 +12,7 @@
 #include <stdexcept>
 #include <string>
 #include <unordered_map>
+#include <unordered_set>
 #include <utility>
 #include <vector>
 
@@ -214,7 +216,6 @@ public:
         }
 
         validate_config();
-        std::filesystem::create_directories(config_.output_directory);
         resolved_probes_.clear();
 
         for(const Probe& probe : config_.probes) {
@@ -223,12 +224,18 @@ public:
             );
         }
 
-        open_files();
         initialized_ = true;
     }
 
     void log(const Mesh& mesh, int timestep, double time) {
         if(!initialized_) { throw std::runtime_error("SimulationLogger::initialize() must be called before log()."); }
+
+        // File creation is deliberately deferred until the first actual log
+        // event. Solver calls log() only after its flow, stability, and exact
+        // advection-workload preflight has succeeded, so a refused run cannot
+        // truncate prior structured evidence merely because probes were
+        // resolved during model setup.
+        ensure_outputs_open();
 
         if(config_.enable_field_logging && config_.field_interval > 0 && timestep % config_.field_interval == 0) {
             log_field(mesh, timestep, time);
@@ -255,18 +262,44 @@ public:
 
         probe_files_.clear();
         resolved_probes_.clear();
+        outputs_open_ = false;
         initialized_ = false;
     }
 
     bool is_initialized() const { return initialized_; }
 
+    // Solver calls this before it publishes successful completion. Keep
+    // close()/the destructor non-throwing, but make buffered structured-output
+    // failures observable to production callers while the run can still be
+    // marked unsuccessful.
+    void flush_and_validate() {
+        if(!initialized_)
+            throw std::logic_error(
+                "SimulationLogger must remain initialized until logging "
+                "finishes.");
+        flush_stream(field_file_,"field log");
+        flush_stream(summary_file_,"summary log");
+        for(auto& entry : probe_files_)
+            flush_stream(entry.second,"probe log '"+entry.first+"'");
+    }
+
 private:
     LoggingConfig config_;
     bool initialized_ = false;
+    bool outputs_open_ = false;
     std::ofstream field_file_;
     std::ofstream summary_file_;
     std::vector<ResolvedProbe> resolved_probes_;
     std::unordered_map<std::string, std::ofstream> probe_files_;
+
+    static void flush_stream(std::ofstream& stream,
+                             const std::string& description) {
+        if(!stream.is_open()) return;
+        stream.flush();
+        if(!stream)
+            throw std::runtime_error(
+                "Failed while writing structured "+description+".");
+    }
 
     // ========================================================
     // CONFIGURATION VALIDATION
@@ -282,9 +315,34 @@ private:
         if(config_.enable_probe_logging && config_.probe_interval <= 0) {
             throw std::invalid_argument("Probe logging interval must be greater than zero.");
         }
+        std::unordered_set<std::string> probe_output_names;
         for(const Probe& probe : config_.probes) {
             if(probe.name.empty()) {
                 throw std::invalid_argument( "Probe name cannot be empty.");
+            }
+            std::string output_name_key;
+            output_name_key.reserve(probe.name.size());
+            for(const unsigned char character : probe.name) {
+                const bool portable_character=
+                    (character>='a' && character<='z') ||
+                    (character>='A' && character<='Z') ||
+                    (character>='0' && character<='9') ||
+                    character=='_' || character=='-';
+                if(!portable_character) {
+                    throw std::invalid_argument(
+                        "Probe name '" + probe.name +
+                        "' must use only portable filename-safe characters "
+                        "[A-Za-z0-9_-]."
+                    );
+                }
+                output_name_key.push_back(static_cast<char>(
+                    std::tolower(character)));
+            }
+            if(!probe_output_names.insert(output_name_key).second) {
+                throw std::runtime_error(
+                    "Duplicate probe output filename (case-insensitive): " +
+                    probe.name
+                );
             }
         }
     }
@@ -371,7 +429,43 @@ private:
     // PROBE RESOLUTION
     // ========================================================
 
+    static void validate_probe_coordinate(
+        const Probe& probe,
+        double coordinate,
+        const std::vector<double>& bounds,
+        const char* axis
+    ) {
+        if(!std::isfinite(coordinate)) {
+            throw std::invalid_argument(
+                "Probe '" + probe.name + "' " + axis +
+                " coordinate must be finite."
+            );
+        }
+        if(bounds.size() < 2) {
+            throw std::logic_error(
+                "Probe '" + probe.name + "' cannot be resolved on an empty " +
+                axis + " mesh axis."
+            );
+        }
+        if(coordinate < bounds.front() || coordinate > bounds.back()) {
+            throw std::out_of_range(
+                "Probe '" + probe.name + "' " + axis + " coordinate " +
+                std::to_string(coordinate) + " lies outside mesh bounds [" +
+                std::to_string(bounds.front()) + ", " +
+                std::to_string(bounds.back()) + "]."
+            );
+        }
+    }
+
     static ResolvedProbe resolve_probe(const Mesh& mesh, const Probe& probe) {
+        // Mesh::index_* intentionally maps an exact outer-boundary coordinate
+        // to the final cell. Validate the physical coordinates first so NaN,
+        // infinity, and values beyond that boundary cannot be clamped into an
+        // apparently valid cell index.
+        validate_probe_coordinate(probe,probe.x,mesh.get_x_bounds(),"x");
+        validate_probe_coordinate(probe,probe.y,mesh.get_y_bounds(),"y");
+        validate_probe_coordinate(probe,probe.z,mesh.get_z_bounds(),"z");
+
         const int i = mesh.index_x(probe.x);
         const int j = mesh.index_y(probe.y);
         const int k = mesh.index_z(probe.z);
@@ -387,6 +481,19 @@ private:
     // ========================================================
     // OPEN FILES
     // ========================================================
+
+    void ensure_outputs_open() {
+        if(outputs_open_) return;
+        if(!config_.enable_field_logging &&
+           !config_.enable_summary_logging &&
+           !config_.enable_probe_logging) {
+            outputs_open_ = true;
+            return;
+        }
+        std::filesystem::create_directories(config_.output_directory);
+        open_files();
+        outputs_open_ = true;
+    }
 
     void open_files() {
         if(config_.enable_field_logging) {
@@ -432,14 +539,6 @@ private:
     void open_probe_files() {
         for(const ResolvedProbe& probe :
             resolved_probes_) {
-
-            if(probe_files_.find(probe.name) != probe_files_.end()) {
-                throw std::runtime_error(
-                    "Duplicate probe name: " +
-                    probe.name
-                );
-            }
-
             const std::filesystem::path path =
                 config_.output_directory /
                 ("probe_" + probe.name + ".csv");

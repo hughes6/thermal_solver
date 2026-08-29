@@ -2,7 +2,10 @@ import unittest
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
-import numpy as np
+try:
+    import numpy as np
+except ModuleNotFoundError:
+    np = None
 
 from tools.openfoam_field_convergence import (
     append_fluid_partition_rows,
@@ -15,6 +18,7 @@ from tools.openfoam_field_convergence import (
 )
 
 
+@unittest.skipUnless(np is not None, "optional NumPy dependency unavailable")
 class OpenFoamFieldConvergenceTest(unittest.TestCase):
     def test_component_air_partitions_leave_external_cells(self):
         centers = np.array([
