@@ -81,6 +81,12 @@ def _sha256_file(path: Path) -> str:
     return digest.hexdigest()
 
 
+def _canonical_solver_source_bytes(data: bytes) -> bytes:
+    """Make the source identity independent of Git's host line-ending mode."""
+
+    return data.replace(b"\r\n", b"\n").replace(b"\r", b"\n")
+
+
 def source_fingerprint(repo_root: Path) -> tuple[str, list[dict[str, object]]]:
     """Hash fixed repository-local inputs using a path-bound byte stream."""
 
@@ -93,7 +99,7 @@ def source_fingerprint(repo_root: Path) -> tuple[str, list[dict[str, object]]]:
             raise AttestationError(
                 f"required regular source input is missing or a symlink: {relative}"
             )
-        raw = path.read_bytes()
+        raw = _canonical_solver_source_bytes(path.read_bytes())
         file_sha = _sha256_bytes(raw)
         relative_bytes = relative.encode("utf-8")
         canonical.extend(relative_bytes)

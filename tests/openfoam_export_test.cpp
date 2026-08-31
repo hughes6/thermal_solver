@@ -460,6 +460,18 @@ int main(int argc, char** argv) {
     assert(std::filesystem::is_regular_file(
         case_path/"solver_build_bundle"/"openfoam_semifrozen_solver"/
             "semiFrozenChtMultiRegionFoam.C"));
+    for(const auto& relative : {
+            std::filesystem::path("build_semifrozen_solver.sh"),
+            std::filesystem::path("solver_build_bundle/tools/")/
+                "build_openfoam_semifrozen_solver.sh",
+            std::filesystem::path("solver_build_bundle/tools/")/
+                "openfoam_semifrozen_attestation.py"}) {
+        std::ifstream stream(case_path/relative,std::ios::binary);
+        const std::string contents{
+            std::istreambuf_iterator<char>(stream),
+            std::istreambuf_iterator<char>()};
+        assert(contents.find('\r')==std::string::npos);
+    }
     assert(std::filesystem::is_regular_file(case_path/"run_cht.sh"));
     assert(std::filesystem::is_regular_file(case_path/"run_parallel.sh"));
     {

@@ -100,7 +100,7 @@ public:
     // any solver-source edit requires an explicit pin update.
     inline static constexpr char
         semi_frozen_solver_project_source_sha256[] =
-            "c5b8c82093c2017b295d43a9b23984cb88416ea168545d1886e26fa968e03c4f";
+            "b5453aa8598729c59ed97cfe4ee7a0d5a220cdba3d2b3fe16b769663101822d3";
 
     static void preflight(const Mesh& mesh,
                           const OpenFoamExportOptions& options) {
@@ -549,8 +549,23 @@ private:
         const std::filesystem::path& path,const std::string& contents) {
         std::ofstream output(path,std::ios::binary);
         require_stream(output,path);
-        output.write(
-            contents.data(),static_cast<std::streamsize>(contents.size()));
+        // These assets execute under Bash/Python in WSL.  The native exporter
+        // is commonly built from a Windows checkout where Git may present
+        // CRLF files; normalize every copied build/script asset so the case
+        // remains directly executable after transfer to Linux.
+        std::string unix_contents;
+        unix_contents.reserve(contents.size());
+        for(std::size_t index=0;index<contents.size();++index) {
+            if(contents[index]=='\r') {
+                if(index+1<contents.size() && contents[index+1]=='\n')
+                    ++index;
+                unix_contents.push_back('\n');
+            } else {
+                unix_contents.push_back(contents[index]);
+            }
+        }
+        output.write(unix_contents.data(),static_cast<std::streamsize>(
+            unix_contents.size()));
         if(!output)
             throw std::runtime_error(
                 "OpenFoamExporter: could not finish writing '"+

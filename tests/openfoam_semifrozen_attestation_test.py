@@ -105,6 +105,14 @@ class SemiFrozenAttestationTest(unittest.TestCase):
             restored, _ = attestation.source_fingerprint(self.repo)
             self.assertEqual(restored, original, relative)
 
+    def test_source_fingerprint_is_independent_of_crlf_checkout_mode(self):
+        relative = attestation.SOURCE_INPUTS[-1]
+        path = self.repo / relative
+        original = path.read_bytes()
+        path.write_bytes(original.replace(b"\r\n", b"\n").replace(b"\n", b"\r\n"))
+        crlf_digest, _ = attestation.source_fingerprint(self.repo)
+        self.assertEqual(crlf_digest, self.source_sha)
+
     def test_source_change_after_build_fails_closed(self):
         stale_line = self.line()
         source = self.repo / attestation.SOURCE_INPUTS[-1]
