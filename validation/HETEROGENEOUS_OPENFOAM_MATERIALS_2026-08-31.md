@@ -44,6 +44,17 @@ g++ -std=c++17 -O0 -I src tests/openfoam_export_test.cpp -o <temporary-exe>
 <temporary-exe>
 ```
 
+## Ambient-air placeholder handling
+
+`final_2Ux2U_Air_block.toml` is a full-size, zero-load internal air region.
+It is now exported as ambient fluid only: no solid cell zone, no solid material
+dictionary, and no CHT region are generated for it. This prevents
+`splitMeshRegions` from evaluating a zero-volume solid region, which otherwise
+causes invalid bounding-box extrema and the `ill-defined primitiveEntry` error.
+
+The same export regression test confirms that this full-air pattern leaves all
+cells as fluid and creates no OpenFOAM component region.
+
 The broader `model_config_test.cpp` was also compiled but has a pre-existing
 failure before material checks: it still expects `model_runner.cpp` to default
 to `library/models/new_model_updated.toml`, while the runner now defaults to

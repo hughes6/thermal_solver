@@ -660,6 +660,52 @@ public:
             const double scale = std::max({1.0, std::abs(lhs), std::abs(rhs)});
             return std::abs(lhs-rhs) > 1e-9*scale;
         };
+        // A template consisting solely of one full-size, zero-load air region
+        // is an ambient-air placeholder, not a solid enclosure.  In
+        // particular, final_2Ux2U_Air_block.toml uses this pattern.  Do not
+        // create an empty solid zone for it: splitMeshRegions subsequently
+        // gives such a zone a zero volume and invalid bounding-box extrema.
+        const auto same_extent=[](double lhs,double rhs) {
+            const double scale=std::max({1.0,std::abs(lhs),std::abs(rhs)});
+            return std::abs(lhs-rhs)<=1e-9*scale;
+        };
+        const bool ambient_air_placeholder=
+            std::abs(component.get_watts())<=1e-12 &&
+            component_regions.size()==1 &&
+            component_regions.front().get_region_type()==RegionType::Air &&
+            std::abs(component_regions.front().get_watts())<=1e-12 &&
+            same_extent(component_regions.front().get_local_position()[0],0.0) &&
+            same_extent(component_regions.front().get_local_position()[1],0.0) &&
+            same_extent(component_regions.front().get_local_position()[2],0.0) &&
+            same_extent(component_regions.front().get_width_m(),
+                        component.get_width_m()) &&
+            same_extent(component_regions.front().get_depth_m(),
+                        component.get_depth_m()) &&
+            same_extent(component_regions.front().get_height_m(),
+                        component.get_height_m());
+        if(ambient_air_placeholder) {
+            stamp_component_adaptive(component);
+            const auto origin=component.get_coords();
+            const int i0=std::max(0,index_x(origin[0]));
+            const int j0=std::max(0,index_y(origin[1]));
+            const int k0=std::max(0,index_z(origin[2]));
+            const int i1=std::min(nx,end_index_x(
+                origin[0]+component.get_width_m()));
+            const int j1=std::min(ny,end_index_y(
+                origin[1]+component.get_depth_m()));
+            const int k1=std::min(nz,end_index_z(
+                origin[2]+component.get_height_m()));
+            for(int i=i0;i<i1;++i) for(int j=j0;j<j1;++j)
+                for(int k=k0;k<k1;++k) {
+                    if(!at(i,j,k).is_fluid())
+                        throw std::logic_error(
+                            "Ambient-air placeholder did not stamp fluid cells.");
+                    OpenFoamCellMetadata& metadata=
+                        openfoam_cell_metadata[idx(i,j,k)];
+                    metadata=OpenFoamCellMetadata{};
+                }
+            return;
+        }
         struct SolidMaterialCandidate {
             std::string name;
             double conductivity;

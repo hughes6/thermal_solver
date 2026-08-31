@@ -89,6 +89,31 @@ int main(int argc, char** argv) {
         assert(dissimilar_core.conductivity==130.0);
     }
 
+    // A component used only to reserve an ambient-air volume must not leave a
+    // zero-cell solid region for splitMeshRegions to process.
+    {
+        Rack air_rack=Rack::from_meters(0.2,0.1,0.1);
+        Mesh air_mesh=Mesh().build_mesh(air_rack,0.1,0.1,0.1,env,load);
+        Component air_placeholder=Component::from_meters(
+            0.2,0.1,0.1,"2U X 2U Air Block");
+        air_placeholder.set_coords_m(0.0,0.0,0.0);
+        air_placeholder.set_rho_solid(1200.0);
+        air_placeholder.set_cp(800.0);
+        air_placeholder.set_k_solid(10.0);
+        air_placeholder.set_watts(0.0);
+        air_placeholder.add_region(InternalRegion(
+            "Air",{0.2,0.1,0.1},{0.0,0.0,0.0}));
+        air_placeholder.order_internal_regions();
+        air_mesh.stamp_component_for_openfoam(air_placeholder);
+        assert(air_mesh.get_openfoam_component_regions().empty());
+        for(const auto& cell : air_mesh.get_cells())
+            assert(cell.is_fluid());
+        for(const auto& metadata : air_mesh.get_openfoam_cell_metadata())
+            assert(metadata.region_type==
+                   Mesh::OpenFoamCellMetadata::RegionType::Fluid &&
+                   metadata.component_id==-1 && metadata.material_id==-1);
+    }
+
     Rack rack=Rack::from_meters(0.5,0.2,0.2);
     rack.set_t(20.0);
     rack.set_cp(1005.0);
