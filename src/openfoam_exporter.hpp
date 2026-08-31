@@ -94,14 +94,6 @@ struct OpenFoamExportOptions {
 
 class OpenFoamExporter {
 public:
-    // This pins generated multirate runners to the repository-local solver
-    // source fingerprint current when the exporter was built.  The Python
-    // attestation regression recomputes it from the three declared inputs so
-    // any solver-source edit requires an explicit pin update.
-    inline static constexpr char
-        semi_frozen_solver_project_source_sha256[] =
-            "b5453aa8598729c59ed97cfe4ee7a0d5a220cdba3d2b3fe16b769663101822d3";
-
     static void preflight(const Mesh& mesh,
                           const OpenFoamExportOptions& options) {
         if(options.case_directory.empty())
@@ -610,9 +602,8 @@ private:
 
         std::ofstream manifest(bundle/"manifest.txt",std::ios::binary);
         require_stream(manifest,bundle/"manifest.txt");
-        manifest << "thermal-sim-semifrozen-build-bundle-v1\n"
-                 << "project_source_sha256 "
-                 << semi_frozen_solver_project_source_sha256 << "\n"
+        manifest << "thermal-sim-semifrozen-build-bundle-v2\n"
+                 << "project_source_sha256 runtime-computed-by-attester\n"
                  << "source_inputs openfoam_semifrozen_solver/Make/files "
                     "openfoam_semifrozen_solver/Make/options "
                     "openfoam_semifrozen_solver/semiFrozenChtMultiRegionFoam.C\n";
@@ -627,9 +618,7 @@ private:
             "set -euo pipefail\n"
             "case_dir=\"$(cd \"$(dirname \"$(readlink -f \"$0\")\")\" && pwd)\"\n"
             "exec bash \"$case_dir/solver_build_bundle/tools/build_openfoam_semifrozen_solver.sh\" "
-            "--expected-source-sha \""+
-            std::string(semi_frozen_solver_project_source_sha256)+
-            "\" \"$@\"\n";
+            "\"$@\"\n";
         write_low_memory_preparation_asset(
             case_directory/"build_semifrozen_solver.sh",launcher);
     }
@@ -3941,8 +3930,19 @@ functions
             output <<
             "solver_mode_policy_marker=\""
                 "THERMAL_SIM_SEMIFROZEN_MODE_POLICY_V1\"\n"
-            "solver_project_source_sha256=\""
-                << semi_frozen_solver_project_source_sha256 << "\"\n"
+            "case_solver_bundle=\"$case_dir/solver_build_bundle\"\n"
+            "case_solver_attester=\"$case_solver_bundle/tools/"
+                "openfoam_semifrozen_attestation.py\"\n"
+            "if [[ ! -f \"$case_solver_attester\" ]]; then\n"
+            "    echo \"ERROR: missing case-bound solver attester: $case_solver_attester.\" >&2\n"
+            "    exit 14\n"
+            "fi\n"
+            "solver_project_source_sha256=$(python3 \"$case_solver_attester\" "
+                "--repo-root \"$case_solver_bundle\" --print-source-sha)\n"
+            "if ! [[ \"$solver_project_source_sha256\" =~ ^[0-9a-f]{64}$ ]]; then\n"
+            "    echo \"ERROR: case-bound solver source attester returned an invalid SHA-256.\" >&2\n"
+            "    exit 14\n"
+            "fi\n"
             "case_solver_builder=\"$case_dir/build_semifrozen_solver.sh\"\n"
             "semi_frozen_solver=\"$(command -v "
                 "semiFrozenChtMultiRegionFoam || true)\"\n"
