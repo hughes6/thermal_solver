@@ -1,10 +1,12 @@
 #!/usr/bin/env python3
-"""Audit OpenFOAM fan flows against the exported positive-pressure domains.
+"""Audit OpenFOAM fan flows against their exported active and assisted domains.
 
 Direction-only checks can pass even when a fan is being advected above the
-first zero-pressure point in its supplied curve.  The exporter deliberately
-clamps those table entries to zero, so such a fan is no longer adding pressure
-and its reported flow must not be interpreted as a supported operating point.
+first zero-pressure point in its supplied curve.  A legacy zero-pressure
+plateau means such a fan is no longer adding pressure and is unsupported.  A
+newer exported signed continuation is instead an explicit assisted-flow
+branch: it is reported as a warning, while flows beyond the supplied table
+remain a hard failure.
 
 This audit reads the curves actually exported into ``fvOptions`` and
 ``0/fluid/p_rgh``.  It therefore checks the case that ran, rather than trying
@@ -53,7 +55,9 @@ class FanOperatingPoint:
     flow_m3_s: float | None
     flow_kg_s: float | None
     positive_pressure_limit_m3_s: float | None
+    curve_domain_limit_m3_s: float | None
     utilization_fraction: float | None
+    curve_domain_utilization_fraction: float | None
     status: str
     detail: str
 
@@ -170,6 +174,24 @@ def positive_pressure_limit(points: tuple[tuple[float, float], ...]) -> float | 
     return None
 
 
+def assisted_flow_limit(
+    points: tuple[tuple[float, float], ...]
+) -> float | None:
+    """Return the terminal table flow when it contains a signed passive branch."""
+    zero = positive_pressure_limit(points)
+    if zero is None:
+        return None
+    scale = max(1.0, *(abs(pressure) for _, pressure in points))
+    tolerance = 1.0e-12 * scale
+    has_signed_branch = any(
+        q_value > zero and pressure < -tolerance
+        for q_value, pressure in points
+    )
+    if not has_signed_branch or points[-1][1] >= -tolerance:
+        return None
+    return points[-1][0]
+
+
 def classify(
     scope: str,
     name: str,
@@ -181,30 +203,48 @@ def classify(
     direction_ok: bool | None = True,
 ) -> FanOperatingPoint:
     limit = positive_pressure_limit(curve.points)
+    curve_limit = assisted_flow_limit(curve.points)
     if flow_m3_s is None:
         return FanOperatingPoint(
-            scope, name, time_s, None, flow_kg_s, limit, None,
+            scope, name, time_s, None, flow_kg_s, limit, curve_limit,
+            None, None,
             "FAIL_MISSING", "no runtime flow measurement at the audited time",
         )
     if not math.isfinite(flow_m3_s):
         return FanOperatingPoint(
-            scope, name, time_s, flow_m3_s, flow_kg_s, limit, None,
+            scope, name, time_s, flow_m3_s, flow_kg_s, limit, curve_limit,
+            None, None,
             "FAIL_NONFINITE", "runtime flow is not finite",
         )
     if direction_ok is False or flow_m3_s <= 0.0:
         return FanOperatingPoint(
-            scope, name, time_s, flow_m3_s, flow_kg_s, limit, None,
+            scope, name, time_s, flow_m3_s, flow_kg_s, limit, curve_limit,
+            None, None,
             "FAIL_DIRECTION", "runtime flow is stagnant or opposite the fan direction",
         )
     if limit is None or not math.isfinite(limit) or limit <= 0.0:
         return FanOperatingPoint(
-            scope, name, time_s, flow_m3_s, flow_kg_s, limit, None,
+            scope, name, time_s, flow_m3_s, flow_kg_s, limit, curve_limit,
+            None, None,
             "FAIL_NO_LIMIT", "exported curve has no positive-to-zero pressure crossing",
         )
     utilization = flow_m3_s / limit
+    curve_utilization = (
+        flow_m3_s / curve_limit if curve_limit is not None else None
+    )
     if utilization >= 1.0:
-        status = "FAIL_OUTSIDE_CURVE"
-        detail = "flow is at or beyond the first zero-pressure point"
+        if curve_limit is None:
+            status = "FAIL_OUTSIDE_CURVE"
+            detail = (
+                "flow is at or beyond the first zero-pressure point and "
+                "the exported curve has no signed assisted-flow branch"
+            )
+        elif flow_m3_s > curve_limit:
+            status = "FAIL_OUTSIDE_CURVE"
+            detail = "flow exceeds the exported signed curve domain"
+        else:
+            status = "WARN_ASSISTED_FLOW"
+            detail = "flow is on the exported signed assisted-flow branch"
     elif utilization >= warning_fraction:
         status = "WARN_NEAR_LIMIT"
         detail = "flow is close to the first zero-pressure point"
@@ -212,7 +252,8 @@ def classify(
         status = "PASS"
         detail = "flow is inside the positive-pressure curve domain"
     return FanOperatingPoint(
-        scope, name, time_s, flow_m3_s, flow_kg_s, limit, utilization,
+        scope, name, time_s, flow_m3_s, flow_kg_s, limit, curve_limit,
+        utilization, curve_utilization,
         status, detail,
     )
 
@@ -235,7 +276,7 @@ def audit_internal(
         if curve is None:
             rows.append(FanOperatingPoint(
                 "internal", name, latest_time, flows.get(name), None,
-                None, None, "FAIL_MISSING_CURVE",
+                None, None, None, None, "FAIL_MISSING_CURVE",
                 "runtime fan has no exported fanMomentumSource curve",
             ))
             continue
@@ -315,8 +356,8 @@ def write_csv(path: Path, rows: list[FanOperatingPoint]) -> None:
 
 def markdown(rows: list[FanOperatingPoint]) -> str:
     lines = [
-        "| Scope | Fan | Time (s) | Flow (m³/s) | Positive-pressure limit (m³/s) | Utilization | Status |",
-        "|---|---|---:|---:|---:|---:|---|",
+        "| Scope | Fan | Time (s) | Flow (m³/s) | Free-delivery limit (m³/s) | Signed-branch limit (m³/s) | Utilization | Curve utilization | Status |",
+        "|---|---|---:|---:|---:|---:|---:|---:|---|",
     ]
     for row in rows:
         flow = "—" if row.flow_m3_s is None else f"{row.flow_m3_s:.7g}"
@@ -328,10 +369,19 @@ def markdown(rows: list[FanOperatingPoint]) -> str:
             "—" if row.utilization_fraction is None
             else f"{100.0 * row.utilization_fraction:.2f}%"
         )
+        curve_limit = (
+            "—" if row.curve_domain_limit_m3_s is None
+            else f"{row.curve_domain_limit_m3_s:.7g}"
+        )
+        curve_utilization = (
+            "—" if row.curve_domain_utilization_fraction is None
+            else f"{100.0 * row.curve_domain_utilization_fraction:.2f}%"
+        )
         time = "—" if not math.isfinite(row.time_s) else f"{row.time_s:g}"
         lines.append(
             f"| {row.scope} | `{row.fan_name}` | {time} | {flow} | "
-            f"{limit} | {utilization} | {row.status} |"
+            f"{limit} | {curve_limit} | {utilization} | "
+            f"{curve_utilization} | {row.status} |"
         )
     return "\n".join(lines) + "\n"
 

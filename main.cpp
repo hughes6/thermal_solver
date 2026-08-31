@@ -25,26 +25,26 @@
 
 int main(int argc, char* argv[]) {
 
-  if (argc > 3) {
-    std::cerr << "Usage: " << argv[0]
-              << " [component.toml] [fan_curves.toml]\n";
-    return 2;
-  }
-  const std::string component_path =
-      argc >= 2 ? argv[1] : "library/components/eaton_2U_UPS.toml";
-  const std::string fan_curve_path =
-      argc == 3 ? argv[2] : "library/fan_curves/fan_curves.toml";
-  ComponentLoader loader;
-  loader.load_fan_curves(fan_curve_path);
-  loader.load_component(component_path);
-  loader.run();
-  return 0;
-
-  // ModelLoader loader;
-  // loader.load_fan_curves("library/components/fan_curves.toml");  
-  // loader.load_model("library/models/rack_test.toml");
+  // if (argc > 3) {
+  //   std::cerr << "Usage: " << argv[0]
+  //             << " [component.toml] [fan_curves.toml]\n";
+  //   return 2;
+  // }
+  // const std::string component_path =
+  //     argc >= 2 ? argv[1] : "library/components/eaton_2U_UPS.toml";
+  // const std::string fan_curve_path =
+  //     argc == 3 ? argv[2] : "library/fan_curves/fan_curves.toml";
+  // ComponentLoader loader;
+  // loader.load_fan_curves(fan_curve_path);
+  // loader.load_component(component_path);
   // loader.run();
-  
+  // return 0;
+
+  ComponentLoader loader;
+  loader.load_fan_curves("library/fan_curves/fan_curves.toml");  
+  loader.load_component("library/components/final_trenton_3u_bam.toml");
+  loader.run();
+  return 0;  
 
   // Environment env(30.0, 5800.0, 20.0, 1005.0, 0.02587, 0.000018, 0.71, 1.225);
   // Workload load(1'000'000, 10'000'000, 1'000'000, 4);

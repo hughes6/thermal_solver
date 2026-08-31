@@ -28,6 +28,39 @@ def position(table: dict) -> tuple[float, float, float]:
     return vector(table, ("x", "y", "z"))
 
 
+def material_properties(
+    value: object, label: str, errors: list[str]
+) -> dict | None:
+    """Resolve an inline material table or a repository-relative TOML file."""
+    if isinstance(value, dict):
+        return value
+    if not isinstance(value, str) or not value:
+        errors.append(f"{label}: material must be a table or non-empty file path")
+        return None
+    path = Path(value)
+    if not path.is_absolute():
+        path = Path.cwd() / path
+    try:
+        material = tomllib.loads(path.read_text(encoding="utf-8-sig"))
+    except (OSError, tomllib.TOMLDecodeError) as exc:
+        errors.append(f"{label}: unable to load material file {value}: {exc}")
+        return None
+    return material
+
+
+def audit_material(value: object, label: str, errors: list[str]) -> None:
+    material = material_properties(value, label, errors)
+    if material is None:
+        return
+    for key in ("rho", "cp", "k"):
+        try:
+            property_value = float(material.get(key, 0.0))
+        except (TypeError, ValueError):
+            property_value = math.nan
+        if not math.isfinite(property_value) or property_value <= 0.0:
+            errors.append(f"{label}: material {key} must be finite and positive")
+
+
 def aabb_overlap(a, b, tolerance=1e-9) -> bool:
     return all(
         a[0][axis] < b[1][axis] - tolerance
@@ -92,10 +125,7 @@ def audit_component(path: Path) -> tuple[list[str], list[str]]:
         errors.append(f"{path.name}: outer watts must be finite and nonnegative")
     outer_material = data.get("material")
     if outer_material:
-        for key in ("rho", "cp", "k"):
-            value = float(outer_material.get(key, 0.0))
-            if not math.isfinite(value) or value <= 0.0:
-                errors.append(f"{path.name}: outer material {key} must be finite and positive")
+        audit_material(outer_material, f"{path.name}: outer material", errors)
 
     for index, region in enumerate(data.get("internal_regions", []), 1):
         label = f"{path.name}: region {index} ({region.get('name', 'unnamed')})"
@@ -187,10 +217,7 @@ def audit_component(path: Path) -> tuple[list[str], list[str]]:
             if state == "solid" and not material:
                 errors.append(f"{label}: solid region is missing material")
             if material:
-                for key in ("rho", "cp", "k"):
-                    value = float(material.get(key, 0.0))
-                    if not math.isfinite(value) or value <= 0.0:
-                        errors.append(f"{label}: material {key} must be finite and positive")
+                audit_material(material, label, errors)
 
     for first, second in itertools.combinations(volumes, 2):
         if aabb_overlap(first[2], second[2]):

@@ -1,0 +1,115 @@
+# Low-memory, initialization-only OpenFOAM profile derived from screening.
+# Fast, ballpark OpenFOAM profile for tuning heat allocation, fan curves,
+# vent resistance, and layout. Use indepth_foam_cfg.toml for final validation.
+
+[mesh]
+adaptive = true
+fine_dx = 0.03
+# A 0.20 m coarse target paradoxically creates more cells after the required
+# 5 mm enclosure cuts are transition-smoothed. The 0.10/0.02 layout is 18%
+# smaller for the reference rack while preserving all required geometry cuts.
+coarse_dx = 0.10
+refinement_margin = 0.02
+
+[openfoam_solver]
+enabled = true
+overwrite = true
+# Screening is exploratory and may retain a coarse mesh after all non-
+# determinant checkMesh checks pass. The generated runner labels this state
+# explicitly; use an in-depth or validation profile for quantitative results.
+allow_determinant_warnings = true
+# On the 8 GB validation workstation, two ranks avoided paging and completed
+# the same 30-step checkpoint 44.8% faster than four ranks. In-depth also uses
+# two ranks; the separate strict validation profile retains four ranks.
+parallel_processes = 2
+
+maximum_time_step = 1.0
+maximum_courant_number = 5.0
+field_write_interval = 0.1
+saved_time_directories = 3
+report_interval = 0.1
+
+use_k_omega_sst = true
+inlet_turbulence_intensity = 0.05
+turbulence_length_scale = 0.01
+turbulent_prandtl_number = 0.85
+temperature_dependent_air = true
+sutherland_temperature = 110.4
+use_fan_curves = true
+# Controlled 30-step same-checkpoint testing retained all three outer
+# fan/thermal coupling passes and reduced only pressure correctors. This cut
+# wall time 18.9% while keeping velocity RMS within 0.348%, fan flows within
+# 0.0045%, and mass imbalance below 0.1% relative to the 3x3 reference.
+pimple_outer_correctors = 3
+pimple_pressure_correctors = 2
+# Frozen-flow screening keeps two energy relinearization/coupling passes while
+# avoiding the third pass that live fan/pressure coupling requires.  This is a
+# speed-screen candidate, not yet a corrected-full-rack validation result; the
+# runner restores 3 outer passes before every airflow window.
+thermal_only_pimple_outer_correctors = 2
+# The exporter follows the first zero-pressure point with a signed C1 passive
+# branch; this wide table prevents an explicit fan source from zero-plateau
+# switching when nearby pressure fields assist a fan.
+fan_curve_extension_multiplier = 4.0
+fan_assisted_flow_slope_multiplier = 1.0
+use_vent_pressure_loss = true
+
+use_multirate_thermal = true
+airflow_warmup_time = 0.5
+use_fan_startup_ramp = true
+fan_startup_ramp_time = 0.05
+fan_startup_ramp_steps = 5
+initial_airflow_check_interval = 0.01
+minimum_initial_airflow_duration = 0.30
+# Require one rack air replacement before accepting the initial spatial flow field.
+minimum_initial_air_exchange_fraction = 0.01
+# The full-pressure 1.7 M-cell lab rack reached Co=4.579 at 0.001 s during its
+# startup ramp. Keep screening airflow below that marginal regime; this also
+# gives the adaptive controller useful headroom below maximum_courant_number.
+airflow_maximum_time_step = 0.0008
+airflow_refresh_maximum_time_step = 0.001
+airflow_checkpoint_interval = 0.1
+
+# A same-mesh 2,400 s comparison against 10 s changed all-region temperature
+# RMS by 0.000020 K (0.000244 K maximum) and reduced thermal wall time 24.5%.
+thermal_only_maximum_time_step = 20.0
+# Diagnostic only for fixed, fully implicit frozen-flow energy stages.
+# Thermal accuracy is controlled by thermal_only_maximum_time_step.
+thermal_only_maximum_courant_number = 1000.0
+airflow_refresh_interval = 2400.0
+airflow_refresh_duration = 0.01
+use_adaptive_airflow_refresh = true
+# A matched 208,772-cell study found that the former Co=10 ceiling reached
+# Co=4.82 and differed from a strict reference by 4.08% velocity RMS. Co=2
+# reached Co=0.96 and reduced that error to 1.50%; its roughly 200 s added
+# refresh cost is about 25% of a representative full screening interval.
+airflow_refresh_maximum_courant_number = 2.0
+airflow_refresh_check_interval = 0.01
+maximum_airflow_refresh_duration = 20.0
+maximum_mass_imbalance_fraction = 0.01
+maximum_device_flow_change_fraction = 0.01
+# The cold-start rack baseline settled to 2.92-2.96% spatial RMS change while
+# mass imbalance was 0.283%, all device directions were correct, and device
+# flows were stable. Match the screening profile's validated 3% long-lag guard;
+# the in-depth profile retains the stricter 1% requirement.
+maximum_velocity_rms_change_fraction = 0.03
+# Screening uses a 3% two-checkpoint long-lag guard because the validated
+# transient RANS field remains locally unsteady while boundary flow, heat
+# rejection, directions, and re-ingestion are stationary. In-depth retains 1%.
+maximum_accepted_velocity_rms_change_fraction = 0.03
+minimum_tracked_boundary_flow_fraction = 0.001
+
+stop_when_thermally_converged = true
+minimum_thermal_convergence_time = 2400.0
+thermal_convergence_reference_interval = 300.0
+# Limits bulk-fluid average and every solid-region maximum. The instantaneous
+# fluid maximum is reported separately because moving fan wakes dominated the
+# otherwise energy-balanced reference rack's hottest-cell motion.
+maximum_temperature_change = 0.25
+maximum_component_average_temperature_change = 0.10
+thermal_convergence_required_checkpoints = 2
+
+[openfoam_solver.gravity]
+x = 0.0
+y = 0.0
+z = -9.80665

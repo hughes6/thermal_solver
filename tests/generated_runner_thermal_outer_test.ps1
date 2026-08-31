@@ -17,6 +17,49 @@ function Assert-Condition {
     }
 }
 
+# ProcessStartInfo.ArgumentList is unavailable in Windows PowerShell 5.1.
+# Keep the runner regression usable from powershell.exe as well as PowerShell 7.
+function Convert-ToProcessStartArgument {
+    param([Parameter(Mandatory = $true)][string]$Argument)
+    if ($Argument.Length -eq 0) { return '""' }
+    if ($Argument -notmatch '[\s"]') { return $Argument }
+    $builder = [Text.StringBuilder]::new()
+    [void]$builder.Append('"')
+    $backslashes = 0
+    foreach ($character in $Argument.ToCharArray()) {
+        if ($character -eq '\\') { $backslashes++; continue }
+        if ($character -eq '"') {
+            for ($index = 0; $index -lt (2 * $backslashes + 1); $index++) { [void]$builder.Append('\\') }
+            [void]$builder.Append('"')
+            $backslashes = 0
+            continue
+        }
+        for ($index = 0; $index -lt $backslashes; $index++) { [void]$builder.Append('\\') }
+        $backslashes = 0
+        [void]$builder.Append($character)
+    }
+    for ($index = 0; $index -lt (2 * $backslashes); $index++) { [void]$builder.Append('\\') }
+    [void]$builder.Append('"')
+    return $builder.ToString()
+}
+
+function Add-ProcessArgument {
+    param(
+        [Parameter(Mandatory = $true)][Diagnostics.ProcessStartInfo]$StartInfo,
+        [Parameter(Mandatory = $true)][string]$Argument
+    )
+    if ($null -ne $StartInfo.ArgumentList) {
+        [void]$StartInfo.ArgumentList.Add($Argument)
+        return
+    }
+    $encoded = Convert-ToProcessStartArgument $Argument
+    $StartInfo.Arguments = if ([string]::IsNullOrWhiteSpace($StartInfo.Arguments)) {
+        $encoded
+    } else {
+        "$($StartInfo.Arguments) $encoded"
+    }
+}
+
 function Get-FileState {
     param([Parameter(Mandatory = $true)][string]$Path)
     if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) {
@@ -430,11 +473,11 @@ exit 97
         $startInfo.UseShellExecute = $false
         $startInfo.RedirectStandardOutput = $true
         $startInfo.RedirectStandardError = $true
-        $startInfo.ArgumentList.Add("--login")
-        $startInfo.ArgumentList.Add((Convert-ToGitBashPath $runner))
-        $startInfo.ArgumentList.Add("2")
-        $startInfo.ArgumentList.Add("--multirate")
-        $startInfo.ArgumentList.Add("1")
+        Add-ProcessArgument $startInfo "--login"
+        Add-ProcessArgument $startInfo (Convert-ToGitBashPath $runner)
+        Add-ProcessArgument $startInfo "2"
+        Add-ProcessArgument $startInfo "--multirate"
+        Add-ProcessArgument $startInfo "1"
         $startInfo.Environment["THERMAL_ONLY_OUTER_CORRECTORS"] = $unsafeOverride
         $startInfo.Environment["OPENFOAM_LAUNCHER"] = Convert-ToGitBashPath $fakeLauncher
         $startInfo.Environment["THERMAL_OUTER_LAUNCH_SENTINEL"] = Convert-ToGitBashPath $sentinel
@@ -504,7 +547,7 @@ exit 0
     $restoreStartInfo.UseShellExecute = $false
     $restoreStartInfo.RedirectStandardOutput = $true
     $restoreStartInfo.RedirectStandardError = $true
-    $restoreStartInfo.ArgumentList.Add((Convert-ToGitBashPath $restoreHarness))
+    Add-ProcessArgument $restoreStartInfo (Convert-ToGitBashPath $restoreHarness)
     $restoreStartInfo.Environment["PATH"] = $gitToolPath + ";" +
         $restoreStartInfo.Environment["PATH"]
     $restoreStartInfo.Environment["THERMAL_OUTER_TEST_CASE"] = Convert-ToGitBashPath $resolvedCase

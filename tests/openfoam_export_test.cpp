@@ -142,8 +142,8 @@ int main(int argc, char** argv) {
         {0.05,0.0,0.05},{0.0,1.0,0.0},
         FlowType::Intake,ShapeType::Rectangular);
     // This bounded fit has two positive roots (0.5 and 0.75 m^3/s) and
-    // becomes positive again above the second. Export must use the first
-    // zero-pressure crossing and clamp the rest of the table to zero.
+    // becomes positive again above the second. Export must use only the first
+    // zero-pressure crossing, then retain a signed C1 assisted-flow branch.
     inlet.set_curve(1.5,5.0,-4.0,1.2);
     Vent outlet(
         "test_outlet",{0.1,0.0,0.1},1.0,0.0,0.65,
@@ -503,10 +503,13 @@ int main(int argc, char** argv) {
         assert(text.str().find(
             "bash \"$case_dir/prepare_regions.sh\"") == std::string::npos);
         assert(text.str().find(
-            "fan_positive_pressure_rules=(\"test_inlet:0.6125") !=
+            "fan_curve_domain_rules=(\"test_inlet:") !=
                std::string::npos);
         assert(text.str().find(
-            "Fan outside positive-pressure curve domain") !=
+            "Fan outside signed curve domain") !=
+               std::string::npos);
+        assert(text.str().find(
+            "Fan on signed assisted-flow branch") !=
                std::string::npos);
         assert(text.str().find(
             "\"$semi_frozen_solver\" -case \"$case_dir\" -parallel "
@@ -1412,7 +1415,8 @@ int main(int argc, char** argv) {
         std::ifstream stream(case_path/"0"/"fluid"/"p_rgh");
         std::ostringstream text;
         text << stream.rdbuf();
-        assert(text.str().find("(1 0)") != std::string::npos);
+        assert(text.str().find("(1 -") != std::string::npos);
+        assert(text.str().find("(1 0)") == std::string::npos);
         assert(text.str().find("(1 0.5)") == std::string::npos);
     }
     assert(std::filesystem::is_regular_file(
@@ -1439,6 +1443,23 @@ int main(int argc, char** argv) {
     assert(boundary_text.str().find("rack_walls") != std::string::npos);
     assert(boundary_text.str().find("test_inlet") != std::string::npos);
     assert(boundary_text.str().find("test_outlet") != std::string::npos);
+
+    const auto invalid_assisted_slope_case=case_path.parent_path()/
+        "thermal_solver_invalid_assisted_slope";
+    bool rejected_invalid_assisted_slope=false;
+    try {
+        OpenFoamExporter::export_mesh(
+            mesh,
+            {.case_directory=invalid_assisted_slope_case,
+             .overwrite=true,
+             .use_fan_curves=true,
+             .fan_assisted_flow_slope_multiplier=0.0});
+    } catch(const std::invalid_argument& error) {
+        rejected_invalid_assisted_slope=std::string(error.what()).find(
+            "fan_assisted_flow_slope_multiplier") != std::string::npos;
+    }
+    assert(rejected_invalid_assisted_slope);
+    assert(!std::filesystem::exists(invalid_assisted_slope_case));
 
     const auto invalid_outer_case=case_path.parent_path()/
         "thermal_solver_invalid_outer_correctors";

@@ -1166,6 +1166,9 @@ struct ModelLoader {
                 cfg.fan_curve_extension_multiplier=
                     value("fan_curve_extension_multiplier")
                         .value<double>().value_or(2.0);
+                cfg.fan_assisted_flow_slope_multiplier=
+                    value("fan_assisted_flow_slope_multiplier")
+                        .value<double>().value_or(1.0);
                 cfg.use_multirate_thermal=
                     value("use_multirate_thermal")
                         .value<bool>().value_or(true);
@@ -2051,6 +2054,8 @@ struct ModelLoader {
                     cfg.thermal_only_pimple_outer_correctors,
                 .fan_curve_extension_multiplier=
                     cfg.fan_curve_extension_multiplier,
+                .fan_assisted_flow_slope_multiplier=
+                    cfg.fan_assisted_flow_slope_multiplier,
                 .use_multirate_thermal=cfg.use_multirate_thermal,
                 .airflow_warmup_time=cfg.airflow_warmup_time,
                 .use_fan_startup_ramp=cfg.use_fan_startup_ramp,

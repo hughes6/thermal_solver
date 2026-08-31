@@ -210,6 +210,8 @@ int main() {
     assert(updated_lab_solver.airflow_maximum_time_step == 0.0005);
     assert(updated_lab_solver.pimple_outer_correctors == 3);
     assert(updated_lab_solver.thermal_only_pimple_outer_correctors == 2);
+    assert(updated_lab_solver.fan_curve_extension_multiplier == 4.0);
+    assert(updated_lab_solver.fan_assisted_flow_slope_multiplier == 1.0);
 
     // A disabled OpenFOAM table may still name a reusable profile for future
     // export, but that profile must not replace the active native root mesh.
@@ -1417,12 +1419,14 @@ int main() {
     assert(run_parallel.find(
         "floor>0 && aa<floor && bb<floor") != std::string::npos);
     assert(run_parallel.find("boundaryFlowFloor=") != std::string::npos);
-    assert(run_parallel.find("fan_positive_pressure_rules") !=
+    assert(run_parallel.find("fan_curve_domain_rules") !=
            std::string::npos);
     assert(run_parallel.find("fan_domain_warning_fraction=0.9") !=
            std::string::npos);
     assert(run_parallel.find(
-        "Fan outside positive-pressure curve domain") != std::string::npos);
+        "Fan outside signed curve domain") != std::string::npos);
+    assert(run_parallel.find(
+        "Fan on signed assisted-flow branch") != std::string::npos);
     assert(run_parallel.find(
         "Fan near positive-pressure curve limit") != std::string::npos);
     assert(run_parallel.find("fanDomainOK=") != std::string::npos);

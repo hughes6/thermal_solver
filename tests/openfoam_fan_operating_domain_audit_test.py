@@ -7,6 +7,7 @@ import io
 from tools.openfoam_fan_operating_domain_audit import (
     FanCurve,
     audit_case,
+    assisted_flow_limit,
     classify,
     main,
     positive_pressure_limit,
@@ -20,7 +21,7 @@ class FanOperatingDomainAuditTest(unittest.TestCase):
         return FanCurve(
             name=name,
             direction=direction,
-            points=((0.0, 100.0), (0.5, 50.0), (1.0, 0.0), (1.5, 0.0)),
+            points=((0.0, 100.0), (0.5, 50.0), (1.0, 0.0), (1.5, -25.0)),
             source="fixture",
         )
 
@@ -30,13 +31,21 @@ class FanOperatingDomainAuditTest(unittest.TestCase):
             1.5,
         )
         self.assertIsNone(positive_pressure_limit(((0.0, 10.0), (1.0, 2.0))))
+        self.assertEqual(
+            assisted_flow_limit(((0.0, 10.0), (1.0, 0.0), (2.0, -5.0))),
+            2.0,
+        )
+        self.assertIsNone(
+            assisted_flow_limit(((0.0, 10.0), (1.0, 0.0), (2.0, 0.0)))
+        )
 
     def test_classifies_below_near_at_and_above_limit(self):
         curve = self.curve()
         self.assertEqual(classify("internal", "fan", 1, 0.89, None, curve, 0.9).status, "PASS")
         self.assertEqual(classify("internal", "fan", 1, 0.90, None, curve, 0.9).status, "WARN_NEAR_LIMIT")
-        self.assertEqual(classify("internal", "fan", 1, 1.00, None, curve, 0.9).status, "FAIL_OUTSIDE_CURVE")
-        self.assertEqual(classify("internal", "fan", 1, 1.20, None, curve, 0.9).status, "FAIL_OUTSIDE_CURVE")
+        self.assertEqual(classify("internal", "fan", 1, 1.00, None, curve, 0.9).status, "WARN_ASSISTED_FLOW")
+        self.assertEqual(classify("internal", "fan", 1, 1.20, None, curve, 0.9).status, "WARN_ASSISTED_FLOW")
+        self.assertEqual(classify("internal", "fan", 1, 1.51, None, curve, 0.9).status, "FAIL_OUTSIDE_CURVE")
 
     def test_missing_reverse_and_unknown_limit_cannot_false_pass(self):
         curve = self.curve()

@@ -10,6 +10,52 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 class ComponentGeometryAuditTest(unittest.TestCase):
+    def test_material_file_references_are_resolved_and_validated(self):
+        component = """
+name = "material reference"
+watts = 0.0
+material = "MATERIAL_PATH"
+[size]
+units = "mm"
+width = 100.0
+depth = 100.0
+height = 100.0
+
+[[internal_regions]]
+name = "solid"
+state = "solid"
+watts = 1.0
+material = "MATERIAL_PATH"
+[internal_regions.position]
+units = "mm"
+x = 10.0
+y = 10.0
+z = 10.0
+[internal_regions.size]
+units = "mm"
+width = 20.0
+depth = 20.0
+height = 20.0
+"""
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            material_path = root / "material.toml"
+            material_path.write_text(
+                "rho = 1200.0\ncp = 800.0\nk = 10.0\n", encoding="utf-8"
+            )
+            component_path = root / "component.toml"
+            component_path.write_text(
+                component.replace("MATERIAL_PATH", material_path.as_posix()),
+                encoding="utf-8",
+            )
+            errors, warnings = audit_component(component_path)
+            self.assertEqual(errors, [])
+            self.assertEqual(warnings, [])
+
+            material_path.unlink()
+            errors, _ = audit_component(component_path)
+            self.assertTrue(any("unable to load material file" in e for e in errors))
+
     def test_updated_rack_devices_are_on_boundary_and_nonoverlapping(self):
         errors, _ = audit_model(
             ROOT / "library" / "models" / "new_model_updated.toml"

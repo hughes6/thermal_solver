@@ -161,6 +161,9 @@ struct OpenFoamSolverInput {
     // thermal-only stages.
     int thermal_only_pimple_outer_correctors = 0;
     double fan_curve_extension_multiplier = 2.0;
+    // Tangent multiplier for the signed assisted-flow branch emitted after a
+    // fan's first free-delivery point. One retains the measured curve slope.
+    double fan_assisted_flow_slope_multiplier = 1.0;
     bool use_multirate_thermal = true;
     double airflow_warmup_time = 20.0;
     bool use_fan_startup_ramp = true;

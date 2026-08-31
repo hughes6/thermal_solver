@@ -111,6 +111,13 @@ python .\plot\outlet_mass_weighted_temperature.py
 python .\plot_outlet_flow.py
 ```
 
+The final-model campaign has a case-specific walkthrough for ParaView fluid
+cuts, velocity vectors, hotspot coordinates, streamlines, reverse-flow and
+Q-criterion recirculation zones, quantitative thermal re-ingestion reports,
+and the airflow-audit-to-thermal transition:
+
+`validation/runs/final_model_openfoam_lowmem_init_20260829/FIELD_VIEWING_AND_THERMAL_PROGRESS.md`
+
 This is backward compatible: an explicit `--case "C:\OpenFOAM\..."` (or the
 existing positional case argument for `outlet_mass_weighted_temperature.py`)
 always takes precedence, which is how to plot an older archived case. Set

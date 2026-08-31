@@ -141,7 +141,7 @@ int main(int argc, char* argv[]) {
     return 0;
   }
   
-  std::string load_model_path = "library/models/new_model_updated.toml";
+  std::string load_model_path = "library/models/final_model.toml"; 
 
   ModelLoader loader;
   const std::filesystem::path model_path = positional_arguments.empty()

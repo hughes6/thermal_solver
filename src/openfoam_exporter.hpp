@@ -14,6 +14,7 @@
 #include <map>
 #include <stdexcept>
 #include <string>
+#include <utility>
 #include <vector>
 
 #include "mesh.hpp"
@@ -49,6 +50,11 @@ struct OpenFoamExportOptions {
     // is restored before every live-flow stage and when the runner exits.
     int thermal_only_pimple_outer_correctors = 0;
     double fan_curve_extension_multiplier = 2.0;
+    // A positive C1 continuation beyond the first free-delivery point is
+    // converted into a pressure drop.  This prevents the explicit OpenFOAM
+    // fan source from toggling between a finite pressure rise and a flat
+    // zero-pressure plateau when external flow assists a fan.
+    double fan_assisted_flow_slope_multiplier = 1.0;
     bool use_multirate_thermal = false;
     // Keep the low-level exporter defaults compatible with end_time=10 s.
     // ModelLoader and the supplied production profiles use 20 s.
@@ -94,7 +100,7 @@ public:
     // any solver-source edit requires an explicit pin update.
     inline static constexpr char
         semi_frozen_solver_project_source_sha256[] =
-            "6f5b54fddb0218558dac8798915169133c66564c199e6c95778410f9a23c9ead";
+            "c5b8c82093c2017b295d43a9b23984cb88416ea168545d1886e26fa968e03c4f";
 
     static void preflight(const Mesh& mesh,
                           const OpenFoamExportOptions& options) {
@@ -136,6 +142,12 @@ public:
                 throw std::invalid_argument(
                     "OpenFoamExporter: fan_curve_extension_multiplier "
                     "must be finite and greater than one.");
+            if(!std::isfinite(options.fan_assisted_flow_slope_multiplier) ||
+               options.fan_assisted_flow_slope_multiplier <= 0.0 ||
+               options.fan_assisted_flow_slope_multiplier > 10.0)
+                throw std::invalid_argument(
+                    "OpenFoamExporter: fan_assisted_flow_slope_multiplier "
+                    "must be finite and in (0,10].");
             for(const auto& patch : mesh.get_openfoam_boundary_patches()) {
                 if(!patch.fan_has_curve) continue;
                 validate_positive_finite(
@@ -143,6 +155,10 @@ public:
                 validate_positive_finite(
                     patch.fan_rated_density, "fan rated density");
                 fan_curve_zero_flow(
+                    patch.fan_curve_a,patch.fan_curve_b,
+                    patch.fan_curve_c,patch.fan_reference_flow_m3s,
+                    "fan curve");
+                fan_curve_slope_at_first_zero(
                     patch.fan_curve_a,patch.fan_curve_b,
                     patch.fan_curve_c,patch.fan_reference_flow_m3s,
                     "fan curve");
@@ -161,6 +177,10 @@ public:
                     ("internal fan '"+device.name+
                      "' rated density").c_str());
                 fan_curve_zero_flow(
+                    device.curve_a,device.curve_b,device.curve_c,
+                    device.reference_flow_m3s,
+                    ("internal fan '"+device.name+"' curve").c_str());
+                fan_curve_slope_at_first_zero(
                     device.curve_a,device.curve_b,device.curve_c,
                     device.reference_flow_m3s,
                     ("internal fan '"+device.name+"' curve").c_str());
@@ -2189,6 +2209,80 @@ private:
         return zero;
     }
 
+    static double fan_curve_slope_at_first_zero(
+        double a,double b,double c,double reference_flow,
+        const char* name) {
+        const double zero=fan_curve_zero_flow(a,b,c,reference_flow,name);
+        const double slope=-b-2.0*c*zero;
+        const double scale=std::max({1.0,std::abs(b),
+                                     std::abs(2.0*c*zero)});
+        if(!std::isfinite(slope) || slope>=-1e-12*scale)
+            throw std::invalid_argument(
+                std::string("OpenFoamExporter: ")+name+
+                " must cross its first zero-pressure point with a "
+                "strictly decreasing pressure slope.");
+        return slope;
+    }
+
+    // Export a C1 curve through the first zero-pressure point.  The supplied
+    // polynomial is authoritative only through that point: a later positive
+    // root from an unconstrained quadratic fit must never restore fan head.
+    // Beyond free delivery we retain the tangent as a signed pressure drop,
+    // representing unpowered/windmilling resistance under assisted flow.
+    static std::vector<std::pair<double,double>> fan_curve_table(
+        double a,double b,double c,double reference_flow,
+        double extension_multiplier,double assisted_slope_multiplier,
+        const char* name) {
+        if(!std::isfinite(extension_multiplier) ||
+           extension_multiplier<=1.0)
+            throw std::invalid_argument(
+                "OpenFoamExporter: fan-curve extension must be finite and "
+                "greater than one.");
+        if(!std::isfinite(assisted_slope_multiplier) ||
+           assisted_slope_multiplier<=0.0)
+            throw std::invalid_argument(
+                "OpenFoamExporter: assisted-flow slope multiplier must be "
+                "finite and positive.");
+        const double zero=fan_curve_zero_flow(a,b,c,reference_flow,name);
+        const double assisted_slope=
+            assisted_slope_multiplier*fan_curve_slope_at_first_zero(
+                a,b,c,reference_flow,name);
+        constexpr int positive_segments=48;
+        constexpr int assisted_segments=32;
+        std::vector<std::pair<double,double>> values;
+        values.reserve(positive_segments+assisted_segments+1);
+        for(int index=0;index<=positive_segments;++index) {
+            const double q=zero*static_cast<double>(index)/
+                           static_cast<double>(positive_segments);
+            const double pressure=index==positive_segments
+                ? 0.0 : std::max(0.0,a-b*q-c*q*q);
+            values.emplace_back(q,pressure);
+        }
+        for(int index=1;index<=assisted_segments;++index) {
+            const double q=zero+(extension_multiplier-1.0)*zero*
+                static_cast<double>(index)/
+                static_cast<double>(assisted_segments);
+            const double pressure=assisted_slope*(q-zero);
+            if(!std::isfinite(pressure) || pressure>=0.0)
+                throw std::invalid_argument(
+                    std::string("OpenFoamExporter: ")+name+
+                    " generated an invalid assisted-flow pressure branch.");
+            values.emplace_back(q,pressure);
+        }
+        return values;
+    }
+
+    static void write_fan_curve_table(
+        std::ostream& output,double a,double b,double c,
+        double reference_flow,const OpenFoamExportOptions& options,
+        const char* name) {
+        for(const auto& point : fan_curve_table(
+                a,b,c,reference_flow,
+                options.fan_curve_extension_multiplier,
+                options.fan_assisted_flow_slope_multiplier,name))
+            output << "   (" << point.first << ' ' << point.second << ")\n";
+    }
+
     static void write_porous_region_files(
         const Mesh& mesh,const std::filesystem::path& case_directory) {
         for(const auto& region:mesh.get_openfoam_porous_regions()) {
@@ -2476,9 +2570,6 @@ functions
                     const double a=scale*patch->fan_curve_a;
                     const double b=scale*patch->fan_curve_b;
                     const double c=scale*patch->fan_curve_c;
-                    const double q_zero=fan_curve_zero_flow(
-                        a,b,c,patch->fan_reference_flow_m3s,
-                        "ambient fan curve");
                     output << " type fanPressure;\n"
                            << " direction "
                            << (patch->kind ==
@@ -2488,15 +2579,9 @@ functions
                            << "  type table;\n"
                            << "  outOfBounds clamp;\n"
                            << "  values\n  (\n";
-                    constexpr int points=20;
-                    for(int i=0;i<=points;++i) {
-                        const double q=
-                            options.fan_curve_extension_multiplier*q_zero*
-                            static_cast<double>(i)/points;
-                        const double pressure=q<=q_zero
-                            ? std::max(0.0,a-b*q-c*q*q) : 0.0;
-                        output << "   (" << q << ' ' << pressure << ")\n";
-                    }
+                    write_fan_curve_table(
+                        output,a,b,c,patch->fan_reference_flow_m3s,
+                        options,"ambient fan curve");
                     output << "  );\n }\n"
                            << " p0 uniform " << reference_pressure << ";\n"
                            << " value uniform " << reference_pressure << ";\n";
@@ -3029,9 +3114,6 @@ functions
                 const double a = scale*device.curve_a;
                 const double b = scale*device.curve_b;
                 const double c = scale*device.curve_c;
-                const double q_zero=fan_curve_zero_flow(
-                    a,b,c,device.reference_flow_m3s,
-                    "internal fan curve");
                 output << name << "\n{\n"
                        << " type fanMomentumSource;\n"
                        << " selectionMode cellZone;\n"
@@ -3042,15 +3124,9 @@ functions
                        << " thickness " << device.thickness << ";\n"
                        << " fanCurve\n {\n  type table;\n"
                        << "  outOfBounds clamp;\n  values\n  (\n";
-                constexpr int points=20;
-                for(int i=0;i<=points;++i) {
-                    const double q=
-                        options.fan_curve_extension_multiplier*q_zero*
-                        static_cast<double>(i)/points;
-                    const double pressure=q<=q_zero
-                        ? std::max(0.0,a-b*q-c*q*q) : 0.0;
-                    output << "   (" << q << ' ' << pressure << ")\n";
-                }
+                write_fan_curve_table(
+                    output,a,b,c,device.reference_flow_m3s,
+                    options,"internal fan curve");
                 output << "  );\n }\n}\n";
             } else {
                 double volume=0.0;
@@ -3105,9 +3181,6 @@ functions
                 const double a=scale*patch.fan_curve_a;
                 const double b=scale*patch.fan_curve_b;
                 const double c=scale*patch.fan_curve_c;
-                const double q_zero=fan_curve_zero_flow(
-                    a,b,c,patch.fan_reference_flow_m3s,
-                    "external fan curve");
                 output << name << "\n{\n"
                        << " type fanMomentumSource;\n"
                        << " selectionMode cellZone;\n"
@@ -3118,15 +3191,9 @@ functions
                        << " thickness " << patch.source_zone_thickness
                        << ";\n fanCurve\n {\n  type table;\n"
                        << "  outOfBounds clamp;\n  values\n  (\n";
-                constexpr int points=20;
-                for(int i=0;i<=points;++i) {
-                    const double q=
-                        options.fan_curve_extension_multiplier*q_zero*
-                        static_cast<double>(i)/points;
-                    const double pressure=q<=q_zero
-                        ? std::max(0.0,a-b*q-c*q*q) : 0.0;
-                    output << "   (" << q << ' ' << pressure << ")\n";
-                }
+                write_fan_curve_table(
+                    output,a,b,c,patch.fan_reference_flow_m3s,
+                    options,"external fan curve");
                 output << "  );\n }\n}\n";
             } else {
                 double volume=0.0;
@@ -4949,41 +5016,50 @@ functions
                     patch.kind == Mesh::OpenFoamBoundaryPatch::Kind::Outlet)
                     output << '"' << foam_word(patch.name) << ":1\" ";
             }
-            output << ")\n    fan_positive_pressure_rules=(";
+            output << ")\n    fan_curve_domain_rules=(";
             if(options.use_fan_curves) {
                 for(const auto& patch : mesh.get_openfoam_boundary_patches()) {
                     if((patch.kind != Mesh::OpenFoamBoundaryPatch::Kind::Inlet &&
                         patch.kind != Mesh::OpenFoamBoundaryPatch::Kind::Outlet) ||
                        !patch.fan_has_curve)
                         continue;
-                    const double limit=fan_curve_zero_flow(
+                    const double positive_limit=fan_curve_zero_flow(
                         patch.fan_curve_a,patch.fan_curve_b,
                         patch.fan_curve_c,patch.fan_reference_flow_m3s,
                         "boundary fan curve")*mesh.get_env().get_rho();
+                    const double curve_limit=positive_limit*
+                        options.fan_curve_extension_multiplier;
                     output << '"' << foam_word(patch.name) << ':'
-                           << std::setprecision(17) << limit << "\" ";
+                           << std::setprecision(17) << positive_limit << ':'
+                           << curve_limit << "\" ";
                 }
                 for(const auto& device :
                     mesh.get_openfoam_internal_flow_devices()) {
                     if(device.kind !=
                        Mesh::OpenFoamInternalFlowDevice::Kind::Fan)
                         continue;
-                    const double limit=fan_curve_zero_flow(
+                    const double positive_limit=fan_curve_zero_flow(
                         device.curve_a,device.curve_b,device.curve_c,
                         device.reference_flow_m3s,"internal fan curve");
+                    const double curve_limit=positive_limit*
+                        options.fan_curve_extension_multiplier;
                     output << '"' << internal_device_name(device) << ':'
-                           << std::setprecision(17) << limit << "\" ";
+                           << std::setprecision(17) << positive_limit << ':'
+                           << curve_limit << "\" ";
                 }
             }
             output <<
                 ")\n"
-                "    fan_positive_pressure_names=()\n"
+                "    fan_curve_domain_names=()\n"
                 "    declare -A fan_positive_pressure_limits=()\n"
+                "    declare -A fan_curve_domain_limits=()\n"
                 "    fan_domain_warning_fraction=0.9\n"
-                "    for rule in \"${fan_positive_pressure_rules[@]}\"; do\n"
+                "    for rule in \"${fan_curve_domain_rules[@]}\"; do\n"
                 "        name=\"${rule%%:*}\"\n"
-                "        fan_positive_pressure_names+=(\"$name\")\n"
-                "        fan_positive_pressure_limits[\"$name\"]=\"${rule#*:}\"\n"
+                "        limits=\"${rule#*:}\"\n"
+                "        fan_curve_domain_names+=(\"$name\")\n"
+                "        fan_positive_pressure_limits[\"$name\"]=\"${limits%%:*}\"\n"
+                "        fan_curve_domain_limits[\"$name\"]=\"${limits##*:}\"\n"
                 "    done\n"
                 "    declare -A internal_fan_lookup=()\n"
                 "    for name in \"${internal_fan_names[@]}\"; do\n"
@@ -5182,8 +5258,8 @@ functions
                     "comparison_reference airflow_state_tmp "
                     "fan_domain_ok=1 fan_domain_warnings=0 "
                     "fan_domain_failures=0 maximum_fan_domain_utilization=0 "
-                    "maximum_fan_domain_name=none domain_flow domain_limit "
-                    "utilization\n"
+                    "maximum_fan_domain_name=none domain_flow positive_limit "
+                    "curve_limit utilization positive_utilization\n"
                 "        latest_one_way_boundary_mass_flow=\"\"\n"
                 "        if ! run_tracked_capture report \"$foam_launcher\" mpirun -np "
                     "\"$processes\" postProcess -case \"$case_dir\" "
@@ -5302,10 +5378,11 @@ functions
                     "phi=$value\" >&2\n"
                 "            fi\n"
                 "        done\n"
-                "        for name in \"${fan_positive_pressure_names[@]}\"; do\n"
+                "        for name in \"${fan_curve_domain_names[@]}\"; do\n"
                 "            value=\"${flows[$name]-}\"\n"
-                "            domain_limit=\"${fan_positive_pressure_limits[$name]}\"\n"
-                "            if [[ -z \"$value\" || -z \"$domain_limit\" ]]; then\n"
+                "            positive_limit=\"${fan_positive_pressure_limits[$name]}\"\n"
+                "            curve_limit=\"${fan_curve_domain_limits[$name]}\"\n"
+                "            if [[ -z \"$value\" || -z \"$positive_limit\" || -z \"$curve_limit\" ]]; then\n"
                 "                fan_domain_ok=0\n"
                 "                fan_domain_failures=$((fan_domain_failures+1))\n"
                 "                echo \"Missing fan-domain flow or limit for $name.\" >&2\n"
@@ -5314,7 +5391,10 @@ functions
                 "            domain_flow=$(awk -v v=\"$value\" 'BEGIN { "
                     "if(v<0)v=-v; printf \"%.17g\",v }')\n"
                 "            utilization=$(awk -v flow=\"$domain_flow\" "
-                    "-v limit=\"$domain_limit\" 'BEGIN { "
+                    "-v limit=\"$curve_limit\" 'BEGIN { "
+                    "printf \"%.17g\",(limit>0?flow/limit:1e30) }')\n"
+                "            positive_utilization=$(awk -v flow=\"$domain_flow\" "
+                    "-v limit=\"$positive_limit\" 'BEGIN { "
                     "printf \"%.17g\",(limit>0?flow/limit:1e30) }')\n"
                 "            if awk -v a=\"$utilization\" "
                     "-v b=\"$maximum_fan_domain_utilization\" "
@@ -5325,16 +5405,21 @@ functions
                 "            if awk -v u=\"$utilization\" 'BEGIN { exit !(u>=1) }'; then\n"
                 "                fan_domain_ok=0\n"
                 "                fan_domain_failures=$((fan_domain_failures+1))\n"
-                "                echo \"Fan outside positive-pressure curve domain: "
-                    "$name flow=$domain_flow limit=$domain_limit "
+                "                echo \"Fan outside signed curve domain: "
+                    "$name flow=$domain_flow limit=$curve_limit "
                     "utilization=$utilization\" >&2\n"
-                "            elif awk -v u=\"$utilization\" "
+                "            elif awk -v u=\"$positive_utilization\" 'BEGIN { exit !(u>=1) }'; then\n"
+                "                fan_domain_warnings=$((fan_domain_warnings+1))\n"
+                "                echo \"Fan on signed assisted-flow branch: "
+                    "$name flow=$domain_flow freeDeliveryLimit=$positive_limit "
+                    "curveLimit=$curve_limit utilization=$utilization\" >&2\n"
+                "            elif awk -v u=\"$positive_utilization\" "
                     "-v warning=\"$fan_domain_warning_fraction\" "
                     "'BEGIN { exit !(u>=warning) }'; then\n"
                 "                fan_domain_warnings=$((fan_domain_warnings+1))\n"
                 "                echo \"Fan near positive-pressure curve limit: "
-                    "$name flow=$domain_flow limit=$domain_limit "
-                    "utilization=$utilization\" >&2\n"
+                    "$name flow=$domain_flow limit=$positive_limit "
+                    "utilization=$positive_utilization\" >&2\n"
                 "            fi\n"
                 "        done\n"
                 "        for name in \"${stability_flow_names[@]}\"; do\n"

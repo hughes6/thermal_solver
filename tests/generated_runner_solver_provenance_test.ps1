@@ -15,6 +15,47 @@ function Assert-Condition {
     }
 }
 
+# Use ArgumentList when available, with a quoted Arguments fallback for
+# Windows PowerShell 5.1/.NET Framework.
+function Convert-ToProcessStartArgument {
+    param([Parameter(Mandatory = $true)][string]$Argument)
+    if ($Argument.Length -eq 0) { return '""' }
+    if ($Argument -notmatch '[\s"]') { return $Argument }
+    $builder = [Text.StringBuilder]::new()
+    [void]$builder.Append('"')
+    $backslashes = 0
+    foreach ($character in $Argument.ToCharArray()) {
+        if ($character -eq '\\') { $backslashes++; continue }
+        if ($character -eq '"') {
+            for ($index = 0; $index -lt (2 * $backslashes + 1); $index++) { [void]$builder.Append('\\') }
+            [void]$builder.Append('"')
+            $backslashes = 0
+            continue
+        }
+        for ($index = 0; $index -lt $backslashes; $index++) { [void]$builder.Append('\\') }
+        $backslashes = 0
+        [void]$builder.Append($character)
+    }
+    for ($index = 0; $index -lt (2 * $backslashes); $index++) { [void]$builder.Append('\\') }
+    [void]$builder.Append('"')
+    return $builder.ToString()
+}
+
+function Add-ProcessArgument {
+    param([Parameter(Mandatory = $true)][Diagnostics.ProcessStartInfo]$StartInfo,
+          [Parameter(Mandatory = $true)][string]$Argument)
+    if ($null -ne $StartInfo.ArgumentList) {
+        [void]$StartInfo.ArgumentList.Add($Argument)
+        return
+    }
+    $encoded = Convert-ToProcessStartArgument $Argument
+    $StartInfo.Arguments = if ([string]::IsNullOrWhiteSpace($StartInfo.Arguments)) {
+        $encoded
+    } else {
+        "$($StartInfo.Arguments) $encoded"
+    }
+}
+
 function Get-TreeFingerprint {
     param([Parameter(Mandatory = $true)][string]$Path)
     $root = [IO.Path]::GetFullPath($Path)
@@ -170,11 +211,11 @@ exec "$@"
         $startInfo.UseShellExecute = $false
         $startInfo.RedirectStandardOutput = $true
         $startInfo.RedirectStandardError = $true
-        $startInfo.ArgumentList.Add("--login")
-        $startInfo.ArgumentList.Add((Convert-ToGitBashPath $runner))
-        $startInfo.ArgumentList.Add("2")
-        $startInfo.ArgumentList.Add("--multirate")
-        $startInfo.ArgumentList.Add("1")
+        Add-ProcessArgument $startInfo "--login"
+        Add-ProcessArgument $startInfo (Convert-ToGitBashPath $runner)
+        Add-ProcessArgument $startInfo "2"
+        Add-ProcessArgument $startInfo "--multirate"
+        Add-ProcessArgument $startInfo "1"
         $startInfo.Environment["OPENFOAM_LAUNCHER"] = $fakeLauncherBash
         $startInfo.Environment["THERMAL_PROVENANCE_ENV_SENTINEL"] = `
             Convert-ToGitBashPath $environmentSentinel

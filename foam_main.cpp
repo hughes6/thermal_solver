@@ -175,7 +175,8 @@ int main(int argc, char* argv[]) {
             .sutherland_temperature = 110.4,
             .use_vent_pressure_loss = true,
             .use_fan_curves = true,
-            .fan_curve_extension_multiplier = 2.0,
+            .fan_curve_extension_multiplier = 4.0,
+            .fan_assisted_flow_slope_multiplier = 1.0,
             // Multirate stages use semiFrozenChtMultiRegionFoam. Full stages
             // establish the fan/vent operating point; thermal-only stages hold
             // that airflow while advancing implicit CHT and temperature-
