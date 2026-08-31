@@ -186,6 +186,23 @@ if [[ -e "$built_target" || -L "$built_target" ]]; then
     exit 68
 fi
 
+# wclean implementations may remove untracked source subdirectories.  Restore
+# the generated identity header after cleaning, immediately before wmake.
+mkdir -p "$header_dir"
+temporary_header="$(mktemp "$header_dir/.solverBuildAttestation.XXXXXX")"
+{
+    printf '%s\n' '#ifndef THERMAL_SIM_SOLVER_BUILD_ATTESTATION_H'
+    printf '%s\n' '#define THERMAL_SIM_SOLVER_BUILD_ATTESTATION_H'
+    printf '#define THERMAL_SIM_SOLVER_PROJECT_SOURCE_SHA256 "%s"\n' "$source_sha"
+    printf '#define THERMAL_SIM_SOLVER_FOAM_API "%s"\n' "$FOAM_API"
+    printf '#define THERMAL_SIM_SOLVER_WM_PROJECT_VERSION "%s"\n' \
+        "$WM_PROJECT_VERSION"
+    printf '#define THERMAL_SIM_SOLVER_WM_OPTIONS "%s"\n' "$WM_OPTIONS"
+    printf '%s\n' '#endif'
+} >"$temporary_header"
+mv -f -- "$temporary_header" "$header_path"
+temporary_header=""
+
 printf 'Building solver for FOAM_API=%s WM_PROJECT_VERSION=%s WM_OPTIONS=%s\n' \
     "$FOAM_API" "$WM_PROJECT_VERSION" "$WM_OPTIONS"
 FOAM_USER_APPBIN="$temporary_appbin" wmake "$build_solver_dir"
