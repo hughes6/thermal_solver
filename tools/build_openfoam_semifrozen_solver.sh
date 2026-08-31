@@ -6,14 +6,14 @@ set -euo pipefail
 
 usage() {
     printf '%s\n' \
-        "Usage: $0 --evidence PATH [--expected-source-sha SHA256] [--negative-mode-case CASE] [--scratch-root DIR]" \
+        "Usage: $0 [--evidence PATH] [--expected-source-sha SHA256] [--negative-mode-case CASE] [--scratch-root DIR]" \
         "" \
         "The evidence path is create-only. This script never starts WSL or" \
         "loads OpenFOAM itself; FOAM_API, WM_PROJECT_VERSION, WM_OPTIONS," \
         "FOAM_USER_APPBIN, wclean, wmake, and python3 must already be available."
 }
 
-evidence_path=""
+evidence_path="${THERMAL_SIM_ATTESTATION_EVIDENCE:-}"
 expected_source_sha=""
 negative_mode_case=""
 scratch_root=""
@@ -51,10 +51,9 @@ while (($#)); do
     esac
 done
 
-[[ -n "$evidence_path" ]] || {
-    printf 'ERROR: --evidence is required.\n' >&2
-    exit 64
-}
+if [[ -z "$evidence_path" ]]; then
+    evidence_path="$PWD/provenance/semifrozen_solver_build_attestation_$(date -u +%Y%m%dT%H%M%SZ).json"
+fi
 [[ ! -e "$evidence_path" ]] || {
     printf 'ERROR: refusing to overwrite evidence: %s\n' "$evidence_path" >&2
     exit 65
