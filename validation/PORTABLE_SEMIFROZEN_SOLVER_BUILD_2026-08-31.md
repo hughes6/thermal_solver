@@ -14,8 +14,10 @@ THERMAL_SOLVER_OPENFOAM_ENV_READY=1 OPENFOAM_LAUNCHER=env \
   bash ./run_parallel.sh 4 --multirate 1
 ```
 
-The build is clean and installs `semiFrozenChtMultiRegionFoam` into that
-environment's `FOAM_USER_APPBIN`. Before installation, it verifies the
+The build command first verifies any installed `semiFrozenChtMultiRegionFoam`
+against this case bundle and the active OpenFOAM identity. A compatible solver
+prints `build skipped`; a missing or stale one is clean-built and installed in
+`FOAM_USER_APPBIN`. Before installation, it verifies the
 compiled program's no-case attestation; after installation, it verifies the
 installed bytes and runtime identity again. The generated runner then checks
 the same identity before acquiring a case lock or changing case state.
