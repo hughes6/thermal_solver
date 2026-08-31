@@ -454,8 +454,10 @@ private:
 
     static std::string load_project_asset(
         const std::filesystem::path& relative_path,
-        const char* required_marker) {
+        const char* required_marker,
+        bool allow_environment_project_root=true) {
         std::vector<std::filesystem::path> candidates;
+        if(allow_environment_project_root)
         if(const char* project_root=std::getenv("THERMAL_SIM_PROJECT_ROOT"))
             if(*project_root)
                 candidates.emplace_back(
@@ -488,18 +490,18 @@ private:
         return {
             load_project_asset(
                 "openfoam_semifrozen_solver/Make/files",
-                "semiFrozenChtMultiRegionFoam.C"),
+                "semiFrozenChtMultiRegionFoam.C",false),
             load_project_asset(
-                "openfoam_semifrozen_solver/Make/options","EXE_INC"),
+                "openfoam_semifrozen_solver/Make/options","EXE_INC",false),
             load_project_asset(
                 "openfoam_semifrozen_solver/semiFrozenChtMultiRegionFoam.C",
-                "THERMAL_SIM_SOLVER_ATTESTATION_V1"),
+                "THERMAL_SIM_SOLVER_ATTESTATION_V1",false),
             load_project_asset(
                 "tools/openfoam_semifrozen_attestation.py",
-                "SOURCE_FINGERPRINT_ALGORITHM"),
+                "SOURCE_FINGERPRINT_ALGORITHM",false),
             load_project_asset(
                 "tools/build_openfoam_semifrozen_solver.sh",
-                "--expected-source-sha")};
+                "--expected-source-sha",false)};
     }
 
     static std::string load_low_memory_preparation_asset(
