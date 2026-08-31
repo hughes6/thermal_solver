@@ -202,6 +202,14 @@ public:
             use_low_memory_preparation
                 ? load_low_memory_preparation_assets()
                 : LowMemoryPreparationAssets{};
+        // A multirate case needs the custom solver.  Package the exact,
+        // fingerprinted project-local build inputs with the case so moving an
+        // export to another OpenFOAM machine does not silently depend on a
+        // separately cloned repository or a stale user application binary.
+        const SemiFrozenSolverBuildAssets semi_frozen_solver_assets =
+            options.use_multirate_thermal
+                ? load_semi_frozen_solver_build_assets()
+                : SemiFrozenSolverBuildAssets{};
         const double fluid_volume_m3=
             ambient_connected_fluid_volume(mesh);
         validate_positive_finite(
@@ -261,6 +269,9 @@ public:
         if(use_low_memory_preparation)
             write_low_memory_preparation_assets(
                 options.case_directory,low_memory_assets);
+        if(options.use_multirate_thermal)
+            write_semi_frozen_solver_build_assets(
+                options.case_directory,semi_frozen_solver_assets);
 
         write_points(mesh, poly_mesh / "points");
         write_faces(faces, poly_mesh / "faces");
@@ -433,6 +444,64 @@ private:
         std::string wrapper;
     };
 
+    struct SemiFrozenSolverBuildAssets {
+        std::string make_files;
+        std::string make_options;
+        std::string solver_source;
+        std::string attester;
+        std::string build_wrapper;
+    };
+
+    static std::string load_project_asset(
+        const std::filesystem::path& relative_path,
+        const char* required_marker) {
+        std::vector<std::filesystem::path> candidates;
+        if(const char* project_root=std::getenv("THERMAL_SIM_PROJECT_ROOT"))
+            if(*project_root)
+                candidates.emplace_back(
+                    std::filesystem::path(project_root)/relative_path);
+        std::filesystem::path header_path=__FILE__;
+        if(header_path.is_relative())
+            header_path=std::filesystem::current_path()/header_path;
+        candidates.emplace_back(
+            header_path.parent_path().parent_path()/relative_path);
+        candidates.emplace_back(
+            std::filesystem::current_path()/relative_path);
+
+        for(const auto& candidate:candidates) {
+            if(!std::filesystem::is_regular_file(candidate)) continue;
+            std::ifstream input(candidate,std::ios::binary);
+            if(!input) continue;
+            const std::string contents{
+                std::istreambuf_iterator<char>(input),
+                std::istreambuf_iterator<char>()};
+            if(contents.find(required_marker)==std::string::npos) continue;
+            return contents;
+        }
+        throw std::runtime_error(
+            "OpenFoamExporter: required semi-frozen solver build asset '"+
+            relative_path.string()+"' was not found or failed its identity "
+            "marker. Set THERMAL_SIM_PROJECT_ROOT to the repository root.");
+    }
+
+    static SemiFrozenSolverBuildAssets load_semi_frozen_solver_build_assets() {
+        return {
+            load_project_asset(
+                "openfoam_semifrozen_solver/Make/files",
+                "semiFrozenChtMultiRegionFoam.C"),
+            load_project_asset(
+                "openfoam_semifrozen_solver/Make/options","EXE_INC"),
+            load_project_asset(
+                "openfoam_semifrozen_solver/semiFrozenChtMultiRegionFoam.C",
+                "THERMAL_SIM_SOLVER_ATTESTATION_V1"),
+            load_project_asset(
+                "tools/openfoam_semifrozen_attestation.py",
+                "SOURCE_FINGERPRINT_ALGORITHM"),
+            load_project_asset(
+                "tools/build_openfoam_semifrozen_solver.sh",
+                "--expected-source-sha")};
+    }
+
     static std::string load_low_memory_preparation_asset(
         const char* filename,const char* required_marker) {
         std::vector<std::filesystem::path> candidates;
@@ -496,6 +565,56 @@ private:
             assets.mapper);
         write_low_memory_preparation_asset(
             case_directory/"prepare_regions_low_memory.sh",assets.wrapper);
+    }
+
+    static void write_semi_frozen_solver_build_assets(
+        const std::filesystem::path& case_directory,
+        const SemiFrozenSolverBuildAssets& assets) {
+        const std::filesystem::path bundle=case_directory/"solver_build_bundle";
+        std::filesystem::create_directories(bundle/"tools");
+        std::filesystem::create_directories(
+            bundle/"openfoam_semifrozen_solver"/"Make");
+        write_low_memory_preparation_asset(
+            bundle/"openfoam_semifrozen_solver"/"Make"/"files",
+            assets.make_files);
+        write_low_memory_preparation_asset(
+            bundle/"openfoam_semifrozen_solver"/"Make"/"options",
+            assets.make_options);
+        write_low_memory_preparation_asset(
+            bundle/"openfoam_semifrozen_solver"/
+                "semiFrozenChtMultiRegionFoam.C",
+            assets.solver_source);
+        write_low_memory_preparation_asset(
+            bundle/"tools"/"openfoam_semifrozen_attestation.py",
+            assets.attester);
+        write_low_memory_preparation_asset(
+            bundle/"tools"/"build_openfoam_semifrozen_solver.sh",
+            assets.build_wrapper);
+
+        std::ofstream manifest(bundle/"manifest.txt",std::ios::binary);
+        require_stream(manifest,bundle/"manifest.txt");
+        manifest << "thermal-sim-semifrozen-build-bundle-v1\n"
+                 << "project_source_sha256 "
+                 << semi_frozen_solver_project_source_sha256 << "\n"
+                 << "source_inputs openfoam_semifrozen_solver/Make/files "
+                    "openfoam_semifrozen_solver/Make/options "
+                    "openfoam_semifrozen_solver/semiFrozenChtMultiRegionFoam.C\n";
+        if(!manifest)
+            throw std::runtime_error(
+                "OpenFoamExporter: could not finish writing semi-frozen "
+                "solver build manifest.");
+
+        const std::string launcher=
+            "#!/usr/bin/env bash\n"
+            "# Build the case-bound semi-frozen solver after initializing OpenFOAM.\n"
+            "set -euo pipefail\n"
+            "case_dir=\"$(cd \"$(dirname \"$(readlink -f \"$0\")\")\" && pwd)\"\n"
+            "exec bash \"$case_dir/solver_build_bundle/tools/build_openfoam_semifrozen_solver.sh\" "
+            "--expected-source-sha \""+
+            std::string(semi_frozen_solver_project_source_sha256)+
+            "\" \"$@\"\n";
+        write_low_memory_preparation_asset(
+            case_directory/"build_semifrozen_solver.sh",launcher);
     }
 
     static bool is_openfoam_time_name(const std::string& name) {
@@ -3807,6 +3926,7 @@ functions
                 "THERMAL_SIM_SEMIFROZEN_MODE_POLICY_V1\"\n"
             "solver_project_source_sha256=\""
                 << semi_frozen_solver_project_source_sha256 << "\"\n"
+            "case_solver_builder=\"$case_dir/build_semifrozen_solver.sh\"\n"
             "semi_frozen_solver=\"$(command -v "
                 "semiFrozenChtMultiRegionFoam || true)\"\n"
             "if [[ -z \"$semi_frozen_solver\" || "
@@ -3816,6 +3936,9 @@ functions
             "    echo \"ERROR: required custom OpenFOAM solver "
                 "'semiFrozenChtMultiRegionFoam' was not found as a regular, "
                 "non-symlink executable file in PATH after OpenFOAM environment setup. "
+                "Build the case-bound solver first with: bash "
+                "\\\"$case_solver_builder\\\" --evidence "
+                "\\\"$case_dir/provenance/semifrozen_solver_build_attestation.json\\\". "
                 "No case lock or case write was attempted.\" >&2\n"
             "    exit 14\n"
             "fi\n"

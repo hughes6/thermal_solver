@@ -415,6 +415,8 @@ class SemiFrozenAttestationTest(unittest.TestCase):
         self.assertIn("mktemp mkdir rm basename cmp", wrapper)
         self.assertIn("thermal_sim_semifrozen_build.", wrapper)
         self.assertIn('--print-source-sha', wrapper)
+        self.assertIn('--expected-source-sha)', wrapper)
+        self.assertIn('bundled solver source does not match the exported case pin', wrapper)
         self.assertIn('--expected-foam-api "$FOAM_API"', wrapper)
         self.assertIn('--evidence "$evidence_path"', wrapper)
         self.assertIn("preinstall_verify_command", wrapper)
@@ -566,6 +568,7 @@ class SemiFrozenAttestationTest(unittest.TestCase):
         old_bytes = b"previous deployed solver bytes\n"
         target = app_bin / "semiFrozenChtMultiRegionFoam"
         scenarios = (
+            ("source_pin_mismatch", False, False),
             ("build_fail", False, False),
             ("preinstall_fail", False, False),
             ("final_fail", False, True),
@@ -573,6 +576,8 @@ class SemiFrozenAttestationTest(unittest.TestCase):
         )
         for mode, should_succeed, evidence_expected in scenarios:
             with self.subTest(mode=mode):
+                if target.exists():
+                    target.chmod(target.stat().st_mode | 0o200)
                 target.write_bytes(old_bytes)
                 evidence = integration / f"{mode}.json"
                 if evidence.exists():
@@ -590,13 +595,16 @@ class SemiFrozenAttestationTest(unittest.TestCase):
                         "FAKE_SOLVER_BINARY": binary_fixture_bash,
                     }
                 )
-                completed = subprocess.run(
-                    [
+                command = [
                         bash,
                         wrapper_bash,
                         "--evidence",
                         self._to_bash_path(bash, evidence),
-                    ],
+                    ]
+                if mode == "source_pin_mismatch":
+                    command.extend(["--expected-source-sha", "0" * 64])
+                completed = subprocess.run(
+                    command,
                     cwd=str(REPO_ROOT),
                     env=environment,
                     text=True,

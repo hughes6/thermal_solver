@@ -447,6 +447,19 @@ int main(int argc, char** argv) {
         case_path/"openfoam_stream_region_selectors.py"));
     assert(std::filesystem::is_regular_file(
         case_path/"prepare_regions_low_memory.sh"));
+    assert(std::filesystem::is_regular_file(
+        case_path/"build_semifrozen_solver.sh"));
+    assert(std::filesystem::is_regular_file(
+        case_path/"solver_build_bundle"/"manifest.txt"));
+    assert(std::filesystem::is_regular_file(
+        case_path/"solver_build_bundle"/"tools"/
+            "build_openfoam_semifrozen_solver.sh"));
+    assert(std::filesystem::is_regular_file(
+        case_path/"solver_build_bundle"/"tools"/
+            "openfoam_semifrozen_attestation.py"));
+    assert(std::filesystem::is_regular_file(
+        case_path/"solver_build_bundle"/"openfoam_semifrozen_solver"/
+            "semiFrozenChtMultiRegionFoam.C"));
     assert(std::filesystem::is_regular_file(case_path/"run_cht.sh"));
     assert(std::filesystem::is_regular_file(case_path/"run_parallel.sh"));
     {
@@ -488,6 +501,12 @@ int main(int argc, char** argv) {
         assert(text.str().find(
             "semi_frozen_solver=\"$(command -v "
             "semiFrozenChtMultiRegionFoam || true)\"") !=
+               std::string::npos);
+        assert(text.str().find(
+            "case_solver_builder=\"$case_dir/build_semifrozen_solver.sh\"") !=
+               std::string::npos);
+        assert(text.str().find(
+            "Build the case-bound solver first with: bash") !=
                std::string::npos);
         assert(text.str().find(
             "semi_frozen_solver=\"$(readlink -f "

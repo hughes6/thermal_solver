@@ -6,7 +6,7 @@ set -euo pipefail
 
 usage() {
     printf '%s\n' \
-        "Usage: $0 --evidence PATH [--negative-mode-case CASE] [--scratch-root DIR]" \
+        "Usage: $0 --evidence PATH [--expected-source-sha SHA256] [--negative-mode-case CASE] [--scratch-root DIR]" \
         "" \
         "The evidence path is create-only. This script never starts WSL or" \
         "loads OpenFOAM itself; FOAM_API, WM_PROJECT_VERSION, WM_OPTIONS," \
@@ -14,6 +14,7 @@ usage() {
 }
 
 evidence_path=""
+expected_source_sha=""
 negative_mode_case=""
 scratch_root=""
 while (($#)); do
@@ -21,6 +22,11 @@ while (($#)); do
         --evidence)
             (($# >= 2)) || { usage >&2; exit 64; }
             evidence_path="$2"
+            shift 2
+            ;;
+        --expected-source-sha)
+            (($# >= 2)) || { usage >&2; exit 64; }
+            expected_source_sha="$2"
             shift 2
             ;;
         --negative-mode-case)
@@ -94,6 +100,19 @@ source_sha="$(
         "$source_sha" >&2
     exit 67
 }
+if [[ -n "$expected_source_sha" ]]; then
+    [[ "$expected_source_sha" =~ ^[0-9a-f]{64}$ ]] || {
+        printf 'ERROR: expected source fingerprint is malformed: %s\n' \
+            "$expected_source_sha" >&2
+        exit 67
+    }
+    [[ "$source_sha" == "$expected_source_sha" ]] || {
+        printf '%s\n' \
+            "ERROR: bundled solver source does not match the exported case pin;" \
+            "expected=$expected_source_sha observed=$source_sha" >&2
+        exit 67
+    }
+fi
 
 # Build from a short, disposable path.  This avoids GNU make ambiguity in a
 # repository path containing spaces and ensures Make artefacts and the
