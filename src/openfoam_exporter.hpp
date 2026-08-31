@@ -2587,6 +2587,44 @@ functions
                      : fluid_initial_temperature(mesh);
     }
 
+    // splitMeshRegions creates interface patches only where two exported
+    // regions actually share a face.  Material subregions can be buried inside
+    // an enclosure, so do not emit fictitious fluid interfaces for them.
+    static bool solid_region_touches(
+        const Mesh& mesh, int region_id, int neighbour_region_id=-1) {
+        const auto& metadata=mesh.get_openfoam_cell_metadata();
+        const std::array<std::array<int,3>,6> offsets{{
+            {{-1,0,0}},{{1,0,0}},{{0,-1,0}},
+            {{0,1,0}},{{0,0,-1}},{{0,0,1}}
+        }};
+        for(int i=0;i<mesh.get_nx();++i) for(int j=0;j<mesh.get_ny();++j)
+            for(int k=0;k<mesh.get_nz();++k) {
+                const std::size_t cell=mesh.idx(i,j,k);
+                if(metadata[cell].region_type!=
+                       Mesh::OpenFoamCellMetadata::RegionType::Solid ||
+                   metadata[cell].component_id!=region_id)
+                    continue;
+                for(const auto& offset : offsets) {
+                    const int ni=i+offset[0], nj=j+offset[1], nk=k+offset[2];
+                    if(ni<0 || ni>=mesh.get_nx() || nj<0 || nj>=mesh.get_ny() ||
+                       nk<0 || nk>=mesh.get_nz() ||
+                       mesh.wall_between(i,j,k,ni,nj,nk)!=nullptr)
+                        continue;
+                    const auto& neighbour=metadata[mesh.idx(ni,nj,nk)];
+                    if(neighbour_region_id<0) {
+                        if(neighbour.region_type==
+                           Mesh::OpenFoamCellMetadata::RegionType::Fluid)
+                            return true;
+                    } else if(neighbour.region_type==
+                                  Mesh::OpenFoamCellMetadata::RegionType::Solid &&
+                              neighbour.component_id==neighbour_region_id) {
+                        return true;
+                    }
+                }
+            }
+        return false;
+    }
+
     static void write_fluid_fields(
         const Mesh& mesh, const OpenFoamExportOptions& options,
         const std::filesystem::path& directory) {
@@ -2615,7 +2653,8 @@ functions
                 output << "}\n";
             }
             for(const auto& component :
-                mesh.get_openfoam_component_regions())
+                mesh.get_openfoam_component_regions()) {
+                if(!solid_region_touches(mesh,component.id)) continue;
                 output << "fluid_to_" << component_region_name(component)
                        << "\n{\n"
                        << " type compressible::"
@@ -2623,6 +2662,7 @@ functions
                        << " Tnbr T;\n kappaMethod fluidThermo;\n"
                        << " useImplicit false;\n qrNbr none;\n qr none;\n"
                        << " value uniform " << temperature << ";\n}\n";
+            }
             output << "}\n";
         }
         {
@@ -2664,9 +2704,11 @@ functions
                 output << "}\n";
             }
             for(const auto& component :
-                mesh.get_openfoam_component_regions())
+                mesh.get_openfoam_component_regions()) {
+                if(!solid_region_touches(mesh,component.id)) continue;
                 output << "fluid_to_" << component_region_name(component)
                        << "\n{\n type noSlip;\n}\n";
+            }
             output << "}\n";
         }
         for(const std::string field : {"p","p_rgh"}) {
@@ -2760,9 +2802,11 @@ functions
                         Mesh::OpenFoamBoundaryPatch::Kind::Inlet,
                     &patch);
             for(const auto& component :
-                mesh.get_openfoam_component_regions())
+                mesh.get_openfoam_component_regions()) {
+                if(!solid_region_touches(mesh,component.id)) continue;
                 pressure_patch(
                     "fluid_to_"+component_region_name(component),false,nullptr);
+            }
             output << "}\n";
         }
         double reference_speed = 0.0;
@@ -2833,13 +2877,15 @@ functions
                     output << "}\n";
                 }
                 for(const auto& component :
-                    mesh.get_openfoam_component_regions())
+                    mesh.get_openfoam_component_regions()) {
+                    if(!solid_region_touches(mesh,component.id)) continue;
                     output << "fluid_to_"
                            << component_region_name(component)
                            << "\n{\n type "
                            << (is_k ? "kqRWallFunction"
                                     : "omegaWallFunction")
                            << ";\n value uniform " << internal << ";\n}\n";
+                }
                 output << "}\n";
             }
             {
@@ -2858,11 +2904,13 @@ functions
                            << "\n{\n type calculated;\n"
                               " value uniform 0;\n}\n";
                 for(const auto& component :
-                    mesh.get_openfoam_component_regions())
+                    mesh.get_openfoam_component_regions()) {
+                    if(!solid_region_touches(mesh,component.id)) continue;
                     output << "fluid_to_"
                            << component_region_name(component)
                            << "\n{\n type nutkWallFunction;\n"
-                              " value uniform 0;\n}\n";
+                               " value uniform 0;\n}\n";
+                }
                 output << "}\n";
             }
         }
@@ -2890,6 +2938,7 @@ functions
                           " value uniform 0;\n}\n";
             for(const auto& component :
                 mesh.get_openfoam_component_regions()) {
+                if(!solid_region_touches(mesh,component.id)) continue;
                 output << "fluid_to_" << component_region_name(component)
                        << "\n{\n type ";
                 if(options.use_k_omega_sst)
@@ -2920,15 +2969,27 @@ functions
         output.precision(17);
         output << "dimensions [0 0 0 1 0 0 0];\n"
                << "internalField uniform " << temperature << ";\n"
-               << "boundaryField\n{\n"
-               << component_region_name(component) << "_to_fluid\n{\n"
-               << " type compressible::"
-                  "turbulentTemperatureRadCoupledMixed;\n"
-               << " Tnbr T;\n kappaMethod solidThermo;\n"
-               << " useImplicit false;\n qrNbr none;\n qr none;\n"
-               << " value uniform " << temperature << ";\n"
-               << "}\n"
-               << "\".*\"\n{\n"
+               << "boundaryField\n{\n";
+        const auto write_coupled_temperature=[&](const std::string& patch) {
+            output << patch << "\n{\n"
+                   << " type compressible::"
+                      "turbulentTemperatureRadCoupledMixed;\n"
+                   << " Tnbr T;\n kappaMethod solidThermo;\n"
+                   << " useImplicit false;\n qrNbr none;\n qr none;\n"
+                   << " value uniform " << temperature << ";\n}\n";
+        };
+        if(solid_region_touches(mesh,component.id))
+            write_coupled_temperature(
+                component_region_name(component)+"_to_fluid");
+        for(const auto& neighbour : mesh.get_openfoam_component_regions()) {
+            if(neighbour.id==component.id ||
+               !solid_region_touches(mesh,component.id,neighbour.id))
+                continue;
+            write_coupled_temperature(
+                component_region_name(component)+"_to_"+
+                component_region_name(neighbour));
+        }
+        output << "\".*\"\n{\n"
                << " type zeroGradient;\n"
                << "}\n}\n";
 
@@ -2939,12 +3000,9 @@ functions
             pressure,"volScalarField","p",
             ("0/"+component_region_name(component)).c_str());
         pressure << "dimensions [1 -1 -2 0 0 0 0];\n"
-                 << "internalField uniform 101325;\n"
-                 << "boundaryField\n{\n"
-                 << component_region_name(component) << "_to_fluid\n{\n"
-                 << " type calculated;\n value uniform 101325;\n"
-                 << "}\n"
-                 << "\".*\"\n{\n"
+                  << "internalField uniform 101325;\n"
+                  << "boundaryField\n{\n"
+                  << "\".*\"\n{\n"
                  << " type calculated;\n value uniform 101325;\n"
                  << "}\n}\n";
     }
@@ -3428,7 +3486,12 @@ functions
             case_directory/"system"/"fluid"/"decomposeParDict");
         write_fluid_decompose_include(
             case_directory/"system"/"fluid"/"decomposeParDict",
-            !mesh.get_openfoam_component_regions().empty());
+            std::any_of(
+                mesh.get_openfoam_component_regions().begin(),
+                mesh.get_openfoam_component_regions().end(),
+                [&](const Mesh::OpenFoamComponentRegion& component) {
+                    return solid_region_touches(mesh,component.id);
+                }));
 
         for(const auto& component :
             mesh.get_openfoam_component_regions()) {
@@ -3508,6 +3571,7 @@ functions
         bool first = true;
         for(const auto& component :
             mesh.get_openfoam_component_regions()) {
+            if(!solid_region_touches(mesh,component.id)) continue;
             output <<
                 "    {\n"
                 "        name chtCoupledInterfaces;\n"

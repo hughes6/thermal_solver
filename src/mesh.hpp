@@ -653,43 +653,50 @@ public:
     // sibling instead when the finished mesh will be exported.
     void stamp_component_for_openfoam(const Component& component) {
         enable_openfoam_export_metadata();
+        const std::vector<InternalRegion> component_regions=
+            component.get_regions();
 
-        // The current OpenFOAM topology creates one solid region per outer
-        // component, so it cannot preserve different material properties on
-        // nested solid heat-source regions. Make that approximation explicit
-        // instead of silently exporting the outer material everywhere.
         const auto materially_different = [](double lhs, double rhs) {
             const double scale = std::max({1.0, std::abs(lhs), std::abs(rhs)});
             return std::abs(lhs-rhs) > 1e-9*scale;
         };
-        bool heterogeneous_solid_material = false;
-        for(const InternalRegion& region : component.get_regions()) {
-            if(region.get_region_type() != RegionType::HeatSource)
-                continue;
-            if(materially_different(region.get_rho(),component.get_rho()) ||
-               materially_different(region.get_cp(),component.get_cp()) ||
-               materially_different(region.get_k(),component.get_k())) {
-                heterogeneous_solid_material = true;
-                break;
+        struct SolidMaterialCandidate {
+            std::string name;
+            double conductivity;
+            double rho;
+            double cp;
+        };
+        // Each distinct solid material receives its own CHT region.  This is
+        // necessary because OpenFOAM's heSolidThermo is region-homogeneous;
+        // assigning all nested solids to the enclosure region silently loses
+        // their rho/Cp/k values.
+        std::vector<SolidMaterialCandidate> candidates{{
+            component.get_name(), component.get_k(), component.get_rho(),
+            component.get_cp()}};
+        std::vector<int> internal_material_candidate(
+            component_regions.size(), 0);
+        for(std::size_t region_index=0;
+            region_index<component_regions.size(); ++region_index) {
+            const InternalRegion& region=component_regions[region_index];
+            if(region.get_region_type()!=RegionType::HeatSource) continue;
+            int candidate=-1;
+            for(std::size_t i=0;i<candidates.size();++i) {
+                const auto& existing=candidates[i];
+                if(!materially_different(existing.conductivity,region.get_k()) &&
+                   !materially_different(existing.rho,region.get_rho()) &&
+                   !materially_different(existing.cp,region.get_cp())) {
+                    candidate=static_cast<int>(i);
+                    break;
+                }
             }
+            if(candidate<0) {
+                candidate=static_cast<int>(candidates.size());
+                candidates.push_back({component.get_name()+" "+region.get_name(),
+                                      region.get_k(),region.get_rho(),
+                                      region.get_cp()});
+            }
+            internal_material_candidate[region_index]=candidate;
         }
-        if(heterogeneous_solid_material) {
-            std::cerr
-                << "OpenFOAM material warning: component '"
-                << component.get_name()
-                << "' has heterogeneous internal solid materials; the "
-                   "exported solid region uses the outer component rho/cp/k "
-                   "and retains only the internal geometry and heat loads.\n";
-        }
-
-        const int component_id =
-            static_cast<int>(openfoam_component_regions.size());
-        openfoam_component_regions.push_back(
-            {component_id,
-             component.get_name(),
-             component.get_k(),
-             component.get_rho(),
-             component.get_cp()});
 
         // OpenFOAM metadata uses boundary-array lookups below. Stamp through
         // the same geometry-aligned path even on a uniform mesh so a decimal
@@ -710,18 +717,70 @@ public:
         const int k1 = std::min(
             nz, end_index_z(origin[2] + component.get_height_m()));
 
+        // Track the material actually occupying every exported solid cell.
+        // Internal regions are applied in component order, matching the native
+        // stamper's overwrite order.
+        std::vector<int> material_candidate_by_cell(get_cell_count(),-1);
         for(int i = i0; i < i1; ++i) {
             for(int j = j0; j < j1; ++j) {
                 for(int k = k0; k < k1; ++k) {
-                    if(!at(i,j,k).is_solid()) continue;
-                    OpenFoamCellMetadata& metadata =
-                        openfoam_cell_metadata[idx(i,j,k)];
-                    metadata.region_type =
-                        OpenFoamCellMetadata::RegionType::Solid;
-                    metadata.component_id = component_id;
-                    metadata.material_id = component_id;
+                    if(at(i,j,k).is_solid())
+                        material_candidate_by_cell[idx(i,j,k)]=0;
                 }
             }
+        }
+        for(std::size_t region_index=0;
+            region_index<component_regions.size(); ++region_index) {
+            const InternalRegion& region=component_regions[region_index];
+            if(region.get_region_type()!=RegionType::HeatSource) continue;
+            const auto position=region.get_global_position();
+            const auto size=region.get_size_m();
+            const int si0=std::max(0,index_x(position[0]));
+            const int sj0=std::max(0,index_y(position[1]));
+            const int sk0=std::max(0,index_z(position[2]));
+            int si1=std::min(nx,end_index_x(position[0]+size[0]));
+            int sj1=std::min(ny,end_index_y(position[1]+size[1]));
+            int sk1=std::min(nz,end_index_z(position[2]+size[2]));
+            if(si1<=si0 && si0<std::min(i1,nx)) si1=si0+1;
+            if(sj1<=sj0 && sj0<std::min(j1,ny)) sj1=sj0+1;
+            if(sk1<=sk0 && sk0<std::min(k1,nz)) sk1=sk0+1;
+            for(int i=si0;i<si1;++i) for(int j=sj0;j<sj1;++j)
+                for(int k=sk0;k<sk1;++k)
+                    if(at(i,j,k).is_solid())
+                        material_candidate_by_cell[idx(i,j,k)]=
+                            internal_material_candidate[region_index];
+        }
+
+        std::vector<int> candidate_region_id(candidates.size(),-1);
+        for(std::size_t candidate=0;candidate<candidates.size();++candidate) {
+            bool occupied=false;
+            for(const int value : material_candidate_by_cell)
+                if(value==static_cast<int>(candidate)) { occupied=true; break; }
+            if(!occupied) continue;
+            const int region_id=
+                static_cast<int>(openfoam_component_regions.size());
+            const auto& material=candidates[candidate];
+            openfoam_component_regions.push_back(
+                {region_id,material.name,material.conductivity,
+                 material.rho,material.cp});
+            candidate_region_id[candidate]=region_id;
+        }
+        const int component_id=[](const std::vector<int>& ids) {
+            for(const int id : ids) if(id>=0) return id;
+            return -1;
+        }(candidate_region_id);
+        for(std::size_t cell=0;cell<material_candidate_by_cell.size();++cell) {
+            const int candidate=material_candidate_by_cell[cell];
+            if(candidate<0) continue;
+            const int region_id=candidate_region_id[
+                static_cast<std::size_t>(candidate)];
+            if(region_id<0)
+                throw std::logic_error(
+                    "OpenFOAM material candidate has no occupied CHT region.");
+            OpenFoamCellMetadata& metadata=openfoam_cell_metadata[cell];
+            metadata.region_type=OpenFoamCellMetadata::RegionType::Solid;
+            metadata.component_id=region_id;
+            metadata.material_id=region_id;
         }
 
         // A homogeneous component may carry its heat load directly on the
@@ -729,10 +788,15 @@ public:
         // native stamper already applies this load; mirror it in OpenFOAM by
         // creating a source mask over the component's solid cells.
         if(std::abs(component.get_watts()) > 1e-12) {
+            const int outer_region_id=candidate_region_id.front();
+            if(outer_region_id<0)
+                throw std::runtime_error(
+                    "OpenFOAM component heat source '"+component.get_name()+
+                    "' has no remaining outer solid cells.");
             const int source_id =
                 static_cast<int>(openfoam_heat_source_regions.size());
             openfoam_heat_source_regions.push_back(
-                {source_id, component_id, component.get_name()+" load",
+                {source_id, outer_region_id, component.get_name()+" load",
                  component.get_watts(), false});
             for(int i = i0; i < i1; ++i) {
                 for(int j = j0; j < j1; ++j) {
@@ -745,15 +809,26 @@ public:
             }
         }
 
-        for(const InternalRegion& region : component.get_regions()) {
+        for(std::size_t region_index=0;
+            region_index<component_regions.size(); ++region_index) {
+            const InternalRegion& region=component_regions[region_index];
             if((region.get_region_type() != RegionType::HeatSource &&
                 region.get_region_type() != RegionType::Air) ||
-               std::abs(region.get_watts()) <= 1e-12)
+                std::abs(region.get_watts()) <= 1e-12)
                 continue;
+            const int source_region_id=
+                region.get_region_type()==RegionType::HeatSource
+                    ? candidate_region_id[static_cast<std::size_t>(
+                        internal_material_candidate[region_index])]
+                    : component_id;
+            if(source_region_id<0)
+                throw std::runtime_error(
+                    "OpenFOAM heat source '"+region.get_name()+
+                    "' has no remaining target region.");
             const int source_id =
                 static_cast<int>(openfoam_heat_source_regions.size());
             openfoam_heat_source_regions.push_back(
-                {source_id, component_id, region.get_name(),
+                {source_id, source_region_id, region.get_name(),
                  region.get_watts(),
                  region.get_region_type() == RegionType::Air});
 

@@ -43,9 +43,8 @@ int main(int argc, char** argv) {
         assert(std::abs(solid_volume-0.002)<1e-12);
     }
 
-    // OpenFOAM currently exports one homogeneous solid material per outer
-    // component. Confirm that matching nested material properties are silent
-    // and differing properties produce an explicit, actionable warning.
+    // Heterogeneous nested solids must become distinct OpenFOAM CHT regions;
+    // they must not be collapsed to the outer enclosure material.
     {
         Rack warning_rack=Rack::from_meters(0.2,0.1,0.1);
         Mesh warning_mesh=Mesh().build_mesh(
@@ -79,11 +78,15 @@ int main(int argc, char** argv) {
         original_cerr = std::cerr.rdbuf(differing_warning.rdbuf());
         warning_mesh.stamp_component_for_openfoam(differing);
         std::cerr.rdbuf(original_cerr);
-        assert(differing_warning.str().find(
-                   "OpenFOAM material warning: component 'heterogeneous heater'")
-               != std::string::npos);
-        assert(differing_warning.str().find(
-                   "uses the outer component rho/cp/k") != std::string::npos);
+        assert(differing_warning.str().empty());
+        const auto& material_regions=
+            warning_mesh.get_openfoam_component_regions();
+        assert(material_regions.size()==2);
+        const auto& dissimilar_core=material_regions.back();
+        assert(dissimilar_core.name=="heterogeneous heater dissimilar core");
+        assert(dissimilar_core.rho==2330.0);
+        assert(dissimilar_core.cp==700.0);
+        assert(dissimilar_core.conductivity==130.0);
     }
 
     Rack rack=Rack::from_meters(0.5,0.2,0.2);
@@ -229,6 +232,68 @@ int main(int argc, char** argv) {
         checkpoint_input.close();
         assert(!std::filesystem::exists(solid_case/"system"));
         std::filesystem::remove_all(solid_case);
+    }
+    // Regression: a nested solid with a different material must export as its
+    // own CHT region, retain its exact dictionary values, and couple thermally
+    // to both the enclosure and adjacent fluid rather than falling back to the
+    // enclosure material.
+    {
+        Rack heterogeneous_rack=Rack::from_meters(0.3,0.1,0.1);
+        Mesh heterogeneous_mesh=Mesh().build_mesh(
+            heterogeneous_rack,0.1,0.1,0.1,env,load);
+        Component heterogeneous=Component::from_meters(
+            0.2,0.1,0.1,"heterogeneous assembly");
+        heterogeneous.set_coords_m(0.0,0.0,0.0);
+        heterogeneous.set_rho_solid(2700.0);
+        heterogeneous.set_cp(900.0);
+        heterogeneous.set_k_solid(150.0);
+        heterogeneous.add_region(InternalRegion(
+            "mixed core",{0.1,0.1,0.1},{0.1,0.0,0.0},
+            800.0,1200.0,10.0,3.0));
+        heterogeneous.order_internal_regions();
+        heterogeneous_mesh.stamp_component_for_openfoam(heterogeneous);
+        const std::filesystem::path heterogeneous_case=
+            case_path/"heterogeneous_material_case";
+        OpenFoamExporter::export_mesh(
+            heterogeneous_mesh,
+            {.case_directory=heterogeneous_case,
+             .overwrite=true,
+             .parallel_processes=2});
+        const auto read_case_file=[&](const std::filesystem::path& path) {
+            std::ifstream input(path);
+            std::ostringstream text;
+            text << input.rdbuf();
+            return text.str();
+        };
+        const std::string enclosure_properties=read_case_file(
+            heterogeneous_case/"constant"/"heterogeneous_assembly_0"/
+                "thermophysicalProperties");
+        const std::string core_properties=read_case_file(
+            heterogeneous_case/"constant"/
+                "heterogeneous_assembly_mixed_core_1"/
+                "thermophysicalProperties");
+        assert(enclosure_properties.find("kappa 150") != std::string::npos);
+        assert(enclosure_properties.find("Cp 900") != std::string::npos);
+        assert(enclosure_properties.find("rho 2700") != std::string::npos);
+        assert(core_properties.find("kappa 10") != std::string::npos);
+        assert(core_properties.find("Cp 800") != std::string::npos);
+        assert(core_properties.find("rho 1200") != std::string::npos);
+        const std::string enclosure_temperature=read_case_file(
+            heterogeneous_case/"0"/"heterogeneous_assembly_0"/"T");
+        const std::string core_temperature=read_case_file(
+            heterogeneous_case/"0"/
+                "heterogeneous_assembly_mixed_core_1"/"T");
+        assert(enclosure_temperature.find(
+            "heterogeneous_assembly_0_to_heterogeneous_assembly_mixed_core_1")
+               != std::string::npos);
+        assert(core_temperature.find(
+            "heterogeneous_assembly_mixed_core_1_to_heterogeneous_assembly_0")
+               != std::string::npos);
+        const std::string core_sources=read_case_file(
+            heterogeneous_case/"constant"/
+                "heterogeneous_assembly_mixed_core_1"/"fvOptions");
+        assert(core_sources.find("mixed_core_0_energy") != std::string::npos);
+        std::filesystem::remove_all(heterogeneous_case);
     }
     {
         std::ofstream(case_path/"validation_4800.json") << "stale\n";
