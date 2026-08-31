@@ -2369,9 +2369,13 @@ struct ModelLoader {
                 << "OpenFOAM backend selected; case exported to "
                 << absolute_case_directory
                 << "\nNative transient solver was not run.\n"
-                << "Run from a WSL terminal with:\n  cd '"
-                << launch_directory
-                << "' && set -o pipefail && ./run_parallel.sh "
+                << "Paste this into WSL to build and run:\n  source "
+                   "\"${THERMAL_SIM_OPENFOAM_BASHRC:-$HOME/OpenFOAM/"
+                   "OpenFOAM-v2606/etc/bashrc}\" && cd "
+                << command_quote(launch_directory)
+                << " && bash ./build_semifrozen_solver.sh && "
+                   "THERMAL_SOLVER_OPENFOAM_ENV_READY=1 "
+                   "OPENFOAM_LAUNCHER=env bash ./run_parallel.sh "
                 << cfg.parallel_processes;
             if(cfg.use_multirate_thermal)
                 std::cout << " --multirate " << model.simulation.duration;
