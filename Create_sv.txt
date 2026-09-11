@@ -1,112 +1,275 @@
 Private Sub Worksheet_Change(ByVal Target As Range)
 
     Const BLOCK_WIDTH As Long = 5
-    Const FIRST_COL As Long = 8      'H
+    Const FIRST_COL As Long = 8          'H
     Const MAX_BLOCKS As Long = 40
+    Const LAST_ROW As Long = 307
 
     Dim n As Long
     Dim i As Long
     Dim j As Long
-    Dim created As Long
+    Dim maxCreated As Long
 
-    Dim src As Range
-    Dim dest As Range
+    Dim srcHeader As Range
+    Dim srcFull As Range
+    Dim destHeader As Range
+    Dim destFull As Range
+    Dim inputRange As Range
 
+    'Only run when C4 changes
     If Target.Address <> "$C$4" Then Exit Sub
 
     On Error GoTo ErrHandler
     Application.EnableEvents = False
+    Application.ScreenUpdating = False
 
     n = CLng(Me.Range("C4").Value)
 
     If n < 1 Then n = 1
     If n > MAX_BLOCKS Then n = MAX_BLOCKS
 
-    Set src = Me.Range("H5:L10")
+    'Original template block
+    Set srcHeader = Me.Range("H5:L10")
+    Set srcFull = Me.Range("H5:L" & LAST_ROW)
 
-    '----------------------------------------
-    'Find how many blocks already exist
-    'J5, O5, T5, Y5, etc. are our markers
-    '----------------------------------------
-    created = 1
+    '--------------------------------------------------
+    'NUMBER OF PINS
+    '
+    'Block 1 J5 = B7
+    'Block 2 O5 = B8
+    'Block 3 T5 = B9
+    'Block 4 Y5 = B10
+    'etc.
+    '--------------------------------------------------
+
+    Me.Range("J5").Formula = "=$B$7"
+
+    '--------------------------------------------------
+    'FIND HOW MANY BLOCKS ALREADY EXIST
+    '--------------------------------------------------
+
+    maxCreated = 1
 
     For i = 1 To MAX_BLOCKS - 1
 
-        If Len(Me.Cells(5, 10 + i * BLOCK_WIDTH).Formula) > 0 Then
-            created = i + 1
+        Set destHeader = Me.Range( _
+            Me.Cells(5, FIRST_COL + i * BLOCK_WIDTH), _
+            Me.Cells(10, FIRST_COL + i * BLOCK_WIDTH + 4))
+
+        If Application.WorksheetFunction.CountA(destHeader) > 0 Then
+            maxCreated = i + 1
         Else
             Exit For
         End If
 
     Next i
 
-    '----------------------------------------
-    'Create ONLY blocks that have never
-    'existed before
-    '----------------------------------------
-    If n > created Then
+    '--------------------------------------------------
+    'CREATE ONLY BLOCKS THAT DO NOT ALREADY EXIST
+    '--------------------------------------------------
 
-        For i = created To n - 1
+    If n > maxCreated Then
 
-            Set dest = src.Offset(0, i * BLOCK_WIDTH)
+        For i = maxCreated To n - 1
 
-            src.Copy Destination:=dest
+            Set destHeader = Me.Range( _
+                Me.Cells(5, FIRST_COL + i * BLOCK_WIDTH), _
+                Me.Cells(10, FIRST_COL + i * BLOCK_WIDTH + 4))
 
-            'Match the original column widths
+            Set destFull = Me.Range( _
+                Me.Cells(5, FIRST_COL + i * BLOCK_WIDTH), _
+                Me.Cells(LAST_ROW, FIRST_COL + i * BLOCK_WIDTH + 4))
+
+            'Copy original block
+            srcHeader.Copy Destination:=destHeader
+
+            'Copy column widths
             For j = 0 To BLOCK_WIDTH - 1
+
                 Me.Columns(FIRST_COL + i * BLOCK_WIDTH + j).ColumnWidth = _
                     Me.Columns(FIRST_COL + j).ColumnWidth
+
             Next j
 
-            'Clear copied USER DATA from new block
-            'I:K equivalent, rows 8:307
-            Me.Range( _
+            '--------------------------------------------------
+            'CLEAR COPIED USER DATA IN BRAND-NEW BLOCK
+            '
+            'Original editable area = I:K
+            'Therefore each new block clears its middle 3 cols.
+            'Formatting / validation stays.
+            '--------------------------------------------------
+
+            Set inputRange = Me.Range( _
                 Me.Cells(8, FIRST_COL + i * BLOCK_WIDTH + 1), _
-                Me.Cells(307, FIRST_COL + i * BLOCK_WIDTH + 3) _
-            ).ClearContents
+                Me.Cells(LAST_ROW, FIRST_COL + i * BLOCK_WIDTH + 3))
+
+            inputRange.ClearContents
+
+            'Copy full formatting / validation / rules
+            RefreshBlockRules srcFull, destFull, _
+                              FIRST_COL, _
+                              FIRST_COL + i * BLOCK_WIDTH
 
         Next i
 
-        created = n
+        maxCreated = n
 
     End If
 
-    '----------------------------------------
-    'Set Number of Pins formulas
-    '
-    'J5 = B7
-    'O5 = B8
-    'T5 = B9
-    'Y5 = B10...
-    '----------------------------------------
-    For i = 0 To created - 1
+    '--------------------------------------------------
+    'SET EACH BLOCK'S NUMBER OF PINS FORMULA
+    '--------------------------------------------------
 
+    For i = 0 To maxCreated - 1
+
+        'J, O, T, Y...
         Me.Cells(5, 10 + i * BLOCK_WIDTH).Formula = _
             "=$B$" & (7 + i)
 
     Next i
 
-    '----------------------------------------
-    'Show/hide blocks WITHOUT deleting data
-    '----------------------------------------
-    For i = 0 To created - 1
+    '--------------------------------------------------
+    'REFRESH RULES FOR ALL EXISTING COPIED BLOCKS
+    '
+    'Does NOT alter user-entered values.
+    '--------------------------------------------------
 
-        Me.Range( _
-            Me.Cells(1, FIRST_COL + i * BLOCK_WIDTH), _
-            Me.Cells(1, FIRST_COL + i * BLOCK_WIDTH + 4) _
-        ).EntireColumn.Hidden = (i >= n)
+    For i = 1 To maxCreated - 1
+
+        Set destFull = Me.Range( _
+            Me.Cells(5, FIRST_COL + i * BLOCK_WIDTH), _
+            Me.Cells(LAST_ROW, FIRST_COL + i * BLOCK_WIDTH + 4))
+
+        RefreshBlockRules srcFull, destFull, _
+                          FIRST_COL, _
+                          FIRST_COL + i * BLOCK_WIDTH
 
     Next i
 
+    '--------------------------------------------------
+    'SHOW / HIDE BLOCKS
+    '
+    'Blocks are NEVER deleted.
+    'This is what preserves entered data.
+    '--------------------------------------------------
+
+    For i = 0 To maxCreated - 1
+
+        Me.Range( _
+            Me.Columns(FIRST_COL + i * BLOCK_WIDTH), _
+            Me.Columns(FIRST_COL + i * BLOCK_WIDTH + 4) _
+        ).Hidden = (i >= n)
+
+    Next i
 
 SafeExit:
+
     Application.CutCopyMode = False
+    Application.ScreenUpdating = True
     Application.EnableEvents = True
+
     Exit Sub
 
-
 ErrHandler:
-    MsgBox "Macro error " & Err.Number & ": " & Err.Description
+
+    MsgBox "Macro error " & Err.Number & ":" & vbCrLf & _
+           Err.Description
+
     Resume SafeExit
 
 End Sub
+
+
+Private Sub RefreshBlockRules( _
+    ByVal srcFull As Range, _
+    ByVal destFull As Range, _
+    ByVal srcStartCol As Long, _
+    ByVal destStartCol As Long)
+
+    Dim fc As FormatCondition
+    Dim f As String
+    Dim i As Long
+    Dim srcCol As String
+    Dim destCol As String
+
+    '--------------------------------------------------
+    'DELETE ONLY DESTINATION CONDITIONAL FORMATTING
+    '--------------------------------------------------
+
+    destFull.FormatConditions.Delete
+
+    '--------------------------------------------------
+    'COPY FORMATTING + CONDITIONAL FORMATTING
+    '--------------------------------------------------
+
+    srcFull.Copy
+
+    destFull.PasteSpecial Paste:=xlPasteFormats
+
+    '--------------------------------------------------
+    'COPY DATA VALIDATION
+    '--------------------------------------------------
+
+    srcFull.Copy
+
+    On Error Resume Next
+    destFull.PasteSpecial Paste:=xlPasteValidation
+    On Error GoTo 0
+
+    Application.CutCopyMode = False
+
+    '--------------------------------------------------
+    'TRANSLATE ABSOLUTE COLUMN REFERENCES
+    '
+    'For block 2:
+    '   $H -> $M
+    '   $I -> $N
+    '   $J -> $O
+    '   $K -> $P
+    '   $L -> $Q
+    '
+    'For block 3:
+    '   $H -> $R
+    '   $J$5 -> $T$5
+    'etc.
+    '--------------------------------------------------
+
+    For Each fc In destFull.FormatConditions
+
+        If fc.Type = xlExpression Then
+
+            f = fc.Formula1
+
+            For i = 0 To 4
+
+                srcCol = ColLetter(srcStartCol + i)
+                destCol = ColLetter(destStartCol + i)
+
+                f = Replace(f, _
+                            "$" & srcCol, _
+                            "$" & destCol)
+
+            Next i
+
+            If f <> fc.Formula1 Then
+
+                fc.Modify _
+                    Type:=xlExpression, _
+                    Formula1:=f
+
+            End If
+
+        End If
+
+    Next fc
+
+End Sub
+
+
+Private Function ColLetter(ByVal colNum As Long) As String
+
+    ColLetter = Split( _
+        Me.Cells(1, colNum).Address, _
+        "$")(1)
+
+End Function
