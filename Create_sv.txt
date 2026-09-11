@@ -14,12 +14,12 @@ Private Sub Worksheet_Change(ByVal Target As Range)
     Dim srcFull As Range
     Dim destHeader As Range
     Dim destFull As Range
-    Dim inputRange As Range
 
     'Only run when C4 changes
     If Target.Address <> "$C$4" Then Exit Sub
 
     On Error GoTo ErrHandler
+
     Application.EnableEvents = False
     Application.ScreenUpdating = False
 
@@ -31,18 +31,6 @@ Private Sub Worksheet_Change(ByVal Target As Range)
     'Original template block
     Set srcHeader = Me.Range("H5:L10")
     Set srcFull = Me.Range("H5:L" & LAST_ROW)
-
-    '--------------------------------------------------
-    'NUMBER OF PINS
-    '
-    'Block 1 J5 = B7
-    'Block 2 O5 = B8
-    'Block 3 T5 = B9
-    'Block 4 Y5 = B10
-    'etc.
-    '--------------------------------------------------
-
-    Me.Range("J5").Formula = "=$B$7"
 
     '--------------------------------------------------
     'FIND HOW MANY BLOCKS ALREADY EXIST
@@ -57,15 +45,23 @@ Private Sub Worksheet_Change(ByVal Target As Range)
             Me.Cells(10, FIRST_COL + i * BLOCK_WIDTH + 4))
 
         If Application.WorksheetFunction.CountA(destHeader) > 0 Then
+
             maxCreated = i + 1
+
         Else
+
             Exit For
+
         End If
 
     Next i
 
+
     '--------------------------------------------------
-    'CREATE ONLY BLOCKS THAT DO NOT ALREADY EXIST
+    'CREATE ONLY BRAND-NEW BLOCKS
+    '
+    'Existing blocks are NOT cleared.
+    'This preserves user-entered data.
     '--------------------------------------------------
 
     If n > maxCreated Then
@@ -80,7 +76,7 @@ Private Sub Worksheet_Change(ByVal Target As Range)
                 Me.Cells(5, FIRST_COL + i * BLOCK_WIDTH), _
                 Me.Cells(LAST_ROW, FIRST_COL + i * BLOCK_WIDTH + 4))
 
-            'Copy original block
+            'Copy the visible/template portion
             srcHeader.Copy Destination:=destHeader
 
             'Copy column widths
@@ -91,24 +87,13 @@ Private Sub Worksheet_Change(ByVal Target As Range)
 
             Next j
 
-            '--------------------------------------------------
-            'CLEAR COPIED USER DATA IN BRAND-NEW BLOCK
-            '
-            'Original editable area = I:K
-            'Therefore each new block clears its middle 3 cols.
-            'Formatting / validation stays.
-            '--------------------------------------------------
-
-            Set inputRange = Me.Range( _
-                Me.Cells(8, FIRST_COL + i * BLOCK_WIDTH + 1), _
-                Me.Cells(LAST_ROW, FIRST_COL + i * BLOCK_WIDTH + 3))
-
-            inputRange.ClearContents
-
-            'Copy full formatting / validation / rules
-            RefreshBlockRules srcFull, destFull, _
-                              FIRST_COL, _
-                              FIRST_COL + i * BLOCK_WIDTH
+            'Copy formatting, conditional formatting,
+            'and validation through row 307
+            CopyBlockRules _
+                srcFull, _
+                destFull, _
+                FIRST_COL, _
+                FIRST_COL + i * BLOCK_WIDTH
 
         Next i
 
@@ -116,22 +101,32 @@ Private Sub Worksheet_Change(ByVal Target As Range)
 
     End If
 
+
     '--------------------------------------------------
-    'SET EACH BLOCK'S NUMBER OF PINS FORMULA
+    'CONNECTOR NAMES
+    '
+    'H6 = B7
+    'M6 = B8
+    'R6 = B9
+    'W6 = B10
+    'etc.
+    '
+    'J5 / O5 / T5 / Y5 are NOT touched.
+    'Those remain Number of Pins.
     '--------------------------------------------------
 
     For i = 0 To maxCreated - 1
 
-        'J, O, T, Y...
-        Me.Cells(5, 10 + i * BLOCK_WIDTH).Formula = _
+        Me.Cells(6, FIRST_COL + i * BLOCK_WIDTH).Formula = _
             "=$B$" & (7 + i)
 
     Next i
 
+
     '--------------------------------------------------
-    'REFRESH RULES FOR ALL EXISTING COPIED BLOCKS
+    'REFRESH FORMATTING/RULES FOR EXISTING BLOCKS
     '
-    'Does NOT alter user-entered values.
+    'Values are preserved.
     '--------------------------------------------------
 
     For i = 1 To maxCreated - 1
@@ -140,17 +135,20 @@ Private Sub Worksheet_Change(ByVal Target As Range)
             Me.Cells(5, FIRST_COL + i * BLOCK_WIDTH), _
             Me.Cells(LAST_ROW, FIRST_COL + i * BLOCK_WIDTH + 4))
 
-        RefreshBlockRules srcFull, destFull, _
-                          FIRST_COL, _
-                          FIRST_COL + i * BLOCK_WIDTH
+        CopyBlockRules _
+            srcFull, _
+            destFull, _
+            FIRST_COL, _
+            FIRST_COL + i * BLOCK_WIDTH
 
     Next i
 
+
     '--------------------------------------------------
-    'SHOW / HIDE BLOCKS
+    'SHOW/HIDE BLOCKS BASED ON C4
     '
-    'Blocks are NEVER deleted.
-    'This is what preserves entered data.
+    'Hiding instead of deleting is what makes data
+    'persist when C4 decreases.
     '--------------------------------------------------
 
     For i = 0 To maxCreated - 1
@@ -162,6 +160,7 @@ Private Sub Worksheet_Change(ByVal Target As Range)
 
     Next i
 
+
 SafeExit:
 
     Application.CutCopyMode = False
@@ -169,6 +168,7 @@ SafeExit:
     Application.EnableEvents = True
 
     Exit Sub
+
 
 ErrHandler:
 
@@ -180,7 +180,7 @@ ErrHandler:
 End Sub
 
 
-Private Sub RefreshBlockRules( _
+Private Sub CopyBlockRules( _
     ByVal srcFull As Range, _
     ByVal destFull As Range, _
     ByVal srcStartCol As Long, _
@@ -188,26 +188,25 @@ Private Sub RefreshBlockRules( _
 
     Dim fc As FormatCondition
     Dim f As String
+
     Dim i As Long
     Dim srcCol As String
     Dim destCol As String
 
     '--------------------------------------------------
-    'DELETE ONLY DESTINATION CONDITIONAL FORMATTING
-    '--------------------------------------------------
-
-    destFull.FormatConditions.Delete
-
-    '--------------------------------------------------
-    'COPY FORMATTING + CONDITIONAL FORMATTING
+    'COPY FORMATTING
+    '
+    'This includes conditional formatting and borders.
+    'It does NOT overwrite cell values.
     '--------------------------------------------------
 
     srcFull.Copy
 
     destFull.PasteSpecial Paste:=xlPasteFormats
 
+
     '--------------------------------------------------
-    'COPY DATA VALIDATION
+    'COPY DATA VALIDATION / DROPDOWNS
     '--------------------------------------------------
 
     srcFull.Copy
@@ -218,20 +217,21 @@ Private Sub RefreshBlockRules( _
 
     Application.CutCopyMode = False
 
+
     '--------------------------------------------------
-    'TRANSLATE ABSOLUTE COLUMN REFERENCES
+    'TRANSLATE CONDITIONAL-FORMATTING REFERENCES
     '
-    'For block 2:
-    '   $H -> $M
-    '   $I -> $N
-    '   $J -> $O
-    '   $K -> $P
-    '   $L -> $Q
+    'Block 1 H:L
+    'Block 2 M:Q
+    'Block 3 R:V
     '
-    'For block 3:
-    '   $H -> $R
-    '   $J$5 -> $T$5
-    'etc.
+    'Examples:
+    '
+    '$H8   -> $M8   -> $R8
+    '$J$5  -> $O$5  -> $T$5
+    '
+    'So Number-of-Pins rules stay tied to the
+    'Number-of-Pins cell for THAT block.
     '--------------------------------------------------
 
     For Each fc In destFull.FormatConditions
@@ -245,17 +245,22 @@ Private Sub RefreshBlockRules( _
                 srcCol = ColLetter(srcStartCol + i)
                 destCol = ColLetter(destStartCol + i)
 
-                f = Replace(f, _
-                            "$" & srcCol, _
-                            "$" & destCol)
+                f = Replace( _
+                    f, _
+                    "$" & srcCol, _
+                    "$" & destCol)
 
             Next i
 
             If f <> fc.Formula1 Then
 
+                On Error Resume Next
+
                 fc.Modify _
                     Type:=xlExpression, _
                     Formula1:=f
+
+                On Error GoTo 0
 
             End If
 
