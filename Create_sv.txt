@@ -3,14 +3,13 @@ Private Sub Worksheet_Change(ByVal Target As Range)
     Dim n As Long
     Dim i As Long
     Dim j As Long
-    Dim k As Long
-    Dim c As Long
-
     Dim src As Range
     Dim dest As Range
-    Dim sfc As FormatCondition
-    Dim dfc As FormatCondition
+    Dim cfSrc As Range
+    Dim cfDest As Range
+    Dim fc As FormatCondition
     Dim f As String
+    Dim newAnchor As String
 
     If Target.Address <> "$C$4" Then Exit Sub
 
@@ -18,48 +17,57 @@ Private Sub Worksheet_Change(ByVal Target As Range)
     Application.EnableEvents = False
 
     n = CLng(Me.Range("C4").Value)
+
     Set src = Me.Range("H5:L10")
 
+    'Full area containing conditional formatting
+    Set cfSrc = Me.Range("I8:K307")
+
+    'Clear old generated blocks
     Me.Range("M5:ZZ10").Clear
+
+    'Remove old generated conditional formatting
+    Me.Range("M8:ZZ307").FormatConditions.Delete
 
     For i = 1 To n - 1
 
         Set dest = src.Offset(0, i * 5)
 
-        'Copy block
-        src.Copy
-        dest.PasteSpecial Paste:=xlPasteAll
+        'Copy main block
+        src.Copy Destination:=dest
 
         'Copy column widths
         For j = 1 To 5
             dest.Columns(j).ColumnWidth = src.Columns(j).ColumnWidth
         Next j
 
-        'Translate conditional-formatting formulas
-        For k = 1 To src.FormatConditions.Count
+        'Destination CF area
+        Set cfDest = cfSrc.Offset(0, i * 5)
 
-            If k <= dest.FormatConditions.Count Then
+        'Remove the partial CF copied with H5:L10
+        cfDest.FormatConditions.Delete
 
-                Set sfc = src.FormatConditions(k)
-                Set dfc = dest.FormatConditions(k)
+        'Copy FULL formatting/rules through row 307
+        cfSrc.Copy
+        cfDest.PasteSpecial Paste:=xlPasteFormats
 
-                If sfc.Type = xlExpression Then
+        'Left column of this block:
+        'M for block 2, R for block 3, etc.
+        newAnchor = ColLetter(dest.Column)
 
-                    f = sfc.Formula1
+        'Translate $H to this block's left column
+        For Each fc In cfDest.FormatConditions
 
-                    For c = 1 To 5
-                        f = Replace(f, _
-                            "$" & ColLetter(src.Column + c - 1), _
-                            "$" & ColLetter(dest.Column + c - 1))
-                    Next c
+            If fc.Type = xlExpression Then
 
-                    dfc.Modify Type:=xlExpression, Formula1:=f
+                f = fc.Formula1
+                f = Replace(f, "$H", "$" & newAnchor)
 
-                End If
+                fc.Modify Type:=xlExpression, Formula1:=f
 
             End If
 
-        Next k
+        Next fc
 
     Next i
 
@@ -71,5 +79,7 @@ End Sub
 
 
 Private Function ColLetter(ByVal colNum As Long) As String
+
     ColLetter = Split(Me.Cells(1, colNum).Address, "$")(1)
+
 End Function
