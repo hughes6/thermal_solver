@@ -15,7 +15,11 @@ Private Sub Worksheet_Change(ByVal Target As Range)
     Dim destHeader As Range
     Dim destFull As Range
 
-    'Only run when C4 changes
+    Dim pinCell As Range
+    Dim nameCell As Range
+    Dim oldNameFormula As String
+
+    'Run ONLY when C4 changes
     If Target.Address <> "$C$4" Then Exit Sub
 
     On Error GoTo ErrHandler
@@ -28,13 +32,14 @@ Private Sub Worksheet_Change(ByVal Target As Range)
     If n < 1 Then n = 1
     If n > MAX_BLOCKS Then n = MAX_BLOCKS
 
-    'Original template block
+    'Original/template block
     Set srcHeader = Me.Range("H5:L10")
     Set srcFull = Me.Range("H5:L" & LAST_ROW)
 
-    '--------------------------------------------------
+
+    '==================================================
     'FIND HOW MANY BLOCKS ALREADY EXIST
-    '--------------------------------------------------
+    '==================================================
 
     maxCreated = 1
 
@@ -45,24 +50,42 @@ Private Sub Worksheet_Change(ByVal Target As Range)
             Me.Cells(10, FIRST_COL + i * BLOCK_WIDTH + 4))
 
         If Application.WorksheetFunction.CountA(destHeader) > 0 Then
-
             maxCreated = i + 1
-
         Else
-
             Exit For
-
         End If
 
     Next i
 
 
-    '--------------------------------------------------
-    'CREATE ONLY BRAND-NEW BLOCKS
+    '==================================================
+    'REMOVE OLD BAD NAME FORMULAS FROM NUMBER-OF-PINS
     '
-    'Existing blocks are NOT cleared.
-    'This preserves user-entered data.
-    '--------------------------------------------------
+    'Old macro accidentally made:
+    'J5 = B7
+    'O5 = B8
+    'T5 = B9
+    '
+    'This ONLY clears those exact old formulas.
+    'A real number entered by the user is preserved.
+    '==================================================
+
+    For i = 0 To maxCreated - 1
+
+        Set pinCell = Me.Cells(5, 10 + i * BLOCK_WIDTH)
+
+        oldNameFormula = "=$B$" & (7 + i)
+
+        If pinCell.Formula = oldNameFormula Then
+            pinCell.MergeArea.ClearContents
+        End If
+
+    Next i
+
+
+    '==================================================
+    'CREATE ONLY BLOCKS THAT HAVE NEVER EXISTED
+    '==================================================
 
     If n > maxCreated Then
 
@@ -76,10 +99,32 @@ Private Sub Worksheet_Change(ByVal Target As Range)
                 Me.Cells(5, FIRST_COL + i * BLOCK_WIDTH), _
                 Me.Cells(LAST_ROW, FIRST_COL + i * BLOCK_WIDTH + 4))
 
-            'Copy the visible/template portion
+
+            '------------------------------------------
+            'COPY TEMPLATE BLOCK
+            '------------------------------------------
+
             srcHeader.Copy Destination:=destHeader
 
-            'Copy column widths
+
+            '------------------------------------------
+            'CLEAR COPIED NUMBER OF PINS
+            '
+            'J5 -> O5 -> T5 -> Y5...
+            '
+            'Each new block starts with its own
+            'blank Number of Pins value.
+            '------------------------------------------
+
+            Set pinCell = Me.Cells(5, 10 + i * BLOCK_WIDTH)
+
+            pinCell.MergeArea.ClearContents
+
+
+            '------------------------------------------
+            'COPY COLUMN WIDTHS
+            '------------------------------------------
+
             For j = 0 To BLOCK_WIDTH - 1
 
                 Me.Columns(FIRST_COL + i * BLOCK_WIDTH + j).ColumnWidth = _
@@ -87,8 +132,12 @@ Private Sub Worksheet_Change(ByVal Target As Range)
 
             Next j
 
-            'Copy formatting, conditional formatting,
-            'and validation through row 307
+
+            '------------------------------------------
+            'COPY FORMATTING, CONDITIONAL FORMATTING,
+            'AND DATA VALIDATION
+            '------------------------------------------
+
             CopyBlockRules _
                 srcFull, _
                 destFull, _
@@ -102,32 +151,33 @@ Private Sub Worksheet_Change(ByVal Target As Range)
     End If
 
 
-    '--------------------------------------------------
+    '==================================================
     'CONNECTOR NAMES
     '
-    'H6 = B7
-    'M6 = B8
-    'R6 = B9
-    'W6 = B10
-    'etc.
+    'Block 1: H6 = B7
+    'Block 2: M6 = B8
+    'Block 3: R6 = B9
+    'Block 4: W6 = B10
     '
-    'J5 / O5 / T5 / Y5 are NOT touched.
-    'Those remain Number of Pins.
-    '--------------------------------------------------
+    'NUMBER OF PINS CELLS ARE NOT TOUCHED.
+    '==================================================
 
     For i = 0 To maxCreated - 1
 
-        Me.Cells(6, FIRST_COL + i * BLOCK_WIDTH).Formula = _
+        Set nameCell = Me.Cells(6, FIRST_COL + i * BLOCK_WIDTH)
+
+        nameCell.MergeArea.Cells(1, 1).Formula = _
             "=$B$" & (7 + i)
 
     Next i
 
 
-    '--------------------------------------------------
-    'REFRESH FORMATTING/RULES FOR EXISTING BLOCKS
+    '==================================================
+    'REFRESH RULES FOR EXISTING BLOCKS
     '
-    'Values are preserved.
-    '--------------------------------------------------
+    'This changes FORMATTING/RULES only.
+    'It does NOT overwrite user-entered data.
+    '==================================================
 
     For i = 1 To maxCreated - 1
 
@@ -144,19 +194,25 @@ Private Sub Worksheet_Change(ByVal Target As Range)
     Next i
 
 
-    '--------------------------------------------------
+    '==================================================
     'SHOW/HIDE BLOCKS BASED ON C4
     '
-    'Hiding instead of deleting is what makes data
-    'persist when C4 decreases.
-    '--------------------------------------------------
+    'Nothing gets deleted.
+    '
+    'Example:
+    'C4 = 4
+    'then C4 = 2
+    'then C4 = 4
+    '
+    'Blocks 3-4 retain their old data.
+    '==================================================
 
     For i = 0 To maxCreated - 1
 
         Me.Range( _
             Me.Columns(FIRST_COL + i * BLOCK_WIDTH), _
             Me.Columns(FIRST_COL + i * BLOCK_WIDTH + 4) _
-        ).Hidden = (i >= n)
+        ).EntireColumn.Hidden = (i >= n)
 
     Next i
 
@@ -180,6 +236,7 @@ ErrHandler:
 End Sub
 
 
+
 Private Sub CopyBlockRules( _
     ByVal srcFull As Range, _
     ByVal destFull As Range, _
@@ -193,21 +250,29 @@ Private Sub CopyBlockRules( _
     Dim srcCol As String
     Dim destCol As String
 
-    '--------------------------------------------------
-    'COPY FORMATTING
+
+    '==================================================
+    'DELETE EXISTING CONDITIONAL FORMATTING
+    'IN DESTINATION BLOCK
+    '==================================================
+
+    destFull.FormatConditions.Delete
+
+
+    '==================================================
+    'COPY FORMATTING + CONDITIONAL FORMATTING
     '
-    'This includes conditional formatting and borders.
-    'It does NOT overwrite cell values.
-    '--------------------------------------------------
+    'Does NOT overwrite values/formulas.
+    '==================================================
 
     srcFull.Copy
 
     destFull.PasteSpecial Paste:=xlPasteFormats
 
 
-    '--------------------------------------------------
+    '==================================================
     'COPY DATA VALIDATION / DROPDOWNS
-    '--------------------------------------------------
+    '==================================================
 
     srcFull.Copy
 
@@ -218,21 +283,22 @@ Private Sub CopyBlockRules( _
     Application.CutCopyMode = False
 
 
-    '--------------------------------------------------
-    'TRANSLATE CONDITIONAL-FORMATTING REFERENCES
+    '==================================================
+    'TRANSLATE CONDITIONAL FORMATTING REFERENCES
     '
     'Block 1 H:L
     'Block 2 M:Q
     'Block 3 R:V
+    'Block 4 W:AA
     '
     'Examples:
     '
-    '$H8   -> $M8   -> $R8
-    '$J$5  -> $O$5  -> $T$5
+    '$H8  -> $M8 -> $R8 -> $W8
     '
-    'So Number-of-Pins rules stay tied to the
-    'Number-of-Pins cell for THAT block.
-    '--------------------------------------------------
+    '$J$5 -> $O$5 -> $T$5 -> $Y$5
+    '
+    'So every block uses its OWN Number of Pins.
+    '==================================================
 
     For Each fc In destFull.FormatConditions
 
@@ -252,6 +318,7 @@ Private Sub CopyBlockRules( _
 
             Next i
 
+
             If f <> fc.Formula1 Then
 
                 On Error Resume Next
@@ -269,6 +336,7 @@ Private Sub CopyBlockRules( _
     Next fc
 
 End Sub
+
 
 
 Private Function ColLetter(ByVal colNum As Long) As String
