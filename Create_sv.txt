@@ -10,34 +10,32 @@ Private Sub Worksheet_Change(ByVal Target As Range)
     Dim dest As Range
     Dim sfc As FormatCondition
     Dim dfc As FormatCondition
-    Dim srcApplies As Range
-    Dim dstApplies As Range
     Dim f As String
 
     If Target.Address <> "$C$4" Then Exit Sub
 
+    On Error GoTo SafeExit
     Application.EnableEvents = False
 
     n = CLng(Me.Range("C4").Value)
     Set src = Me.Range("H5:L10")
 
-    'Remove old generated blocks
     Me.Range("M5:ZZ10").Clear
 
     For i = 1 To n - 1
 
-        Set dest = src.Offset(0, i * src.Columns.Count)
+        Set dest = src.Offset(0, i * 5)
 
-        'Copy entire block
+        'Copy block
         src.Copy
         dest.PasteSpecial Paste:=xlPasteAll
 
         'Copy column widths
-        For j = 1 To src.Columns.Count
+        For j = 1 To 5
             dest.Columns(j).ColumnWidth = src.Columns(j).ColumnWidth
         Next j
 
-        'Fix conditional-formatting rules
+        'Translate conditional-formatting formulas
         For k = 1 To src.FormatConditions.Count
 
             If k <= dest.FormatConditions.Count Then
@@ -49,28 +47,13 @@ Private Sub Worksheet_Change(ByVal Target As Range)
 
                     f = sfc.Formula1
 
-                    'Translate absolute columns within H:L
-                    'H -> M -> R...
-                    'I -> N -> S...
-                    'J -> O -> T...
-                    'etc.
-                    For c = 1 To src.Columns.Count
+                    For c = 1 To 5
                         f = Replace(f, _
                             "$" & ColLetter(src.Column + c - 1), _
                             "$" & ColLetter(dest.Column + c - 1))
                     Next c
 
                     dfc.Modify Type:=xlExpression, Formula1:=f
-
-                    'Move the Applies To range too
-                    Set srcApplies = Application.Intersect(sfc.AppliesTo, src)
-
-                    If Not srcApplies Is Nothing Then
-                        Set dstApplies = srcApplies.Offset(0, _
-                            i * src.Columns.Count)
-
-                        dfc.ModifyAppliesToRange dstApplies
-                    End If
 
                 End If
 
@@ -80,6 +63,7 @@ Private Sub Worksheet_Change(ByVal Target As Range)
 
     Next i
 
+SafeExit:
     Application.CutCopyMode = False
     Application.EnableEvents = True
 
@@ -87,7 +71,5 @@ End Sub
 
 
 Private Function ColLetter(ByVal colNum As Long) As String
-
     ColLetter = Split(Me.Cells(1, colNum).Address, "$")(1)
-
 End Function
