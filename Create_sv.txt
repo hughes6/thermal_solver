@@ -1,85 +1,112 @@
 Private Sub Worksheet_Change(ByVal Target As Range)
 
+    Const BLOCK_WIDTH As Long = 5
+    Const FIRST_COL As Long = 8      'H
+    Const MAX_BLOCKS As Long = 40
+
     Dim n As Long
     Dim i As Long
     Dim j As Long
+    Dim created As Long
+
     Dim src As Range
     Dim dest As Range
-    Dim cfSrc As Range
-    Dim cfDest As Range
-    Dim fc As FormatCondition
-    Dim f As String
-    Dim newAnchor As String
 
     If Target.Address <> "$C$4" Then Exit Sub
 
-    On Error GoTo SafeExit
+    On Error GoTo ErrHandler
     Application.EnableEvents = False
 
     n = CLng(Me.Range("C4").Value)
 
+    If n < 1 Then n = 1
+    If n > MAX_BLOCKS Then n = MAX_BLOCKS
+
     Set src = Me.Range("H5:L10")
 
-    'Full area containing conditional formatting
-    Set cfSrc = Me.Range("I8:K307")
+    '----------------------------------------
+    'Find how many blocks already exist
+    'J5, O5, T5, Y5, etc. are our markers
+    '----------------------------------------
+    created = 1
 
-    'Clear old generated blocks
-    Me.Range("M5:ZZ10").Clear
+    For i = 1 To MAX_BLOCKS - 1
 
-    'Remove old generated conditional formatting
-    Me.Range("M8:ZZ307").FormatConditions.Delete
-
-    For i = 1 To n - 1
-
-        Set dest = src.Offset(0, i * 5)
-
-        'Copy main block
-        src.Copy Destination:=dest
-
-        'Copy column widths
-        For j = 1 To 5
-            dest.Columns(j).ColumnWidth = src.Columns(j).ColumnWidth
-        Next j
-
-        'Destination CF area
-        Set cfDest = cfSrc.Offset(0, i * 5)
-
-        'Remove the partial CF copied with H5:L10
-        cfDest.FormatConditions.Delete
-
-        'Copy FULL formatting/rules through row 307
-        cfSrc.Copy
-        cfDest.PasteSpecial Paste:=xlPasteFormats
-
-        'Left column of this block:
-        'M for block 2, R for block 3, etc.
-        newAnchor = ColLetter(dest.Column)
-
-        'Translate $H to this block's left column
-        For Each fc In cfDest.FormatConditions
-
-            If fc.Type = xlExpression Then
-
-                f = fc.Formula1
-                f = Replace(f, "$H", "$" & newAnchor)
-
-                fc.Modify Type:=xlExpression, Formula1:=f
-
-            End If
-
-        Next fc
+        If Len(Me.Cells(5, 10 + i * BLOCK_WIDTH).Formula) > 0 Then
+            created = i + 1
+        Else
+            Exit For
+        End If
 
     Next i
+
+    '----------------------------------------
+    'Create ONLY blocks that have never
+    'existed before
+    '----------------------------------------
+    If n > created Then
+
+        For i = created To n - 1
+
+            Set dest = src.Offset(0, i * BLOCK_WIDTH)
+
+            src.Copy Destination:=dest
+
+            'Match the original column widths
+            For j = 0 To BLOCK_WIDTH - 1
+                Me.Columns(FIRST_COL + i * BLOCK_WIDTH + j).ColumnWidth = _
+                    Me.Columns(FIRST_COL + j).ColumnWidth
+            Next j
+
+            'Clear copied USER DATA from new block
+            'I:K equivalent, rows 8:307
+            Me.Range( _
+                Me.Cells(8, FIRST_COL + i * BLOCK_WIDTH + 1), _
+                Me.Cells(307, FIRST_COL + i * BLOCK_WIDTH + 3) _
+            ).ClearContents
+
+        Next i
+
+        created = n
+
+    End If
+
+    '----------------------------------------
+    'Set Number of Pins formulas
+    '
+    'J5 = B7
+    'O5 = B8
+    'T5 = B9
+    'Y5 = B10...
+    '----------------------------------------
+    For i = 0 To created - 1
+
+        Me.Cells(5, 10 + i * BLOCK_WIDTH).Formula = _
+            "=$B$" & (7 + i)
+
+    Next i
+
+    '----------------------------------------
+    'Show/hide blocks WITHOUT deleting data
+    '----------------------------------------
+    For i = 0 To created - 1
+
+        Me.Range( _
+            Me.Cells(1, FIRST_COL + i * BLOCK_WIDTH), _
+            Me.Cells(1, FIRST_COL + i * BLOCK_WIDTH + 4) _
+        ).EntireColumn.Hidden = (i >= n)
+
+    Next i
+
 
 SafeExit:
     Application.CutCopyMode = False
     Application.EnableEvents = True
+    Exit Sub
+
+
+ErrHandler:
+    MsgBox "Macro error " & Err.Number & ": " & Err.Description
+    Resume SafeExit
 
 End Sub
-
-
-Private Function ColLetter(ByVal colNum As Long) As String
-
-    ColLetter = Split(Me.Cells(1, colNum).Address, "$")(1)
-
-End Function
