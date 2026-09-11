@@ -2,6 +2,7 @@ Private Sub Worksheet_Change(ByVal Target As Range)
 
     Const BLOCK_WIDTH As Long = 5
     Const FIRST_COL As Long = 8          'H
+    Const CENTER_COL As Long = 10        'J
     Const MAX_BLOCKS As Long = 40
     Const LAST_ROW As Long = 307
 
@@ -14,12 +15,8 @@ Private Sub Worksheet_Change(ByVal Target As Range)
     Dim srcFull As Range
     Dim destHeader As Range
     Dim destFull As Range
+    Dim oldCell As Range
 
-    Dim pinCell As Range
-    Dim nameCell As Range
-    Dim oldNameFormula As String
-
-    'Run ONLY when C4 changes
     If Target.Address <> "$C$4" Then Exit Sub
 
     On Error GoTo ErrHandler
@@ -32,9 +29,29 @@ Private Sub Worksheet_Change(ByVal Target As Range)
     If n < 1 Then n = 1
     If n > MAX_BLOCKS Then n = MAX_BLOCKS
 
-    'Original/template block
     Set srcHeader = Me.Range("H5:L10")
     Set srcFull = Me.Range("H5:L" & LAST_ROW)
+
+
+    '==================================================
+    'REMOVE DUPLICATE NAMES CREATED BY OLD MACRO
+    '
+    'Old macro put names in:
+    'H6, M6, R6, W6...
+    '
+    'Correct cells are:
+    'J6, O6, T6, Y6...
+    '==================================================
+
+    For i = 0 To MAX_BLOCKS - 1
+
+        Set oldCell = Me.Cells(6, FIRST_COL + i * BLOCK_WIDTH)
+
+        If oldCell.Formula = "=$B$" & (7 + i) Then
+            oldCell.ClearContents
+        End If
+
+    Next i
 
 
     '==================================================
@@ -59,32 +76,7 @@ Private Sub Worksheet_Change(ByVal Target As Range)
 
 
     '==================================================
-    'REMOVE OLD BAD NAME FORMULAS FROM NUMBER-OF-PINS
-    '
-    'Old macro accidentally made:
-    'J5 = B7
-    'O5 = B8
-    'T5 = B9
-    '
-    'This ONLY clears those exact old formulas.
-    'A real number entered by the user is preserved.
-    '==================================================
-
-    For i = 0 To maxCreated - 1
-
-        Set pinCell = Me.Cells(5, 10 + i * BLOCK_WIDTH)
-
-        oldNameFormula = "=$B$" & (7 + i)
-
-        If pinCell.Formula = oldNameFormula Then
-            pinCell.MergeArea.ClearContents
-        End If
-
-    Next i
-
-
-    '==================================================
-    'CREATE ONLY BLOCKS THAT HAVE NEVER EXISTED
+    'CREATE NEW BLOCKS ONLY
     '==================================================
 
     If n > maxCreated Then
@@ -100,31 +92,16 @@ Private Sub Worksheet_Change(ByVal Target As Range)
                 Me.Cells(LAST_ROW, FIRST_COL + i * BLOCK_WIDTH + 4))
 
 
-            '------------------------------------------
-            'COPY TEMPLATE BLOCK
-            '------------------------------------------
-
+            'Copy template
             srcHeader.Copy Destination:=destHeader
 
 
-            '------------------------------------------
-            'CLEAR COPIED NUMBER OF PINS
-            '
-            'J5 -> O5 -> T5 -> Y5...
-            '
-            'Each new block starts with its own
-            'blank Number of Pins value.
-            '------------------------------------------
-
-            Set pinCell = Me.Cells(5, 10 + i * BLOCK_WIDTH)
-
-            pinCell.MergeArea.ClearContents
+            'Clear copied Number of Pins value
+            'J5, O5, T5, Y5...
+            Me.Cells(5, CENTER_COL + i * BLOCK_WIDTH).MergeArea.ClearContents
 
 
-            '------------------------------------------
-            'COPY COLUMN WIDTHS
-            '------------------------------------------
-
+            'Copy widths
             For j = 0 To BLOCK_WIDTH - 1
 
                 Me.Columns(FIRST_COL + i * BLOCK_WIDTH + j).ColumnWidth = _
@@ -133,11 +110,7 @@ Private Sub Worksheet_Change(ByVal Target As Range)
             Next j
 
 
-            '------------------------------------------
-            'COPY FORMATTING, CONDITIONAL FORMATTING,
-            'AND DATA VALIDATION
-            '------------------------------------------
-
+            'Copy formatting/rules/validation
             CopyBlockRules _
                 srcFull, _
                 destFull, _
@@ -154,29 +127,25 @@ Private Sub Worksheet_Change(ByVal Target As Range)
     '==================================================
     'CONNECTOR NAMES
     '
-    'Block 1: H6 = B7
-    'Block 2: M6 = B8
-    'Block 3: R6 = B9
-    'Block 4: W6 = B10
+    'J6 = B7
+    'O6 = B8
+    'T6 = B9
+    'Y6 = B10
     '
-    'NUMBER OF PINS CELLS ARE NOT TOUCHED.
+    'J5/O5/T5/Y5 remain NUMBER OF PINS
     '==================================================
 
     For i = 0 To maxCreated - 1
 
-        Set nameCell = Me.Cells(6, FIRST_COL + i * BLOCK_WIDTH)
-
-        nameCell.MergeArea.Cells(1, 1).Formula = _
+        Me.Cells(6, CENTER_COL + i * BLOCK_WIDTH).MergeArea.Cells(1, 1).Formula = _
             "=$B$" & (7 + i)
 
     Next i
 
 
     '==================================================
-    'REFRESH RULES FOR EXISTING BLOCKS
-    '
-    'This changes FORMATTING/RULES only.
-    'It does NOT overwrite user-entered data.
+    'REFRESH RULES ON EXISTING BLOCKS
+    'WITHOUT CHANGING THEIR DATA
     '==================================================
 
     For i = 1 To maxCreated - 1
@@ -195,16 +164,9 @@ Private Sub Worksheet_Change(ByVal Target As Range)
 
 
     '==================================================
-    'SHOW/HIDE BLOCKS BASED ON C4
+    'SHOW / HIDE BLOCKS
     '
-    'Nothing gets deleted.
-    '
-    'Example:
-    'C4 = 4
-    'then C4 = 2
-    'then C4 = 4
-    '
-    'Blocks 3-4 retain their old data.
+    'Hidden blocks keep all entered data.
     '==================================================
 
     For i = 0 To maxCreated - 1
@@ -228,13 +190,10 @@ SafeExit:
 
 ErrHandler:
 
-    MsgBox "Macro error " & Err.Number & ":" & vbCrLf & _
-           Err.Description
-
+    MsgBox "Macro error " & Err.Number & ":" & vbCrLf & Err.Description
     Resume SafeExit
 
 End Sub
-
 
 
 Private Sub CopyBlockRules( _
@@ -245,35 +204,21 @@ Private Sub CopyBlockRules( _
 
     Dim fc As FormatCondition
     Dim f As String
-
     Dim i As Long
     Dim srcCol As String
     Dim destCol As String
 
 
-    '==================================================
-    'DELETE EXISTING CONDITIONAL FORMATTING
-    'IN DESTINATION BLOCK
-    '==================================================
-
+    'Delete destination conditional formatting only
     destFull.FormatConditions.Delete
 
 
-    '==================================================
-    'COPY FORMATTING + CONDITIONAL FORMATTING
-    '
-    'Does NOT overwrite values/formulas.
-    '==================================================
-
+    'Copy formatting + conditional formatting
     srcFull.Copy
-
     destFull.PasteSpecial Paste:=xlPasteFormats
 
 
-    '==================================================
-    'COPY DATA VALIDATION / DROPDOWNS
-    '==================================================
-
+    'Copy dropdowns / validation
     srcFull.Copy
 
     On Error Resume Next
@@ -284,20 +229,10 @@ Private Sub CopyBlockRules( _
 
 
     '==================================================
-    'TRANSLATE CONDITIONAL FORMATTING REFERENCES
-    '
-    'Block 1 H:L
-    'Block 2 M:Q
-    'Block 3 R:V
-    'Block 4 W:AA
-    '
-    'Examples:
+    'TRANSLATE CONDITIONAL FORMATTING
     '
     '$H8  -> $M8 -> $R8 -> $W8
-    '
     '$J$5 -> $O$5 -> $T$5 -> $Y$5
-    '
-    'So every block uses its OWN Number of Pins.
     '==================================================
 
     For Each fc In destFull.FormatConditions
@@ -318,15 +253,10 @@ Private Sub CopyBlockRules( _
 
             Next i
 
-
             If f <> fc.Formula1 Then
 
                 On Error Resume Next
-
-                fc.Modify _
-                    Type:=xlExpression, _
-                    Formula1:=f
-
+                fc.Modify Type:=xlExpression, Formula1:=f
                 On Error GoTo 0
 
             End If
@@ -338,11 +268,8 @@ Private Sub CopyBlockRules( _
 End Sub
 
 
-
 Private Function ColLetter(ByVal colNum As Long) As String
 
-    ColLetter = Split( _
-        Me.Cells(1, colNum).Address, _
-        "$")(1)
+    ColLetter = Split(Me.Cells(1, colNum).Address, "$")(1)
 
 End Function
