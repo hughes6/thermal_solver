@@ -4,6 +4,7 @@ Private Const BLOCK_WIDTH As Long = 5
 Private Const FIRST_COL As Long = 8          'H
 Private Const CENTER_COL As Long = 10        'J
 Private Const MAX_BLOCKS As Long = 40
+Private Const FIRST_DATA_ROW As Long = 8
 Private Const LAST_ROW As Long = 307
 
 
@@ -19,14 +20,21 @@ Private Sub Worksheet_Change(ByVal Target As Range)
     Dim destInput As Range
 
     'Only run when C4 changes
-    If Target.Address <> "$C$4" Then Exit Sub
+    If Intersect(Target, Me.Range("C4")) Is Nothing Then Exit Sub
 
     On Error GoTo ErrHandler
 
     Application.EnableEvents = False
     Application.ScreenUpdating = False
 
-    n = CLng(Me.Range("C4").Value)
+    '-----------------------------------------
+    'GET NUMBER OF CONNECTORS / BLOCKS
+    '-----------------------------------------
+    If IsNumeric(Me.Range("C4").Value) Then
+        n = CLng(Me.Range("C4").Value)
+    Else
+        n = 1
+    End If
 
     If n < 1 Then n = 1
     If n > MAX_BLOCKS Then n = MAX_BLOCKS
@@ -36,17 +44,18 @@ Private Sub Worksheet_Change(ByVal Target As Range)
 
     '==================================================
     'FIND HOW MANY BLOCKS HAVE ALREADY BEEN CREATED
+    '
+    'We use the connector-name cell:
+    '
+    'J6, O6, T6, Y6...
     '==================================================
 
     maxCreated = 1
 
     For i = 1 To MAX_BLOCKS - 1
 
-        If Application.WorksheetFunction.CountA( _
-            Me.Range( _
-                Me.Cells(5, FIRST_COL + i * BLOCK_WIDTH), _
-                Me.Cells(LAST_ROW, FIRST_COL + i * BLOCK_WIDTH + 4) _
-            )) > 0 Then
+        If Len(Me.Cells(6, CENTER_COL + i * BLOCK_WIDTH).Formula) > 0 _
+           Or Len(Me.Cells(6, CENTER_COL + i * BLOCK_WIDTH).Value) > 0 Then
 
             maxCreated = i + 1
 
@@ -60,10 +69,10 @@ Private Sub Worksheet_Change(ByVal Target As Range)
 
 
     '==================================================
-    'CREATE ONLY BRAND-NEW BLOCKS
+    'CREATE ONLY BLOCKS THAT HAVE NEVER EXISTED
     '
-    'Existing blocks are never recopied or erased,
-    'so entered data persists.
+    'Existing blocks are NOT recopied.
+    'This preserves entered data.
     '==================================================
 
     If n > maxCreated Then
@@ -74,11 +83,9 @@ Private Sub Worksheet_Change(ByVal Target As Range)
                 Me.Cells(5, FIRST_COL + i * BLOCK_WIDTH), _
                 Me.Cells(10, FIRST_COL + i * BLOCK_WIDTH + 4))
 
-
             '------------------------------------------
-            'COPY ORIGINAL H5:L10 BLOCK
+            'COPY ORIGINAL H5:L10
             '------------------------------------------
-
             srcHeader.Copy Destination:=destHeader
 
 
@@ -87,48 +94,40 @@ Private Sub Worksheet_Change(ByVal Target As Range)
             '
             'J5, O5, T5, Y5...
             '------------------------------------------
-
             Me.Cells(5, CENTER_COL + i * BLOCK_WIDTH) _
                 .MergeArea.ClearContents
 
 
             '------------------------------------------
-            'CLEAR COPIED USER-ENTERED CONSTANTS
+            'CLEAR USER INPUT CELLS IN NEW BLOCK
             '
-            'Preserves formulas if there are any.
+            'Block 1 = I:K
+            'Block 2 = N:P
+            'Block 3 = S:U
+            'etc.
             '------------------------------------------
-
             Set destInput = Me.Range( _
-                Me.Cells(8, FIRST_COL + i * BLOCK_WIDTH + 1), _
+                Me.Cells(FIRST_DATA_ROW, FIRST_COL + i * BLOCK_WIDTH + 1), _
                 Me.Cells(LAST_ROW, FIRST_COL + i * BLOCK_WIDTH + 3))
 
-            On Error Resume Next
-
-            destInput.SpecialCells( _
-                xlCellTypeConstants).ClearContents
-
-            On Error GoTo ErrHandler
+            destInput.ClearContents
 
 
             '------------------------------------------
             'COPY COLUMN WIDTHS
             '------------------------------------------
-
             For j = 0 To BLOCK_WIDTH - 1
 
-                Me.Columns( _
-                    FIRST_COL + i * BLOCK_WIDTH + j _
-                ).ColumnWidth = _
+                Me.Columns(FIRST_COL + i * BLOCK_WIDTH + j).ColumnWidth = _
                     Me.Columns(FIRST_COL + j).ColumnWidth
 
             Next j
 
 
             '------------------------------------------
-            'BUILD RULES FOR THIS BLOCK
+            'COPY FORMATTING / RULES / VALIDATION
             '------------------------------------------
-
-            RebuildBlockRules i
+            RefreshBlockFormatting i
 
         Next i
 
@@ -138,14 +137,18 @@ Private Sub Worksheet_Change(ByVal Target As Range)
 
 
     '==================================================
-    'CONNECTOR NAMES
+    'SET CONNECTOR NAMES
     '
+    'Block 1:
     'J6 = B7
-    'O6 = B8
-    'T6 = B9
-    'Y6 = B10
     '
-    'J5/O5/T5/Y5 stay Number of Pins.
+    'Block 2:
+    'O6 = B8
+    '
+    'Block 3:
+    'T6 = B9
+    '
+    'etc.
     '==================================================
 
     For i = 0 To maxCreated - 1
@@ -158,23 +161,61 @@ Private Sub Worksheet_Change(ByVal Target As Range)
 
 
     '==================================================
-    'REBUILD RULES FOR ALL GENERATED BLOCKS
+    'BUILD THE | HELPER SPILL FOR EVERY BLOCK
     '
-    'This fixes any broken rules left by previous
-    'versions of the macro.
+    'This is the important off-by-one fix.
+    '
+    'Block 1:
+    'H8 spills exactly J5 rows
+    '
+    'Block 2:
+    'M8 spills exactly O5 rows
+    '
+    'Block 3:
+    'R8 spills exactly T5 rows
+    '
+    'Examples:
+    '
+    'J5 = 4 -> H8:H11 contains |
+    'O5 = 6 -> M8:M13 contains |
     '==================================================
 
-    For i = 1 To maxCreated - 1
+    For i = 0 To maxCreated - 1
 
-        RebuildBlockRules i
+        SetupHelperSpill i
 
     Next i
 
 
     '==================================================
-    'SHOW / HIDE BASED ON C4
+    'REFRESH CONDITIONAL FORMATTING FOR GENERATED
+    'BLOCKS
     '
-    'Hiding preserves all entered data.
+    'Does not overwrite entered values.
+    '==================================================
+
+    For i = 1 To maxCreated - 1
+
+        RefreshBlockFormatting i
+
+    Next i
+
+
+    '==================================================
+    'SHOW / HIDE BLOCKS BASED ON C4
+    '
+    'Blocks are hidden, NEVER deleted.
+    '
+    'So:
+    '
+    'C4 = 4
+    'enter data
+    '
+    'C4 = 2
+    'blocks 3-4 hide
+    '
+    'C4 = 4
+    'blocks 3-4 return with their old data
     '==================================================
 
     For i = 0 To maxCreated - 1
@@ -207,15 +248,83 @@ End Sub
 
 
 
-Private Sub RebuildBlockRules(ByVal blockIndex As Long)
+Private Sub SetupHelperSpill(ByVal blockIndex As Long)
 
-    Dim colOffset As Long
+    Dim helperCol As Long
+    Dim pinCol As Long
+
+    Dim helperRange As Range
+    Dim helperCell As Range
+
+    Dim pinAddress As String
+    Dim spillFormula As String
+
+    '-----------------------------------------
+    'BLOCK 1
+    'helper = H
+    'pin count = J
+    '
+    'BLOCK 2
+    'helper = M
+    'pin count = O
+    '
+    'BLOCK 3
+    'helper = R
+    'pin count = T
+    '-----------------------------------------
+
+    helperCol = FIRST_COL + blockIndex * BLOCK_WIDTH
+    pinCol = CENTER_COL + blockIndex * BLOCK_WIDTH
+
+    Set helperRange = Me.Range( _
+        Me.Cells(FIRST_DATA_ROW, helperCol), _
+        Me.Cells(LAST_ROW, helperCol))
+
+    Set helperCell = Me.Cells(FIRST_DATA_ROW, helperCol)
+
+    'Clear any old helper formulas / values first
+    helperRange.ClearContents
+
+    'Examples:
+    'J$5
+    'O$5
+    'T$5
+    pinAddress = Me.Cells(5, pinCol).Address( _
+                    RowAbsolute:=True, _
+                    ColumnAbsolute:=False)
+
+    '-----------------------------------------
+    'ONE FORMULA.
+    '
+    'If Number of Pins = 4:
+    '
+    '|   row 8
+    '|   row 9
+    '|   row 10
+    '|   row 11
+    '
+    'Exactly four rows.
+    '-----------------------------------------
+
+    spillFormula = _
+        "=IF(" & pinAddress & ">0," & _
+        "IF(SEQUENCE(" & pinAddress & "),""|""),"""")"
+
+    helperCell.Formula2 = spillFormula
+
+End Sub
+
+
+
+Private Sub RefreshBlockFormatting(ByVal blockIndex As Long)
 
     Dim srcRange As Range
     Dim destRange As Range
 
     Dim fc As FormatCondition
     Dim f As String
+
+    Dim colOffset As Long
 
     colOffset = blockIndex * BLOCK_WIDTH
 
@@ -227,16 +336,17 @@ Private Sub RebuildBlockRules(ByVal blockIndex As Long)
 
 
     '==================================================
-    'DELETE OLD / BROKEN RULES FROM THIS BLOCK
+    'REMOVE EXISTING CONDITIONAL FORMATTING
+    'FROM THIS GENERATED BLOCK
     '==================================================
 
     destRange.FormatConditions.Delete
 
 
     '==================================================
-    'COPY ORIGINAL FORMATTING + RULES
+    'COPY FORMATTING FROM ORIGINAL BLOCK
     '
-    'Excel automatically moves the Applies To range.
+    'Values are NOT copied.
     '==================================================
 
     srcRange.Copy
@@ -247,35 +357,41 @@ Private Sub RebuildBlockRules(ByVal blockIndex As Long)
 
 
     '==================================================
-    'TRANSLATE FORMULAS WITHOUT CHANGING ROW LOGIC
+    'TRANSLATE CONDITIONAL-FORMATTING FORMULAS
     '
-    'Examples for Block 2:
+    'Block 1:
+    '$H8
+    '$J$5
     '
-    '$H8   -> $M8
-    '$I8   -> $N8
-    '$J$5  -> $O$5
-    '$K8   -> $P8
-    '$L8   -> $Q8
+    'Block 2:
+    '$M8
+    '$O$5
     '
-    'The row remains EXACTLY as written.
+    'Block 3:
+    '$R8
+    '$T$5
+    '
+    'etc.
     '==================================================
 
     For Each fc In destRange.FormatConditions
 
         If fc.Type = xlExpression Then
 
-            f = fc.Formula1
-
             f = TranslateBlockFormula( _
-                    f, _
+                    fc.Formula1, _
                     FIRST_COL, _
                     FIRST_COL + colOffset)
 
             If f <> fc.Formula1 Then
 
+                On Error Resume Next
+
                 fc.Modify _
                     Type:=xlExpression, _
                     Formula1:=f
+
+                On Error GoTo 0
 
             End If
 
@@ -308,22 +424,28 @@ Private Function TranslateBlockFormula( _
     ByVal destStartCol As Long) As String
 
     Dim i As Long
+
     Dim f As String
 
     Dim sourceLetter As String
     Dim destLetter As String
 
-    'Temporary markers stop replacements from
-    'interfering with each other.
     f = formulaText
 
 
     '==================================================
-    'FIRST PASS:
+    'FIRST PASS
     '
-    '$H -> {BLOCKCOL0}
-    '$I -> {BLOCKCOL1}
-    '...
+    'Turn source block columns into temporary markers.
+    '
+    '$H -> marker 0
+    '$I -> marker 1
+    '$J -> marker 2
+    '$K -> marker 3
+    '$L -> marker 4
+    '
+    'This prevents replacements interfering with
+    'each other.
     '==================================================
 
     For i = 0 To BLOCK_WIDTH - 1
@@ -339,11 +461,9 @@ Private Function TranslateBlockFormula( _
 
 
     '==================================================
-    'SECOND PASS:
+    'SECOND PASS
     '
-    '{BLOCKCOL0} -> $M
-    '{BLOCKCOL1} -> $N
-    'etc.
+    'Replace markers with destination columns.
     '==================================================
 
     For i = 0 To BLOCK_WIDTH - 1
