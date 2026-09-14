@@ -1,122 +1,41 @@
 #=========================================
-# LOAD AND PLACE SCHEMATIC VIEWS
-#=========================================
-MAIN_DEVICE_ID = None
-devinfo = prj.GetAllDeviceIds(None)
-
-for dev_id in [x for x in devinfo[1] if x is not None]:
-    dev.SetId(dev_id)
-    if dev.GetName() == DEVICE_DESIGNATION:
-        MAIN_DEVICE_ID = dev_id
-        break
-
-if MAIN_DEVICE_ID is None:
-    raise Exception(f"Could not find main device {DEVICE_DESIGNATION}")
-
-MASTER_SCHEMATIC_LAYOUT, SHEET_DICT = generate_master_schematic_layout(PIN_SIGNAL_INFO, x_block, block_width)
-
-SCHEMATIC_DATA = []
-
-#=========================================
-# PHASE 1 - CREATE ALL BLOCKS AND VIEWS
-#=========================================
-for i in range(len(PIN_SIGNAL_INFO)):
-    conn_name = PIN_SIGNAL_INFO[i][0]["connector name"]
-    conn_layout_dict = MASTER_SCHEMATIC_LAYOUT[i]
-    current_sheet_id = SHEET_DICT[conn_layout_dict["sheet"]]
-
-    xp = conn_layout_dict["x start"]
-    yp = conn_layout_dict["y start"]
-    xwidth = conn_layout_dict["width"]
-    yheight = conn_layout_dict["height"]
-
-    view_number = i + 1
-
-    dev.SetId(MAIN_DEVICE_ID)
-    parent_block = dev.CreateView(MAIN_DEVICE_ID, view_number, 0, "0")
-
-    if parent_block == 0:
-        raise Exception(f"Failed creating main view {view_number} for {conn_name}")
-
-    print("MAIN VIEW:", conn_name, "SOURCE:", MAIN_DEVICE_ID, "VIEW:", view_number, "RESULT:", parent_block)
-
-    # Fresh symbol object ONLY for this block
-    block_sym = prj.CreateSymbolObject()
-    is_loaded = block_sym.Load("CABBLOCK", 1)
-
-    if not is_loaded:
-        raise Exception(f"Failed loading CABBLOCK for {conn_name}")
-
-    block_symbol_id = block_sym.PlaceBlock(current_sheet_id, xp, yp, xwidth, yheight, parent_block)
-
-    if block_symbol_id == 0:
-        raise Exception(f"Failed placing main block for {conn_name}")
-
-    print("BLOCK:", conn_name, "DEVICE VIEW:", parent_block, "SYMBOL:", block_symbol_id)
-
-    # IMPORTANT - release this symbol object NOW
-    del block_sym
-    time.sleep(0.25)
-
-    connector_device_id = CONNECTOR_DEVICE_IDS[conn_name]
-
-    dev.SetId(connector_device_id)
-    connector_view_id = dev.CreateView(connector_device_id, 1, parent_block)
-
-    if connector_view_id == 0:
-        raise Exception(f"Failed creating connector view for {conn_name}")
-
-    print("CONNECTOR VIEW:", conn_name, "SOURCE:", connector_device_id, "PARENT:", parent_block, "RESULT:", connector_view_id)
-
-    SCHEMATIC_DATA.append({
-        "index": i,
-        "name": conn_name,
-        "parent_block": parent_block,
-        "block_symbol_id": block_symbol_id,
-        "connector_view": connector_view_id,
-        "sheet_id": current_sheet_id,
-        "layout": conn_layout_dict
-    })
-
-    time.sleep(0.5)
-
-#=========================================
-# COMPLETELY RELEASE E3 OBJECTS
-#=========================================
-del attr
-del text
-del sym
-del pin
-del comp
-del dev
-del sht
-del prj
-del app
-
-time.sleep(1.5)
-
-#=========================================
-# RECREATE CLEAN E3 OBJECTS
-#=========================================
-app = win32.gencache.EnsureDispatch("CT.Application")
-prj = app.CreateJobObject()
-text = prj.CreateTextObject()
-comp = prj.CreateComponentObject()
-dev = prj.CreateDeviceObject()
-sym = prj.CreateSymbolObject()
-pin = prj.CreatePinObject()
-attr = prj.CreateAttributeObject()
-sht = prj.CreateSheetObject()
-
-#=========================================
 # PHASE 2 - PLACE ALL PINS
+# RESET E3 OBJECTS FOR EVERY CONNECTOR
 #=========================================
 for data in SCHEMATIC_DATA:
+    del attr
+    del text
+    del sym
+    del pin
+    del comp
+    del dev
+    del sht
+    del prj
+    del app
+
+    time.sleep(1.0)
+
+    app = win32.gencache.EnsureDispatch("CT.Application")
+    prj = app.CreateJobObject()
+    text = prj.CreateTextObject()
+    comp = prj.CreateComponentObject()
+    dev = prj.CreateDeviceObject()
+    sym = prj.CreateSymbolObject()
+    pin = prj.CreatePinObject()
+    attr = prj.CreateAttributeObject()
+    sht = prj.CreateSheetObject()
+
     i = data["index"]
     conn_name = data["name"]
     connector_view_id = data["connector_view"]
     current_sheet_id = data["sheet_id"]
     conn_layout_dict = data["layout"]
+
+    print("=========================================")
+    print("STARTING CONNECTOR:", conn_name)
+    print("CONNECTOR VIEW:", connector_view_id)
+    print("SHEET:", current_sheet_id)
+    print("=========================================")
 
     dev.SetId(connector_view_id)
 
@@ -154,34 +73,5 @@ for data in SCHEMATIC_DATA:
 
         time.sleep(0.25)
 
-#=========================================
-# RESET BEFORE FORMATTING
-#=========================================
-del attr
-del text
-del sym
-del pin
-del comp
-del dev
-del sht
-del prj
-del app
-
-time.sleep(1.0)
-
-app = win32.gencache.EnsureDispatch("CT.Application")
-prj = app.CreateJobObject()
-text = prj.CreateTextObject()
-comp = prj.CreateComponentObject()
-dev = prj.CreateDeviceObject()
-sym = prj.CreateSymbolObject()
-pin = prj.CreatePinObject()
-attr = prj.CreateAttributeObject()
-sht = prj.CreateSheetObject()
-
-#=========================================
-# PHASE 3 - FORMAT BLOCKS
-#=========================================
-for data in SCHEMATIC_DATA:
-    layout = data["layout"]
-    format_main_block_view(data["parent_block"], layout["x start"], layout["y start"], layout["width"], layout["height"])
+    print("FINISHED CONNECTOR:", conn_name)
+    time.sleep(0.5)
