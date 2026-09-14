@@ -1,11 +1,10 @@
 def format_connector_text(connector_view_id, conn_name):
-    print("FORMATTING CONNECTOR:", conn_name, "VIEW:", connector_view_id)
-
     dev.SetId(connector_view_id)
 
     #=========================================
-    # FORMAT CONNECTOR DEVICE TEXT
-    # TYPE 12 = CONNECTOR DEVICE DESIGNATION
+    # CONNECTOR DEVICE TEXT
+    # TYPE 5  = COMPONENT CODE -> HIDE
+    # TYPE 12 = DEVICE DESIGNATION -> BOLD
     #=========================================
     symbolinfo = dev.GetSymbolIds(None)
     symbolids = [x for x in symbolinfo[1] if x is not None]
@@ -20,16 +19,19 @@ def format_connector_text(connector_view_id, conn_name):
             text.SetId(text_id)
             text_type = text.GetType()
 
-            if text_type == 12:
+            if text_type == 5:
+                text.SetVisibility(0)
+
+            elif text_type == 12:
                 text.SetVisibility(1)
                 text.SetColour(0)
                 text.SetStyle(1)
                 text.SetHeight(0.2)
-                print("BOLDED CONNECTOR NAME:", text.GetText(), "TYPE:", text_type)
 
     #=========================================
-    # FORMAT PIN TEXT
-    # TYPE 617 = LOCAL SIGNAL NAME
+    # PIN TEXT
+    # TYPE 617 = LOCAL SIGNAL NAME -> SHOW/BOLD
+    # EVERYTHING ELSE -> HIDE
     #=========================================
     pininfo = dev.GetPinIds(None)
     pinids = [x for x in pininfo[1] if x is not None]
@@ -50,7 +52,6 @@ def format_connector_text(connector_view_id, conn_name):
                 text.SetAlignment(3)
                 text.SetStyle(1)
                 text.SetHeight(0.2)
-                print("LOCAL SIGNAL:", conn_name, "PIN:", pin.GetName(), "TEXT:", text.GetText())
 
             else:
                 text.SetVisibility(0)
