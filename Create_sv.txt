@@ -3,6 +3,7 @@ import time
 import pyodbc
 import win32com.client as win32
 import tkinter as tk
+import gc
 
 
 # ================================================
@@ -316,15 +317,17 @@ def format_main_block_view(device_view_id, x, y, width, height):
 
 def wait_for_final_formatting():
     root = tk.Tk()
-    root.title("E3 Block Creation Complete")
+    root.title("Save and Reopen E3 Project")
     root.attributes("-topmost", True)
-    root.geometry("520x180")
+    root.geometry("620x280")
 
-    label = tk.Label(root, text="E3 creation is complete.\n\nWait until the schematic has fully finished updating,\nthen click FINALIZE SCHEMATIC.", font=("Arial", 11))
+    message = "MAIN CREATION IS COMPLETE\n\n1. Save the Zuken project\n2. Close the Zuken project\n3. Reopen the saved project\n4. Wait until the project is fully loaded\n\nThen click FINALIZE SCHEMATIC."
+
+    label = tk.Label(root, text=message, font=("Arial", 11), justify="center")
     label.pack(pady=20)
 
     button = tk.Button(root, text="FINALIZE SCHEMATIC", width=35, height=2, command=root.destroy)
-    button.pack(pady=5)
+    button.pack(pady=10)
 
     root.mainloop()
 
@@ -1142,7 +1145,7 @@ for data in SCHEMATIC_DATA:
 
 #=========================================
 # MAIN CREATION PHASE IS NOW COMPLETE
-# RELEASE ALL E3 COM OBJECTS BEFORE GUI BARRIER
+# RELEASE ALL E3 COM OBJECTS BEFORE SAVE/CLOSE/REOPEN BARRIER
 #=========================================
 del attr
 del text
@@ -1154,25 +1157,33 @@ del sht
 del prj
 del app
 
+gc.collect()
 time.sleep(1.0)
 
 print("")
 print("============================================================")
 print("MAIN E3 CREATION COMPLETE")
-print("WAIT UNTIL E3 IS FULLY FINISHED UPDATING")
+print("SAVE THE ZUKEN PROJECT")
+print("CLOSE THE ZUKEN PROJECT")
+print("REOPEN THE SAVED PROJECT")
+print("WAIT UNTIL IT IS FULLY LOADED")
 print("THEN CLICK FINALIZE SCHEMATIC")
 print("============================================================")
 
 #=========================================
-# MANUAL BARRIER
+# MANUAL SAVE / CLOSE / REOPEN BARRIER
 #=========================================
 wait_for_final_formatting()
 
+gc.collect()
 time.sleep(1.0)
 
 #=========================================
-# RECONNECT TO THE ALREADY OPEN E3 INSTANCE
+# RECONNECT TO THE REOPENED ACTIVE E3 PROJECT
 #=========================================
+print("")
+print("RECONNECTING TO REOPENED E3 PROJECT")
+
 app = win32.GetActiveObject("CT.Application")
 prj = app.CreateJobObject()
 text = prj.CreateTextObject()
@@ -1184,13 +1195,16 @@ attr = prj.CreateAttributeObject()
 sht = prj.CreateSheetObject()
 
 #=========================================
-# FINAL OPERATION - PROVEN PIN VIEW FORMATTER
-# DO NOT PLACE OR REFORMAT ANYTHING AFTER THIS
+# FINAL OPERATION - EXACT FORMATTER THAT PASSED 49/49
+# DO NOT PLACE, CREATE, OR REFORMAT ANYTHING AFTER THIS
 #=========================================
 format_final_schematic_connectors()
 
 print("")
+print("============================================================")
 print("FINAL SCHEMATIC FORMATTING COMPLETE")
+print("SAVE THE PROJECT AGAIN TO KEEP THE FINAL VISIBILITY CHANGES")
+print("============================================================")
 
 #=========================================
 # CLEANUP
@@ -1202,6 +1216,17 @@ del sym
 del comp
 del dev
 del sht
-del conn
 del prj
 del app
+
+gc.collect()
+
+try:
+    cur.close()
+except Exception:
+    pass
+
+try:
+    conn.close()
+except Exception:
+    pass
