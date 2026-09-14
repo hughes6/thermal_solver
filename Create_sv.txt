@@ -95,7 +95,7 @@ def generate_master_schematic_layout(PIN_SIGNAL_INFO,x_block,main_block_width):
     PIN_START_OFFSET = 2.0
 
     # USABLE PAGE LIMITS
-    PAGE_TOP = TOP_OF_PAGE - TOP_MARGIN
+    PAGE_TOP = TOP_OF_PAGE
     PAGE_BOTTOM = BOTTOM_OF_PAGE + BOTTOM_MARGIN
     PAGE_LEFT = LEFT_OF_PAGE + LEFT_MARGIN
     PAGE_RIGHT = RIGHT_OF_PAGE - RIGHT_MARGIN
@@ -574,6 +574,14 @@ for i in range(len(PIN_SIGNAL_INFO)):
 #=========================================
 # LOAD AND PLACE SCHEMATIC VIEWS
 #=========================================
+MAIN_DEVICE_ID = None
+devinfo = prj.GetAllDeviceIds(None)
+for dev_id in [x for x in devinfo[1] if x is not None]:
+    dev.SetId(dev_id)
+    if dev.GetName() == DEVICE_DESIGNATION:
+        MAIN_DEVICE_ID = dev_id
+        break
+
 MASTER_SCHEMATIC_LAYOUT, SHEET_DICT = generate_master_schematic_layout(PIN_SIGNAL_INFO, x_block, block_width)
 time.sleep(0.5)
 for i in range(len(PIN_SIGNAL_INFO)):
@@ -585,15 +593,9 @@ for i in range(len(PIN_SIGNAL_INFO)):
             conn_layout_dict = d
             break
 
-    devinfo = prj.GetAllDeviceIds(None)
-    dev_ids = [x for x in devinfo[1] if x is not None]
-    for id in dev_ids:
-        dev.SetId(id)
-        if dev.GetName() == DEVICE_DESIGNATION:
-            device_id = id
 
-
-    res = dev.CreateView(device_id, 1, 0, 1)
+    dev.SetId(MAIN_DEVICE_ID)
+    res = dev.CreateView(MAIN_DEVICE_ID, 1, 0, 1)
     if res == 0:
         app.PutMessage(f"Step 4 not working. Result: {res}\n")
         raise Exception(f"Step 4 failed. No new device view created.\n")
