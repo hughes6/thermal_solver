@@ -1,122 +1,187 @@
 #=========================================
 # LOAD AND PLACE SCHEMATIC VIEWS
 #=========================================
-MAIN_DEVICE_ID=None
-devinfo=prj.GetAllDeviceIds(None)
+MAIN_DEVICE_ID = None
+devinfo = prj.GetAllDeviceIds(None)
+
 for dev_id in [x for x in devinfo[1] if x is not None]:
     dev.SetId(dev_id)
-    if dev.GetName()==DEVICE_DESIGNATION:
-        MAIN_DEVICE_ID=dev_id
+    if dev.GetName() == DEVICE_DESIGNATION:
+        MAIN_DEVICE_ID = dev_id
         break
-if MAIN_DEVICE_ID is None: raise Exception(f"Could not find main device {DEVICE_DESIGNATION}")
 
-MASTER_SCHEMATIC_LAYOUT,SHEET_DICT=generate_master_schematic_layout(PIN_SIGNAL_INFO,x_block,block_width)
-SCHEMATIC_DATA=[]
+if MAIN_DEVICE_ID is None:
+    raise Exception(f"Could not find main device {DEVICE_DESIGNATION}")
+
+MASTER_SCHEMATIC_LAYOUT, SHEET_DICT = generate_master_schematic_layout(PIN_SIGNAL_INFO, x_block, block_width)
+
+SCHEMATIC_DATA = []
 
 #=========================================
-# PHASE 1 - CREATE ALL BLOCKS + VIEWS
+# PHASE 1 - CREATE ALL BLOCKS AND VIEWS
 #=========================================
 for i in range(len(PIN_SIGNAL_INFO)):
-    conn_name=PIN_SIGNAL_INFO[i][0]["connector name"]
-    conn_layout_dict=MASTER_SCHEMATIC_LAYOUT[i]
-    current_sheet_id=SHEET_DICT[conn_layout_dict["sheet"]]
-    xp=conn_layout_dict["x start"]; yp=conn_layout_dict["y start"]; xwidth=conn_layout_dict["width"]; yheight=conn_layout_dict["height"]
+    conn_name = PIN_SIGNAL_INFO[i][0]["connector name"]
+    conn_layout_dict = MASTER_SCHEMATIC_LAYOUT[i]
+    current_sheet_id = SHEET_DICT[conn_layout_dict["sheet"]]
 
-    # CREATE UNIQUE MAIN DEVICE VIEW
-    view_number=i+1
+    xp = conn_layout_dict["x start"]
+    yp = conn_layout_dict["y start"]
+    xwidth = conn_layout_dict["width"]
+    yheight = conn_layout_dict["height"]
+
+    view_number = i + 1
+
     dev.SetId(MAIN_DEVICE_ID)
-    parent_block=dev.CreateView(MAIN_DEVICE_ID,view_number,0,"0")
-    if parent_block==0: raise Exception(f"Failed creating main view {view_number} for {conn_name}")
-    print("MAIN VIEW:",conn_name,"SOURCE:",MAIN_DEVICE_ID,"VIEW:",view_number,"RESULT:",parent_block)
+    parent_block = dev.CreateView(MAIN_DEVICE_ID, view_number, 0, "0")
 
-    # IMPORTANT: FRESH SYMBOL OBJECT + LOAD FOR EVERY BLOCK
-    block_sym=prj.CreateSymbolObject()
-    isLoaded=block_sym.Load("CABBLOCK",1)
-    if not isLoaded: raise Exception(f"Failed loading CABBLOCK for {conn_name}")
+    if parent_block == 0:
+        raise Exception(f"Failed creating main view {view_number} for {conn_name}")
 
-    block_symbol_id=block_sym.PlaceBlock(current_sheet_id,xp,yp,xwidth,yheight,parent_block)
-    if block_symbol_id==0: raise Exception(f"Failed placing main block for {conn_name}")
-    print("BLOCK:",conn_name,"DEVICE VIEW:",parent_block,"SYMBOL:",block_symbol_id)
+    print("MAIN VIEW:", conn_name, "SOURCE:", MAIN_DEVICE_ID, "VIEW:", view_number, "RESULT:", parent_block)
 
-    # CREATE CONNECTOR VIEW ATTACHED TO THIS SPECIFIC MAIN VIEW
-    connector_device_id=CONNECTOR_DEVICE_IDS[conn_name]
+    # Fresh symbol object ONLY for this block
+    block_sym = prj.CreateSymbolObject()
+    is_loaded = block_sym.Load("CABBLOCK", 1)
+
+    if not is_loaded:
+        raise Exception(f"Failed loading CABBLOCK for {conn_name}")
+
+    block_symbol_id = block_sym.PlaceBlock(current_sheet_id, xp, yp, xwidth, yheight, parent_block)
+
+    if block_symbol_id == 0:
+        raise Exception(f"Failed placing main block for {conn_name}")
+
+    print("BLOCK:", conn_name, "DEVICE VIEW:", parent_block, "SYMBOL:", block_symbol_id)
+
+    # IMPORTANT - release this symbol object NOW
+    del block_sym
+    time.sleep(0.25)
+
+    connector_device_id = CONNECTOR_DEVICE_IDS[conn_name]
+
     dev.SetId(connector_device_id)
-    connector_view_id=dev.CreateView(connector_device_id,1,parent_block)
-    if connector_view_id==0: raise Exception(f"Failed creating connector view for {conn_name}")
-    print("CONNECTOR VIEW:",conn_name,"SOURCE:",connector_device_id,"PARENT:",parent_block,"RESULT:",connector_view_id)
+    connector_view_id = dev.CreateView(connector_device_id, 1, parent_block)
 
-    SCHEMATIC_DATA.append({"index":i,"name":conn_name,"parent_block":parent_block,"block_symbol_id":block_symbol_id,"connector_view":connector_view_id,"sheet_id":current_sheet_id,"layout":conn_layout_dict})
+    if connector_view_id == 0:
+        raise Exception(f"Failed creating connector view for {conn_name}")
+
+    print("CONNECTOR VIEW:", conn_name, "SOURCE:", connector_device_id, "PARENT:", parent_block, "RESULT:", connector_view_id)
+
+    SCHEMATIC_DATA.append({
+        "index": i,
+        "name": conn_name,
+        "parent_block": parent_block,
+        "block_symbol_id": block_symbol_id,
+        "connector_view": connector_view_id,
+        "sheet_id": current_sheet_id,
+        "layout": conn_layout_dict
+    })
+
     time.sleep(0.5)
 
 #=========================================
-# RESET OBJECTS BEFORE PIN PLACEMENT
+# COMPLETELY RELEASE E3 OBJECTS
 #=========================================
-del attr,text,sym,pin,comp,dev,sht,prj,app
-time.sleep(1.0)
+del attr
+del text
+del sym
+del pin
+del comp
+del dev
+del sht
+del prj
+del app
 
-app=win32.gencache.EnsureDispatch("CT.Application")
-prj=app.CreateJobObject()
-text=prj.CreateTextObject()
-comp=prj.CreateComponentObject()
-dev=prj.CreateDeviceObject()
-sym=prj.CreateSymbolObject()
-pin=prj.CreatePinObject()
-attr=prj.CreateAttributeObject()
-sht=prj.CreateSheetObject()
+time.sleep(1.5)
+
+#=========================================
+# RECREATE CLEAN E3 OBJECTS
+#=========================================
+app = win32.gencache.EnsureDispatch("CT.Application")
+prj = app.CreateJobObject()
+text = prj.CreateTextObject()
+comp = prj.CreateComponentObject()
+dev = prj.CreateDeviceObject()
+sym = prj.CreateSymbolObject()
+pin = prj.CreatePinObject()
+attr = prj.CreateAttributeObject()
+sht = prj.CreateSheetObject()
 
 #=========================================
 # PHASE 2 - PLACE ALL PINS
 #=========================================
 for data in SCHEMATIC_DATA:
-    i=data["index"]; conn_name=data["name"]; connector_view_id=data["connector_view"]; current_sheet_id=data["sheet_id"]; conn_layout_dict=data["layout"]
+    i = data["index"]
+    conn_name = data["name"]
+    connector_view_id = data["connector_view"]
+    current_sheet_id = data["sheet_id"]
+    conn_layout_dict = data["layout"]
 
     dev.SetId(connector_view_id)
-    newpininfo=dev.GetAllPinIds(None)
-    newpinids=[x for x in newpininfo[1] if x is not None]
-    newpindict={}
+
+    newpininfo = dev.GetAllPinIds(None)
+    newpinids = [x for x in newpininfo[1] if x is not None]
+
+    newpindict = {}
 
     for pin_id in newpinids:
         pin.SetId(pin_id)
-        newpindict[str(pin.GetName())]=pin_id
+        pin_name = str(pin.GetName())
+        newpindict[pin_name] = pin_id
 
-    print("PIN VIEW:",conn_name,"VIEW:",connector_view_id,"PINS:",newpindict)
+    print("PIN VIEW:", conn_name, "VIEW:", connector_view_id, "PINS:", newpindict)
 
-    SCHEMATIC_PIN_MAP=generate_schematic_pin_map(PIN_SIGNAL_INFO[i],newpindict,conn_layout_dict)
-    symname="MilSymbolReceptacle¶END_SPLIT"
+    SCHEMATIC_PIN_MAP = generate_schematic_pin_map(PIN_SIGNAL_INFO[i], newpindict, conn_layout_dict)
+
+    symname = "MilSymbolReceptacle¶END_SPLIT"
 
     for pin_data in SCHEMATIC_PIN_MAP:
-        res=sym.PlacePins(pin_data["pin id"],symname,"1",current_sheet_id,pin_data["x"],pin_data["y"],pin_data["flip"],1.0)
-        print("PLACEPIN:",conn_name,"PIN:",pin_data["pin name"],"ID:",pin_data["pin id"],"X:",pin_data["x"],"Y:",pin_data["y"],"RESULT:",repr(res))
-        status=res[0] if isinstance(res,(tuple,list)) else res
-        if status==0: raise Exception(f"Failed placing {conn_name} pin {pin_data['pin name']}")
-        app.PutMessage(f"Placed {conn_name} pin {pin_data['pin name']} x={pin_data['x']} y={pin_data['y']} flip={pin_data['flip']}")
-        symname="MilSymbolReceptacle¶SPLIT_BOTTOM"
+        print("ATTEMPTING:", conn_name, "PIN:", pin_data["pin name"], "ID:", pin_data["pin id"], "X:", pin_data["x"], "Y:", pin_data["y"])
+
+        res = sym.PlacePins(pin_data["pin id"], symname, "1", current_sheet_id, pin_data["x"], pin_data["y"], pin_data["flip"], 1.0)
+
+        print("PLACEPINS RESULT:", repr(res))
+
+        status = res[0] if isinstance(res, (tuple, list)) else res
+
+        if status == 0:
+            raise Exception(f"Failed placing {conn_name} pin {pin_data['pin name']}")
+
+        app.PutMessage(f"Placed {conn_name} pin {pin_data['pin name']} x={pin_data['x']} y={pin_data['y']}")
+
+        symname = "MilSymbolReceptacle¶SPLIT_BOTTOM"
+
         time.sleep(0.25)
 
 #=========================================
-# RESET OBJECTS BEFORE FORMATTING
+# RESET BEFORE FORMATTING
 #=========================================
-del attr,text,sym,pin,comp,dev,sht,prj,app
+del attr
+del text
+del sym
+del pin
+del comp
+del dev
+del sht
+del prj
+del app
+
 time.sleep(1.0)
 
-app=win32.gencache.EnsureDispatch("CT.Application")
-prj=app.CreateJobObject()
-text=prj.CreateTextObject()
-comp=prj.CreateComponentObject()
-dev=prj.CreateDeviceObject()
-sym=prj.CreateSymbolObject()
-pin=prj.CreatePinObject()
-attr=prj.CreateAttributeObject()
-sht=prj.CreateSheetObject()
+app = win32.gencache.EnsureDispatch("CT.Application")
+prj = app.CreateJobObject()
+text = prj.CreateTextObject()
+comp = prj.CreateComponentObject()
+dev = prj.CreateDeviceObject()
+sym = prj.CreateSymbolObject()
+pin = prj.CreatePinObject()
+attr = prj.CreateAttributeObject()
+sht = prj.CreateSheetObject()
 
 #=========================================
-# PHASE 3 - FORMAT ALL BLOCKS
+# PHASE 3 - FORMAT BLOCKS
 #=========================================
 for data in SCHEMATIC_DATA:
-    layout=data["layout"]
-    format_main_block_view(data["parent_block"],layout["x start"],layout["y start"],layout["width"],layout["height"])
-
-#=========================================
-# CLEANUP
-#=========================================
-del pin,attr,text,sym,comp,dev,sht,conn,prj,app
+    layout = data["layout"]
+    format_main_block_view(data["parent_block"], layout["x start"], layout["y start"], layout["width"], layout["height"])
