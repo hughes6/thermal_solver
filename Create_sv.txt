@@ -1,109 +1,113 @@
-def display_main_block_attributes(device_view_id):
-    dev.SetId(device_view_id)
+def format_connector_text(connector_view_id, conn_name):
+    print("FORMATTING CONNECTOR TEXT:", conn_name, "VIEW:", connector_view_id)
+
+    dev.SetId(connector_view_id)
+
+    #=========================================
+    # SYMBOL TEXT
+    #=========================================
     syminfo = dev.GetSymbolIds(None)
     symids = [x for x in syminfo[1] if x is not None]
 
     for sym_id in symids:
         sym.SetId(sym_id)
 
-        res = sym.AddAttributeValue("Equipment Identifacation", ADDITIONAL_PART_ID)
-
-        if res == -1:
-            print("Equipment Identification already exists or failed on symbol:", sym_id)
-            attrinfo = sym.GetAttributeIds(None)
-            attrids = [x for x in attrinfo[1] if x is not None]
-
-            for attr_id in attrids:
-                attr.SetId(attr_id)
-
-                if attr.GetName() == "Equipment Identifacation":
-                    res = attr_id
-                    break
-
-        if res != -1:
-            attr.SetId(res)
-            display_result = attr.DisplayAttribute()
-            print("DISPLAY ATTRIBUTE:", device_view_id, "SYMBOL:", sym_id, "ATTR:", res, "RESULT:", display_result)
-
-
-def format_main_block_view(device_view_id, x, y, width, height):
-    print("FORMATTING DEVICE VIEW:", device_view_id)
-
-    x_center = x + (width / 2.0)
-
-    dev.SetId(device_view_id)
-    syminfo = dev.GetSymbolIds(None)
-    symids = [s for s in syminfo[1] if s is not None]
-
-    for sym_id in symids:
-        sym.SetId(sym_id)
-
-        sym.SetBlockHatchColour(58)
-        sym.SetBlockOutlineColour(0)
-
-        #=========================================
-        # NORMAL SYMBOL TEXT
-        #=========================================
         textinfo = sym.GetTextIds(None)
-        textids = [t for t in textinfo[1] if t is not None]
+        textids = [x for x in textinfo[1] if x is not None]
 
         for text_id in textids:
             text.SetId(text_id)
+
             txt = str(text.GetText()).strip()
+            txt_type = text.GetType()
 
-            print("SYMBOL TEXT:", "VIEW:", device_view_id, "SYM:", sym_id, "TEXT ID:", text_id, "VALUE:", repr(txt))
+            print("CONNECTOR SYMBOL TEXT:", conn_name, "TEXT:", repr(txt), "TYPE:", txt_type, "ID:", text_id)
 
-            if txt == "BxRxUx":
-                text.SetColour(0)
-                text.SetMode(1)
-                text.SetAlignment(2)
-                text.SetStyle(1)
-                text.SetHeight(0.2)
-                text.SetSchemaLocation(x_center, y + height - 0.3)
-
-            elif txt == str(DEVICE_DESIGNATION).strip() or str(DEVICE_DESIGNATION).strip() in txt:
-                text.SetColour(0)
-                text.SetMode(1)
-                text.SetAlignment(2)
-                text.SetStyle(1)
-                text.SetHeight(0.2)
-                text.SetSchemaLocation(x_center, y + height - 0.7)
-
-                print("MOVED DEVICE DESIGNATION:", repr(txt), "TO:", x_center, y + height - 0.7)
-
-            elif DEVICE_FUNCTION is not None and txt == str(DEVICE_FUNCTION).strip():
+            # HIDE COMPONENT CODE
+            if txt_type == 5:
                 text.SetVisibility(0)
 
-        #=========================================
-        # ATTRIBUTE TEXT
-        #=========================================
-        attrinfo = sym.GetAttributeIds(None)
-        attrids = [a for a in attrinfo[1] if a is not None]
+            # BOLD CONNECTOR DEVICE NAME
+            if txt == str(conn_name).strip():
+                text.SetVisibility(1)
+                text.SetColour(0)
+                text.SetMode(1)
+                text.SetStyle(1)
+                text.SetHeight(0.2)
+
+                print("BOLDED CONNECTOR NAME:", conn_name, "TEXT ID:", text_id)
+
+    #=========================================
+    # PIN ATTRIBUTE TEXT
+    #=========================================
+    pininfo = dev.GetAllPinIds(None)
+    pinids = [x for x in pininfo[1] if x is not None]
+
+    for pin_id in pinids:
+        pin.SetId(pin_id)
+
+        attrinfo = pin.GetAttributeIds(None)
+        attrids = [x for x in attrinfo[1] if x is not None]
 
         for attr_id in attrids:
             attr.SetId(attr_id)
+
             attr_name = str(attr.GetName()).strip()
 
-            print("ATTRIBUTE:", "VIEW:", device_view_id, "SYM:", sym_id, "ATTR ID:", attr_id, "NAME:", repr(attr_name))
+            attrtextinfo = attr.GetTextIds(None)
+            attrtextids = [x for x in attrtextinfo[1] if x is not None]
 
-            if attr_name == "Equipment Identifacation":
-                attrtextinfo = attr.GetTextIds(None)
-                attrtextids = [t for t in attrtextinfo[1] if t is not None]
+            for text_id in attrtextids:
+                text.SetId(text_id)
 
-                print("EQUIPMENT IDENTIFICATION TEXT IDS:", attrtextids)
+                txt = str(text.GetText()).strip()
 
-                for text_id in attrtextids:
-                    text.SetId(text_id)
-                    txt = str(text.GetText()).strip()
+                print("PIN ATTRIBUTE TEXT:", conn_name, "PIN:", pin.GetName(), "ATTR:", repr(attr_name), "TEXT:", repr(txt), "ID:", text_id)
 
-                    print("ATTRIBUTE TEXT:", "ID:", text_id, "VALUE:", repr(txt))
-
+                if attr_name == "Local Signal Name":
                     text.SetVisibility(1)
                     text.SetColour(0)
                     text.SetMode(1)
-                    text.SetAlignment(2)
-                    text.SetStyle(1)
+                    text.SetStyle(0)
                     text.SetHeight(0.2)
-                    text.SetSchemaLocation(x_center, y + height - 1.1)
 
-                    print("MOVED EQUIPMENT IDENTIFICATION:", repr(txt), "TO:", x_center, y + height - 1.1)
+                    print("SHOWING LOCAL SIGNAL:", conn_name, "PIN:", pin.GetName(), "SIGNAL:", repr(txt))
+
+                else:
+                    text.SetVisibility(0)
+
+
+
+
+
+
+#=========================================
+# RESET BEFORE CONNECTOR TEXT FORMATTING
+#=========================================
+del attr
+del text
+del sym
+del pin
+del comp
+del dev
+del sht
+del prj
+del app
+
+time.sleep(1.0)
+
+app = win32.gencache.EnsureDispatch("CT.Application")
+prj = app.CreateJobObject()
+text = prj.CreateTextObject()
+comp = prj.CreateComponentObject()
+dev = prj.CreateDeviceObject()
+sym = prj.CreateSymbolObject()
+pin = prj.CreatePinObject()
+attr = prj.CreateAttributeObject()
+sht = prj.CreateSheetObject()
+
+#=========================================
+# FORMAT ALL CONNECTOR AND PIN TEXT
+#=========================================
+for data in SCHEMATIC_DATA:
+    format_connector_text(data["connector_view"], data["name"])
