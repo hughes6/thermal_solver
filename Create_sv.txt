@@ -314,11 +314,12 @@ def format_main_block_view(device_view_id, x, y, width, height):
                     print("MOVED EQUIPMENT IDENTIFICATION:", repr(txt), "TO:", x_center, y + height - 1.1)
 
 
-def format_connector_text(connector_view_id, conn_name):
-    dev.SetId(connector_view_id)
+def format_connector_text(connector_device_id, conn_name):
+    dev.SetId(connector_device_id)
 
     #=========================================
     # HIDE COMPONENT CODE ONLY
+    # USE THE ACTUAL CONNECTOR DEVICE, NOT THE VIEW
     #=========================================
     symbolinfo = dev.GetSymbolIds(None)
     symbolids = [x for x in symbolinfo[1] if x is not None]
@@ -330,12 +331,13 @@ def format_connector_text(connector_view_id, conn_name):
 
         for text_id in textids:
             text.SetId(text_id)
-
             if text.GetType() == 5:
                 text.SetVisibility(0)
 
     #=========================================
-    # TURN ON LOCAL SIGNAL NAME ONLY
+    # TURN ON + BOLD LOCAL SIGNAL NAME ONLY
+    # TYPE 617 = LOCAL SIGNAL NAME
+    # LEAVE DEVICE DESIGNATION ALONE
     #=========================================
     pininfo = dev.GetPinIds(None)
     pinids = [x for x in pininfo[1] if x is not None]
@@ -347,7 +349,6 @@ def format_connector_text(connector_view_id, conn_name):
 
         for pin_text_id in pintextids:
             text.SetId(pin_text_id)
-
             if text.GetType() == 617:
                 text.SetVisibility(1)
                 text.SetColour(0)
@@ -821,6 +822,7 @@ for i in range(len(PIN_SIGNAL_INFO)):
         "name": conn_name,
         "parent_block": parent_block,
         "block_symbol_id": block_symbol_id,
+        "connector_device_id": connector_device_id,
         "connector_view": connector_view_id,
         "sheet_id": current_sheet_id,
         "layout": conn_layout_dict
@@ -998,7 +1000,7 @@ sht = prj.CreateSheetObject()
 # FINAL OPERATION - FORMAT CONNECTOR AND PIN TEXT
 #=========================================
 for data in SCHEMATIC_DATA:
-    format_connector_text(data["connector_view"], data["name"])
+    format_connector_text(data["connector_device_id"], data["name"])
 
 #=========================================
 # CLEANUP
