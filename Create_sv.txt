@@ -1,348 +1,955 @@
-import time
-import win32com.client as win32
 
-
-# ================================================
-# CONNECT TO ACTIVE E3 PROJECT
-# ================================================
-app = win32.GetActiveObject("CT.Application")
-prj = app.CreateJobObject()
-dev = prj.CreateDeviceObject()
-pin = prj.CreatePinObject()
-sym = prj.CreateSymbolObject()
-text = prj.CreateTextObject()
-
-
-# ================================================
-# HELPERS
-# ================================================
-def extract_ids(result):
-    if result is None:
-        return []
-
-    if isinstance(result, (tuple, list)):
-        if len(result) >= 2 and isinstance(result[1], (tuple, list)):
-            return [x for x in result[1] if x is not None and x != 0]
-
-        return [x for x in result if isinstance(x, int) and x != 0]
-
-    if isinstance(result, int):
-        if result != 0:
-            return [result]
-
-    return []
-
-
-def get_visibility(text_id):
-    text.SetId(text_id)
-
-    try:
-        return text.GetVisibility()
-    except Exception as e:
-        return "GET VIS ERROR: " + repr(e)
-
-
-def get_pin_view_ids(pin_id):
-    pin.SetId(pin_id)
-
-    try:
-        result = pin.GetViewIds(None)
-        return extract_ids(result)
-    except Exception:
-        pass
-
-    try:
-        result = pin.GetViewIds()
-        return extract_ids(result)
-    except Exception as e:
-        print("GetViewIds ERROR:", pin_id, repr(e))
-        return []
-
-
-# ================================================
-# TRACK EVERYTHING WE MODIFY
-# ================================================
-modified_texts = []
-
-
-print("")
-print("============================================================")
-print("E3 VISIBILITY TEST")
-print("============================================================")
-
-
-# ================================================
-# GET ALL LOGICAL DEVICES
-# ================================================
-device_result = prj.GetAllDeviceIds(None)
-device_ids = extract_ids(device_result)
-
-
-for device_id in device_ids:
-    dev.SetId(device_id)
-
-    try:
-        device_name = str(dev.GetName())
-    except Exception:
-        continue
-
-    # ================================================
-    # DETECT CONNECTOR DEVICE
-    # ================================================
-    try:
-        symbol_result = dev.GetSymbolIds(None)
-        logical_symbol_ids = extract_ids(symbol_result)
-    except Exception:
-        logical_symbol_ids = []
-
-    is_connector = False
-
-    for logical_symbol_id in logical_symbol_ids:
-        sym.SetId(logical_symbol_id)
-
-        try:
-            text_result = sym.GetTextIds(None)
-            text_ids = extract_ids(text_result)
-        except Exception:
-            text_ids = []
-
-        for text_id in text_ids:
-            text.SetId(text_id)
-
-            try:
-                text_type = text.GetType()
-            except Exception:
-                continue
-
-            if text_type == 5:
-                is_connector = True
-                break
-
-        if is_connector:
-            break
-
-    if not is_connector:
-        continue
-
-    print("")
-    print("############################################################")
-    print("CONNECTOR:", device_name)
-    print("DEVICE ID:", device_id)
-    print("############################################################")
-
-    # ================================================
-    # GET LOGICAL CONNECTOR PINS
-    # ================================================
-    try:
-        pin_result = dev.GetPinIds(None)
-        logical_pin_ids = extract_ids(pin_result)
-    except Exception:
-        logical_pin_ids = []
-
-    for logical_pin_id in logical_pin_ids:
-        pin.SetId(logical_pin_id)
-
-        try:
-            pin_name = str(pin.GetName())
-        except Exception:
-            pin_name = "UNKNOWN"
-
-        pin_view_ids = get_pin_view_ids(logical_pin_id)
-
-        for pin_view_id in pin_view_ids:
-            sym.SetId(pin_view_id)
-
-            try:
-                text_result = sym.GetTextIds(None)
-                symbol_text_ids = extract_ids(text_result)
-            except Exception:
-                symbol_text_ids = []
-
-            # ================================================
-            # DETERMINE POSITION FROM TYPE 213
-            # ================================================
-            split_position = None
-
-            for text_id in symbol_text_ids:
-                text.SetId(text_id)
-
-                try:
-                    text_type = text.GetType()
-                    text_value = str(text.GetText()).strip()
-                except Exception:
-                    continue
-
-                if text_type == 213 and "/" in text_value and not text_value.startswith("*"):
-                    try:
-                        split_position = int(text_value.split("/")[0])
-                    except Exception:
-                        split_position = None
-
-                    break
-
-            if split_position is None:
-                continue
-
-            print("")
-            print("PIN:", pin_name, "VIEW:", pin_view_id, "POSITION:", split_position)
-
-            # ================================================
-            # TEST EVERY RELEVANT TEXT
-            # ================================================
-            for text_id in symbol_text_ids:
-                text.SetId(text_id)
-
-                try:
-                    text_type = text.GetType()
-                    text_value = str(text.GetText()).strip()
-                except Exception:
-                    continue
-
-                # ================================================
-                # TYPE 5 - COMPONENT CODE
-                # ALWAYS OFF
-                # ================================================
-                if text_type == 5:
-                    before = get_visibility(text_id)
-                    text.SetId(text_id)
-                    result = text.SetVisibility(0)
-                    after = get_visibility(text_id)
-
-                    print("    TYPE 5")
-                    print("    TEXT ID:", text_id)
-                    print("    VALUE:", repr(text_value))
-                    print("    BEFORE:", before)
-                    print("    SET RESULT:", result)
-                    print("    AFTER:", after)
-
-                    if after == 0:
-                        print("    IMMEDIATE RESULT: PASS")
-                    else:
-                        print("    IMMEDIATE RESULT: FAIL")
-
-                    modified_texts.append({"device": device_name, "pin": pin_name, "position": split_position, "view": pin_view_id, "text_id": text_id, "type": 5, "value": text_value, "desired": 0})
-
-                # ================================================
-                # TYPE 12 - DEVICE DESIGNATION
-                # ONLY TURN OFF NON-TOP PINS
-                # ================================================
-                elif text_type == 12 and split_position != 1:
-                    before = get_visibility(text_id)
-                    text.SetId(text_id)
-                    result = text.SetVisibility(0)
-                    after = get_visibility(text_id)
-
-                    print("    TYPE 12 NON-TOP")
-                    print("    TEXT ID:", text_id)
-                    print("    VALUE:", repr(text_value))
-                    print("    BEFORE:", before)
-                    print("    SET RESULT:", result)
-                    print("    AFTER:", after)
-
-                    if after == 0:
-                        print("    IMMEDIATE RESULT: PASS")
-                    else:
-                        print("    IMMEDIATE RESULT: FAIL")
-
-                    modified_texts.append({"device": device_name, "pin": pin_name, "position": split_position, "view": pin_view_id, "text_id": text_id, "type": 12, "value": text_value, "desired": 0})
-
-                # ================================================
-                # TYPE 12 TOP PIN
-                # DO NOT TOUCH
-                # ================================================
-                elif text_type == 12 and split_position == 1:
-                    visibility = get_visibility(text_id)
-
-                    print("    TYPE 12 TOP - LEFT ALONE")
-                    print("    TEXT ID:", text_id)
-                    print("    VALUE:", repr(text_value))
-                    print("    VISIBILITY:", visibility)
-
-                # ================================================
-                # TYPE 617 - LOCAL SIGNAL NAME
-                # ALWAYS ON
-                # ================================================
-                elif text_type == 617:
-                    before = get_visibility(text_id)
-
-                    text.SetId(text_id)
-                    result = text.SetVisibility(1)
-                    text.SetColour(0)
-                    text.SetAlignment(3)
-                    text.SetStyle(1)
-                    text.SetHeight(0.2)
-
-                    after = get_visibility(text_id)
-
-                    print("    TYPE 617")
-                    print("    TEXT ID:", text_id)
-                    print("    VALUE:", repr(text_value))
-                    print("    BEFORE:", before)
-                    print("    SET RESULT:", result)
-                    print("    AFTER:", after)
-
-                    if after == 1:
-                        print("    IMMEDIATE RESULT: PASS")
-                    else:
-                        print("    IMMEDIATE RESULT: FAIL")
-
-                    modified_texts.append({"device": device_name, "pin": pin_name, "position": split_position, "view": pin_view_id, "text_id": text_id, "type": 617, "value": text_value, "desired": 1})
-
-
-# ================================================
-# WAIT TO SEE WHETHER E3 RESETS VISIBILITY
-# ================================================
-print("")
-print("============================================================")
-print("IMMEDIATE FORMATTING COMPLETE")
-print("WAITING 5 SECONDS")
-print("============================================================")
-
-time.sleep(5.0)
-
-
-# ================================================
-# SECOND PASS - DO NOT MODIFY ANYTHING
-# JUST READ VISIBILITY BACK
-# ================================================
-print("")
-print("============================================================")
-print("5 SECOND VISIBILITY VERIFICATION")
-print("============================================================")
-
-passed = 0
-failed = 0
-
-for item in modified_texts:
-    current_visibility = get_visibility(item["text_id"])
-
-    print("")
-    print("DEVICE:", item["device"])
-    print("PIN:", item["pin"])
-    print("POSITION:", item["position"])
-    print("VIEW:", item["view"])
-    print("TEXT ID:", item["text_id"])
-    print("TYPE:", item["type"])
-    print("VALUE:", repr(item["value"]))
-    print("EXPECTED VISIBILITY:", item["desired"])
-    print("ACTUAL VISIBILITY:", current_visibility)
-
-    if current_visibility == item["desired"]:
-        print("FINAL RESULT: PASS")
-        passed += 1
-    else:
-        print("FINAL RESULT: FAIL")
-        failed += 1
-
-
-# ================================================
-# FINAL SUMMARY
-# ================================================
-print("")
-print("============================================================")
-print("FINAL SUMMARY")
-print("============================================================")
-print("PASS:", passed)
-print("FAIL:", failed)
-print("TOTAL:", len(modified_texts))
-print("============================================================")
+============================================================
+E3 VISIBILITY TEST
+============================================================
+
+############################################################
+CONNECTOR: SCP-J1
+DEVICE ID: 72552
+############################################################
+
+PIN: 1 VIEW: 69855 POSITION: 1
+    TYPE 5
+    TEXT ID: 65444
+    VALUE: 'Generic_D-Sub_9P_Plug'
+    BEFORE: 1
+    SET RESULT: 1
+    AFTER: 0
+    IMMEDIATE RESULT: PASS
+    TYPE 12 TOP - LEFT ALONE
+    TEXT ID: 70827
+    VALUE: 'SCP-J1#1'
+    VISIBILITY: 1
+    TYPE 617
+    TEXT ID: 65468
+    VALUE: 'TEST_1'
+    BEFORE: 1
+    SET RESULT: 1
+    AFTER: 1
+    IMMEDIATE RESULT: PASS
+
+PIN: 2 VIEW: 69315 POSITION: 2
+    TYPE 5
+    TEXT ID: 15336
+    VALUE: 'Generic_D-Sub_9P_Plug'
+    BEFORE: 1
+    SET RESULT: 1
+    AFTER: 0
+    IMMEDIATE RESULT: PASS
+    TYPE 12 NON-TOP
+    TEXT ID: 71351
+    VALUE: 'SCP-J1#1'
+    BEFORE: 1
+    SET RESULT: 1
+    AFTER: 0
+    IMMEDIATE RESULT: PASS
+    TYPE 617
+    TEXT ID: 137344
+    VALUE: 'SPARE'
+    BEFORE: 1
+    SET RESULT: 1
+    AFTER: 1
+    IMMEDIATE RESULT: PASS
+
+PIN: 3 VIEW: 69777 POSITION: 3
+    TYPE 5
+    TEXT ID: 69169
+    VALUE: 'Generic_D-Sub_9P_Plug'
+    BEFORE: 1
+    SET RESULT: 1
+    AFTER: 0
+    IMMEDIATE RESULT: PASS
+    TYPE 12 NON-TOP
+    TEXT ID: 71453
+    VALUE: 'SCP-J1#1'
+    BEFORE: 1
+    SET RESULT: 1
+    AFTER: 0
+    IMMEDIATE RESULT: PASS
+    TYPE 617
+    TEXT ID: 69221
+    VALUE: 'T3'
+    BEFORE: 1
+    SET RESULT: 1
+    AFTER: 1
+    IMMEDIATE RESULT: PASS
+
+PIN: 4 VIEW: 70517 POSITION: 4
+    TYPE 5
+    TEXT ID: 68391
+    VALUE: 'Generic_D-Sub_9P_Plug'
+    BEFORE: 1
+    SET RESULT: 1
+    AFTER: 0
+    IMMEDIATE RESULT: PASS
+    TYPE 12 NON-TOP
+    TEXT ID: 69217
+    VALUE: 'SCP-J1#1'
+    BEFORE: 1
+    SET RESULT: 1
+    AFTER: 0
+    IMMEDIATE RESULT: PASS
+    TYPE 617
+    TEXT ID: 67086
+    VALUE: 'SPARE'
+    BEFORE: 1
+    SET RESULT: 1
+    AFTER: 1
+    IMMEDIATE RESULT: PASS
+
+PIN: 5 VIEW: 70709 POSITION: 5
+    TYPE 5
+    TEXT ID: 69669
+    VALUE: 'Generic_D-Sub_9P_Plug'
+    BEFORE: 1
+    SET RESULT: 1
+    AFTER: 0
+    IMMEDIATE RESULT: PASS
+    TYPE 12 NON-TOP
+    TEXT ID: 69563
+    VALUE: 'SCP-J1#1'
+    BEFORE: 1
+    SET RESULT: 1
+    AFTER: 0
+    IMMEDIATE RESULT: PASS
+    TYPE 617
+    TEXT ID: 67296
+    VALUE: 'test55'
+    BEFORE: 1
+    SET RESULT: 1
+    AFTER: 1
+    IMMEDIATE RESULT: PASS
+
+PIN: 6 VIEW: 71319 POSITION: 6
+    TYPE 5
+    TEXT ID: 65556
+    VALUE: 'Generic_D-Sub_9P_Plug'
+    BEFORE: 1
+    SET RESULT: 1
+    AFTER: 0
+    IMMEDIATE RESULT: PASS
+    TYPE 12 NON-TOP
+    TEXT ID: 65579
+    VALUE: 'SCP-J1#1'
+    BEFORE: 1
+    SET RESULT: 1
+    AFTER: 0
+    IMMEDIATE RESULT: PASS
+    TYPE 617
+    TEXT ID: 72089
+    VALUE: 'SPARE'
+    BEFORE: 1
+    SET RESULT: 1
+    AFTER: 1
+    IMMEDIATE RESULT: PASS
+
+PIN: 7 VIEW: 71381 POSITION: 7
+    TYPE 5
+    TEXT ID: 69735
+    VALUE: 'Generic_D-Sub_9P_Plug'
+    BEFORE: 1
+    SET RESULT: 1
+    AFTER: 0
+    IMMEDIATE RESULT: PASS
+    TYPE 12 NON-TOP
+    TEXT ID: 67000
+    VALUE: 'SCP-J1#1'
+    BEFORE: 1
+    SET RESULT: 1
+    AFTER: 0
+    IMMEDIATE RESULT: PASS
+    TYPE 617
+    TEXT ID: 69695
+    VALUE: 'SPARE'
+    BEFORE: 1
+    SET RESULT: 1
+    AFTER: 1
+    IMMEDIATE RESULT: PASS
+
+PIN: 8 VIEW: 70173 POSITION: 8
+    TYPE 5
+    TEXT ID: 62491
+    VALUE: 'Generic_D-Sub_9P_Plug'
+    BEFORE: 1
+    SET RESULT: 1
+    AFTER: 0
+    IMMEDIATE RESULT: PASS
+    TYPE 12 NON-TOP
+    TEXT ID: 69753
+    VALUE: 'SCP-J1#1'
+    BEFORE: 1
+    SET RESULT: 1
+    AFTER: 0
+    IMMEDIATE RESULT: PASS
+    TYPE 617
+    TEXT ID: 68579
+    VALUE: 'SPARE'
+    BEFORE: 1
+    SET RESULT: 1
+    AFTER: 1
+    IMMEDIATE RESULT: PASS
+
+PIN: 9 VIEW: 70297 POSITION: 9
+    TYPE 5
+    TEXT ID: 65688
+    VALUE: 'Generic_D-Sub_9P_Plug'
+    BEFORE: 1
+    SET RESULT: 1
+    AFTER: 0
+    IMMEDIATE RESULT: PASS
+    TYPE 12 NON-TOP
+    TEXT ID: 70215
+    VALUE: 'SCP-J1#1'
+    BEFORE: 1
+    SET RESULT: 1
+    AFTER: 0
+    IMMEDIATE RESULT: PASS
+    TYPE 617
+    TEXT ID: 65842
+    VALUE: 'SPARE'
+    BEFORE: 1
+    SET RESULT: 1
+    AFTER: 1
+    IMMEDIATE RESULT: PASS
+
+############################################################
+CONNECTOR: SCP-J2
+DEVICE ID: 65571
+############################################################
+
+PIN: 1 VIEW: 12023 POSITION: 1
+    TYPE 5
+    TEXT ID: 68687
+    VALUE: 'Generic_RJ45_Plug'
+    BEFORE: 1
+    SET RESULT: 1
+    AFTER: 0
+    IMMEDIATE RESULT: PASS
+    TYPE 12 TOP - LEFT ALONE
+    TEXT ID: 68637
+    VALUE: 'SCP-J2#2'
+    VISIBILITY: 1
+    TYPE 617
+    TEXT ID: 72561
+    VALUE: 'SPARE'
+    BEFORE: 1
+    SET RESULT: 1
+    AFTER: 1
+    IMMEDIATE RESULT: PASS
+
+PIN: 2 VIEW: 65549 POSITION: 2
+    TYPE 5
+    TEXT ID: 68091
+    VALUE: 'Generic_RJ45_Plug'
+    BEFORE: 1
+    SET RESULT: 1
+    AFTER: 0
+    IMMEDIATE RESULT: PASS
+    TYPE 12 NON-TOP
+    TEXT ID: 68087
+    VALUE: 'SCP-J2#2'
+    BEFORE: 1
+    SET RESULT: 1
+    AFTER: 0
+    IMMEDIATE RESULT: PASS
+    TYPE 617
+    TEXT ID: 68161
+    VALUE: 'SPARE'
+    BEFORE: 1
+    SET RESULT: 1
+    AFTER: 1
+    IMMEDIATE RESULT: PASS
+
+PIN: 3 VIEW: 65553 POSITION: 3
+    TYPE 5
+    TEXT ID: 63436
+    VALUE: 'Generic_RJ45_Plug'
+    BEFORE: 1
+    SET RESULT: 1
+    AFTER: 0
+    IMMEDIATE RESULT: PASS
+    TYPE 12 NON-TOP
+    TEXT ID: 147231
+    VALUE: 'SCP-J2#2'
+    BEFORE: 1
+    SET RESULT: 1
+    AFTER: 0
+    IMMEDIATE RESULT: PASS
+    TYPE 617
+    TEXT ID: 70973
+    VALUE: 'SPARE'
+    BEFORE: 1
+    SET RESULT: 1
+    AFTER: 1
+    IMMEDIATE RESULT: PASS
+
+PIN: 4 VIEW: 137292 POSITION: 4
+    TYPE 5
+    TEXT ID: 66938
+    VALUE: 'Generic_RJ45_Plug'
+    BEFORE: 1
+    SET RESULT: 1
+    AFTER: 0
+    IMMEDIATE RESULT: PASS
+    TYPE 12 NON-TOP
+    TEXT ID: 67309
+    VALUE: 'SCP-J2#2'
+    BEFORE: 1
+    SET RESULT: 1
+    AFTER: 0
+    IMMEDIATE RESULT: PASS
+    TYPE 617
+    TEXT ID: 67483
+    VALUE: 'TEST'
+    BEFORE: 1
+    SET RESULT: 1
+    AFTER: 1
+    IMMEDIATE RESULT: PASS
+
+PIN: 5 VIEW: 70139 POSITION: 5
+    TYPE 5
+    TEXT ID: 69769
+    VALUE: 'Generic_RJ45_Plug'
+    BEFORE: 1
+    SET RESULT: 1
+    AFTER: 0
+    IMMEDIATE RESULT: PASS
+    TYPE 12 NON-TOP
+    TEXT ID: 69071
+    VALUE: 'SCP-J2#2'
+    BEFORE: 1
+    SET RESULT: 1
+    AFTER: 0
+    IMMEDIATE RESULT: PASS
+    TYPE 617
+    TEXT ID: 69317
+    VALUE: 'SPARE'
+    BEFORE: 1
+    SET RESULT: 1
+    AFTER: 1
+    IMMEDIATE RESULT: PASS
+
+PIN: 6 VIEW: 65062 POSITION: 6
+    TYPE 5
+    TEXT ID: 65472
+    VALUE: 'Generic_RJ45_Plug'
+    BEFORE: 1
+    SET RESULT: 1
+    AFTER: 0
+    IMMEDIATE RESULT: PASS
+    TYPE 12 NON-TOP
+    TEXT ID: 65972
+    VALUE: 'SCP-J2#2'
+    BEFORE: 1
+    SET RESULT: 1
+    AFTER: 0
+    IMMEDIATE RESULT: PASS
+    TYPE 617
+    TEXT ID: 65948
+    VALUE: 'SPARE'
+    BEFORE: 1
+    SET RESULT: 1
+    AFTER: 1
+    IMMEDIATE RESULT: PASS
+
+PIN: 7 VIEW: 65133 POSITION: 7
+    TYPE 5
+    TEXT ID: 65763
+    VALUE: 'Generic_RJ45_Plug'
+    BEFORE: 1
+    SET RESULT: 1
+    AFTER: 0
+    IMMEDIATE RESULT: PASS
+    TYPE 12 NON-TOP
+    TEXT ID: 72481
+    VALUE: 'SCP-J2#2'
+    BEFORE: 1
+    SET RESULT: 1
+    AFTER: 0
+    IMMEDIATE RESULT: PASS
+    TYPE 617
+    TEXT ID: 137323
+    VALUE: 'SPARE'
+    BEFORE: 1
+    SET RESULT: 1
+    AFTER: 1
+    IMMEDIATE RESULT: PASS
+
+PIN: 8 VIEW: 65169 POSITION: 8
+    TYPE 5
+    TEXT ID: 69079
+    VALUE: 'Generic_RJ45_Plug'
+    BEFORE: 1
+    SET RESULT: 1
+    AFTER: 0
+    IMMEDIATE RESULT: PASS
+    TYPE 12 NON-TOP
+    TEXT ID: 70711
+    VALUE: 'SCP-J2#2'
+    BEFORE: 1
+    SET RESULT: 1
+    AFTER: 0
+    IMMEDIATE RESULT: PASS
+    TYPE 617
+    TEXT ID: 66284
+    VALUE: 'SPARE'
+    BEFORE: 1
+    SET RESULT: 1
+    AFTER: 1
+    IMMEDIATE RESULT: PASS
+
+============================================================
+IMMEDIATE FORMATTING COMPLETE
+WAITING 5 SECONDS
+============================================================
+
+============================================================
+5 SECOND VISIBILITY VERIFICATION
+============================================================
+
+DEVICE: SCP-J1
+PIN: 1
+POSITION: 1
+VIEW: 69855
+TEXT ID: 65444
+TYPE: 5
+VALUE: 'Generic_D-Sub_9P_Plug'
+EXPECTED VISIBILITY: 0
+ACTUAL VISIBILITY: 0
+FINAL RESULT: PASS
+
+DEVICE: SCP-J1
+PIN: 1
+POSITION: 1
+VIEW: 69855
+TEXT ID: 65468
+TYPE: 617
+VALUE: 'TEST_1'
+EXPECTED VISIBILITY: 1
+ACTUAL VISIBILITY: 1
+FINAL RESULT: PASS
+
+DEVICE: SCP-J1
+PIN: 2
+POSITION: 2
+VIEW: 69315
+TEXT ID: 15336
+TYPE: 5
+VALUE: 'Generic_D-Sub_9P_Plug'
+EXPECTED VISIBILITY: 0
+ACTUAL VISIBILITY: 0
+FINAL RESULT: PASS
+
+DEVICE: SCP-J1
+PIN: 2
+POSITION: 2
+VIEW: 69315
+TEXT ID: 71351
+TYPE: 12
+VALUE: 'SCP-J1#1'
+EXPECTED VISIBILITY: 0
+ACTUAL VISIBILITY: 0
+FINAL RESULT: PASS
+
+DEVICE: SCP-J1
+PIN: 2
+POSITION: 2
+VIEW: 69315
+TEXT ID: 137344
+TYPE: 617
+VALUE: 'SPARE'
+EXPECTED VISIBILITY: 1
+ACTUAL VISIBILITY: 1
+FINAL RESULT: PASS
+
+DEVICE: SCP-J1
+PIN: 3
+POSITION: 3
+VIEW: 69777
+TEXT ID: 69169
+TYPE: 5
+VALUE: 'Generic_D-Sub_9P_Plug'
+EXPECTED VISIBILITY: 0
+ACTUAL VISIBILITY: 0
+FINAL RESULT: PASS
+
+DEVICE: SCP-J1
+PIN: 3
+POSITION: 3
+VIEW: 69777
+TEXT ID: 71453
+TYPE: 12
+VALUE: 'SCP-J1#1'
+EXPECTED VISIBILITY: 0
+ACTUAL VISIBILITY: 0
+FINAL RESULT: PASS
+
+DEVICE: SCP-J1
+PIN: 3
+POSITION: 3
+VIEW: 69777
+TEXT ID: 69221
+TYPE: 617
+VALUE: 'T3'
+EXPECTED VISIBILITY: 1
+ACTUAL VISIBILITY: 1
+FINAL RESULT: PASS
+
+DEVICE: SCP-J1
+PIN: 4
+POSITION: 4
+VIEW: 70517
+TEXT ID: 68391
+TYPE: 5
+VALUE: 'Generic_D-Sub_9P_Plug'
+EXPECTED VISIBILITY: 0
+ACTUAL VISIBILITY: 0
+FINAL RESULT: PASS
+
+DEVICE: SCP-J1
+PIN: 4
+POSITION: 4
+VIEW: 70517
+TEXT ID: 69217
+TYPE: 12
+VALUE: 'SCP-J1#1'
+EXPECTED VISIBILITY: 0
+ACTUAL VISIBILITY: 0
+FINAL RESULT: PASS
+
+DEVICE: SCP-J1
+PIN: 4
+POSITION: 4
+VIEW: 70517
+TEXT ID: 67086
+TYPE: 617
+VALUE: 'SPARE'
+EXPECTED VISIBILITY: 1
+ACTUAL VISIBILITY: 1
+FINAL RESULT: PASS
+
+DEVICE: SCP-J1
+PIN: 5
+POSITION: 5
+VIEW: 70709
+TEXT ID: 69669
+TYPE: 5
+VALUE: 'Generic_D-Sub_9P_Plug'
+EXPECTED VISIBILITY: 0
+ACTUAL VISIBILITY: 0
+FINAL RESULT: PASS
+
+DEVICE: SCP-J1
+PIN: 5
+POSITION: 5
+VIEW: 70709
+TEXT ID: 69563
+TYPE: 12
+VALUE: 'SCP-J1#1'
+EXPECTED VISIBILITY: 0
+ACTUAL VISIBILITY: 0
+FINAL RESULT: PASS
+
+DEVICE: SCP-J1
+PIN: 5
+POSITION: 5
+VIEW: 70709
+TEXT ID: 67296
+TYPE: 617
+VALUE: 'test55'
+EXPECTED VISIBILITY: 1
+ACTUAL VISIBILITY: 1
+FINAL RESULT: PASS
+
+DEVICE: SCP-J1
+PIN: 6
+POSITION: 6
+VIEW: 71319
+TEXT ID: 65556
+TYPE: 5
+VALUE: 'Generic_D-Sub_9P_Plug'
+EXPECTED VISIBILITY: 0
+ACTUAL VISIBILITY: 0
+FINAL RESULT: PASS
+
+DEVICE: SCP-J1
+PIN: 6
+POSITION: 6
+VIEW: 71319
+TEXT ID: 65579
+TYPE: 12
+VALUE: 'SCP-J1#1'
+EXPECTED VISIBILITY: 0
+ACTUAL VISIBILITY: 0
+FINAL RESULT: PASS
+
+DEVICE: SCP-J1
+PIN: 6
+POSITION: 6
+VIEW: 71319
+TEXT ID: 72089
+TYPE: 617
+VALUE: 'SPARE'
+EXPECTED VISIBILITY: 1
+ACTUAL VISIBILITY: 1
+FINAL RESULT: PASS
+
+DEVICE: SCP-J1
+PIN: 7
+POSITION: 7
+VIEW: 71381
+TEXT ID: 69735
+TYPE: 5
+VALUE: 'Generic_D-Sub_9P_Plug'
+EXPECTED VISIBILITY: 0
+ACTUAL VISIBILITY: 0
+FINAL RESULT: PASS
+
+DEVICE: SCP-J1
+PIN: 7
+POSITION: 7
+VIEW: 71381
+TEXT ID: 67000
+TYPE: 12
+VALUE: 'SCP-J1#1'
+EXPECTED VISIBILITY: 0
+ACTUAL VISIBILITY: 0
+FINAL RESULT: PASS
+
+DEVICE: SCP-J1
+PIN: 7
+POSITION: 7
+VIEW: 71381
+TEXT ID: 69695
+TYPE: 617
+VALUE: 'SPARE'
+EXPECTED VISIBILITY: 1
+ACTUAL VISIBILITY: 1
+FINAL RESULT: PASS
+
+DEVICE: SCP-J1
+PIN: 8
+POSITION: 8
+VIEW: 70173
+TEXT ID: 62491
+TYPE: 5
+VALUE: 'Generic_D-Sub_9P_Plug'
+EXPECTED VISIBILITY: 0
+ACTUAL VISIBILITY: 0
+FINAL RESULT: PASS
+
+DEVICE: SCP-J1
+PIN: 8
+POSITION: 8
+VIEW: 70173
+TEXT ID: 69753
+TYPE: 12
+VALUE: 'SCP-J1#1'
+EXPECTED VISIBILITY: 0
+ACTUAL VISIBILITY: 0
+FINAL RESULT: PASS
+
+DEVICE: SCP-J1
+PIN: 8
+POSITION: 8
+VIEW: 70173
+TEXT ID: 68579
+TYPE: 617
+VALUE: 'SPARE'
+EXPECTED VISIBILITY: 1
+ACTUAL VISIBILITY: 1
+FINAL RESULT: PASS
+
+DEVICE: SCP-J1
+PIN: 9
+POSITION: 9
+VIEW: 70297
+TEXT ID: 65688
+TYPE: 5
+VALUE: 'Generic_D-Sub_9P_Plug'
+EXPECTED VISIBILITY: 0
+ACTUAL VISIBILITY: 0
+FINAL RESULT: PASS
+
+DEVICE: SCP-J1
+PIN: 9
+POSITION: 9
+VIEW: 70297
+TEXT ID: 70215
+TYPE: 12
+VALUE: 'SCP-J1#1'
+EXPECTED VISIBILITY: 0
+ACTUAL VISIBILITY: 0
+FINAL RESULT: PASS
+
+DEVICE: SCP-J1
+PIN: 9
+POSITION: 9
+VIEW: 70297
+TEXT ID: 65842
+TYPE: 617
+VALUE: 'SPARE'
+EXPECTED VISIBILITY: 1
+ACTUAL VISIBILITY: 1
+FINAL RESULT: PASS
+
+DEVICE: SCP-J2
+PIN: 1
+POSITION: 1
+VIEW: 12023
+TEXT ID: 68687
+TYPE: 5
+VALUE: 'Generic_RJ45_Plug'
+EXPECTED VISIBILITY: 0
+ACTUAL VISIBILITY: 0
+FINAL RESULT: PASS
+
+DEVICE: SCP-J2
+PIN: 1
+POSITION: 1
+VIEW: 12023
+TEXT ID: 72561
+TYPE: 617
+VALUE: 'SPARE'
+EXPECTED VISIBILITY: 1
+ACTUAL VISIBILITY: 1
+FINAL RESULT: PASS
+
+DEVICE: SCP-J2
+PIN: 2
+POSITION: 2
+VIEW: 65549
+TEXT ID: 68091
+TYPE: 5
+VALUE: 'Generic_RJ45_Plug'
+EXPECTED VISIBILITY: 0
+ACTUAL VISIBILITY: 0
+FINAL RESULT: PASS
+
+DEVICE: SCP-J2
+PIN: 2
+POSITION: 2
+VIEW: 65549
+TEXT ID: 68087
+TYPE: 12
+VALUE: 'SCP-J2#2'
+EXPECTED VISIBILITY: 0
+ACTUAL VISIBILITY: 0
+FINAL RESULT: PASS
+
+DEVICE: SCP-J2
+PIN: 2
+POSITION: 2
+VIEW: 65549
+TEXT ID: 68161
+TYPE: 617
+VALUE: 'SPARE'
+EXPECTED VISIBILITY: 1
+ACTUAL VISIBILITY: 1
+FINAL RESULT: PASS
+
+DEVICE: SCP-J2
+PIN: 3
+POSITION: 3
+VIEW: 65553
+TEXT ID: 63436
+TYPE: 5
+VALUE: 'Generic_RJ45_Plug'
+EXPECTED VISIBILITY: 0
+ACTUAL VISIBILITY: 0
+FINAL RESULT: PASS
+
+DEVICE: SCP-J2
+PIN: 3
+POSITION: 3
+VIEW: 65553
+TEXT ID: 147231
+TYPE: 12
+VALUE: 'SCP-J2#2'
+EXPECTED VISIBILITY: 0
+ACTUAL VISIBILITY: 0
+FINAL RESULT: PASS
+
+DEVICE: SCP-J2
+PIN: 3
+POSITION: 3
+VIEW: 65553
+TEXT ID: 70973
+TYPE: 617
+VALUE: 'SPARE'
+EXPECTED VISIBILITY: 1
+ACTUAL VISIBILITY: 1
+FINAL RESULT: PASS
+
+DEVICE: SCP-J2
+PIN: 4
+POSITION: 4
+VIEW: 137292
+TEXT ID: 66938
+TYPE: 5
+VALUE: 'Generic_RJ45_Plug'
+EXPECTED VISIBILITY: 0
+ACTUAL VISIBILITY: 0
+FINAL RESULT: PASS
+
+DEVICE: SCP-J2
+PIN: 4
+POSITION: 4
+VIEW: 137292
+TEXT ID: 67309
+TYPE: 12
+VALUE: 'SCP-J2#2'
+EXPECTED VISIBILITY: 0
+ACTUAL VISIBILITY: 0
+FINAL RESULT: PASS
+
+DEVICE: SCP-J2
+PIN: 4
+POSITION: 4
+VIEW: 137292
+TEXT ID: 67483
+TYPE: 617
+VALUE: 'TEST'
+EXPECTED VISIBILITY: 1
+ACTUAL VISIBILITY: 1
+FINAL RESULT: PASS
+
+DEVICE: SCP-J2
+PIN: 5
+POSITION: 5
+VIEW: 70139
+TEXT ID: 69769
+TYPE: 5
+VALUE: 'Generic_RJ45_Plug'
+EXPECTED VISIBILITY: 0
+ACTUAL VISIBILITY: 0
+FINAL RESULT: PASS
+
+DEVICE: SCP-J2
+PIN: 5
+POSITION: 5
+VIEW: 70139
+TEXT ID: 69071
+TYPE: 12
+VALUE: 'SCP-J2#2'
+EXPECTED VISIBILITY: 0
+ACTUAL VISIBILITY: 0
+FINAL RESULT: PASS
+
+DEVICE: SCP-J2
+PIN: 5
+POSITION: 5
+VIEW: 70139
+TEXT ID: 69317
+TYPE: 617
+VALUE: 'SPARE'
+EXPECTED VISIBILITY: 1
+ACTUAL VISIBILITY: 1
+FINAL RESULT: PASS
+
+DEVICE: SCP-J2
+PIN: 6
+POSITION: 6
+VIEW: 65062
+TEXT ID: 65472
+TYPE: 5
+VALUE: 'Generic_RJ45_Plug'
+EXPECTED VISIBILITY: 0
+ACTUAL VISIBILITY: 0
+FINAL RESULT: PASS
+
+DEVICE: SCP-J2
+PIN: 6
+POSITION: 6
+VIEW: 65062
+TEXT ID: 65972
+TYPE: 12
+VALUE: 'SCP-J2#2'
+EXPECTED VISIBILITY: 0
+ACTUAL VISIBILITY: 0
+FINAL RESULT: PASS
+
+DEVICE: SCP-J2
+PIN: 6
+POSITION: 6
+VIEW: 65062
+TEXT ID: 65948
+TYPE: 617
+VALUE: 'SPARE'
+EXPECTED VISIBILITY: 1
+ACTUAL VISIBILITY: 1
+FINAL RESULT: PASS
+
+DEVICE: SCP-J2
+PIN: 7
+POSITION: 7
+VIEW: 65133
+TEXT ID: 65763
+TYPE: 5
+VALUE: 'Generic_RJ45_Plug'
+EXPECTED VISIBILITY: 0
+ACTUAL VISIBILITY: 0
+FINAL RESULT: PASS
+
+DEVICE: SCP-J2
+PIN: 7
+POSITION: 7
+VIEW: 65133
+TEXT ID: 72481
+TYPE: 12
+VALUE: 'SCP-J2#2'
+EXPECTED VISIBILITY: 0
+ACTUAL VISIBILITY: 0
+FINAL RESULT: PASS
+
+DEVICE: SCP-J2
+PIN: 7
+POSITION: 7
+VIEW: 65133
+TEXT ID: 137323
+TYPE: 617
+VALUE: 'SPARE'
+EXPECTED VISIBILITY: 1
+ACTUAL VISIBILITY: 1
+FINAL RESULT: PASS
+
+DEVICE: SCP-J2
+PIN: 8
+POSITION: 8
+VIEW: 65169
+TEXT ID: 69079
+TYPE: 5
+VALUE: 'Generic_RJ45_Plug'
+EXPECTED VISIBILITY: 0
+ACTUAL VISIBILITY: 0
+FINAL RESULT: PASS
+
+DEVICE: SCP-J2
+PIN: 8
+POSITION: 8
+VIEW: 65169
+TEXT ID: 70711
+TYPE: 12
+VALUE: 'SCP-J2#2'
+EXPECTED VISIBILITY: 0
+ACTUAL VISIBILITY: 0
+FINAL RESULT: PASS
+
+DEVICE: SCP-J2
+PIN: 8
+POSITION: 8
+VIEW: 65169
+TEXT ID: 66284
+TYPE: 617
+VALUE: 'SPARE'
+EXPECTED VISIBILITY: 1
+ACTUAL VISIBILITY: 1
+FINAL RESULT: PASS
+
+============================================================
+FINAL SUMMARY
+============================================================
+PASS: 49
+FAIL: 0
+TOTAL: 49
+============================================================
