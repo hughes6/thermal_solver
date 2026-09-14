@@ -1,110 +1,356 @@
+import win32com.client as win32
+
+
 # ================================================
-# TEST CREATED VIEW IDS DIRECTLY
+# CONNECT TO ACTIVE E3 PROJECT
 # ================================================
+app = win32.gencache.EnsureDispatch("CT.Application")
+prj = app.CreateJobObject()
+dev = prj.CreateDeviceObject()
+pin = prj.CreatePinObject()
+sym = prj.CreateSymbolObject()
+text = prj.CreateTextObject()
+
+
+# ================================================
+# HELPERS
+# ================================================
+def extract_ids(result):
+    if result is None:
+        return []
+
+    if isinstance(result, (tuple, list)):
+        if len(result) >= 2:
+            values = result[1]
+
+            if isinstance(values, (tuple, list)):
+                return [x for x in values if x is not None]
+
+        return [x for x in result if isinstance(x, int) and x != 0]
+
+    if isinstance(result, int):
+        if result == 0:
+            return []
+
+        return [result]
+
+    return []
+
+
+def get_pin_view_ids(pin_id):
+    pin.SetId(pin_id)
+
+    try:
+        result = pin.GetViewIds(None)
+        return extract_ids(result)
+    except Exception:
+        pass
+
+    try:
+        result = pin.GetViewIds()
+        return extract_ids(result)
+    except Exception as e:
+        print("GetViewIds ERROR FOR PIN", pin_id, ":", repr(e))
+        return []
+
+
+def print_text_object(text_id, prefix):
+    text.SetId(text_id)
+
+    try:
+        text_value = text.GetText()
+    except Exception:
+        text_value = "<ERROR>"
+
+    try:
+        text_type = text.GetType()
+    except Exception:
+        text_type = "<ERROR>"
+
+    print(prefix, "TEXT ID:", text_id, "TYPE:", text_type, "VALUE:", repr(text_value))
+
+
+# ================================================
+# GET LOGICAL DEVICES
+# ================================================
+device_result = prj.GetAllDeviceIds(None)
+device_ids = extract_ids(device_result)
 
 print("")
 print("============================================================")
-print("CREATED VIEW ID TEST")
+print("LOGICAL DEVICES")
 print("============================================================")
+print("DEVICE IDS:", device_ids)
 
-for data in SCHEMATIC_DATA:
+
+# ================================================
+# SAVE EVERY PIN VIEW WE DISCOVER
+# ================================================
+ALL_PIN_VIEW_IDS = set()
+PIN_VIEW_OWNER = {}
+
+
+# ================================================
+# WALK LOGICAL DEVICES
+# ================================================
+for device_id in device_ids:
+    dev.SetId(device_id)
+
+    try:
+        device_name = dev.GetName()
+    except Exception:
+        device_name = "<ERROR>"
+
     print("")
-    print("CONNECTOR:", data["name"])
-    print("PARENT BLOCK ID:", data["parent_block"])
-    print("CONNECTOR VIEW ID:", data["connector_view"])
+    print("############################################################")
+    print("DEVICE ID:", device_id)
+    print("DEVICE NAME:", repr(device_name))
+    print("############################################################")
 
-    test_ids = [
-        ("PARENT_BLOCK", data["parent_block"]),
-        ("CONNECTOR_VIEW", data["connector_view"])
-    ]
+    # ================================================
+    # DEVICE SYMBOLS
+    # ================================================
+    try:
+        symbol_result = dev.GetSymbolIds(None)
+        symbol_ids = extract_ids(symbol_result)
+    except Exception as e:
+        symbol_ids = []
+        print("GetSymbolIds ERROR:", repr(e))
 
-    for label, test_id in test_ids:
+    print("DEVICE SYMBOL IDS:", symbol_ids)
+
+    for symbol_id in symbol_ids:
+        sym.SetId(symbol_id)
+
+        try:
+            symbol_name = sym.GetName()
+        except Exception:
+            symbol_name = "<ERROR>"
+
         print("")
-        print("----------------", label, test_id, "----------------")
+        print("    SYMBOL ID:", symbol_id)
+        print("    SYMBOL NAME:", repr(symbol_name))
 
         try:
-            dev.SetId(test_id)
-            print("DEV NAME:", repr(dev.GetName()))
+            text_result = sym.GetTextIds(None)
+            text_ids = extract_ids(text_result)
         except Exception as e:
-            print("DEV SET/NAME ERROR:", repr(e))
-            continue
+            text_ids = []
+            print("    SYMBOL GetTextIds ERROR:", repr(e))
+
+        for text_id in text_ids:
+            print_text_object(text_id, "        SYMBOL")
+
+    # ================================================
+    # LOGICAL DEVICE PINS
+    # ================================================
+    try:
+        pin_result = dev.GetPinIds(None)
+        pin_ids = extract_ids(pin_result)
+    except Exception as e:
+        pin_ids = []
+        print("GetPinIds ERROR:", repr(e))
+
+    print("")
+    print("LOGICAL PIN IDS:", pin_ids)
+
+    for pin_id in pin_ids:
+        pin.SetId(pin_id)
 
         try:
-            symbolinfo = dev.GetSymbolIds(None)
-            symbolids = [x for x in symbolinfo[1] if x is not None]
+            pin_name = pin.GetName()
+        except Exception:
+            pin_name = "<ERROR>"
+
+        print("")
+        print("    --------------------------------------------------------")
+        print("    LOGICAL PIN ID:", pin_id)
+        print("    LOGICAL PIN NAME:", repr(pin_name))
+
+        # ================================================
+        # NORMAL PIN TEXT
+        # ================================================
+        try:
+            pin_text_result = pin.GetTextIds(None)
+            pin_text_ids = extract_ids(pin_text_result)
         except Exception as e:
-            symbolids = []
-            print("GetSymbolIds ERROR:", repr(e))
+            pin_text_ids = []
+            print("    GetTextIds ERROR:", repr(e))
 
-        print("SYMBOL IDS:", symbolids)
+        print("    LOGICAL PIN TEXT IDS:", pin_text_ids)
 
-        for symbol_id in symbolids:
+        for text_id in pin_text_ids:
+            print_text_object(text_id, "        LOGICAL PIN")
+
+        # ================================================
+        # THIS IS THE IMPORTANT PART
+        # FIND ALL VIEWS OF THIS PIN
+        # ================================================
+        pin_view_ids = get_pin_view_ids(pin_id)
+
+        print("    PIN VIEW IDS:", pin_view_ids)
+
+        for pin_view_id in pin_view_ids:
+            ALL_PIN_VIEW_IDS.add(pin_view_id)
+
+            if pin_view_id not in PIN_VIEW_OWNER:
+                PIN_VIEW_OWNER[pin_view_id] = []
+
+            PIN_VIEW_OWNER[pin_view_id].append({
+                "device_id": device_id,
+                "device_name": device_name,
+                "pin_id": pin_id,
+                "pin_name": pin_name
+            })
+
+
+# ================================================
+# NOW INSPECT EVERY PIN VIEW DIRECTLY
+# ================================================
+print("")
+print("")
+print("============================================================")
+print("PIN VIEW OBJECTS")
+print("============================================================")
+print("ALL UNIQUE PIN VIEW IDS:", sorted(ALL_PIN_VIEW_IDS))
+
+
+for pin_view_id in sorted(ALL_PIN_VIEW_IDS):
+    print("")
+    print("############################################################")
+    print("PIN VIEW ID:", pin_view_id)
+    print("OWNERS:", PIN_VIEW_OWNER.get(pin_view_id))
+    print("############################################################")
+
+    # ================================================
+    # TRY THE ID AS A PIN OBJECT
+    # ================================================
+    print("")
+    print("TRYING AS PIN OBJECT")
+
+    try:
+        pin.SetId(pin_view_id)
+
+        try:
+            pin_name = pin.GetName()
+        except Exception:
+            pin_name = "<ERROR>"
+
+        print("PIN VIEW NAME:", repr(pin_name))
+
+        try:
+            pin_text_result = pin.GetTextIds(None)
+            pin_text_ids = extract_ids(pin_text_result)
+        except Exception as e:
+            pin_text_ids = []
+            print("PIN VIEW GetTextIds ERROR:", repr(e))
+
+        print("PIN VIEW TEXT IDS:", pin_text_ids)
+
+        for text_id in pin_text_ids:
+            print_text_object(text_id, "    PIN VIEW")
+
+    except Exception as e:
+        print("FAILED AS PIN OBJECT:", repr(e))
+
+    # ================================================
+    # ALSO TRY THE SAME ID AS A DEVICE VIEW
+    # ================================================
+    print("")
+    print("TRYING AS DEVICE OBJECT")
+
+    try:
+        dev.SetId(pin_view_id)
+
+        try:
+            view_name = dev.GetName()
+        except Exception:
+            view_name = "<ERROR>"
+
+        print("DEVICE NAME:", repr(view_name))
+
+        try:
+            is_view = dev.IsView()
+        except Exception as e:
+            is_view = "<ERROR>"
+
+        print("IS VIEW:", is_view)
+
+        try:
+            original_id = dev.GetOriginalId()
+        except Exception:
+            original_id = "<ERROR>"
+
+        print("ORIGINAL DEVICE ID:", original_id)
+
+        try:
+            symbol_result = dev.GetSymbolIds(None)
+            symbol_ids = extract_ids(symbol_result)
+        except Exception as e:
+            symbol_ids = []
+            print("DEVICE VIEW GetSymbolIds ERROR:", repr(e))
+
+        print("DEVICE VIEW SYMBOL IDS:", symbol_ids)
+
+        for symbol_id in symbol_ids:
             sym.SetId(symbol_id)
 
             try:
-                textinfo = sym.GetTextIds(None)
-                textids = [x for x in textinfo[1] if x is not None]
+                symbol_name = sym.GetName()
+            except Exception:
+                symbol_name = "<ERROR>"
+
+            print("")
+            print("    DEVICE VIEW SYMBOL:", symbol_id)
+            print("    SYMBOL NAME:", repr(symbol_name))
+
+            try:
+                text_result = sym.GetTextIds(None)
+                text_ids = extract_ids(text_result)
             except Exception as e:
-                textids = []
+                text_ids = []
+                print("    SYMBOL GetTextIds ERROR:", repr(e))
 
-            print("    SYMBOL:", symbol_id)
-
-            for text_id in textids:
-                text.SetId(text_id)
-
-                try:
-                    text_value = text.GetText()
-                except Exception:
-                    text_value = "<ERROR>"
-
-                try:
-                    text_type = text.GetType()
-                except Exception:
-                    text_type = "<ERROR>"
-
-                print("        TEXT:", text_id, "TYPE:", text_type, "VALUE:", repr(text_value))
+            for text_id in text_ids:
+                print_text_object(text_id, "        DEVICE VIEW SYMBOL")
 
         try:
-            pininfo = dev.GetPinIds(None)
-            pinids = [x for x in pininfo[1] if x is not None]
+            pin_result = dev.GetPinIds(None)
+            view_pin_ids = extract_ids(pin_result)
         except Exception as e:
-            pinids = []
-            print("GetPinIds ERROR:", repr(e))
+            view_pin_ids = []
+            print("DEVICE VIEW GetPinIds ERROR:", repr(e))
 
-        print("PIN IDS:", pinids)
+        print("DEVICE VIEW PIN IDS:", view_pin_ids)
 
-        for pin_id in pinids:
-            pin.SetId(pin_id)
+        for view_pin_id in view_pin_ids:
+            pin.SetId(view_pin_id)
 
             try:
-                pin_name = pin.GetName()
+                view_pin_name = pin.GetName()
             except Exception:
-                pin_name = "<ERROR>"
+                view_pin_name = "<ERROR>"
 
-            print("    PIN:", pin_id, "NAME:", repr(pin_name))
+            print("")
+            print("    DEVICE VIEW PIN:", view_pin_id)
+            print("    PIN NAME:", repr(view_pin_name))
 
             try:
-                pintextinfo = pin.GetTextIds(None)
-                pintextids = [x for x in pintextinfo[1] if x is not None]
+                pin_text_result = pin.GetTextIds(None)
+                pin_text_ids = extract_ids(pin_text_result)
             except Exception as e:
-                pintextids = []
+                pin_text_ids = []
+                print("    PIN GetTextIds ERROR:", repr(e))
 
-            for pin_text_id in pintextids:
-                text.SetId(pin_text_id)
+            for text_id in pin_text_ids:
+                print_text_object(text_id, "        DEVICE VIEW PIN")
 
-                try:
-                    text_value = text.GetText()
-                except Exception:
-                    text_value = "<ERROR>"
+    except Exception as e:
+        print("FAILED AS DEVICE OBJECT:", repr(e))
 
-                try:
-                    text_type = text.GetType()
-                except Exception:
-                    text_type = "<ERROR>"
-
-                print("        PIN TEXT:", pin_text_id, "TYPE:", text_type, "VALUE:", repr(text_value))
 
 print("")
 print("============================================================")
-print("END CREATED VIEW TEST")
+print("SEARCH COMPLETE")
+print("LOOK FOR TYPE 617 IN THE OUTPUT")
 print("============================================================")
