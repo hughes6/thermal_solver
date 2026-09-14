@@ -1,492 +1,408 @@
-Option Explicit
-
-Private Const BLOCK_WIDTH As Long = 5
-Private Const FIRST_COL As Long = 8          'H
-Private Const CENTER_COL As Long = 10        'J
-Private Const MAX_BLOCKS As Long = 40
-Private Const FIRST_DATA_ROW As Long = 8
-Private Const LAST_ROW As Long = 307
-
-
-Private Sub Worksheet_Change(ByVal Target As Range)
-
-    Dim n As Long
-    Dim i As Long
-    Dim j As Long
-    Dim maxCreated As Long
-
-    Dim srcHeader As Range
-    Dim destHeader As Range
-    Dim destInput As Range
-
-    'Only run when C4 changes
-    If Intersect(Target, Me.Range("C4")) Is Nothing Then Exit Sub
-
-    On Error GoTo ErrHandler
-
-    Application.EnableEvents = False
-    Application.ScreenUpdating = False
-
-    '-----------------------------------------
-    'GET NUMBER OF CONNECTORS / BLOCKS
-    '-----------------------------------------
-    If IsNumeric(Me.Range("C4").Value) Then
-        n = CLng(Me.Range("C4").Value)
-    Else
-        n = 1
-    End If
-
-    If n < 1 Then n = 1
-    If n > MAX_BLOCKS Then n = MAX_BLOCKS
-
-    Set srcHeader = Me.Range("H5:L10")
-
-
-    '==================================================
-    'FIND HOW MANY BLOCKS HAVE ALREADY BEEN CREATED
-    '
-    'We use the connector-name cell:
-    '
-    'J6, O6, T6, Y6...
-    '==================================================
-
-    maxCreated = 1
-
-    For i = 1 To MAX_BLOCKS - 1
-
-        If Len(Me.Cells(6, CENTER_COL + i * BLOCK_WIDTH).Formula) > 0 _
-           Or Len(Me.Cells(6, CENTER_COL + i * BLOCK_WIDTH).Value) > 0 Then
-
-            maxCreated = i + 1
-
-        Else
-
-            Exit For
-
-        End If
-
-    Next i
-
-
-    '==================================================
-    'CREATE ONLY BLOCKS THAT HAVE NEVER EXISTED
-    '
-    'Existing blocks are NOT recopied.
-    'This preserves entered data.
-    '==================================================
-
-    If n > maxCreated Then
-
-        For i = maxCreated To n - 1
-
-            Set destHeader = Me.Range( _
-                Me.Cells(5, FIRST_COL + i * BLOCK_WIDTH), _
-                Me.Cells(10, FIRST_COL + i * BLOCK_WIDTH + 4))
-
-            '------------------------------------------
-            'COPY ORIGINAL H5:L10
-            '------------------------------------------
-            srcHeader.Copy Destination:=destHeader
-
-
-            '------------------------------------------
-            'CLEAR COPIED NUMBER OF PINS
-            '
-            'J5, O5, T5, Y5...
-            '------------------------------------------
-            Me.Cells(5, CENTER_COL + i * BLOCK_WIDTH) _
-                .MergeArea.ClearContents
-
-
-            '------------------------------------------
-            'CLEAR USER INPUT CELLS IN NEW BLOCK
-            '
-            'Block 1 = I:K
-            'Block 2 = N:P
-            'Block 3 = S:U
-            'etc.
-            '------------------------------------------
-            Set destInput = Me.Range( _
-                Me.Cells(FIRST_DATA_ROW, FIRST_COL + i * BLOCK_WIDTH + 1), _
-                Me.Cells(LAST_ROW, FIRST_COL + i * BLOCK_WIDTH + 3))
-
-            destInput.ClearContents
-
-
-            '------------------------------------------
-            'COPY COLUMN WIDTHS
-            '------------------------------------------
-            For j = 0 To BLOCK_WIDTH - 1
-
-                Me.Columns(FIRST_COL + i * BLOCK_WIDTH + j).ColumnWidth = _
-                    Me.Columns(FIRST_COL + j).ColumnWidth
-
-            Next j
-
-
-            '------------------------------------------
-            'COPY FORMATTING / RULES / VALIDATION
-            '------------------------------------------
-            RefreshBlockFormatting i
-
-        Next i
-
-        maxCreated = n
-
-    End If
-
-
-    '==================================================
-    'SET CONNECTOR NAMES
-    '
-    'Block 1:
-    'J6 = B7
-    '
-    'Block 2:
-    'O6 = B8
-    '
-    'Block 3:
-    'T6 = B9
-    '
-    'etc.
-    '==================================================
-
-    For i = 0 To maxCreated - 1
-
-        Me.Cells(6, CENTER_COL + i * BLOCK_WIDTH) _
-            .MergeArea.Cells(1, 1).Formula = _
-            "=$B$" & (7 + i)
-
-    Next i
-
-
-    '==================================================
-    'BUILD THE | HELPER SPILL FOR EVERY BLOCK
-    '
-    'This is the important off-by-one fix.
-    '
-    'Block 1:
-    'H8 spills exactly J5 rows
-    '
-    'Block 2:
-    'M8 spills exactly O5 rows
-    '
-    'Block 3:
-    'R8 spills exactly T5 rows
-    '
-    'Examples:
-    '
-    'J5 = 4 -> H8:H11 contains |
-    'O5 = 6 -> M8:M13 contains |
-    '==================================================
-
-    For i = 0 To maxCreated - 1
-
-        SetupHelperSpill i
-
-    Next i
-
-
-    '==================================================
-    'REFRESH CONDITIONAL FORMATTING FOR GENERATED
-    'BLOCKS
-    '
-    'Does not overwrite entered values.
-    '==================================================
-
-    For i = 1 To maxCreated - 1
-
-        RefreshBlockFormatting i
-
-    Next i
-
-
-    '==================================================
-    'SHOW / HIDE BLOCKS BASED ON C4
-    '
-    'Blocks are hidden, NEVER deleted.
-    '
-    'So:
-    '
-    'C4 = 4
-    'enter data
-    '
-    'C4 = 2
-    'blocks 3-4 hide
-    '
-    'C4 = 4
-    'blocks 3-4 return with their old data
-    '==================================================
-
-    For i = 0 To maxCreated - 1
-
-        Me.Range( _
-            Me.Columns(FIRST_COL + i * BLOCK_WIDTH), _
-            Me.Columns(FIRST_COL + i * BLOCK_WIDTH + 4) _
-        ).EntireColumn.Hidden = (i >= n)
-
-    Next i
-
-
-SafeExit:
-
-    Application.CutCopyMode = False
-    Application.ScreenUpdating = True
-    Application.EnableEvents = True
-
-    Exit Sub
-
-
-ErrHandler:
-
-    MsgBox "Macro error " & Err.Number & ":" & vbCrLf & _
-           Err.Description
-
-    Resume SafeExit
-
-End Sub
-
-
-
-Private Sub SetupHelperSpill(ByVal blockIndex As Long)
-
-    Dim helperCol As Long
-    Dim pinCol As Long
-
-    Dim helperRange As Range
-    Dim helperCell As Range
-
-    Dim pinAddress As String
-    Dim spillFormula As String
-
-    '-----------------------------------------
-    'BLOCK 1
-    'helper = H
-    'pin count = J
-    '
-    'BLOCK 2
-    'helper = M
-    'pin count = O
-    '
-    'BLOCK 3
-    'helper = R
-    'pin count = T
-    '-----------------------------------------
-
-    helperCol = FIRST_COL + blockIndex * BLOCK_WIDTH
-    pinCol = CENTER_COL + blockIndex * BLOCK_WIDTH
-
-    Set helperRange = Me.Range( _
-        Me.Cells(FIRST_DATA_ROW, helperCol), _
-        Me.Cells(LAST_ROW, helperCol))
-
-    Set helperCell = Me.Cells(FIRST_DATA_ROW, helperCol)
-
-    'Clear any old helper formulas / values first
-    helperRange.ClearContents
-
-    'Examples:
-    'J$5
-    'O$5
-    'T$5
-    pinAddress = Me.Cells(5, pinCol).Address( _
-                    RowAbsolute:=True, _
-                    ColumnAbsolute:=False)
-
-    '-----------------------------------------
-    'ONE FORMULA.
-    '
-    'If Number of Pins = 4:
-    '
-    '|   row 8
-    '|   row 9
-    '|   row 10
-    '|   row 11
-    '
-    'Exactly four rows.
-    '-----------------------------------------
-
-    spillFormula = _
-        "=IF(" & pinAddress & ">0," & _
-        "IF(SEQUENCE(" & pinAddress & "),""|""),"""")"
-
-    helperCell.Formula2 = spillFormula
-
-End Sub
-
-
-
-Private Sub RefreshBlockFormatting(ByVal blockIndex As Long)
-
-    Dim srcRange As Range
-    Dim destRange As Range
-
-    Dim fc As FormatCondition
-    Dim f As String
-
-    Dim colOffset As Long
-
-    colOffset = blockIndex * BLOCK_WIDTH
-
-    Set srcRange = Me.Range("H5:L" & LAST_ROW)
-
-    Set destRange = Me.Range( _
-        Me.Cells(5, FIRST_COL + colOffset), _
-        Me.Cells(LAST_ROW, FIRST_COL + colOffset + 4))
-
-
-    '==================================================
-    'REMOVE EXISTING CONDITIONAL FORMATTING
-    'FROM THIS GENERATED BLOCK
-    '==================================================
-
-    destRange.FormatConditions.Delete
-
-
-    '==================================================
-    'COPY FORMATTING FROM ORIGINAL BLOCK
-    '
-    'Values are NOT copied.
-    '==================================================
-
-    srcRange.Copy
-
-    destRange.PasteSpecial Paste:=xlPasteFormats
-
-    Application.CutCopyMode = False
-
-
-    '==================================================
-    'TRANSLATE CONDITIONAL-FORMATTING FORMULAS
-    '
-    'Block 1:
-    '$H8
-    '$J$5
-    '
-    'Block 2:
-    '$M8
-    '$O$5
-    '
-    'Block 3:
-    '$R8
-    '$T$5
-    '
-    'etc.
-    '==================================================
-
-    For Each fc In destRange.FormatConditions
-
-        If fc.Type = xlExpression Then
-
-            f = TranslateBlockFormula( _
-                    fc.Formula1, _
-                    FIRST_COL, _
-                    FIRST_COL + colOffset)
-
-            If f <> fc.Formula1 Then
-
-                On Error Resume Next
-
-                fc.Modify _
-                    Type:=xlExpression, _
-                    Formula1:=f
-
-                On Error GoTo 0
-
-            End If
-
-        End If
-
-    Next fc
-
-
-    '==================================================
-    'COPY DATA VALIDATION / DROPDOWNS
-    '==================================================
-
-    srcRange.Copy
-
-    On Error Resume Next
-
-    destRange.PasteSpecial Paste:=xlPasteValidation
-
-    On Error GoTo 0
-
-    Application.CutCopyMode = False
-
-End Sub
-
-
-
-Private Function TranslateBlockFormula( _
-    ByVal formulaText As String, _
-    ByVal sourceStartCol As Long, _
-    ByVal destStartCol As Long) As String
-
-    Dim i As Long
-
-    Dim f As String
-
-    Dim sourceLetter As String
-    Dim destLetter As String
-
-    f = formulaText
-
-
-    '==================================================
-    'FIRST PASS
-    '
-    'Turn source block columns into temporary markers.
-    '
-    '$H -> marker 0
-    '$I -> marker 1
-    '$J -> marker 2
-    '$K -> marker 3
-    '$L -> marker 4
-    '
-    'This prevents replacements interfering with
-    'each other.
-    '==================================================
-
-    For i = 0 To BLOCK_WIDTH - 1
-
-        sourceLetter = ColLetter(sourceStartCol + i)
-
-        f = Replace( _
-                f, _
-                "$" & sourceLetter, _
-                "{BLOCKCOL" & CStr(i) & "}")
-
-    Next i
-
-
-    '==================================================
-    'SECOND PASS
-    '
-    'Replace markers with destination columns.
-    '==================================================
-
-    For i = 0 To BLOCK_WIDTH - 1
-
-        destLetter = ColLetter(destStartCol + i)
-
-        f = Replace( _
-                f, _
-                "{BLOCKCOL" & CStr(i) & "}", _
-                "$" & destLetter)
-
-    Next i
-
-    TranslateBlockFormula = f
-
-End Function
-
-
-
-Private Function ColLetter(ByVal colNum As Long) As String
-
-    ColLetter = Split( _
-        Me.Cells(1, colNum).Address, _
-        "$")(1)
-
-End Function
+from openpyxl import load_workbook
+import time
+import pyodbc
+import win32com.client as win32
+import tkinter as tk
+
+
+# ================================================
+# HELPER FXN
+# ================================================
+def make_gui(body):
+    root = tk.Tk()
+    root.title("Commit changes to database")
+
+    choice = {"value": None}
+
+    def pressed(value):
+        choice["value"] = value
+        root.quit()
+
+    # Frame with scrollbar
+    frame = tk.Frame(root)
+    frame.pack(padx=10, pady=10)
+
+    scrollbar = tk.Scrollbar(frame)
+    scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+
+    text = tk.Text(frame, height=20, width=80, wrap="word",
+                   yscrollcommand=scrollbar.set)
+    text.pack(side=tk.LEFT, fill=tk.BOTH)
+
+    scrollbar.config(command=text.yview)
+
+    text.insert("1.0", body)
+    text.config(state="disabled")
+
+    tk.Button(root, text="COMMIT", width=50,
+              command=lambda: pressed("YES")).pack(pady=5)
+    tk.Button(root, text="ROLLBACK", width=50,
+              command=lambda: pressed("NO")).pack(pady=5)
+
+    root.mainloop()
+    return choice["value"]
+
+def ask_save_path(default_full_path=""):
+    import os
+    import tkinter as tk
+    from tkinter import filedialog
+
+    default_folder = os.path.dirname(default_full_path)
+
+    # Create Tk root
+    root = tk.Tk()
+    root.withdraw()
+    root.attributes("-topmost", True)
+    root.update()
+
+    try:
+        # Let user PICK an existing Excel file
+        selected_path = filedialog.askopenfilename(
+            initialdir=default_folder,
+            filetypes=[("Excel Files", "*.xlsm"), ("All Files", "*.*")]
+        )
+    except Exception:
+        return None
+
+    # Cancel or X
+    if not selected_path:
+        root.destroy()
+        return None
+    root.destroy()
+    # Return ONLY the file name (not full path)
+    return os.path.abspath(selected_path)
+
+
+# ================================================
+# PARSE EXCEL
+# ================================================
+BLOCK_OFFSET = 5
+output_path = ask_save_path()
+wb = load_workbook(output_path, data_only=True)
+ws = wb.active
+
+ASSY_NAME = ws["C1"].value
+VERSION = ws["C2"].value
+ADDITIONAL_PART_ID = "21910823-500"
+
+NUMBER_OF_CONNECTORS = ws["C4"].value
+CONNECTORS = {}
+for row in ws.iter_rows(min_row=7, max_row=7+NUMBER_OF_CONNECTORS):
+    connector_name = row[1].value
+    connector_type = row[2].value
+    CONNECTORS[connector_name] = connector_type
+
+CONNECTORS = {k: v for k, v in CONNECTORS.items() if v is not None}
+
+MODEL_CHECK = ws["G8"].value
+TITLE_CHECK = ws["E2"].value
+CONNECTOR_MODEL_CHECK = ws["G2"].value
+if MODEL_CHECK != "Pass":
+    raise Exception("Model check is failing, fix it")
+if TITLE_CHECK != "Pass":
+    raise Exception("Title check is failing, fix it")
+if CONNECTOR_MODEL_CHECK != "Pass":
+    raise Exception("Connector model check is failing, fix it")
+
+PIN_SIGNAL_INFO = []
+for i in range(NUMBER_OF_CONNECTORS):
+    pin_col = 9 + (i * BLOCK_OFFSET)
+    signal_col = pin_col + 1
+    in_out_col = pin_col + 2
+    number_of_pins = ws.cell(row=5, column=signal_col).value
+    connector_name = ws.cell(row=6, column=signal_col).value
+    if number_of_pins is None:
+        number_of_pins = 0
+    number_of_pins = int(number_of_pins)
+    connector_type = CONNECTORS[connector_name]
+    temp = [{'connector name': connector_name, 'connector type': connector_type, 'number of pins' : number_of_pins}]
+    end_row = 8 + number_of_pins - 1
+    for r in range(8, end_row + 1):
+        pin = ws.cell(row=r, column=pin_col).value
+        signal = ws.cell(row=r, column=signal_col).value
+        if signal is None:
+            signal = "SPARE"
+        in_out = ws.cell(row=r, column=in_out_col).value
+        if in_out is None:
+            in_out = "NONE"
+        temp.append([pin, signal, in_out])
+    PIN_SIGNAL_INFO.append(temp)
+
+wb.close()
+
+print(PIN_SIGNAL_INFO, '\n')
+
+# ================================================
+# CONNECT TO DB
+# ================================================
+CONNECTION_STRING = (
+    "DRIVER={SQL Server};"
+    "SERVER=sql-zuken-prd;"
+    "DATABASE=Zuken_E3Library;"
+    "Trusted_Connection=yes;"
+)
+
+conn = pyodbc.connect(CONNECTION_STRING, autocommit=True)
+cur = conn.cursor()
+
+# set objects
+#====================================================================================================================================
+app = win32.gencache.EnsureDispatch('CT.Application')
+prj = app.CreateJobObject()
+text = prj.CreateTextObject()
+comp = prj.CreateComponentObject()
+dev = prj.CreateDeviceObject()
+sym = prj.CreateSymbolObject()
+pin = prj.CreatePinObject()
+attr = prj.CreateAttributeObject()
+#====================================================================================================================================
+# more setup
+#====================================================================================================================================
+app.PutMessage("\n Starting Block Making Scrpit")
+
+sht = prj.CreateSheetObject()
+sheet_info = prj.GetAllSheetIds(None)
+sheet_count = sheet_info[0]
+sheet_ids = sheet_info[1]
+sheet_ids = [x for x in sheet_ids if x is not None]
+
+for id in sheet_ids:
+    sht.SetId(id)
+    if sht.GetName() != "1":
+        sht.Delete()
+    else:
+        sheet_1_id = id
+
+sheet1 = sht.SetId(sheet_1_id)
+
+symbol_name = "CABBLOCK"
+symbol_version = 1
+isLoaded = sym.Load(symbol_name, symbol_version)
+if not isLoaded:
+    app.PutMessage("failed to load symbol.")
+else:
+    app.PutMessage("Symbol loaded successfully.")
+
+HALF_NUMBER_OF_CONNECTORS = int(NUMBER_OF_CONNECTORS/2.0) + 1
+block_width = 3.0
+block_height = 3.0 + (0.5 * HALF_NUMBER_OF_CONNECTORS)
+x_block = 3.0
+y_block = (32.0 - NUMBER_OF_CONNECTORS)/2.0 + (block_height/2.0)
+x_block_center = x_block + block_width/2.0
+res = sym.PlaceBlock(sheet_1_id, x_block, y_block, block_width, block_height)
+# CREATE MAPPING HERE
+CONNECTOR_MAP = []
+i = 0
+for connector in PIN_SIGNAL_INFO:
+    connector_name = PIN_SIGNAL_INFO[i][0]['connector name']
+    connector_position = i 
+    if i > HALF_NUMBER_OF_CONNECTORS:
+        connector_flip = 1
+        connector_position -= HALF_NUMBER_OF_CONNECTORS
+    else:
+        connector_flip = 0
+    CONNECTOR_MAP.append({'connector name' : connector_name, 'connector position' : connector_position, 'connector flip' : connector_flip})
+    i += 1
+print(CONNECTOR_MAP)
+if res == 0:
+    app.PutMessage(f"Place block failed: {res}")
+    raise Exception(f"place block failed: {res}")
+else:
+    app.PutMessage(f"Placed block: {res}")
+
+
+devinfo = prj.GetAllDeviceIds(None)
+devids = [x for x in devinfo[1] if x is not None]
+for dev_id in devids:
+    dev.SetId(dev_id)
+    if dev.GetName() == "A1":
+        res = dev.SetName(ASSY_NAME)
+        if res == 0:
+            app.PutMessage("failed to set name")
+
+        res = dev.SetLocation("BxRxUx")
+        if res == 0:
+            app.PutMessage("failed to set location")
+
+        res = dev.AddAttributeValue("Additional Part ID", ADDITIONAL_PART_ID)
+        if res == -1:
+            app.PutMessage("failed to add Additional Part ID")
+        else:
+            attr.SetId(res)
+            attr.DisplayAttribute()
+
+
+        attrinfo = dev.GetAttributeIds(None)    
+        attrids = [x for x in attrinfo[1] if x is not None]
+        for att_id in attrids:
+            attr.SetId(att_id)
+            textinfo = attr.GetTextIds(None)
+            textids = [x for x in textinfo[1] if x is not None]
+            for text_id in textids:
+                text.SetId(text_id)
+                if text.GetText() == ADDITIONAL_PART_ID:
+                    text.SetColour(0)
+                    text.SetMode(1)
+                    text.SetAlignment(2)
+                    text.SetStyle(1)
+                    text.SetHeight(0.2)
+                    xloc = [0.0]
+                    yloc = [0.0]
+                    grid = [""]
+                    column = [""]
+                    row = [""]
+                    result = text.GetSchemaLocation(xloc, yloc, grid,  column, row)
+                    new_x = x_block_center
+                    new_y = y_block
+                    text.SetSchemaLocation(new_x, new_y)
+                    
+        syminfo = dev.GetSymbolIds(None)
+        symids = [x for x in syminfo[1] if x is not None]
+        for sym_id in symids:
+            sym.SetId(sym_id)
+            sym.SetBlockHatchColour(58)
+            textinfo = sym.GetTextIds(None)
+            textids = [x for x in textinfo[1] if x is not None]
+            for text_id in textids:
+                text.SetId(text_id)
+                if text.GetText() == "BxRxUx":
+                    text.SetColour(0)
+                    text.SetMode(1)
+                    text.SetAlignment(2)
+                    text.SetStyle(1)
+                    text.SetHeight(0.2)
+                    xloc = [0.0]
+                    yloc = [0.0]
+                    grid = [""]
+                    column = [""]
+                    row = [""]
+                    result = text.GetSchemaLocation(xloc, yloc, grid,  column, row)
+                    new_x = x_block_center
+                    new_y = y_block + 1.0
+                    text.SetSchemaLocation(new_x, new_y)
+                if text.GetText() == ASSY_NAME:
+                    text.SetColour(0)
+                    text.SetMode(1)
+                    text.SetAlignment(2)
+                    text.SetStyle(1)
+                    text.SetHeight(0.2) 
+                    text.SetAlignment(2)
+                    xloc = [0.0]
+                    yloc = [0.0]
+                    grid = [""]
+                    column = [""]
+                    row = [""]
+                    result = text.GetSchemaLocation(xloc, yloc, grid,  column, row)
+                    new_x = x_block_center
+                    new_y = y_block + 2.0
+                    text.SetSchemaLocation(new_x, new_y)         
+          
+# front side green - 58
+# back side green  - 74
+res = sym.SetBlockHatchColour(58)
+if res == -1:
+    app.PutMessage("failed to set block hatch color")
+res = sym.SetBlockOutlineColour(0)
+if res != -1:
+    app.PutMessage("failed to set block hatch outline color")
+
+#====================================================================================================================================
+# LOAD AND PLACE CONNECTOR LOOP
+#====================================================================================================================================
+for i in range(len(PIN_SIGNAL_INFO)):
+    # step 1 - get the component from the database
+    conn_type = PIN_SIGNAL_INFO[i][0]['connector type']
+    conn_name = PIN_SIGNAL_INFO[i][0]['connector name']
+    ver = 1
+    res = app.GetDatabaseTableSelectedComponents(conn_type, ver)
+    if(res[0] != 0):
+        app.PutMessage(f"step 1 did not work, Result: {res}\n")
+        raise Exception(f"Step 1 failed. No device found in database with name: {conn_type}.\n")
+    else:
+        app.PutMessage(f"Step 1 success. Device found in database. Result: {res}")
+
+    # step 2 - place the component from the library into the device tree
+    print(f'Placing connector name: {conn_name} type: {conn_type} into device tree\n')
+    res = dev.Create(conn_name, "", "", conn_type, ver, 0)
+    if(res == 0):
+        app.PutMessage(f"step 2 did not work, Result: {res}\n")
+        raise Exception("Step 2 failed. Device failed to be added to device tree.\n")
+    else:
+        app.PutMessage(f"Step 2 success. Device added to device tree. Result: {res}")
+
+
+    # step 3 - get the device, and pin info from tree and order it
+    devinfo = prj.GetAllDeviceIds(None)
+    devcount = devinfo[0]
+    devids   = devinfo[1]
+    devids   = [x for x in devids if x is not None]
+    dev_total = len(devids)
+
+    CURRENT_CONNECTOR_ID = None
+    for id in devids:
+        dev.SetId(id)
+        name = dev.GetName()
+        if name == PIN_SIGNAL_INFO[i][0]['connector name']:
+            print(name, CURRENT_CONNECTOR_ID)
+            CURRENT_CONNECTOR_ID = id
+            break
+
+    # assign signal name
+    dev.SetId(CURRENT_CONNECTOR_ID)
+    pininfo = dev.GetPinIds(None)
+    pindids = [x for x in pininfo[1] if x is not None]
+    PINDICT = []
+    pins = []
+    for pin_id in pindids:
+        pin.SetId(pin_id)
+        name = pin.GetName()
+        pins.append(pin_id)
+        current_pin_info = None
+        for pin_data in PIN_SIGNAL_INFO[i][1:]:
+            if str(pin_data[0]) == str(name):
+                current_pin_info = pin_data
+                break
+        print(current_pin_info)
+        signal = current_pin_info[1]
+        in_out = current_pin_info[2]
+        print(f'setting pin: {name} signal: {signal} inout: {in_out}')
+        pin.SetAttributeValue("Local Signal Name", signal)
+        pin.SetAttributeValue("Signal Types", in_out)
+        attrinfo = pin.GetAttributeIds(None)
+        attids = [x for x in attrinfo[1] if x is not None]
+        for att_id in attids:
+            attr.SetId(att_id)
+            if attr.GetName() == "Local Signal Name" or attr.GetName() == "Signal Types":
+                attr.DisplayAttribute()
+        PINDICT.append(pin_id)
+
+    # step 4 - create the pin # view
+    devinfo = prj.GetAllDeviceIds(None)
+    dev_ids = [x for x in devinfo[1] if x is not None]
+    for id in dev_ids:
+        dev.SetId(id)
+        if dev.GetName() == PIN_SIGNAL_INFO[i][0]['connector name']:
+            device_id = id
+            break
+
+    symname = "MilBlockSymbolReceptacleInt¶FULL"
+
+    #FUNCTION HERE TO MATCH THE MAP
+    x = x_block + 0.3
+    y = 18.0
+    flip = 0
+
+    if flip != 0:
+        x -= 0.6 + block_width
+    res = sym.PlacePins(PINDICT, symname, ver, sheet_1_id, x, y, flip, 1.0)
+    sym.SetId(res[0])
+    textinfo = sym.GetTextIds(None)
+    textids = [x for x in textinfo[1] if x is not None]
+    for text_id in textids:
+        text.SetId(text_id)
+        print(text.GetText())
+        if PIN_SIGNAL_INFO[i][0]['connector name'] == text.GetText():
+            text.SetColour(0)
+            text.SetMode(1)
+            text.SetStyle(1)
+            text.SetHeight(0.2)
