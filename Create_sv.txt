@@ -177,7 +177,7 @@ def generate_master_schematic_layout(PIN_SIGNAL_INFO,x_block,main_block_width):
         current_top_y = (y_start - BLOCK_Y_SPACING)
         current_column_width = max(current_column_width, width)
 
-    return SHEET_DICT, SPACING_DICT
+    return SPACING_DICT, SHEET_DICT
 
 
 # ================================================
@@ -575,7 +575,7 @@ for i in range(len(PIN_SIGNAL_INFO)):
 # LOAD AND PLACE SCHEMATIC VIEWS
 #=========================================
 MASTER_SCHEMATIC_LAYOUT, SHEET_DICT = generate_master_schematic_layout(PIN_SIGNAL_INFO, x_block, block_width)
-print(MASTER_SCHEMATIC_LAYOUT)
+time.sleep(0.5)
 for i in range(len(PIN_SIGNAL_INFO)):
     conn_type = PIN_SIGNAL_INFO[i][0]['connector type']
     conn_name = PIN_SIGNAL_INFO[i][0]['connector name']
@@ -592,22 +592,31 @@ for i in range(len(PIN_SIGNAL_INFO)):
         if dev.GetName() == DEVICE_DESIGNATION:
             device_id = id
 
-    res = dev.CreateView(device_id, 1, 0, 0)
+
+    res = dev.CreateView(device_id, 1, 0, 1)
     if res == 0:
         app.PutMessage(f"Step 4 not working. Result: {res}\n")
         raise Exception(f"Step 4 failed. No new device view created.\n")
     else:
         app.PutMessage(f"Step 4 success. New device view placed. Result: {res}")
+    parent_block = res
 
-        
+    symbol_name = "CABBLOCK"
+    symbol_version = 1
+    isLoaded = sym.Load(symbol_name, symbol_version)
+    if not isLoaded:
+        app.PutMessage("failed to load symbol.")
+    else:
+        app.PutMessage("Symbol loaded successfully.")
+
     schematic_sheet = conn_layout_dict["sheet"]
     current_sheet_id = SHEET_DICT[schematic_sheet]
     xp = conn_layout_dict["x start"]
-    yp = conn_layout_dict["y start"]
+    yp = conn_layout_dict["y start"] + conn_layout_dict['height']
     xwidth = conn_layout_dict["width"]
     yheight = conn_layout_dict["height"]
     print(f"Connector: {conn_name}, Sheet: {schematic_sheet}, X: {xp}, Y: {yp}, Height: {conn_layout_dict['height']}")
-    res = sym.PlaceBlock(current_sheet_id, xp, yp, xwidth, yheight)
+    res = sym.PlaceBlock(current_sheet_id, xp, yp-5.0, xwidth, yheight, parent_block)
     if res == 0:
         app.PutMessage(f"Place block failed: {res}")
         raise Exception(f"place block failed: {res}")
@@ -667,3 +676,5 @@ for i in range(len(PIN_SIGNAL_INFO)):
     #         time.sleep(0.55)
     #         app.PutMessage(f"Result: {res}")
     #     SPARE_Y -= SPARE_CONN_GAP
+
+    time.sleep(0.5)
