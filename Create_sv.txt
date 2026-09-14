@@ -1,3 +1,122 @@
+from openpyxl import load_workbook
+import time
+import pyodbc
+import win32com.client as win32
+import tkinter as tk
+
+
+
+
+def display_main_block_attributes(device_view_id):
+    dev.SetId(device_view_id)
+    syminfo = dev.GetSymbolIds(None)
+    symids = [x for x in syminfo[1] if x is not None]
+
+    for sym_id in symids:
+        sym.SetId(sym_id)
+
+        res = sym.AddAttributeValue("Equipment Identifacation", ADDITIONAL_PART_ID)
+
+        if res == -1:
+            print("Equipment Identification already exists or failed on symbol:", sym_id)
+            attrinfo = sym.GetAttributeIds(None)
+            attrids = [x for x in attrinfo[1] if x is not None]
+
+            for attr_id in attrids:
+                attr.SetId(attr_id)
+
+                if attr.GetName() == "Equipment Identifacation":
+                    res = attr_id
+                    break
+
+        if res != -1:
+            attr.SetId(res)
+            display_result = attr.DisplayAttribute()
+            print("DISPLAY ATTRIBUTE:", device_view_id, "SYMBOL:", sym_id, "ATTR:", res, "RESULT:", display_result)
+
+
+def format_main_block_view(device_view_id, x, y, width, height):
+    print("FORMATTING DEVICE VIEW:", device_view_id)
+
+    x_center = x + (width / 2.0)
+
+    dev.SetId(device_view_id)
+    syminfo = dev.GetSymbolIds(None)
+    symids = [s for s in syminfo[1] if s is not None]
+
+    for sym_id in symids:
+        sym.SetId(sym_id)
+
+        sym.SetBlockHatchColour(58)
+        sym.SetBlockOutlineColour(0)
+
+        #=========================================
+        # NORMAL SYMBOL TEXT
+        #=========================================
+        textinfo = sym.GetTextIds(None)
+        textids = [t for t in textinfo[1] if t is not None]
+
+        for text_id in textids:
+            text.SetId(text_id)
+            txt = str(text.GetText()).strip()
+
+            print("SYMBOL TEXT:", "VIEW:", device_view_id, "SYM:", sym_id, "TEXT ID:", text_id, "VALUE:", repr(txt))
+
+            if txt == "BxRxUx":
+                text.SetColour(0)
+                text.SetMode(1)
+                text.SetAlignment(2)
+                text.SetStyle(1)
+                text.SetHeight(0.2)
+                text.SetSchemaLocation(x_center, y + height - 0.3)
+
+            elif txt == str(DEVICE_DESIGNATION).strip() or str(DEVICE_DESIGNATION).strip() in txt:
+                text.SetColour(0)
+                text.SetMode(1)
+                text.SetAlignment(2)
+                text.SetStyle(1)
+                text.SetHeight(0.2)
+                text.SetSchemaLocation(x_center, y + height - 0.7)
+
+                print("MOVED DEVICE DESIGNATION:", repr(txt), "TO:", x_center, y + height - 0.7)
+
+            elif DEVICE_FUNCTION is not None and txt == str(DEVICE_FUNCTION).strip():
+                text.SetVisibility(0)
+
+        #=========================================
+        # ATTRIBUTE TEXT
+        #=========================================
+        attrinfo = sym.GetAttributeIds(None)
+        attrids = [a for a in attrinfo[1] if a is not None]
+
+        for attr_id in attrids:
+            attr.SetId(attr_id)
+            attr_name = str(attr.GetName()).strip()
+
+            print("ATTRIBUTE:", "VIEW:", device_view_id, "SYM:", sym_id, "ATTR ID:", attr_id, "NAME:", repr(attr_name))
+
+            if attr_name == "Equipment Identifacation":
+                attrtextinfo = attr.GetTextIds(None)
+                attrtextids = [t for t in attrtextinfo[1] if t is not None]
+
+                print("EQUIPMENT IDENTIFICATION TEXT IDS:", attrtextids)
+
+                for text_id in attrtextids:
+                    text.SetId(text_id)
+                    txt = str(text.GetText()).strip()
+
+                    print("ATTRIBUTE TEXT:", "ID:", text_id, "VALUE:", repr(txt))
+
+                    text.SetVisibility(1)
+                    text.SetColour(0)
+                    text.SetMode(1)
+                    text.SetAlignment(2)
+                    text.SetStyle(1)
+                    text.SetHeight(0.2)
+                    text.SetSchemaLocation(x_center, y + height - 1.1)
+
+                    print("MOVED EQUIPMENT IDENTIFICATION:", repr(txt), "TO:", x_center, y + height - 1.1)
+
 def format_connector_text(connector_view_id, conn_name):
     print("FORMATTING CONNECTOR TEXT:", conn_name, "VIEW:", connector_view_id)
 
@@ -86,22 +205,9 @@ def format_connector_text(connector_view_id, conn_name):
                     text.SetVisibility(0)
 
 
-#=========================================
-# RESET BEFORE TEXT FORMATTING
-#=========================================
-del attr
-del text
-del sym
-del pin
-del comp
-del dev
-del sht
-del prj
-del app
-
-time.sleep(1.0)
-
-app = win32.gencache.EnsureDispatch("CT.Application")
+# set objects
+#====================================================================================================================================
+app = win32.gencache.EnsureDispatch('CT.Application')
 prj = app.CreateJobObject()
 text = prj.CreateTextObject()
 comp = prj.CreateComponentObject()
@@ -109,29 +215,32 @@ dev = prj.CreateDeviceObject()
 sym = prj.CreateSymbolObject()
 pin = prj.CreatePinObject()
 attr = prj.CreateAttributeObject()
-sht = prj.CreateSheetObject()
-
-#=========================================
-# FORMAT CONNECTOR + PIN TEXT
-#=========================================
-for data in SCHEMATIC_DATA:
-    format_connector_text(data["connector_view"], data["name"])
-
-#=========================================
-# FORMAT SECONDARY MAIN BLOCK TEXT
-#=========================================
-for data in SCHEMATIC_DATA:
-    layout = data["layout"]
-    format_main_block_view(data["parent_block"], layout["x start"], layout["y start"], layout["width"], layout["height"])
-
+#====================================================================================================================================
+# more setup
+#====================================================================================================================================
+dev.SetId(146771)
+symbolinfo = dev.GetSymbolIds(None)
+symbolids = symbolinfo[1][-1]
+sym.SetId(symbolids)
+texinfo = sym.GetTextIds(None)
+texids = [x for x in texinfo[1] if x is not None]
+for t_id in texids:
+    text.SetId(t_id)
+    if "SCP" in text.GetText():
+        print(text.GetText(), text.GetType())
 
 
+pininfo = dev.GetPinIds(None)
+pinids = [x for x in pininfo[1] if x is not None]
+for pin_id in pinids:
+    pin.SetId(pin_id)
+    pintextinfo = pin.GetTextIds(None)
+    pintextids = [x for x in pintextinfo[1] if x is not None]
+    for pin_text_id in pintextids:
+        text.SetId(pin_text_id)
+        if text.GetType() == 617:
+            text.SetVisibility(1)
+            text.SetAlignment(3)
+            text.SetStyle(1)
 
-
-
-for data in SCHEMATIC_DATA:
-    display_main_block_attributes(data["parent_block"])
-
-root = tk.Tk()
-...
-root.mainloop()
+# dev. set id to connector SCP-J2 -> loop thru symbol text and if text.type is 12, bold it
