@@ -1108,7 +1108,9 @@ del app
 
 time.sleep(0.5)
 
-POST_FORMATTER_CODE = r'''import time
+POST_FORMATTER_CODE = r'''import os
+import time
+import pythoncom
 import win32com.client as win32
 
 
@@ -1129,16 +1131,63 @@ def extract_ids(result):
     return []
 
 
-def format_project():
-    app = win32.gencache.EnsureDispatch("CT.Application")
+def get_visibility(text_obj):
+    try:
+        return text_obj.GetVisibility()
+    except Exception:
+        return "UNAVAILABLE"
+
+
+def write_log(message):
+    print(message)
+    with open(LOG_PATH, "a", encoding="utf-8") as log_file:
+        log_file.write(str(message) + "\\n")
+
+
+def get_active_e3():
+    app = win32.GetActiveObject("CT.Application")
     prj = app.CreateJobObject()
+    return app, prj
+
+
+def target_project_is_ready(prj):
+    device_result = prj.GetAllDeviceIds(None)
+    device_ids = extract_ids(device_result)
+    names = []
+
+    for device_id in device_ids:
+        dev = prj.CreateDeviceObject()
+        dev.SetId(device_id)
+
+        try:
+            names.append(str(dev.GetName()))
+        except Exception:
+            pass
+
+    return TARGET_MAIN_DEVICE in names
+
+
+def format_project(pass_number):
+    app, prj = get_active_e3()
     dev = prj.CreateDeviceObject()
     pin = prj.CreatePinObject()
     sym = prj.CreateSymbolObject()
     text = prj.CreateTextObject()
 
+    if not target_project_is_ready(prj):
+        write_log("PASS " + str(pass_number) + ": target project is not ready yet")
+        return False
+
     device_result = prj.GetAllDeviceIds(None)
     device_ids = extract_ids(device_result)
+    connector_count = 0
+    pin_view_count = 0
+    change_count = 0
+
+    write_log("============================================================")
+    write_log("FORMAT PASS " + str(pass_number))
+    write_log("TARGET MAIN DEVICE: " + TARGET_MAIN_DEVICE)
+    write_log("============================================================")
 
     for device_id in device_ids:
         dev.SetId(device_id)
@@ -1148,6 +1197,11 @@ def format_project():
                 continue
         except Exception:
             pass
+
+        try:
+            device_name = str(dev.GetName())
+        except Exception:
+            continue
 
         try:
             logical_symbol_result = dev.GetSymbolIds(None)
@@ -1170,16 +1224,20 @@ def format_project():
                 text.SetId(logical_text_id)
 
                 try:
-                    text_type = text.GetType()
+                    if text.GetType() == 5:
+                        is_connector = True
+                        break
                 except Exception:
-                    continue
+                    pass
 
-                if text_type == 5:
-                    is_connector = True
-                    text.SetVisibility(0)
+            if is_connector:
+                break
 
         if not is_connector:
             continue
+
+        connector_count += 1
+        write_log("CONNECTOR: " + device_name + " DEVICE ID: " + str(device_id))
 
         try:
             logical_pin_result = dev.GetPinIds(None)
@@ -1189,6 +1247,11 @@ def format_project():
 
         for logical_pin_id in logical_pin_ids:
             pin.SetId(logical_pin_id)
+
+            try:
+                logical_pin_name = str(pin.GetName())
+            except Exception:
+                logical_pin_name = "UNKNOWN"
 
             try:
                 view_result = pin.GetViewIds(None)
@@ -1205,7 +1268,8 @@ def format_project():
                     sym.SetId(pin_view_id)
                     symbol_text_result = sym.GetTextIds(None)
                     symbol_text_ids = extract_ids(symbol_text_result)
-                except Exception:
+                except Exception as e:
+                    write_log("PIN " + logical_pin_name + " VIEW " + str(pin_view_id) + " SYMBOL ERROR: " + repr(e))
                     continue
 
                 split_position = None
@@ -1229,34 +1293,47 @@ def format_project():
                 if split_position is None:
                     continue
 
+                pin_view_count += 1
                 is_top_pin = split_position == 1
+                write_log("PIN " + logical_pin_name + " VIEW " + str(pin_view_id) + " POSITION " + str(split_position) + " TOP " + str(is_top_pin))
 
                 for text_id in symbol_text_ids:
                     text.SetId(text_id)
 
                     try:
                         text_type = text.GetType()
+                        text_value = str(text.GetText()).strip()
                     except Exception:
                         continue
 
                     if text_type == 5:
-                        text.SetVisibility(0)
+                        result = text.SetVisibility(0)
+                        change_count += 1
+                        write_log("    TYPE 5 OFF RESULT=" + str(result) + " VIS=" + str(get_visibility(text)) + " VALUE=" + repr(text_value))
 
                     elif text_type == 617:
-                        text.SetVisibility(1)
+                        result = text.SetVisibility(1)
                         text.SetColour(0)
                         text.SetAlignment(3)
                         text.SetStyle(1)
                         text.SetHeight(0.2)
+                        change_count += 1
+                        write_log("    TYPE 617 ON RESULT=" + str(result) + " VIS=" + str(get_visibility(text)) + " VALUE=" + repr(text_value))
 
                     elif text_type == 12:
                         if is_top_pin:
-                            text.SetVisibility(1)
+                            result = text.SetVisibility(1)
                             text.SetColour(0)
                             text.SetStyle(1)
                             text.SetHeight(0.2)
+                            write_log("    TYPE 12 TOP ON RESULT=" + str(result) + " VIS=" + str(get_visibility(text)) + " VALUE=" + repr(text_value))
                         else:
-                            text.SetVisibility(0)
+                            result = text.SetVisibility(0)
+                            write_log("    TYPE 12 OFF RESULT=" + str(result) + " VIS=" + str(get_visibility(text)) + " VALUE=" + repr(text_value))
+
+                        change_count += 1
+
+    write_log("PASS " + str(pass_number) + " CONNECTORS=" + str(connector_count) + " PIN_VIEWS=" + str(pin_view_count) + " CHANGES=" + str(change_count))
 
     del text
     del sym
@@ -1265,21 +1342,66 @@ def format_project():
     del prj
     del app
 
+    return connector_count > 0 and pin_view_count > 0
 
-time.sleep(3.0)
-format_project()
-time.sleep(2.0)
-format_project()
+
+pythoncom.CoInitialize()
+LOG_PATH = os.path.join(os.path.expanduser("~"), "Downloads", "e3_post_formatter_log.txt")
+
+with open(LOG_PATH, "w", encoding="utf-8") as log_file:
+    log_file.write("E3 POST FORMATTER STARTED\\n")
+    log_file.write("TARGET MAIN DEVICE: " + TARGET_MAIN_DEVICE + "\\n")
+
+try:
+    ready = False
+
+    for attempt in range(1, 31):
+        try:
+            app, prj = get_active_e3()
+            ready = target_project_is_ready(prj)
+            del prj
+            del app
+        except Exception as e:
+            write_log("ATTACH ATTEMPT " + str(attempt) + " FAILED: " + repr(e))
+            ready = False
+
+        if ready:
+            write_log("ATTACHED TO ACTIVE E3 ON ATTEMPT " + str(attempt))
+            break
+
+        time.sleep(1.0)
+
+    if not ready:
+        write_log("FAILED TO ATTACH TO THE ACTIVE TARGET E3 PROJECT")
+    else:
+        time.sleep(2.0)
+        format_project(1)
+        time.sleep(2.0)
+        format_project(2)
+        time.sleep(4.0)
+        format_project(3)
+        time.sleep(6.0)
+        format_project(4)
+        write_log("E3 POST FORMATTER COMPLETE")
+
+except Exception as e:
+    write_log("POST FORMATTER FATAL ERROR: " + repr(e))
+
+finally:
+    pythoncom.CoUninitialize()
 '''
+
+POST_FORMATTER_CODE = "TARGET_MAIN_DEVICE = " + repr(str(DEVICE_DESIGNATION)) + "\n" + POST_FORMATTER_CODE
 
 formatter_path = os.path.join(tempfile.gettempdir(), "e3_post_creation_formatter.py")
 
 with open(formatter_path, "w", encoding="utf-8") as formatter_file:
     formatter_file.write(POST_FORMATTER_CODE)
 
-creation_flags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+creation_flags = getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0) | getattr(subprocess, "DETACHED_PROCESS", 0)
 subprocess.Popen([sys.executable, formatter_path], creationflags=creation_flags)
 
 print("Creation complete.")
-print("Delayed E3 split-symbol formatter launched.")
-print("It will apply the proven formatting after E3 finalizes the created views.")
+print("The proven GetViewIds formatter was launched against the ACTIVE E3 instance.")
+print("It retries for the live project and reapplies formatting for about 15 seconds.")
+print("Formatter log: " + os.path.join(os.path.expanduser("~"), "Downloads", "e3_post_formatter_log.txt"))
