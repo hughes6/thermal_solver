@@ -1,5 +1,9 @@
 from openpyxl import load_workbook
 import time
+import os
+import sys
+import tempfile
+import subprocess
 import pyodbc
 import win32com.client as win32
 import tkinter as tk
@@ -1080,14 +1084,17 @@ attr = prj.CreateAttributeObject()
 sht = prj.CreateSheetObject()
 
 #=========================================
-# FINAL OPERATION - FORMAT CONNECTOR AND PIN TEXT
+# POST-CREATION FORMATTER HANDOFF
 #=========================================
-for data in SCHEMATIC_DATA:
-    format_connector_text(data["connector_device_id"], data["name"])
+# The split-symbol type 5 and type 12 visibility changes are applied by a
+# second Python process after this creation script releases E3. This matches
+# the standalone test that worked after creation finished.
 
-#=========================================
-# CLEANUP
-#=========================================
+try:
+    conn.close()
+except Exception:
+    pass
+
 del pin
 del attr
 del text
@@ -1098,3 +1105,181 @@ del sht
 del conn
 del prj
 del app
+
+time.sleep(0.5)
+
+POST_FORMATTER_CODE = r'''import time
+import win32com.client as win32
+
+
+def extract_ids(result):
+    if result is None:
+        return []
+
+    if isinstance(result, (tuple, list)):
+        if len(result) >= 2 and isinstance(result[1], (tuple, list)):
+            return [x for x in result[1] if x is not None and x != 0]
+
+        return [x for x in result if isinstance(x, int) and x != 0]
+
+    if isinstance(result, int):
+        if result != 0:
+            return [result]
+
+    return []
+
+
+def format_project():
+    app = win32.gencache.EnsureDispatch("CT.Application")
+    prj = app.CreateJobObject()
+    dev = prj.CreateDeviceObject()
+    pin = prj.CreatePinObject()
+    sym = prj.CreateSymbolObject()
+    text = prj.CreateTextObject()
+
+    device_result = prj.GetAllDeviceIds(None)
+    device_ids = extract_ids(device_result)
+
+    for device_id in device_ids:
+        dev.SetId(device_id)
+
+        try:
+            if dev.IsView() == 1:
+                continue
+        except Exception:
+            pass
+
+        try:
+            logical_symbol_result = dev.GetSymbolIds(None)
+            logical_symbol_ids = extract_ids(logical_symbol_result)
+        except Exception:
+            logical_symbol_ids = []
+
+        is_connector = False
+
+        for logical_symbol_id in logical_symbol_ids:
+            sym.SetId(logical_symbol_id)
+
+            try:
+                logical_text_result = sym.GetTextIds(None)
+                logical_text_ids = extract_ids(logical_text_result)
+            except Exception:
+                logical_text_ids = []
+
+            for logical_text_id in logical_text_ids:
+                text.SetId(logical_text_id)
+
+                try:
+                    text_type = text.GetType()
+                except Exception:
+                    continue
+
+                if text_type == 5:
+                    is_connector = True
+                    text.SetVisibility(0)
+
+        if not is_connector:
+            continue
+
+        try:
+            logical_pin_result = dev.GetPinIds(None)
+            logical_pin_ids = extract_ids(logical_pin_result)
+        except Exception:
+            logical_pin_ids = []
+
+        for logical_pin_id in logical_pin_ids:
+            pin.SetId(logical_pin_id)
+
+            try:
+                view_result = pin.GetViewIds(None)
+            except Exception:
+                try:
+                    view_result = pin.GetViewIds()
+                except Exception:
+                    view_result = None
+
+            pin_view_ids = extract_ids(view_result)
+
+            for pin_view_id in pin_view_ids:
+                try:
+                    sym.SetId(pin_view_id)
+                    symbol_text_result = sym.GetTextIds(None)
+                    symbol_text_ids = extract_ids(symbol_text_result)
+                except Exception:
+                    continue
+
+                split_position = None
+
+                for text_id in symbol_text_ids:
+                    text.SetId(text_id)
+
+                    try:
+                        text_type = text.GetType()
+                        text_value = str(text.GetText()).strip()
+                    except Exception:
+                        continue
+
+                    if text_type == 213 and "/" in text_value and not text_value.startswith("*"):
+                        try:
+                            split_position = int(text_value.split("/")[0])
+                        except Exception:
+                            split_position = None
+                        break
+
+                if split_position is None:
+                    continue
+
+                is_top_pin = split_position == 1
+
+                for text_id in symbol_text_ids:
+                    text.SetId(text_id)
+
+                    try:
+                        text_type = text.GetType()
+                    except Exception:
+                        continue
+
+                    if text_type == 5:
+                        text.SetVisibility(0)
+
+                    elif text_type == 617:
+                        text.SetVisibility(1)
+                        text.SetColour(0)
+                        text.SetAlignment(3)
+                        text.SetStyle(1)
+                        text.SetHeight(0.2)
+
+                    elif text_type == 12:
+                        if is_top_pin:
+                            text.SetVisibility(1)
+                            text.SetColour(0)
+                            text.SetStyle(1)
+                            text.SetHeight(0.2)
+                        else:
+                            text.SetVisibility(0)
+
+    del text
+    del sym
+    del pin
+    del dev
+    del prj
+    del app
+
+
+time.sleep(3.0)
+format_project()
+time.sleep(2.0)
+format_project()
+'''
+
+formatter_path = os.path.join(tempfile.gettempdir(), "e3_post_creation_formatter.py")
+
+with open(formatter_path, "w", encoding="utf-8") as formatter_file:
+    formatter_file.write(POST_FORMATTER_CODE)
+
+creation_flags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+subprocess.Popen([sys.executable, formatter_path], creationflags=creation_flags)
+
+print("Creation complete.")
+print("Delayed E3 split-symbol formatter launched.")
+print("It will apply the proven formatting after E3 finalizes the created views.")
