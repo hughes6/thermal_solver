@@ -1,42 +1,35 @@
-def generate_schematic_pin_map(connector_info,newpindict,layout,pin_spacing=0.25,pin_start_offset=2.0,edge_offset=0.3):
-    x=layout["x start"]+layout["width"]-edge_offset
-    y_start=layout["y start"]+layout["height"]-pin_start_offset
-    pin_map=[]
-    for pos,pin_data in enumerate(connector_info[1:]):
-        pin_name=str(pin_data[0])
-        if pin_name not in newpindict: raise Exception(f"Pin {pin_name} not found in new view for {connector_info[0]['connector name']}")
-        pin_map.append({"pin name":pin_name,"pin id":newpindict[pin_name],"x":x,"y":y_start-(pos*pin_spacing),"flip":"/1"})
-    return pin_map
+def format_main_block_view(device_view_id,x,y,width,height):
+    x_center=x+(width/2.0); function_spacing=0.5 if DEVICE_FUNCTION is not None else 0.0
+    dev.SetId(device_view_id)
+
+    # ATTRIBUTE TEXTS
+    attrinfo=dev.GetAttributeIds(None)
+    for att_id in [a for a in attrinfo[1] if a is not None]:
+        attr.SetId(att_id)
+        textinfo=attr.GetTextIds(None)
+        for text_id in [t for t in textinfo[1] if t is not None]:
+            text.SetId(text_id); txt=text.GetText()
+            if txt==ADDITIONAL_PART_ID:
+                text.SetColour(0); text.SetMode(1); text.SetAlignment(2); text.SetStyle(1); text.SetHeight(0.2)
+                text.SetSchemaLocation(x_center,y+height-1.1-function_spacing)
+            elif DEVICE_FUNCTION is not None and txt==DEVICE_FUNCTION:
+                text.SetColour(0); text.SetMode(1); text.SetAlignment(2); text.SetStyle(1); text.SetHeight(0.2)
+                text.SetSchemaLocation(x_center,y+height-1.5-function_spacing)
+
+    # SYMBOL TEXTS
+    syminfo=dev.GetSymbolIds(None)
+    for sym_id in [s for s in syminfo[1] if s is not None]:
+        sym.SetId(sym_id); sym.SetBlockHatchColour(58)
+        textinfo=sym.GetTextIds(None)
+        for text_id in [t for t in textinfo[1] if t is not None]:
+            text.SetId(text_id); txt=text.GetText()
+            if txt=="BxRxUx":
+                text.SetColour(0); text.SetMode(1); text.SetAlignment(2); text.SetStyle(1); text.SetHeight(0.2)
+                text.SetSchemaLocation(x_center,y+height-0.3-function_spacing)
+            elif txt==DEVICE_DESIGNATION:
+                text.SetColour(0); text.SetMode(1); text.SetAlignment(2); text.SetStyle(1); text.SetHeight(0.2)
+                text.SetSchemaLocation(x_center,y+height-0.7-function_spacing)
 
 
-after place block 
 
 
-
-# CREATE NEW VIEW OF THIS CONNECTOR
-connector_device_id=CONNECTOR_DEVICE_IDS[conn_name]
-dev.SetId(connector_device_id)
-res=dev.CreateView(connector_device_id,1,0,0)
-if res==0: raise Exception(f"Failed to create connector view for {conn_name}")
-connector_view_id=res
-
-# GET PIN IDS FROM THE NEW CONNECTOR VIEW
-dev.SetId(connector_view_id)
-newpininfo=dev.GetAllPinIds(None)
-newpinids=[x for x in newpininfo[1] if x is not None]
-newpindict={}
-for pin_id in newpinids:
-    pin.SetId(pin_id)
-    newpindict[str(pin.GetName())]=pin_id
-
-# ORDER + MAP THE PINS
-SCHEMATIC_PIN_MAP=generate_schematic_pin_map(PIN_SIGNAL_INFO[i],newpindict,conn_layout_dict)
-
-# PLACE ALL PINS ON RIGHT SIDE
-symname="MilSymbolReceptacle¶END_SPLIT"
-for pin_data in SCHEMATIC_PIN_MAP:
-    res=sym.PlacePins(pin_data["pin id"],symname,1,current_sheet_id,pin_data["x"],pin_data["y"],pin_data["flip"],1.0)
-    if res==0: raise Exception(f"Failed placing {conn_name} pin {pin_data['pin name']}")
-    app.PutMessage(f"Placed {conn_name} pin {pin_data['pin name']} x={pin_data['x']} y={pin_data['y']} flip={pin_data['flip']}")
-    symname="MilSymbolReceptacle¶SPLIT_BOTTOM"
-    time.sleep(0.25)
