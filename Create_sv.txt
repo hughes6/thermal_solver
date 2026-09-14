@@ -313,14 +313,67 @@ def format_main_block_view(device_view_id, x, y, width, height):
 
                     print("MOVED EQUIPMENT IDENTIFICATION:", repr(txt), "TO:", x_center, y + height - 1.1)
 
-def format_connector_text(connector_view_id, conn_name):
+def format_connector_text(connector_view_id, conn_name, placed_pin_symbols):
     dev.SetId(connector_view_id)
+    top_symbol_id = placed_pin_symbols[0]["symbol_id"] if placed_pin_symbols else None
 
     #=========================================
-    # SYMBOL TEXT
+    # FORMAT EXACT SYMBOLS RETURNED BY PLACEPINS
     # TYPE 5  = COMPONENT CODE -> HIDE
-    # TYPE 12 = DEVICE DESIGNATION -> SHOW ONLY ON TOP SYMBOL
+    # TYPE 12 = DEVICE DESIGNATION -> TOP PIN ONLY
     #=========================================
+    for index, placed_pin in enumerate(placed_pin_symbols):
+        symbol_id = placed_pin["symbol_id"]
+        pin_id = placed_pin["pin_id"]
+
+        sym.SetId(symbol_id)
+        textinfo = sym.GetTextIds(None)
+        textids = [x for x in textinfo[1] if x is not None]
+
+        for text_id in textids:
+            text.SetId(text_id)
+            text_type = text.GetTypeId()
+
+            if text_type == 5:
+                text.SetVisibility(0)
+            elif text_type == 12:
+                if index == 0:
+                    text.SetVisibility(1)
+                    text.SetColour(0)
+                    text.SetStyle(1)
+                    text.SetHeight(0.2)
+                else:
+                    text.SetVisibility(0)
+
+        #=========================================
+        # FORMAT EXACT PIN TEXT
+        # TYPE 617 = LOCAL SIGNAL NAME -> SHOW/BOLD
+        # TYPE 5   = COMPONENT CODE -> HIDE
+        # TYPE 12  = DEVICE DESIGNATION -> HIDE HERE
+        #=========================================
+        pin.SetId(pin_id)
+        pintextinfo = pin.GetTextIds(None)
+        pintextids = [x for x in pintextinfo[1] if x is not None]
+
+        for pin_text_id in pintextids:
+            text.SetId(pin_text_id)
+            text_type = text.GetTypeId()
+
+            if text_type == 617:
+                text.SetVisibility(1)
+                text.SetColour(0)
+                text.SetAlignment(3)
+                text.SetStyle(1)
+                text.SetHeight(0.2)
+            elif text_type == 5:
+                text.SetVisibility(0)
+            elif text_type == 12:
+                text.SetVisibility(0)
+
+    #=========================================
+    # FINAL FORCE SWEEP OF CONNECTOR VIEW
+    #=========================================
+    dev.SetId(connector_view_id)
     symbolinfo = dev.GetSymbolIds(None)
     symbolids = [x for x in symbolinfo[1] if x is not None]
 
@@ -331,33 +384,19 @@ def format_connector_text(connector_view_id, conn_name):
 
         for text_id in textids:
             text.SetId(text_id)
-            text_type = text.GetType()
+            text_type = text.GetTypeId()
 
             if text_type == 5:
                 text.SetVisibility(0)
             elif text_type == 12:
-                text.SetVisibility(0)
+                if symbol_id == top_symbol_id:
+                    text.SetVisibility(1)
+                    text.SetColour(0)
+                    text.SetStyle(1)
+                    text.SetHeight(0.2)
+                else:
+                    text.SetVisibility(0)
 
-    if len(symbolids) > 0:
-        top_symbol_id = symbolids[-1]
-        sym.SetId(top_symbol_id)
-        textinfo = sym.GetTextIds(None)
-        textids = [x for x in textinfo[1] if x is not None]
-
-        for text_id in textids:
-            text.SetId(text_id)
-
-            if text.GetType() == 12:
-                text.SetVisibility(1)
-                text.SetColour(0)
-                text.SetStyle(1)
-                text.SetHeight(0.2)
-
-    #=========================================
-    # PIN TEXT
-    # TYPE 617 = LOCAL SIGNAL NAME -> SHOW/BOLD
-    # DO NOT TOUCH TYPE 12 HERE
-    #=========================================
     pininfo = dev.GetPinIds(None)
     pinids = [x for x in pininfo[1] if x is not None]
 
@@ -368,7 +407,7 @@ def format_connector_text(connector_view_id, conn_name):
 
         for pin_text_id in pintextids:
             text.SetId(pin_text_id)
-            text_type = text.GetType()
+            text_type = text.GetTypeId()
 
             if text_type == 617:
                 text.SetVisibility(1)
@@ -376,7 +415,7 @@ def format_connector_text(connector_view_id, conn_name):
                 text.SetAlignment(3)
                 text.SetStyle(1)
                 text.SetHeight(0.2)
-            elif text_type == 5:
+            elif text_type == 5 or text_type == 12:
                 text.SetVisibility(0)
 
 
@@ -1023,7 +1062,7 @@ sht = prj.CreateSheetObject()
 # FINAL OPERATION - FORMAT CONNECTOR AND PIN TEXT
 #=========================================
 for data in SCHEMATIC_DATA:
-    format_connector_text(data["connector_view"], data["name"])
+    format_connector_text(data["connector_view"], data["name"], data["placed_pin_symbols"])
 
 #=========================================
 # CLEANUP
