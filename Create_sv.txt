@@ -1,264 +1,81 @@
-import win32com.client as win32
+=========================================
+STARTING SCHEMATIC PIN TEXT FORMATTING
+=========================================
 
+CONNECTOR: SCP-J1 DEVICE ID: 143319
+LOGICAL PINS: [146679, 146947, 143357, 143356, 143334, 143333, 143299, 143297, 143353]
+PIN: 1 VIEW: 145971 POSITION: 1 TOP: True
+    HIDE COMPONENT CODE: 'Generic_D-Sub_9P_Plug'
+    SHOW TOP DEVICE DESIGNATION: 'SCP-J1#1'
+    SHOW LOCAL SIGNAL: 'TEST_1'
+PIN: 2 VIEW: 146864 POSITION: 2 TOP: False
+    HIDE COMPONENT CODE: 'Generic_D-Sub_9P_Plug'
+    HIDE DEVICE DESIGNATION: 'SCP-J1#1'
+    SHOW LOCAL SIGNAL: 'SPARE'
+PIN: 3 VIEW: 147189 POSITION: 3 TOP: False
+    HIDE COMPONENT CODE: 'Generic_D-Sub_9P_Plug'
+    HIDE DEVICE DESIGNATION: 'SCP-J1#1'
+    SHOW LOCAL SIGNAL: 'T3'
+PIN: 4 VIEW: 143872 POSITION: 4 TOP: False
+    HIDE COMPONENT CODE: 'Generic_D-Sub_9P_Plug'
+    HIDE DEVICE DESIGNATION: 'SCP-J1#1'
+    SHOW LOCAL SIGNAL: 'SPARE'
+PIN: 5 VIEW: 146740 POSITION: 5 TOP: False
+    HIDE COMPONENT CODE: 'Generic_D-Sub_9P_Plug'
+    HIDE DEVICE DESIGNATION: 'SCP-J1#1'
+    SHOW LOCAL SIGNAL: 'test55'
+PIN: 6 VIEW: 143997 POSITION: 6 TOP: False
+    HIDE COMPONENT CODE: 'Generic_D-Sub_9P_Plug'
+    HIDE DEVICE DESIGNATION: 'SCP-J1#1'
+    SHOW LOCAL SIGNAL: 'SPARE'
+PIN: 7 VIEW: 146856 POSITION: 7 TOP: False
+    HIDE COMPONENT CODE: 'Generic_D-Sub_9P_Plug'
+    HIDE DEVICE DESIGNATION: 'SCP-J1#1'
+    SHOW LOCAL SIGNAL: 'SPARE'
+PIN: 8 VIEW: 145976 POSITION: 8 TOP: False
+    HIDE COMPONENT CODE: 'Generic_D-Sub_9P_Plug'
+    HIDE DEVICE DESIGNATION: 'SCP-J1#1'
+    SHOW LOCAL SIGNAL: 'SPARE'
+PIN: 9 VIEW: 146421 POSITION: 9 TOP: False
+    HIDE COMPONENT CODE: 'Generic_D-Sub_9P_Plug'
+    HIDE DEVICE DESIGNATION: 'SCP-J1#1'
+    SHOW LOCAL SIGNAL: 'SPARE'
 
-# ================================================
-# CONNECT TO CURRENT E3 PROJECT
-# ================================================
-app = win32.gencache.EnsureDispatch("CT.Application")
-prj = app.CreateJobObject()
-dev = prj.CreateDeviceObject()
-pin = prj.CreatePinObject()
-sym = prj.CreateSymbolObject()
-text = prj.CreateTextObject()
+CONNECTOR: SCP-J2 DEVICE ID: 143337
+LOGICAL PINS: [145253, 142238, 142648, 144290, 143830, 142541, 145727, 145936]
+PIN: 1 VIEW: 145053 POSITION: 1 TOP: True
+    HIDE COMPONENT CODE: 'Generic_RJ45_Plug'
+    SHOW TOP DEVICE DESIGNATION: 'SCP-J2#2'
+    SHOW LOCAL SIGNAL: 'SPARE'
+PIN: 2 VIEW: 142569 POSITION: 2 TOP: False
+    HIDE COMPONENT CODE: 'Generic_RJ45_Plug'
+    HIDE DEVICE DESIGNATION: 'SCP-J2#2'
+    SHOW LOCAL SIGNAL: 'SPARE'
+PIN: 3 VIEW: 145523 POSITION: 3 TOP: False
+    HIDE COMPONENT CODE: 'Generic_RJ45_Plug'
+    HIDE DEVICE DESIGNATION: 'SCP-J2#2'
+    SHOW LOCAL SIGNAL: 'SPARE'
+PIN: 4 VIEW: 145050 POSITION: 4 TOP: False
+    HIDE COMPONENT CODE: 'Generic_RJ45_Plug'
+    HIDE DEVICE DESIGNATION: 'SCP-J2#2'
+    SHOW LOCAL SIGNAL: 'TEST'
+PIN: 5 VIEW: 146866 POSITION: 5 TOP: False
+    HIDE COMPONENT CODE: 'Generic_RJ45_Plug'
+    HIDE DEVICE DESIGNATION: 'SCP-J2#2'
+    SHOW LOCAL SIGNAL: 'SPARE'
+PIN: 6 VIEW: 146083 POSITION: 6 TOP: False
+    HIDE COMPONENT CODE: 'Generic_RJ45_Plug'
+    HIDE DEVICE DESIGNATION: 'SCP-J2#2'
+    SHOW LOCAL SIGNAL: 'SPARE'
+PIN: 7 VIEW: 147297 POSITION: 7 TOP: False
+    HIDE COMPONENT CODE: 'Generic_RJ45_Plug'
+    HIDE DEVICE DESIGNATION: 'SCP-J2#2'
+    SHOW LOCAL SIGNAL: 'SPARE'
+PIN: 8 VIEW: 143967 POSITION: 8 TOP: False
+    HIDE COMPONENT CODE: 'Generic_RJ45_Plug'
+    HIDE DEVICE DESIGNATION: 'SCP-J2#2'
+    SHOW LOCAL SIGNAL: 'SPARE'
 
-
-# ================================================
-# HELPER
-# ================================================
-def extract_ids(result):
-    if result is None:
-        return []
-
-    if isinstance(result, (tuple, list)):
-        if len(result) >= 2 and isinstance(result[1], (tuple, list)):
-            return [x for x in result[1] if x is not None and x != 0]
-
-        return [x for x in result if isinstance(x, int) and x != 0]
-
-    if isinstance(result, int):
-        if result != 0:
-            return [result]
-
-    return []
-
-
-# ================================================
-# GET ALL LOGICAL DEVICES
-# ================================================
-device_result = prj.GetAllDeviceIds(None)
-device_ids = extract_ids(device_result)
-
-print("=========================================")
-print("STARTING SCHEMATIC PIN TEXT FORMATTING")
-print("=========================================")
-
-
-# ================================================
-# WALK ALL LOGICAL DEVICES
-# ================================================
-for device_id in device_ids:
-    dev.SetId(device_id)
-
-    try:
-        device_name = str(dev.GetName())
-    except Exception:
-        continue
-
-    # ================================================
-    # DETERMINE IF THIS IS A CONNECTOR DEVICE
-    # Connector logical symbols contain type 5
-    # ================================================
-    try:
-        symbol_result = dev.GetSymbolIds(None)
-        logical_symbol_ids = extract_ids(symbol_result)
-    except Exception:
-        logical_symbol_ids = []
-
-    is_connector = False
-
-    for logical_symbol_id in logical_symbol_ids:
-        sym.SetId(logical_symbol_id)
-
-        try:
-            text_result = sym.GetTextIds(None)
-            text_ids = extract_ids(text_result)
-        except Exception:
-            text_ids = []
-
-        for text_id in text_ids:
-            text.SetId(text_id)
-
-            try:
-                text_type = text.GetType()
-            except Exception:
-                continue
-
-            if text_type == 5:
-                is_connector = True
-                break
-
-        if is_connector:
-            break
-
-    if not is_connector:
-        continue
-
-    print("")
-    print("CONNECTOR:", device_name, "DEVICE ID:", device_id)
-
-
-    # ================================================
-    # GET LOGICAL PINS
-    # ================================================
-    try:
-        pin_result = dev.GetPinIds(None)
-        logical_pin_ids = extract_ids(pin_result)
-    except Exception:
-        logical_pin_ids = []
-
-    print("LOGICAL PINS:", logical_pin_ids)
-
-
-    # ================================================
-    # WALK EACH LOGICAL PIN
-    # ================================================
-    for logical_pin_id in logical_pin_ids:
-        pin.SetId(logical_pin_id)
-
-        try:
-            logical_pin_name = str(pin.GetName())
-        except Exception:
-            logical_pin_name = "UNKNOWN"
-
-        # ================================================
-        # GET ACTUAL PLACED PIN VIEW IDS
-        # ================================================
-        try:
-            view_result = pin.GetViewIds(None)
-            pin_view_ids = extract_ids(view_result)
-        except Exception:
-            try:
-                view_result = pin.GetViewIds()
-                pin_view_ids = extract_ids(view_result)
-            except Exception:
-                pin_view_ids = []
-
-        for pin_view_id in pin_view_ids:
-
-            # ================================================
-            # THE PIN VIEW ID IS ALSO THE SPLIT SYMBOL ID
-            # ================================================
-            try:
-                sym.SetId(pin_view_id)
-            except Exception:
-                continue
-
-            try:
-                text_result = sym.GetTextIds(None)
-                symbol_text_ids = extract_ids(text_result)
-            except Exception:
-                symbol_text_ids = []
-
-            if not symbol_text_ids:
-                continue
-
-
-            # ================================================
-            # DETERMINE SPLIT POSITION USING TYPE 213
-            #
-            # Examples:
-            # 1/9 = TOP
-            # 2/9
-            # 3/9
-            # etc.
-            # ================================================
-            split_position = None
-
-            for text_id in symbol_text_ids:
-                text.SetId(text_id)
-
-                try:
-                    text_type = text.GetType()
-                    text_value = str(text.GetText()).strip()
-                except Exception:
-                    continue
-
-                if text_type == 213 and "/" in text_value and not text_value.startswith("*"):
-                    position_text = text_value.split("/")[0]
-
-                    try:
-                        split_position = int(position_text)
-                    except Exception:
-                        split_position = None
-
-                    break
-
-
-            # ================================================
-            # IGNORE NON-SPLIT SYMBOLS
-            # ================================================
-            if split_position is None:
-                continue
-
-            is_top_pin = split_position == 1
-
-            print("PIN:", logical_pin_name, "VIEW:", pin_view_id, "POSITION:", split_position, "TOP:", is_top_pin)
-
-
-            # ================================================
-            # FORMAT THIS EXACT SPLIT SYMBOL
-            # ================================================
-            for text_id in symbol_text_ids:
-                text.SetId(text_id)
-
-                try:
-                    text_type = text.GetType()
-                    text_value = str(text.GetText()).strip()
-                except Exception:
-                    continue
-
-
-                # ================================================
-                # TYPE 5
-                # COMPONENT CODE
-                #
-                # Generic_D-Sub_9P_Plug
-                # Generic_RJ45_Plug
-                #
-                # ALWAYS OFF
-                # ================================================
-                if text_type == 5:
-                    text.SetVisibility(0)
-                    print("    HIDE COMPONENT CODE:", repr(text_value))
-
-
-                # ================================================
-                # TYPE 617
-                # LOCAL SIGNAL NAME
-                #
-                # ALWAYS ON
-                # ================================================
-                elif text_type == 617:
-                    text.SetVisibility(1)
-                    text.SetColour(0)
-                    text.SetAlignment(3)
-                    text.SetStyle(1)
-                    text.SetHeight(0.2)
-                    print("    SHOW LOCAL SIGNAL:", repr(text_value))
-
-
-                # ================================================
-                # TYPE 12
-                # DEVICE DESIGNATION
-                #
-                # SCP-J1#1
-                # SCP-J2#2
-                #
-                # ONLY TOP PIN ON
-                # ================================================
-                elif text_type == 12:
-                    if is_top_pin:
-                        text.SetVisibility(1)
-                        text.SetColour(0)
-                        text.SetStyle(1)
-                        text.SetHeight(0.2)
-                        print("    SHOW TOP DEVICE DESIGNATION:", repr(text_value))
-                    else:
-                        text.SetVisibility(0)
-                        print("    HIDE DEVICE DESIGNATION:", repr(text_value))
-
-
-print("")
-print("=========================================")
-print("FORMATTING COMPLETE")
-print("=========================================")
+=========================================
+FORMATTING COMPLETE
+=========================================
