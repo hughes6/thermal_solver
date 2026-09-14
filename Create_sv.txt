@@ -1,10 +1,8 @@
-def format_connector_text(connector_view_id, conn_name):
+def format_connector_text(connector_view_id, conn_name, top_pin_symbol_id, top_pin_id):
     dev.SetId(connector_view_id)
 
     #=========================================
-    # CONNECTOR DEVICE TEXT
-    # TYPE 5  = COMPONENT CODE -> HIDE
-    # TYPE 12 = DEVICE DESIGNATION -> BOLD
+    # FORMAT SPLIT PIN SYMBOL TEXT
     #=========================================
     symbolinfo = dev.GetSymbolIds(None)
     symbolids = [x for x in symbolinfo[1] if x is not None]
@@ -19,19 +17,22 @@ def format_connector_text(connector_view_id, conn_name):
             text.SetId(text_id)
             text_type = text.GetType()
 
+            # COMPONENT CODE
             if text_type == 5:
                 text.SetVisibility(0)
 
+            # DEVICE DESIGNATION
             elif text_type == 12:
-                text.SetVisibility(1)
-                text.SetColour(0)
-                text.SetStyle(1)
-                text.SetHeight(0.2)
+                if symbol_id == top_pin_symbol_id:
+                    text.SetVisibility(1)
+                    text.SetColour(0)
+                    text.SetStyle(1)
+                    text.SetHeight(0.2)
+                else:
+                    text.SetVisibility(0)
 
     #=========================================
-    # PIN TEXT
-    # TYPE 617 = LOCAL SIGNAL NAME -> SHOW/BOLD
-    # EVERYTHING ELSE -> HIDE
+    # FORMAT PIN TEXT
     #=========================================
     pininfo = dev.GetPinIds(None)
     pinids = [x for x in pininfo[1] if x is not None]
@@ -46,6 +47,7 @@ def format_connector_text(connector_view_id, conn_name):
             text.SetId(pin_text_id)
             text_type = text.GetType()
 
+            # LOCAL SIGNAL NAME
             if text_type == 617:
                 text.SetVisibility(1)
                 text.SetColour(0)
@@ -53,5 +55,20 @@ def format_connector_text(connector_view_id, conn_name):
                 text.SetStyle(1)
                 text.SetHeight(0.2)
 
+            # COMPONENT CODE
+            elif text_type == 5:
+                text.SetVisibility(0)
+
+            # DEVICE DESIGNATION
+            elif text_type == 12:
+                if pin_id == top_pin_id:
+                    text.SetVisibility(1)
+                    text.SetColour(0)
+                    text.SetStyle(1)
+                    text.SetHeight(0.2)
+                else:
+                    text.SetVisibility(0)
+
+            # EVERYTHING ELSE ON THE PIN
             else:
                 text.SetVisibility(0)
