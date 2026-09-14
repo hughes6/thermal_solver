@@ -1,46 +1,133 @@
-def format_connector_text(connector_view_id, parent_block):
-    #=========================================
-    # HIDE COMPONENT CODE
-    # KNOWN WORKING METHOD
-    #=========================================
-    dev.SetId(connector_view_id)
+# ================================================
+# E3 HIERARCHY DIAGNOSTIC
+# READ ONLY - DOES NOT MODIFY ANYTHING
+# ================================================
 
-    symbolinfo = dev.GetSymbolIds(None)
-    symbolids = [x for x in symbolinfo[1] if x is not None]
+print("")
+print("============================================================")
+print("E3 DEVICE / SYMBOL / PIN HIERARCHY")
+print("============================================================")
+
+devinfo = prj.GetAllDeviceIds(None)
+device_ids = [x for x in devinfo[1] if x is not None]
+
+print("ALL DEVICE IDS:", device_ids)
+print("DEVICE COUNT:", len(device_ids))
+print("")
+
+for device_id in device_ids:
+    dev.SetId(device_id)
+
+    try:
+        device_name = dev.GetName()
+    except Exception as e:
+        device_name = "<ERROR>"
+
+    print("============================================================")
+    print("DEVICE ID:", device_id)
+    print("DEVICE NAME:", repr(device_name))
+
+    # --------------------------------------------
+    # SYMBOLS OWNED BY THIS DEVICE
+    # --------------------------------------------
+    try:
+        symbolinfo = dev.GetSymbolIds(None)
+        symbolids = [x for x in symbolinfo[1] if x is not None]
+    except Exception as e:
+        symbolids = []
+        print("GetSymbolIds ERROR:", repr(e))
+
+    print("SYMBOL IDS:", symbolids)
+    print("SYMBOL COUNT:", len(symbolids))
 
     for symbol_id in symbolids:
         sym.SetId(symbol_id)
 
-        textinfo = sym.GetTextIds(None)
-        textids = [x for x in textinfo[1] if x is not None]
+        print("    --------------------------------------------------------")
+        print("    SYMBOL ID:", symbol_id)
+
+        try:
+            symbol_name = sym.GetName()
+            print("    SYMBOL NAME:", repr(symbol_name))
+        except Exception as e:
+            print("    SYMBOL NAME: <GetName unavailable>", repr(e))
+
+        try:
+            textinfo = sym.GetTextIds(None)
+            textids = [x for x in textinfo[1] if x is not None]
+        except Exception as e:
+            textids = []
+            print("    SYMBOL GetTextIds ERROR:", repr(e))
+
+        print("    SYMBOL TEXT IDS:", textids)
 
         for text_id in textids:
             text.SetId(text_id)
 
-            if text.GetType() == 5:
-                text.SetVisibility(0)
+            try:
+                text_value = text.GetText()
+            except Exception:
+                text_value = "<ERROR>"
 
-    #=========================================
-    # SHOW LOCAL SIGNAL NAME
-    # KNOWN WORKING MANUAL METHOD
-    #=========================================
-    dev.SetId(parent_block)
+            try:
+                text_type = text.GetType()
+            except Exception:
+                text_type = "<ERROR>"
 
-    pininfo = dev.GetPinIds(None)
-    pinids = [x for x in pininfo[1] if x is not None]
+            print("        TEXT ID:", text_id, "TYPE:", text_type, "VALUE:", repr(text_value))
+
+    # --------------------------------------------
+    # PINS OWNED BY THIS DEVICE
+    # --------------------------------------------
+    try:
+        pininfo = dev.GetPinIds(None)
+        pinids = [x for x in pininfo[1] if x is not None]
+    except Exception as e:
+        pinids = []
+        print("GetPinIds ERROR:", repr(e))
+
+    print("")
+    print("PIN IDS:", pinids)
+    print("PIN COUNT:", len(pinids))
 
     for pin_id in pinids:
         pin.SetId(pin_id)
 
-        pintextinfo = pin.GetTextIds(None)
-        pintextids = [x for x in pintextinfo[1] if x is not None]
+        try:
+            pin_name = pin.GetName()
+        except Exception:
+            pin_name = "<ERROR>"
+
+        print("    --------------------------------------------------------")
+        print("    PIN ID:", pin_id)
+        print("    PIN NAME:", repr(pin_name))
+
+        try:
+            pintextinfo = pin.GetTextIds(None)
+            pintextids = [x for x in pintextinfo[1] if x is not None]
+        except Exception as e:
+            pintextids = []
+            print("    PIN GetTextIds ERROR:", repr(e))
+
+        print("    PIN TEXT IDS:", pintextids)
 
         for pin_text_id in pintextids:
             text.SetId(pin_text_id)
 
-            if text.GetType() == 617:
-                text.SetVisibility(1)
-                text.SetAlignment(3)
-                text.SetStyle(1)
-                text.SetColour(0)
-                text.SetHeight(0.2)
+            try:
+                text_value = text.GetText()
+            except Exception:
+                text_value = "<ERROR>"
+
+            try:
+                text_type = text.GetType()
+            except Exception:
+                text_type = "<ERROR>"
+
+            print("        TEXT ID:", pin_text_id, "TYPE:", text_type, "VALUE:", repr(text_value))
+
+    print("")
+
+print("============================================================")
+print("END DEVICE HIERARCHY")
+print("============================================================")
