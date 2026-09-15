@@ -85,6 +85,9 @@ def runn():
         print("============================================================")
 
         formatted_count = 0
+        scanned_device_count = 0
+        scanned_symbol_count = 0
+        found_attribute_count = 0
 
         try:
             all_device_result = prj.GetAllDeviceIds(None)
@@ -95,14 +98,7 @@ def runn():
 
         for candidate_device_id in all_device_ids:
             dev.SetId(candidate_device_id)
-
-            try:
-                is_view = dev.IsView()
-            except Exception:
-                is_view = 0
-
-            if is_view != 1:
-                continue
+            scanned_device_count += 1
 
             try:
                 device_name = str(dev.GetName()).strip()
@@ -117,6 +113,7 @@ def runn():
 
             for symbol_id in symbol_ids:
                 sym.SetId(symbol_id)
+                scanned_symbol_count += 1
 
                 try:
                     attribute_result = sym.GetAttributeIds(None)
@@ -139,6 +136,9 @@ def runn():
 
                 if not equipment_attribute_ids:
                     continue
+
+                found_attribute_count += len(equipment_attribute_ids)
+                print("FOUND EQUIPMENT IDENTIFACATION ATTRIBUTE:", "DEVICE:", device_name, "DEVICE ID:", candidate_device_id, "SYMBOL:", symbol_id, "ATTR IDS:", equipment_attribute_ids)
 
                 designation_x = None
                 designation_y = None
@@ -249,6 +249,9 @@ def runn():
                         formatted_count += 1
 
         print("")
+        print("EQUIPMENT IDENTIFACATION DEVICES SCANNED:", scanned_device_count)
+        print("EQUIPMENT IDENTIFACATION SYMBOLS SCANNED:", scanned_symbol_count)
+        print("EQUIPMENT IDENTIFACATION ATTRIBUTES FOUND:", found_attribute_count)
         print("EQUIPMENT IDENTIFACATION TEXTS FORMATTED:", formatted_count)
         return formatted_count
 
