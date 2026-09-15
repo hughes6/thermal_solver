@@ -1,375 +1,1248 @@
+from openpyxl import load_workbook
 import time
+import pyodbc
 import win32com.client as win32
+import tkinter as tk
+import gc
+from utils import run
 
 
 # ================================================
-# CONNECT TO ACTIVE E3 PROJECT
+# HELPER FXN
 # ================================================
-app = win32.GetActiveObject("CT.Application")
-prj = app.CreateJobObject()
-dev = prj.CreateDeviceObject()
-pin = prj.CreatePinObject()
-sym = prj.CreateSymbolObject()
-text = prj.CreateTextObject()
+def make_gui(body):
+    root = tk.Tk()
+    root.title("Commit changes to database")
 
+    choice = {"value": None}
 
-# ================================================
-# HELPERS
-# ================================================
-def extract_ids(result):
-    if result is None:
-        return []
+    def pressed(value):
+        choice["value"] = value
+        root.quit()
 
-    if isinstance(result, (tuple, list)):
-        if len(result) >= 2 and isinstance(result[1], (tuple, list)):
-            return [x for x in result[1] if x is not None and x != 0]
+    # Frame with scrollbar
+    frame = tk.Frame(root)
+    frame.pack(padx=10, pady=10)
 
-        return [x for x in result if isinstance(x, int) and x != 0]
+    scrollbar = tk.Scrollbar(frame)
+    scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
 
-    if isinstance(result, int):
-        if result != 0:
-            return [result]
+    text = tk.Text(frame, height=20, width=80, wrap="word",
+                   yscrollcommand=scrollbar.set)
+    text.pack(side=tk.LEFT, fill=tk.BOTH)
 
-    return []
+    scrollbar.config(command=text.yview)
 
+    text.insert("1.0", body)
+    text.config(state="disabled")
 
-def get_visibility(text_id):
-    text.SetId(text_id)
+    tk.Button(root, text="COMMIT", width=50,
+              command=lambda: pressed("YES")).pack(pady=5)
+    tk.Button(root, text="ROLLBACK", width=50,
+              command=lambda: pressed("NO")).pack(pady=5)
+
+    root.mainloop()
+    return choice["value"]
+
+def ask_save_path(default_full_path=""):
+    import os
+    import tkinter as tk
+    from tkinter import filedialog
+
+    default_folder = os.path.dirname(default_full_path)
+
+    # Create Tk root
+    root = tk.Tk()
+    root.withdraw()
+    root.attributes("-topmost", True)
+    root.update()
 
     try:
-        return text.GetVisibility()
-    except Exception as e:
-        return "GET VIS ERROR: " + repr(e)
-
-
-def get_pin_view_ids(pin_id):
-    pin.SetId(pin_id)
-
-    try:
-        result = pin.GetViewIds(None)
-        return extract_ids(result)
+        # Let user PICK an existing Excel file
+        selected_path = filedialog.askopenfilename(
+            initialdir=default_folder,
+            filetypes=[("Excel Files", "*.xlsm"), ("All Files", "*.*")]
+        )
     except Exception:
-        pass
+        return None
 
-    try:
-        result = pin.GetViewIds()
-        return extract_ids(result)
-    except Exception as e:
-        print("GetViewIds ERROR:", pin_id, repr(e))
-        return []
+    # Cancel or X
+    if not selected_path:
+        root.destroy()
+        return None
+    root.destroy()
+    # Return ONLY the file name (not full path)
+    return os.path.abspath(selected_path)
 
+def generate_master_schematic_layout(PIN_SIGNAL_INFO,x_block,main_block_width):
+    SHEET_DICT = {1:sheet_1_id}
 
-# ================================================
-# TRACK EVERYTHING WE MODIFY
-# ================================================
-modified_texts = []
+    # PAGE BOUNDS
+    TOP_OF_PAGE = 32.9
+    BOTTOM_OF_PAGE = 0.0
+    LEFT_OF_PAGE = 0.0
+    RIGHT_OF_PAGE = 42.9
 
+    # PAGE MARGINS
+    TOP_MARGIN = 1.0
+    BOTTOM_MARGIN = 1.0
+    LEFT_MARGIN = 1.0
+    RIGHT_MARGIN = 1.0
 
-print("")
-print("============================================================")
-print("E3 VISIBILITY TEST")
-print("============================================================")
+    # BLOCK SPACING
+    BLOCK_X_SPACING = 1.0
+    BLOCK_Y_SPACING = 1.0
+    SCHEMATIC_BLOCK_WIDTH = 3.0
+    PIN_SPACING = 0.25
+    PIN_START_OFFSET = 2.25
 
+    # USABLE PAGE LIMITS
+    PAGE_TOP = TOP_OF_PAGE - TOP_MARGIN
+    PAGE_BOTTOM = BOTTOM_OF_PAGE + BOTTOM_MARGIN
+    PAGE_LEFT = LEFT_OF_PAGE + LEFT_MARGIN
+    PAGE_RIGHT = RIGHT_OF_PAGE - RIGHT_MARGIN
+    USABLE_PAGE_HEIGHT = PAGE_TOP - PAGE_BOTTOM
 
-# ================================================
-# GET ALL LOGICAL DEVICES
-# ================================================
-device_result = prj.GetAllDeviceIds(None)
-device_ids = extract_ids(device_result)
+    # OUTPUT
+    SPACING_DICT = []
+    sheet = 1
+    # On sheet 1, start to the RIGHT of the main block
+    current_x = (x_block + main_block_width + BLOCK_X_SPACING)
 
-
-for device_id in device_ids:
-    dev.SetId(device_id)
-
-    try:
-        device_name = str(dev.GetName())
-    except Exception:
-        continue
+    # Current Y is the TOP edge available for placement
+    current_top_y = PAGE_TOP
+    # Tracks widest block in current column
+    current_column_width = 0.0
 
     # ================================================
-    # DETECT CONNECTOR DEVICE
+    # BUILD LAYOUT
     # ================================================
-    try:
-        symbol_result = dev.GetSymbolIds(None)
-        logical_symbol_ids = extract_ids(symbol_result)
-    except Exception:
-        logical_symbol_ids = []
+    for i in range(len(PIN_SIGNAL_INFO)):
+        connector_name = (PIN_SIGNAL_INFO[i][0]["connector name"])
+        number_of_pins = (PIN_SIGNAL_INFO[i][0]["number of pins"])
+        width = SCHEMATIC_BLOCK_WIDTH
+        height = (PIN_START_OFFSET + (PIN_SPACING * number_of_pins))
 
-    is_connector = False
+        # --------------------------------------------
+        # SAFETY CHECK:
+        # Block cannot physically fit on ANY page
+        # --------------------------------------------
+        if height > USABLE_PAGE_HEIGHT:
+            raise Exception(f"Schematic block for {connector_name} is too tall for a page. Height = {height}, usable page height = {USABLE_PAGE_HEIGHT}")
 
-    for logical_symbol_id in logical_symbol_ids:
-        sym.SetId(logical_symbol_id)
+        # CALCULATE BOTTOM Y IF PLACED HERE
+        candidate_y = current_top_y - height
+
+        # DOES IT FIT VERTICALLY?
+        if candidate_y < PAGE_BOTTOM:
+            next_x = (current_x + current_column_width + BLOCK_X_SPACING)
+
+            # DOES NEXT COLUMN FIT ON THIS PAGE?
+            if next_x + width <= PAGE_RIGHT:
+                current_x = next_x
+                current_top_y = PAGE_TOP
+                current_column_width = 0.0
+
+            else:
+                # PAGE IS FULL -> NEW PAGE
+                sheet += 1
+                res = sht.Create(0, sheet, "DINA3", 0)
+                if res == 0:
+                    app.PutMessage("failed to create new sheet")
+                    raise Exception("failed to create new sheet")
+                SHEET_DICT[sheet] = res
+                current_x = PAGE_LEFT
+                current_top_y = PAGE_TOP
+                current_column_width = 0.0
+
+            # Recalculate Y at new column/page
+            candidate_y = current_top_y - height
+
+        # CHECK HORIZONTAL FIT
+        if current_x + width > PAGE_RIGHT:
+            sheet += 1
+            res = sht.Create(0, sheet, "DINA3", 0)
+            if res == 0:
+                app.PutMessage("failed to create new sheet")
+                raise Exception("failed to create new sheet")
+            SHEET_DICT[sheet] = res
+            current_x = PAGE_LEFT
+            current_top_y = PAGE_TOP
+            current_column_width = 0.0
+            candidate_y = current_top_y - height
+
+        # SAVE PLACEMENT
+        x_start = current_x
+        y_start = candidate_y
+        SPACING_DICT.append({"connector name": connector_name, "connector index": i, "sheet": sheet, "x start": x_start, "y start": y_start, "x end": x_start + width, "y end": y_start + height, "height": height, "width": width, "number of pins": number_of_pins})
+        # UPDATE CURSOR FOR NEXT BLOCK
+        current_top_y = (y_start - BLOCK_Y_SPACING)
+        current_column_width = max(current_column_width, width)
+
+    return SPACING_DICT, SHEET_DICT
+
+
+
+def generate_schematic_pin_map(connector_info,newpindict,layout,pin_spacing=0.25,pin_start_offset=2.0,edge_offset=0.3):
+    x=layout["x start"]+layout["width"]-0.3
+    y_start=layout["y start"]+layout["height"]-pin_start_offset
+    pin_map=[]
+    for pos,pin_data in enumerate(connector_info[1:]):
+        pin_name=str(pin_data[0])
+        if pin_name not in newpindict: raise Exception(f"Pin {pin_name} not found in new view for {connector_info[0]['connector name']}")
+        pin_map.append({"pin name":pin_name,"pin id":newpindict[pin_name],"x":x,"y":y_start-(pos*pin_spacing),"flip":"/1"})
+    return pin_map
+
+def recreate_e3_objects():
+    app = win32.gencache.EnsureDispatch('CT.Application')
+    prj = app.CreateJobObject()
+    text = prj.CreateTextObject()
+    comp = prj.CreateComponentObject()
+    dev = prj.CreateDeviceObject()
+    sym = prj.CreateSymbolObject()
+    pin = prj.CreatePinObject()
+    attr = prj.CreateAttributeObject()
+    sht = prj.CreateSheetObject()
+    return app, prj, text, comp, dev, sym, pin, attr, sht
+
+def display_main_block_attributes(device_view_id):
+    dev.SetId(device_view_id)
+    syminfo = dev.GetSymbolIds(None)
+    symids = [x for x in syminfo[1] if x is not None]
+
+    for sym_id in symids:
+        sym.SetId(sym_id)
+
+        res = sym.AddAttributeValue("Equipment Identifacation", ADDITIONAL_PART_ID)
+
+        if res == -1:
+            print("Equipment Identification already exists or failed on symbol:", sym_id)
+            attrinfo = sym.GetAttributeIds(None)
+            attrids = [x for x in attrinfo[1] if x is not None]
+
+            for attr_id in attrids:
+                attr.SetId(attr_id)
+
+                if attr.GetName() == "Equipment Identifacation":
+                    res = attr_id
+                    break
+
+        if res != -1:
+            attr.SetId(res)
+            display_result = attr.DisplayAttribute()
+            print("DISPLAY ATTRIBUTE:", device_view_id, "SYMBOL:", sym_id, "ATTR:", res, "RESULT:", display_result)
+
+
+def format_main_block_view(device_view_id, x, y, width, height):
+    print("FORMATTING DEVICE VIEW:", device_view_id)
+
+    x_center = x + (width / 2.0)
+
+    dev.SetId(device_view_id)
+    syminfo = dev.GetSymbolIds(None)
+    symids = [s for s in syminfo[1] if s is not None]
+
+    for sym_id in symids:
+        sym.SetId(sym_id)
+
+        sym.SetBlockHatchColour(58)
+        sym.SetBlockOutlineColour(0)
+
+        #=========================================
+        # NORMAL SYMBOL TEXT
+        #=========================================
+        textinfo = sym.GetTextIds(None)
+        textids = [t for t in textinfo[1] if t is not None]
+
+        for text_id in textids:
+            text.SetId(text_id)
+            txt = str(text.GetText()).strip()
+
+            print("SYMBOL TEXT:", "VIEW:", device_view_id, "SYM:", sym_id, "TEXT ID:", text_id, "VALUE:", repr(txt))
+
+            if txt == "BxRxUx":
+                text.SetColour(0)
+                text.SetMode(1)
+                text.SetAlignment(2)
+                text.SetStyle(1)
+                text.SetHeight(0.2)
+                text.SetSchemaLocation(x_center, y + height - 0.3)
+
+            elif txt == str(DEVICE_DESIGNATION).strip() or str(DEVICE_DESIGNATION).strip() in txt:
+                text.SetColour(0)
+                text.SetMode(1)
+                text.SetAlignment(2)
+                text.SetStyle(1)
+                text.SetHeight(0.2)
+                text.SetSchemaLocation(x_center, y + height - 0.7)
+
+                print("MOVED DEVICE DESIGNATION:", repr(txt), "TO:", x_center, y + height - 0.7)
+
+            elif DEVICE_FUNCTION is not None and txt == str(DEVICE_FUNCTION).strip():
+                text.SetVisibility(0)
+
+        #=========================================
+        # ATTRIBUTE TEXT
+        #=========================================
+        attrinfo = sym.GetAttributeIds(None)
+        attrids = [a for a in attrinfo[1] if a is not None]
+
+        for attr_id in attrids:
+            attr.SetId(attr_id)
+            attr_name = str(attr.GetName()).strip()
+
+            print("ATTRIBUTE:", "VIEW:", device_view_id, "SYM:", sym_id, "ATTR ID:", attr_id, "NAME:", repr(attr_name))
+
+            if attr_name == "Equipment Identifacation":
+                attrtextinfo = attr.GetTextIds(None)
+                attrtextids = [t for t in attrtextinfo[1] if t is not None]
+
+                print("EQUIPMENT IDENTIFICATION TEXT IDS:", attrtextids)
+
+                for text_id in attrtextids:
+                    text.SetId(text_id)
+                    txt = str(text.GetText()).strip()
+
+                    print("ATTRIBUTE TEXT:", "ID:", text_id, "VALUE:", repr(txt))
+
+                    text.SetVisibility(1)
+                    text.SetColour(0)
+                    text.SetMode(1)
+                    text.SetAlignment(2)
+                    text.SetStyle(1)
+                    text.SetHeight(0.2)
+                    text.SetSchemaLocation(x_center, y + height - 1.1)
+
+                    print("MOVED EQUIPMENT IDENTIFICATION:", repr(txt), "TO:", x_center, y + height - 1.1)
+
+
+def wait_for_final_formatting():
+    root = tk.Tk()
+    root.title("Save and Reopen E3 Project")
+    root.attributes("-topmost", True)
+    root.geometry("620x280")
+
+    message = "MAIN CREATION IS COMPLETE\n\n1. Save the Zuken project\n2. Close the Zuken project\n3. Reopen the saved project\n4. Wait until the project is fully loaded\n\nThen click FINALIZE SCHEMATIC."
+
+    label = tk.Label(root, text=message, font=("Arial", 11), justify="center")
+    label.pack(pady=20)
+
+    button = tk.Button(root, text="FINALIZE SCHEMATIC", width=35, height=2, command=root.destroy)
+    button.pack(pady=10)
+
+    root.mainloop()
+
+
+def format_final_schematic_connectors():
+    def extract_ids(result):
+        if result is None:
+            return []
+
+        if isinstance(result, (tuple, list)):
+            if len(result) >= 2 and isinstance(result[1], (tuple, list)):
+                return [x for x in result[1] if x is not None and x != 0]
+
+            return [x for x in result if isinstance(x, int) and x != 0]
+
+        if isinstance(result, int):
+            if result != 0:
+                return [result]
+
+        return []
+
+    def get_pin_view_ids(pin_id):
+        pin.SetId(pin_id)
 
         try:
-            text_result = sym.GetTextIds(None)
-            text_ids = extract_ids(text_result)
+            result = pin.GetViewIds(None)
+            return extract_ids(result)
         except Exception:
-            text_ids = []
+            pass
 
-        for text_id in text_ids:
-            text.SetId(text_id)
+        try:
+            result = pin.GetViewIds()
+            return extract_ids(result)
+        except Exception as e:
+            print("GetViewIds ERROR:", pin_id, repr(e))
+            return []
 
-            try:
-                text_type = text.GetType()
-            except Exception:
-                continue
-
-            if text_type == 5:
-                is_connector = True
-                break
-
-        if is_connector:
-            break
-
-    if not is_connector:
-        continue
+    modified_texts = []
 
     print("")
-    print("############################################################")
-    print("CONNECTOR:", device_name)
-    print("DEVICE ID:", device_id)
-    print("############################################################")
+    print("============================================================")
+    print("FINAL SCHEMATIC CONNECTOR FORMATTING")
+    print("============================================================")
 
-    # ================================================
-    # GET LOGICAL CONNECTOR PINS
-    # ================================================
-    try:
-        pin_result = dev.GetPinIds(None)
-        logical_pin_ids = extract_ids(pin_result)
-    except Exception:
-        logical_pin_ids = []
+    device_result = prj.GetAllDeviceIds(None)
+    device_ids = extract_ids(device_result)
 
-    for logical_pin_id in logical_pin_ids:
-        pin.SetId(logical_pin_id)
+    for device_id in device_ids:
+        dev.SetId(device_id)
 
         try:
-            pin_name = str(pin.GetName())
+            device_name = str(dev.GetName())
         except Exception:
-            pin_name = "UNKNOWN"
+            continue
 
-        pin_view_ids = get_pin_view_ids(logical_pin_id)
+        try:
+            symbol_result = dev.GetSymbolIds(None)
+            logical_symbol_ids = extract_ids(symbol_result)
+        except Exception:
+            logical_symbol_ids = []
 
-        for pin_view_id in pin_view_ids:
-            sym.SetId(pin_view_id)
+        is_connector = False
+
+        for logical_symbol_id in logical_symbol_ids:
+            sym.SetId(logical_symbol_id)
 
             try:
                 text_result = sym.GetTextIds(None)
-                symbol_text_ids = extract_ids(text_result)
+                text_ids = extract_ids(text_result)
             except Exception:
-                symbol_text_ids = []
+                text_ids = []
 
-            # ================================================
-            # DETERMINE POSITION FROM TYPE 213
-            # ================================================
-            split_position = None
-
-            for text_id in symbol_text_ids:
+            for text_id in text_ids:
                 text.SetId(text_id)
 
                 try:
                     text_type = text.GetType()
-                    text_value = str(text.GetText()).strip()
                 except Exception:
                     continue
 
-                if text_type == 213 and "/" in text_value and not text_value.startswith("*"):
-                    try:
-                        split_position = int(text_value.split("/")[0])
-                    except Exception:
-                        split_position = None
-
+                if text_type == 5:
+                    is_connector = True
                     break
 
-            if split_position is None:
-                continue
+            if is_connector:
+                break
 
-            print("")
-            print("PIN:", pin_name, "VIEW:", pin_view_id, "POSITION:", split_position)
+        if not is_connector:
+            continue
 
-            # ================================================
-            # TEST EVERY RELEVANT TEXT
-            # ================================================
-            for text_id in symbol_text_ids:
-                text.SetId(text_id)
+        print("")
+        print("CONNECTOR:", device_name, "DEVICE ID:", device_id)
+
+        try:
+            pin_result = dev.GetPinIds(None)
+            logical_pin_ids = extract_ids(pin_result)
+        except Exception:
+            logical_pin_ids = []
+
+        for logical_pin_id in logical_pin_ids:
+            pin.SetId(logical_pin_id)
+
+            try:
+                pin_name = str(pin.GetName())
+            except Exception:
+                pin_name = "UNKNOWN"
+
+            pin_view_ids = get_pin_view_ids(logical_pin_id)
+
+            for pin_view_id in pin_view_ids:
+                sym.SetId(pin_view_id)
 
                 try:
-                    text_type = text.GetType()
-                    text_value = str(text.GetText()).strip()
+                    text_result = sym.GetTextIds(None)
+                    symbol_text_ids = extract_ids(text_result)
                 except Exception:
+                    symbol_text_ids = []
+
+                split_position = None
+
+                for text_id in symbol_text_ids:
+                    text.SetId(text_id)
+
+                    try:
+                        text_type = text.GetType()
+                        text_value = str(text.GetText()).strip()
+                    except Exception:
+                        continue
+
+                    if text_type == 213 and "/" in text_value and not text_value.startswith("*"):
+                        try:
+                            split_position = int(text_value.split("/")[0])
+                        except Exception:
+                            split_position = None
+
+                        break
+
+                if split_position is None:
                     continue
 
-                # ================================================
-                # TYPE 5 - COMPONENT CODE
-                # ALWAYS OFF
-                # ================================================
-                if text_type == 5:
-                    before = get_visibility(text_id)
+                print("PIN:", pin_name, "VIEW:", pin_view_id, "POSITION:", split_position)
+
+                for text_id in symbol_text_ids:
                     text.SetId(text_id)
-                    result = text.SetVisibility(0)
-                    after = get_visibility(text_id)
 
-                    print("    TYPE 5")
-                    print("    TEXT ID:", text_id)
-                    print("    VALUE:", repr(text_value))
-                    print("    BEFORE:", before)
-                    print("    SET RESULT:", result)
-                    print("    AFTER:", after)
+                    try:
+                        text_type = text.GetType()
+                        text_value = str(text.GetText()).strip()
+                    except Exception:
+                        continue
 
-                    if after == 0:
-                        print("    IMMEDIATE RESULT: PASS")
-                    else:
-                        print("    IMMEDIATE RESULT: FAIL")
+                    if text_type == 5:
+                        result = text.SetVisibility(0)
+                        print("    COMPONENT CODE OFF:", repr(text_value), "RESULT:", result)
+                        modified_texts.append({"text_id": text_id, "desired": 0, "type": 5, "value": text_value})
 
-                    modified_texts.append({"device": device_name, "pin": pin_name, "position": split_position, "view": pin_view_id, "text_id": text_id, "type": 5, "value": text_value, "desired": 0})
+                    elif text_type == 12:
+                        if split_position != 1:
+                            result = text.SetVisibility(0)
+                            print("    DEVICE DESIGNATION OFF:", repr(text_value), "RESULT:", result)
+                            modified_texts.append({"text_id": text_id, "desired": 0, "type": 12, "value": text_value})
+                        else:
+                            print("    TOP DEVICE DESIGNATION LEFT ALONE:", repr(text_value))
 
-                # ================================================
-                # TYPE 12 - DEVICE DESIGNATION
-                # ONLY TURN OFF NON-TOP PINS
-                # ================================================
-                elif text_type == 12 and split_position != 1:
-                    before = get_visibility(text_id)
-                    text.SetId(text_id)
-                    result = text.SetVisibility(0)
-                    after = get_visibility(text_id)
-
-                    print("    TYPE 12 NON-TOP")
-                    print("    TEXT ID:", text_id)
-                    print("    VALUE:", repr(text_value))
-                    print("    BEFORE:", before)
-                    print("    SET RESULT:", result)
-                    print("    AFTER:", after)
-
-                    if after == 0:
-                        print("    IMMEDIATE RESULT: PASS")
-                    else:
-                        print("    IMMEDIATE RESULT: FAIL")
-
-                    modified_texts.append({"device": device_name, "pin": pin_name, "position": split_position, "view": pin_view_id, "text_id": text_id, "type": 12, "value": text_value, "desired": 0})
-
-                # ================================================
-                # TYPE 12 TOP PIN
-                # DO NOT TOUCH
-                # ================================================
-                elif text_type == 12 and split_position == 1:
-                    visibility = get_visibility(text_id)
-
-                    print("    TYPE 12 TOP - LEFT ALONE")
-                    print("    TEXT ID:", text_id)
-                    print("    VALUE:", repr(text_value))
-                    print("    VISIBILITY:", visibility)
-
-                # ================================================
-                # TYPE 617 - LOCAL SIGNAL NAME
-                # ALWAYS ON
-                # ================================================
-                elif text_type == 617:
-                    before = get_visibility(text_id)
-
-                    text.SetId(text_id)
-                    result = text.SetVisibility(1)
-                    text.SetColour(0)
-                    text.SetAlignment(3)
-                    text.SetStyle(1)
-                    text.SetHeight(0.2)
-
-                    after = get_visibility(text_id)
-
-                    print("    TYPE 617 LOCAL SIGNAL")
-                    print("    TEXT ID:", text_id)
-                    print("    VALUE:", repr(text_value))
-                    print("    BEFORE:", before)
-                    print("    SET RESULT:", result)
-                    print("    AFTER:", after)
-
-                    if after == 1:
-                        print("    IMMEDIATE RESULT: PASS")
-                    else:
-                        print("    IMMEDIATE RESULT: FAIL")
-
-                    modified_texts.append({"device": device_name, "pin": pin_name, "position": split_position, "view": pin_view_id, "text_id": text_id, "type": 617, "value": text_value, "desired": 1})
-
-                # ================================================
-                # TYPE 203 - PIN NUMBER
-                # ALWAYS VISIBLE AND BOLD
-                # ================================================
-                elif text_type == 203:
-                    before = get_visibility(text_id)
-
-                    text.SetId(text_id)
-                    result = text.SetVisibility(1)
-                    text.SetStyle(1)
-
-                    after = get_visibility(text_id)
-
-                    print("    TYPE 203 PIN NUMBER")
-                    print("    TEXT ID:", text_id)
-                    print("    VALUE:", repr(text_value))
-                    print("    BEFORE:", before)
-                    print("    SET RESULT:", result)
-                    print("    AFTER:", after)
-
-                    if after == 1:
-                        print("    IMMEDIATE RESULT: PASS")
-                    else:
-                        print("    IMMEDIATE RESULT: FAIL")
-
-                    modified_texts.append({"device": device_name, "pin": pin_name, "position": split_position, "view": pin_view_id, "text_id": text_id, "type": 203, "value": text_value, "desired": 1})
-
-
-# ================================================
-# WAIT TO SEE WHETHER E3 RESETS VISIBILITY
-# ================================================
-print("")
-print("============================================================")
-print("IMMEDIATE FORMATTING COMPLETE")
-print("WAITING 5 SECONDS")
-print("============================================================")
-
-time.sleep(5.0)
-
-
-# ================================================
-# SECOND PASS - DO NOT MODIFY ANYTHING
-# JUST READ VISIBILITY BACK
-# ================================================
-print("")
-print("============================================================")
-print("5 SECOND VISIBILITY VERIFICATION")
-print("============================================================")
-
-passed = 0
-failed = 0
-
-for item in modified_texts:
-    current_visibility = get_visibility(item["text_id"])
+                    elif text_type == 617:
+                        text.SetVisibility(1)
+                        text.SetColour(0)
+                        text.SetAlignment(3)
+                        text.SetStyle(1)
+                        text.SetHeight(0.2)
+                        print("    LOCAL SIGNAL ON:", repr(text_value))
+                        modified_texts.append({"text_id": text_id, "desired": 1, "type": 617, "value": text_value})
 
     print("")
-    print("DEVICE:", item["device"])
-    print("PIN:", item["pin"])
-    print("POSITION:", item["position"])
-    print("VIEW:", item["view"])
-    print("TEXT ID:", item["text_id"])
-    print("TYPE:", item["type"])
-    print("VALUE:", repr(item["value"]))
-    print("EXPECTED VISIBILITY:", item["desired"])
-    print("ACTUAL VISIBILITY:", current_visibility)
+    print("WAITING 5 SECONDS TO VERIFY VISIBILITY")
+    time.sleep(5.0)
 
-    if current_visibility == item["desired"]:
-        print("FINAL RESULT: PASS")
-        passed += 1
+    passed = 0
+    failed = 0
+
+    for item in modified_texts:
+        text.SetId(item["text_id"])
+
+        try:
+            actual_visibility = text.GetVisibility()
+        except Exception as e:
+            actual_visibility = "ERROR: " + repr(e)
+
+        if actual_visibility == item["desired"]:
+            passed += 1
+        else:
+            failed += 1
+            print("VISIBILITY VERIFY FAIL:", "TYPE:", item["type"], "VALUE:", repr(item["value"]), "EXPECTED:", item["desired"], "ACTUAL:", actual_visibility)
+
+    print("")
+    print("============================================================")
+    print("FINAL FORMAT VERIFY PASS:", passed)
+    print("FINAL FORMAT VERIFY FAIL:", failed)
+    print("============================================================")
+
+
+# ================================================
+# PARSE EXCEL
+# ================================================
+BLOCK_OFFSET = 5
+output_path = ask_save_path()
+wb = load_workbook(output_path, data_only=True)
+ws = wb.active
+
+ASSY_NAME = ws["C1"].value
+VERSION = ws["C2"].value
+ADDITIONAL_PART_ID = ws["C3"].value
+DEVICE_DESIGNATION = ws["D3"].value
+DEVICE_FUNCTION = ws["C4"].value
+NUMBER_OF_CONNECTORS = ws["C5"].value
+
+CONNECTORS = {}
+for row in ws.iter_rows(min_row=7, max_row=7+NUMBER_OF_CONNECTORS):
+    connector_name = row[1].value
+    connector_type = row[2].value
+    CONNECTORS[connector_name] = connector_type
+
+CONNECTORS = {k: v for k, v in CONNECTORS.items() if v is not None}
+
+MODEL_CHECK = ws["G8"].value
+TITLE_CHECK = ws["E2"].value
+CONNECTOR_MODEL_CHECK = ws["G2"].value
+if MODEL_CHECK != "Pass":
+    raise Exception("Model check is failing, fix it")
+if TITLE_CHECK != "Pass":
+    raise Exception("Title check is failing, fix it")
+if CONNECTOR_MODEL_CHECK != "Pass":
+    raise Exception("Connector model check is failing, fix it")
+
+PIN_SIGNAL_INFO = []
+for i in range(NUMBER_OF_CONNECTORS):
+    pin_col = 9 + (i * BLOCK_OFFSET)
+    signal_col = pin_col + 1
+    in_out_col = pin_col + 2
+    number_of_pins = ws.cell(row=5, column=signal_col).value
+    connector_name = ws.cell(row=6, column=signal_col).value
+    if number_of_pins is None:
+        number_of_pins = 0
+    number_of_pins = int(number_of_pins)
+    connector_type = CONNECTORS[connector_name]
+    temp = [{'connector name': connector_name, 'connector type': connector_type, 'number of pins' : number_of_pins}]
+    end_row = 8 + number_of_pins - 1
+    for r in range(8, end_row + 1):
+        pin = ws.cell(row=r, column=pin_col).value
+        signal = ws.cell(row=r, column=signal_col).value
+        if signal is None:
+            signal = "SPARE"
+        in_out = ws.cell(row=r, column=in_out_col).value
+        if in_out is None:
+            in_out = "NONE"
+        temp.append([pin, signal, in_out])
+    PIN_SIGNAL_INFO.append(temp)
+
+wb.close()
+
+
+# ================================================
+# CONNECT TO DB
+# ================================================
+CONNECTION_STRING = (
+    "DRIVER={SQL Server};"
+    "SERVER=sql-zuken-prd;"
+    "DATABASE=Zuken_E3Library;"
+    "Trusted_Connection=yes;"
+)
+
+conn = pyodbc.connect(CONNECTION_STRING, autocommit=True)
+cur = conn.cursor()
+
+# set objects
+#====================================================================================================================================
+app = win32.gencache.EnsureDispatch('CT.Application')
+prj = app.CreateJobObject()
+text = prj.CreateTextObject()
+comp = prj.CreateComponentObject()
+dev = prj.CreateDeviceObject()
+sym = prj.CreateSymbolObject()
+pin = prj.CreatePinObject()
+attr = prj.CreateAttributeObject()
+#====================================================================================================================================
+# more setup
+#====================================================================================================================================
+app.PutMessage("\n Starting Block Making Scrpit")
+
+sht = prj.CreateSheetObject()
+sheet_info = prj.GetAllSheetIds(None)
+sheet_count = sheet_info[0]
+sheet_ids = sheet_info[1]
+sheet_ids = [x for x in sheet_ids if x is not None]
+
+for id in sheet_ids:
+    sht.SetId(id)
+    if sht.GetName() != "1":
+        sht.Delete()
     else:
-        print("FINAL RESULT: FAIL")
-        failed += 1
+        sheet_1_id = id
+
+sheet1 = sht.SetId(sheet_1_id)
+
+symbol_name = "CABBLOCK"
+symbol_version = 1
+isLoaded = sym.Load(symbol_name, symbol_version)
+if not isLoaded:
+    app.PutMessage("failed to load symbol.")
+else:
+    app.PutMessage("Symbol loaded successfully.")
+
+PIN_VIEW_SPACING = 0.75
+TOP_OF_PAGE = 32.9
+TOP_MARIGIN = 1.0
+LEFT_OF_PAGE = 0.0
+LEFT_MARIGIN = 1.0
+left_target = LEFT_OF_PAGE + LEFT_MARIGIN
+top_target = TOP_OF_PAGE - TOP_MARIGIN
+
+HALF_NUMBER_OF_CONNECTORS = int(NUMBER_OF_CONNECTORS/2.0) + 1
+block_width = 3.0
+if NUMBER_OF_CONNECTORS < 6:
+    block_height = 1.75 + (PIN_VIEW_SPACING * NUMBER_OF_CONNECTORS)
+else:
+    block_height = 1.75 + (PIN_VIEW_SPACING * HALF_NUMBER_OF_CONNECTORS)    
+
+x_block = left_target
+y_block = top_target - (block_height)
+x_block_center = x_block + block_width/2.0
+res = sym.PlaceBlock(sheet_1_id, x_block, y_block, block_width, block_height)
+
+if DEVICE_FUNCTION is not None:
+    y_start = y_block + block_height - 2.25
+    block_height += 0.5
+else:
+    y_start = y_block + block_height - 2.0
+
+# CREATE MAPPING HERE
+CONNECTOR_MAP = []
+if NUMBER_OF_CONNECTORS < 6:
+    for i, connector in enumerate(PIN_SIGNAL_INFO):
+        connector_name = connector[0]['connector name']
+        CONNECTOR_MAP.append({'connector name' : connector_name, 'connector position' : i, 'connector flip' : 0})
+else:
+    left_count = (NUMBER_OF_CONNECTORS + 1) // 2
+    for i, connector in enumerate(PIN_SIGNAL_INFO):
+        connector_name = connector[0]['connector name']
+        if i < left_count: 
+            connector_position = i
+            connector_flip = 0
+        else:
+            connector_position = i - left_count
+            connector_flip = 1
+
+        CONNECTOR_MAP.append({'connector name' : connector_name, 'connector position' : connector_position, 'connector flip' : connector_flip})
+
+if res == 0:
+    app.PutMessage(f"Place block failed: {res}")
+    raise Exception(f"place block failed: {res}")
+else:
+    app.PutMessage(f"Placed block: {res}")
+
+if DEVICE_FUNCTION is not None:
+    function_spacing = 0.5
+else:
+    function_spacing = 0.0
+
+devinfo = prj.GetAllDeviceIds(None)
+devids = [x for x in devinfo[1] if x is not None]
+for dev_id in devids:
+    dev.SetId(dev_id)
+    if dev.GetName() == "A1":
+        res = dev.SetName(DEVICE_DESIGNATION)
+        if res == 0:
+            app.PutMessage("failed to set name")
+
+        res = dev.SetLocation("BxRxUx")
+        if res == 0:
+            app.PutMessage("failed to set location")
+
+        res = dev.AddAttributeValue("Additional Part ID", ADDITIONAL_PART_ID)
+        if res == -1:
+            app.PutMessage("failed to add Additional Part ID")
+        else:
+            attr.SetId(res)
+            attr.DisplayAttribute()
+        if DEVICE_FUNCTION is not None:
+            res = dev.AddAttributeValue("Device Function", DEVICE_FUNCTION)
+            if res == -1:
+                app.PutMessage("failed to add Device Function")
 
 
-# ================================================
-# FINAL SUMMARY
-# ================================================
+        attrinfo = dev.GetAttributeIds(None)    
+        attrids = [x for x in attrinfo[1] if x is not None]
+        for att_id in attrids:
+            attr.SetId(att_id)
+            textinfo = attr.GetTextIds(None)
+            textids = [x for x in textinfo[1] if x is not None]
+            for text_id in textids:
+                text.SetId(text_id)
+                if text.GetText() == ADDITIONAL_PART_ID:
+                    text.SetColour(0)
+                    text.SetMode(1)
+                    text.SetAlignment(2)
+                    text.SetStyle(1)
+                    text.SetHeight(0.2)
+                    xloc = [0.0]
+                    yloc = [0.0]
+                    grid = [""]
+                    column = [""]
+                    row = [""]
+                    result = text.GetSchemaLocation(xloc, yloc, grid,  column, row)
+                    new_x = x_block_center
+                    new_y = y_block + block_height - 1.1 - function_spacing
+                    text.SetSchemaLocation(new_x, new_y)
+                if text.GetText() == DEVICE_FUNCTION:
+                    text.SetColour(0)
+                    text.SetMode(1)
+                    text.SetAlignment(2)
+                    text.SetStyle(1)
+                    text.SetHeight(0.2)
+                    xloc = [0.0]
+                    yloc = [0.0]
+                    grid = [""]
+                    column = [""]
+                    row = [""]
+                    result = text.GetSchemaLocation(xloc, yloc, grid,  column, row)
+                    new_x = x_block_center
+                    new_y = y_block + block_height - 1.5 - function_spacing
+                    text.SetSchemaLocation(new_x, new_y)
+                    
+        syminfo = dev.GetSymbolIds(None)
+        symids = [x for x in syminfo[1] if x is not None]
+        for sym_id in symids:
+            sym.SetId(sym_id)
+            sym.SetBlockHatchColour(58)
+            textinfo = sym.GetTextIds(None)
+            textids = [x for x in textinfo[1] if x is not None]
+            for text_id in textids:
+                text.SetId(text_id)
+                if text.GetText() == "BxRxUx":
+                    text.SetColour(0)
+                    text.SetMode(1)
+                    text.SetAlignment(2)
+                    text.SetStyle(1)
+                    text.SetHeight(0.2)
+                    xloc = [0.0]
+                    yloc = [0.0]
+                    grid = [""]
+                    column = [""]
+                    row = [""]
+                    result = text.GetSchemaLocation(xloc, yloc, grid,  column, row)
+                    new_x = x_block_center
+                    new_y = y_block + block_height - 0.3 - function_spacing
+                    text.SetSchemaLocation(new_x, new_y)
+                if text.GetText() == DEVICE_DESIGNATION:
+                    text.SetColour(0)
+                    text.SetMode(1)
+                    text.SetAlignment(2)
+                    text.SetStyle(1)
+                    text.SetHeight(0.2) 
+                    text.SetAlignment(2)
+                    xloc = [0.0]
+                    yloc = [0.0]
+                    grid = [""]
+                    column = [""]
+                    row = [""]
+                    result = text.GetSchemaLocation(xloc, yloc, grid,  column, row)
+                    new_x = x_block_center
+                    new_y = y_block + block_height - 0.7 - function_spacing
+                    text.SetSchemaLocation(new_x, new_y)         
+          
+# front side green - 58
+# back side green  - 74
+res = sym.SetBlockHatchColour(58)
+if res == -1:
+    app.PutMessage("failed to set block hatch color")
+res = sym.SetBlockOutlineColour(0)
+if res != -1:
+    app.PutMessage("failed to set block hatch outline color")
+time.sleep(0.25)
+
+# print('pin signal info: ', PIN_SIGNAL_INFO)
+# print('\n connectors: ', CONNECTORS)
+# print('n connector map: ', CONNECTOR_MAP)
+CONNECTOR_DEVICE_IDS = {}
+#====================================================================================================================================
+# LOAD AND PLACE CONNECTOR LOOP
+#====================================================================================================================================
+for i in range(len(PIN_SIGNAL_INFO)):
+    # step 1 - get the component from the database
+    conn_type = PIN_SIGNAL_INFO[i][0]['connector type']
+    conn_name = PIN_SIGNAL_INFO[i][0]['connector name']
+    ver = 1
+    res = app.GetDatabaseTableSelectedComponents(conn_type, ver)
+    if(res[0] != 0):
+        app.PutMessage(f"step 1 did not work, Result: {res}\n")
+        raise Exception(f"Step 1 failed. No device found in database with name: {conn_type}.\n")
+    else:
+        app.PutMessage(f"Step 1 success. Device found in database. Result: {res}")
+
+    # step 2 - place the component from the library into the device tree
+    # print(f'Placing connector name: {conn_name} type: {conn_type} into device tree\n')
+    res = dev.Create(conn_name, "", "", conn_type, ver, 0)
+    if(res == 0):
+        app.PutMessage(f"step 2 did not work, Result: {res}\n")
+        raise Exception("Step 2 failed. Device failed to be added to device tree.\n")
+    else:
+        app.PutMessage(f"Step 2 success. Device added to device tree. Result: {res}")
+
+
+    # step 3 - get the device, and pin info from tree and order it
+    devinfo = prj.GetAllDeviceIds(None)
+    devcount = devinfo[0]
+    devids   = devinfo[1]
+    devids   = [x for x in devids if x is not None]
+    dev_total = len(devids)
+
+    CURRENT_CONNECTOR_ID = None
+    for id in devids:
+        dev.SetId(id)
+        name = dev.GetName()
+        if name == PIN_SIGNAL_INFO[i][0]['connector name']:
+            CURRENT_CONNECTOR_ID = id
+            break
+    CONNECTOR_DEVICE_IDS[conn_name] = CURRENT_CONNECTOR_ID
+    # assign signal name
+    dev.SetId(CURRENT_CONNECTOR_ID)
+    pininfo = dev.GetPinIds(None)
+    pindids = [x for x in pininfo[1] if x is not None]
+    PINDICT = []
+    pins = []
+    for pin_id in pindids:
+        pin.SetId(pin_id)
+        name = pin.GetName()
+        pins.append(pin_id)
+        current_pin_info = None
+        for pin_data in PIN_SIGNAL_INFO[i][1:]:
+            if str(pin_data[0]) == str(name):
+                current_pin_info = pin_data
+                break
+        signal = current_pin_info[1]
+        in_out = current_pin_info[2]
+        pin.SetAttributeValue("Local Signal Name", signal)
+        pin.SetAttributeValue("Signal Types", in_out)
+        attrinfo = pin.GetAttributeIds(None)
+        attids = [x for x in attrinfo[1] if x is not None]
+        for att_id in attids:
+            attr.SetId(att_id)
+            if attr.GetName() == "Local Signal Name" or attr.GetName() == "Signal Types":
+                attr.DisplayAttribute()
+        PINDICT.append(pin_id)
+
+    # step 4 - create the pin # view
+    devinfo = prj.GetAllDeviceIds(None)
+    dev_ids = [x for x in devinfo[1] if x is not None]
+    for id in dev_ids:
+        dev.SetId(id)
+        if dev.GetName() == PIN_SIGNAL_INFO[i][0]['connector name']:
+            device_id = id
+            break
+
+    symname = "MilBlockSymbolReceptacleInt¶FULL"
+
+    connector_map_info = CONNECTOR_MAP[i]
+    connector_position = connector_map_info['connector position']
+    flip = connector_map_info['connector flip']
+
+    if flip == 0:
+        x = x_block + 0.3
+        y = y_start - (connector_position * PIN_VIEW_SPACING)
+    else:
+        x = x_block + block_width - 0.3
+        y = y_start - (connector_position * PIN_VIEW_SPACING)
+        flip = "/1"
+
+    # print(f'placing {PIN_SIGNAL_INFO[i][0]['connector name']} at x = {x}, y = {y}, flip = {flip} when block_x = {x_block} block_y: {y_block} start: {y_start}')
+    app.PutMessage(f'placing {PIN_SIGNAL_INFO[i][0]['connector name']} at x = {x}, y = {y}, flip = {flip}')
+    res = sym.PlacePins(PINDICT, symname, ver, sheet_1_id, x, y, flip, 1.0)
+    sym.SetId(res[0])
+    textinfo = sym.GetTextIds(None)
+    textids = [x for x in textinfo[1] if x is not None]
+    for text_id in textids:
+        text.SetId(text_id)
+        if PIN_SIGNAL_INFO[i][0]['connector name'] == text.GetText():
+            text.SetColour(0)
+            text.SetMode(1)
+            text.SetStyle(1)
+            text.SetHeight(0.2)
+    time.sleep(0.5)
+
+    #=========================================
+# LOAD AND PLACE SCHEMATIC VIEWS
+#=========================================
+MAIN_DEVICE_ID = None
+devinfo = prj.GetAllDeviceIds(None)
+
+for dev_id in [x for x in devinfo[1] if x is not None]:
+    dev.SetId(dev_id)
+    if dev.GetName() == DEVICE_DESIGNATION:
+        MAIN_DEVICE_ID = dev_id
+        break
+
+if MAIN_DEVICE_ID is None:
+    raise Exception(f"Could not find main device {DEVICE_DESIGNATION}")
+
+MASTER_SCHEMATIC_LAYOUT, SHEET_DICT = generate_master_schematic_layout(PIN_SIGNAL_INFO, x_block, block_width)
+
+SCHEMATIC_DATA = []
+#=========================================
+# PHASE 1 - CREATE ALL BLOCKS AND VIEWS
+#=========================================
+for i in range(len(PIN_SIGNAL_INFO)):
+    conn_name = PIN_SIGNAL_INFO[i][0]["connector name"]
+    conn_layout_dict = MASTER_SCHEMATIC_LAYOUT[i]
+    current_sheet_id = SHEET_DICT[conn_layout_dict["sheet"]]
+
+    xp = conn_layout_dict["x start"]
+    yp = conn_layout_dict["y start"]
+    xwidth = conn_layout_dict["width"]
+    yheight = conn_layout_dict["height"]
+
+    view_number = i + 1
+
+    dev.SetId(MAIN_DEVICE_ID)
+    parent_block = dev.CreateView(MAIN_DEVICE_ID, view_number, 0, "0")
+
+    if parent_block == 0:
+        raise Exception(f"Failed creating main view {view_number} for {conn_name}")
+
+    print("MAIN VIEW:", conn_name, "SOURCE:", MAIN_DEVICE_ID, "VIEW:", view_number, "RESULT:", parent_block)
+
+    # Fresh symbol object ONLY for this block
+    block_sym = prj.CreateSymbolObject()
+    is_loaded = block_sym.Load("CABBLOCK", 1)
+
+    if not is_loaded:
+        raise Exception(f"Failed loading CABBLOCK for {conn_name}")
+
+    block_symbol_id = block_sym.PlaceBlock(current_sheet_id, xp, yp, xwidth, yheight, parent_block)
+
+    if block_symbol_id == 0:
+        raise Exception(f"Failed placing main block for {conn_name}")
+
+    print("BLOCK:", conn_name, "DEVICE VIEW:", parent_block, "SYMBOL:", block_symbol_id)
+
+    # IMPORTANT - release this symbol object NOW
+    del block_sym
+    time.sleep(0.25)
+
+    connector_device_id = CONNECTOR_DEVICE_IDS[conn_name]
+
+    dev.SetId(connector_device_id)
+    connector_view_number = view_number
+    connector_view_id = dev.CreateView(connector_device_id, connector_view_number, parent_block)
+
+    if connector_view_id == 0:
+        raise Exception(f"Failed creating connector view for {conn_name}")
+
+    print("CONNECTOR VIEW:", conn_name, "SOURCE:", connector_device_id, "PARENT:", parent_block, "RESULT:", connector_view_id)
+
+    SCHEMATIC_DATA.append({
+        "index": i,
+        "name": conn_name,
+        "parent_block": parent_block,
+        "block_symbol_id": block_symbol_id,
+        "connector_view": connector_view_id,
+        "sheet_id": current_sheet_id,
+        "layout": conn_layout_dict
+    })
+
+    time.sleep(0.5)
+
+#=========================================
+# COMPLETELY RELEASE E3 OBJECTS
+#=========================================
+del attr
+del text
+del sym
+del pin
+del comp
+del dev
+del sht
+del prj
+del app
+
+time.sleep(1.5)
+
+#=========================================
+# RECREATE CLEAN E3 OBJECTS
+#=========================================
+app = win32.gencache.EnsureDispatch("CT.Application")
+prj = app.CreateJobObject()
+text = prj.CreateTextObject()
+comp = prj.CreateComponentObject()
+dev = prj.CreateDeviceObject()
+sym = prj.CreateSymbolObject()
+pin = prj.CreatePinObject()
+attr = prj.CreateAttributeObject()
+sht = prj.CreateSheetObject()
+
+#=========================================
+# PHASE 2 - PLACE ALL PINS
+# RESET E3 OBJECTS FOR EVERY CONNECTOR
+#=========================================
+for data in SCHEMATIC_DATA:
+    del attr
+    del text
+    del sym
+    del pin
+    del comp
+    del dev
+    del sht
+    del prj
+    del app
+
+    time.sleep(1.0)
+
+    app = win32.gencache.EnsureDispatch("CT.Application")
+    prj = app.CreateJobObject()
+    text = prj.CreateTextObject()
+    comp = prj.CreateComponentObject()
+    dev = prj.CreateDeviceObject()
+    sym = prj.CreateSymbolObject()
+    pin = prj.CreatePinObject()
+    attr = prj.CreateAttributeObject()
+    sht = prj.CreateSheetObject()
+
+    i = data["index"]
+    conn_name = data["name"]
+    connector_view_id = data["connector_view"]
+    current_sheet_id = data["sheet_id"]
+    conn_layout_dict = data["layout"]
+
+    print("=========================================")
+    print("STARTING CONNECTOR:", conn_name)
+    print("CONNECTOR VIEW:", connector_view_id)
+    print("SHEET:", current_sheet_id)
+    print("=========================================")
+
+    dev.SetId(connector_view_id)
+
+    newpininfo = dev.GetAllPinIds(None)
+    newpinids = [x for x in newpininfo[1] if x is not None]
+
+    newpindict = {}
+
+    for pin_id in newpinids:
+        pin.SetId(pin_id)
+        pin_name = str(pin.GetName())
+        newpindict[pin_name] = pin_id
+
+    print("PIN VIEW:", conn_name, "VIEW:", connector_view_id, "PINS:", newpindict)
+
+    SCHEMATIC_PIN_MAP = generate_schematic_pin_map(PIN_SIGNAL_INFO[i], newpindict, conn_layout_dict)
+    data["placed_pin_symbols"] = []
+
+    symname = "MilSymbolReceptacle¶END_SPLIT"
+
+    for pin_data in SCHEMATIC_PIN_MAP:
+        print("ATTEMPTING:", conn_name, "PIN:", pin_data["pin name"], "ID:", pin_data["pin id"], "X:", pin_data["x"], "Y:", pin_data["y"])
+
+        res = sym.PlacePins(pin_data["pin id"], symname, "1", current_sheet_id, pin_data["x"], pin_data["y"], pin_data["flip"], 1.0)
+
+        print("PLACEPINS RESULT:", repr(res))
+
+        status = res[0] if isinstance(res, (tuple, list)) else res
+
+        if status == 0:
+            raise Exception(f"Failed placing {conn_name} pin {pin_data['pin name']}")
+
+        data["placed_pin_symbols"].append({"symbol_id": status, "pin_id": pin_data["pin id"], "pin_name": pin_data["pin name"]})
+
+        app.PutMessage(f"Placed {conn_name} pin {pin_data['pin name']} x={pin_data['x']} y={pin_data['y']}")
+
+        symname = "MilSymbolReceptacle¶SPLIT_BOTTOM"
+
+        time.sleep(0.25)
+
+    print("FINISHED CONNECTOR:", conn_name)
+    time.sleep(0.5)
+
+#=========================================
+# RESET BEFORE MAIN BLOCK FORMATTING
+#=========================================
+del attr
+del text
+del sym
+del pin
+del comp
+del dev
+del sht
+del prj
+del app
+
+time.sleep(1.0)
+
+app = win32.gencache.EnsureDispatch("CT.Application")
+prj = app.CreateJobObject()
+text = prj.CreateTextObject()
+comp = prj.CreateComponentObject()
+dev = prj.CreateDeviceObject()
+sym = prj.CreateSymbolObject()
+pin = prj.CreatePinObject()
+attr = prj.CreateAttributeObject()
+sht = prj.CreateSheetObject()
+
+#=========================================
+# FORMAT SECONDARY MAIN BLOCK TEXT
+#=========================================
+for data in SCHEMATIC_DATA:
+    layout = data["layout"]
+    format_main_block_view(data["parent_block"], layout["x start"], layout["y start"], layout["width"], layout["height"])
+
+#=========================================
+# MAIN CREATION PHASE IS NOW COMPLETE
+# RELEASE ALL E3 COM OBJECTS BEFORE SAVE/CLOSE/REOPEN BARRIER
+#=========================================
+del attr
+del text
+del sym
+del pin
+del comp
+del dev
+del sht
+del prj
+del app
+
+gc.collect()
+time.sleep(1.0)
+
 print("")
 print("============================================================")
-print("FINAL SUMMARY")
+print("MAIN E3 CREATION COMPLETE")
+print("SAVE THE ZUKEN PROJECT")
+print("CLOSE THE ZUKEN PROJECT")
+print("REOPEN THE SAVED PROJECT")
+print("WAIT UNTIL IT IS FULLY LOADED")
+print("THEN CLICK FINALIZE SCHEMATIC")
 print("============================================================")
-print("PASS:", passed)
-print("FAIL:", failed)
-print("TOTAL:", len(modified_texts))
+
+#=========================================
+# MANUAL SAVE / CLOSE / REOPEN BARRIER
+#=========================================
+wait_for_final_formatting()
+
+gc.collect()
+time.sleep(1.0)
+
+#=========================================
+# RECONNECT TO THE REOPENED ACTIVE E3 PROJECT
+#=========================================
+print("")
+print("RECONNECTING TO REOPENED E3 PROJECT")
+
+app = win32.GetActiveObject("CT.Application")
+prj = app.CreateJobObject()
+text = prj.CreateTextObject()
+comp = prj.CreateComponentObject()
+dev = prj.CreateDeviceObject()
+sym = prj.CreateSymbolObject()
+pin = prj.CreatePinObject()
+attr = prj.CreateAttributeObject()
+sht = prj.CreateSheetObject()
+
+#=========================================
+# FINAL OPERATION - EXACT FORMATTER THAT PASSED 49/49
+# DO NOT PLACE, CREATE, OR REFORMAT ANYTHING AFTER THIS
+#=========================================
+format_final_schematic_connectors()
+
+print("")
 print("============================================================")
+print("FINAL SCHEMATIC FORMATTING COMPLETE")
+print("SAVE THE PROJECT AGAIN TO KEEP THE FINAL VISIBILITY CHANGES")
+print("============================================================")
+
+#=========================================
+# CLEANUP
+#=========================================
+del pin
+del attr 
+del text
+del sym
+del comp
+del dev
+del sht
+del prj
+del app
+
+def wait_for_process_to_exit(process_id):
+    import ctypes
+    synchronize = 0x00100000
+    infinite = 0xFFFFFFFF
+
+    kernel32 = ctypes.windll.kernel32
+    process_handle = kernel32.OpenProcess(synchronize, False, process_id)
+
+    if process_handle:
+        kernel32.WaitForSingleObject(process_handle, infinite)
+        kernel32.CloseHandle(process_handle)
+
+
+subprocess.Popen([sys.executable, os.path.abspath("")])
+#=========================================
+# CLEANUP
+#=========================================
+del pin
+del attr 
+del text
+del sym
+del comp
+del dev
+del sht
+del prj
+del app
