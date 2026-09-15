@@ -4,7 +4,49 @@ import pyodbc
 import win32com.client as win32
 import tkinter as tk
 import gc
+import os
+import sys
+import subprocess
+
+
+# ================================================
+# RUN FINAL FORMATTER IN A COMPLETELY FRESH PYTHON PROCESS
+# NO COMMAND-LINE MODE / NO SCRIPT ARGUMENTS
+# ================================================
+def start_final_formatter():
+    parent_pid = os.getpid()
+    script_directory = os.path.dirname(os.path.abspath(__file__))
+
+    child_code = f"""
+import ctypes
+import time
+
+parent_pid = {parent_pid}
+
+SYNCHRONIZE = 0x00100000
+INFINITE = 0xFFFFFFFF
+
+kernel32 = ctypes.windll.kernel32
+process_handle = kernel32.OpenProcess(SYNCHRONIZE, False, parent_pid)
+
+if process_handle:
+    print("WAITING FOR MAIN PYTHON PROCESS TO FULLY TERMINATE")
+    kernel32.WaitForSingleObject(process_handle, INFINITE)
+    kernel32.CloseHandle(process_handle)
+
+time.sleep(2.0)
+
+print("MAIN PROCESS CLOSED")
+print("STARTING FINAL E3 FORMATTER")
+
 from utils import run
+
+run()
+
+print("FINAL E3 FORMATTER COMPLETE")
+"""
+
+    subprocess.Popen([sys.executable, "-c", child_code], cwd=script_directory)
 
 
 # ================================================
@@ -1146,103 +1188,76 @@ for data in SCHEMATIC_DATA:
 
 #=========================================
 # MAIN CREATION PHASE IS NOW COMPLETE
-# RELEASE ALL E3 COM OBJECTS BEFORE SAVE/CLOSE/REOPEN BARRIER
+# RELEASE ALL E3 COM OBJECTS
 #=========================================
-del attr
-del text
-del sym
-del pin
-del comp
-del dev
-del sht
-del prj
-del app
+try:
+    del attr
+except Exception:
+    pass
+
+try:
+    del text
+except Exception:
+    pass
+
+try:
+    del sym
+except Exception:
+    pass
+
+try:
+    del pin
+except Exception:
+    pass
+
+try:
+    del comp
+except Exception:
+    pass
+
+try:
+    del dev
+except Exception:
+    pass
+
+try:
+    del sht
+except Exception:
+    pass
+
+try:
+    del prj
+except Exception:
+    pass
+
+try:
+    del app
+except Exception:
+    pass
+
+try:
+    cur.close()
+except Exception:
+    pass
+
+try:
+    conn.close()
+except Exception:
+    pass
 
 gc.collect()
-time.sleep(1.0)
 
 print("")
 print("============================================================")
 print("MAIN E3 CREATION COMPLETE")
-print("SAVE THE ZUKEN PROJECT")
-print("CLOSE THE ZUKEN PROJECT")
-print("REOPEN THE SAVED PROJECT")
-print("WAIT UNTIL IT IS FULLY LOADED")
-print("THEN CLICK FINALIZE SCHEMATIC")
+print("STARTING FRESH FORMATTER PROCESS")
 print("============================================================")
 
-#=========================================
-# MANUAL SAVE / CLOSE / REOPEN BARRIER
-#=========================================
-wait_for_final_formatting()
+# The new process waits until THIS process is completely terminated,
+# then imports utils.run and executes run().
+start_final_formatter()
 
-gc.collect()
-time.sleep(1.0)
+print("FORMATTER PROCESS STARTED")
+print("ENDING MAIN PYTHON PROCESS")
 
-#=========================================
-# RECONNECT TO THE REOPENED ACTIVE E3 PROJECT
-#=========================================
-print("")
-print("RECONNECTING TO REOPENED E3 PROJECT")
-
-app = win32.GetActiveObject("CT.Application")
-prj = app.CreateJobObject()
-text = prj.CreateTextObject()
-comp = prj.CreateComponentObject()
-dev = prj.CreateDeviceObject()
-sym = prj.CreateSymbolObject()
-pin = prj.CreatePinObject()
-attr = prj.CreateAttributeObject()
-sht = prj.CreateSheetObject()
-
-#=========================================
-# FINAL OPERATION - EXACT FORMATTER THAT PASSED 49/49
-# DO NOT PLACE, CREATE, OR REFORMAT ANYTHING AFTER THIS
-#=========================================
-format_final_schematic_connectors()
-
-print("")
-print("============================================================")
-print("FINAL SCHEMATIC FORMATTING COMPLETE")
-print("SAVE THE PROJECT AGAIN TO KEEP THE FINAL VISIBILITY CHANGES")
-print("============================================================")
-
-#=========================================
-# CLEANUP
-#=========================================
-del pin
-del attr 
-del text
-del sym
-del comp
-del dev
-del sht
-del prj
-del app
-
-def wait_for_process_to_exit(process_id):
-    import ctypes
-    synchronize = 0x00100000
-    infinite = 0xFFFFFFFF
-
-    kernel32 = ctypes.windll.kernel32
-    process_handle = kernel32.OpenProcess(synchronize, False, process_id)
-
-    if process_handle:
-        kernel32.WaitForSingleObject(process_handle, infinite)
-        kernel32.CloseHandle(process_handle)
-
-
-subprocess.Popen([sys.executable, os.path.abspath("")])
-#=========================================
-# CLEANUP
-#=========================================
-del pin
-del attr 
-del text
-del sym
-del comp
-del dev
-del sht
-del prj
-del app
+sys.exit(0)
