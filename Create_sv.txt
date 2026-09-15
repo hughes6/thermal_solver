@@ -204,6 +204,34 @@ def recreate_e3_objects():
     sht = prj.CreateSheetObject()
     return app, prj, text, comp, dev, sym, pin, attr, sht
 
+def display_main_block_attributes(device_view_id):
+    dev.SetId(device_view_id)
+    syminfo = dev.GetSymbolIds(None)
+    symids = [x for x in syminfo[1] if x is not None]
+
+    for sym_id in symids:
+        sym.SetId(sym_id)
+
+        res = sym.AddAttributeValue("Equipment Identifacation", ADDITIONAL_PART_ID)
+
+        if res == -1:
+            print("Equipment Identification already exists or failed on symbol:", sym_id)
+            attrinfo = sym.GetAttributeIds(None)
+            attrids = [x for x in attrinfo[1] if x is not None]
+
+            for attr_id in attrids:
+                attr.SetId(attr_id)
+
+                if attr.GetName() == "Equipment Identifacation":
+                    res = attr_id
+                    break
+
+        if res != -1:
+            attr.SetId(res)
+            display_result = attr.DisplayAttribute()
+            print("DISPLAY ATTRIBUTE:", device_view_id, "SYMBOL:", sym_id, "ATTR:", res, "RESULT:", display_result)
+
+
 def format_main_block_view(device_view_id, x, y, width, height):
     print("FORMATTING DEVICE VIEW:", device_view_id)
 
@@ -218,17 +246,6 @@ def format_main_block_view(device_view_id, x, y, width, height):
 
         sym.SetBlockHatchColour(58)
         sym.SetBlockOutlineColour(0)
-
-        #=========================================
-        # ADD EQUIPMENT IDENTIFICATION ATTRIBUTE
-        # ADD ONLY - DO NOT DISPLAY OR FORMAT YET
-        #=========================================
-        equipment_attr_id = sym.AddAttributeValue("Equipment Identifacation", ADDITIONAL_PART_ID)
-
-        if equipment_attr_id == -1:
-            print("FAILED TO ADD EQUIPMENT IDENTIFICATION:", "VIEW:", device_view_id, "SYMBOL:", sym_id)
-        else:
-            print("ADDED EQUIPMENT IDENTIFICATION:", "VIEW:", device_view_id, "SYMBOL:", sym_id, "ATTR ID:", equipment_attr_id, "VALUE:", repr(ADDITIONAL_PART_ID))
 
         #=========================================
         # NORMAL SYMBOL TEXT
@@ -263,6 +280,39 @@ def format_main_block_view(device_view_id, x, y, width, height):
             elif DEVICE_FUNCTION is not None and txt == str(DEVICE_FUNCTION).strip():
                 text.SetVisibility(0)
 
+        #=========================================
+        # ATTRIBUTE TEXT
+        #=========================================
+        attrinfo = sym.GetAttributeIds(None)
+        attrids = [a for a in attrinfo[1] if a is not None]
+
+        for attr_id in attrids:
+            attr.SetId(attr_id)
+            attr_name = str(attr.GetName()).strip()
+
+            print("ATTRIBUTE:", "VIEW:", device_view_id, "SYM:", sym_id, "ATTR ID:", attr_id, "NAME:", repr(attr_name))
+
+            if attr_name == "Equipment Identifacation":
+                attrtextinfo = attr.GetTextIds(None)
+                attrtextids = [t for t in attrtextinfo[1] if t is not None]
+
+                print("EQUIPMENT IDENTIFICATION TEXT IDS:", attrtextids)
+
+                for text_id in attrtextids:
+                    text.SetId(text_id)
+                    txt = str(text.GetText()).strip()
+
+                    print("ATTRIBUTE TEXT:", "ID:", text_id, "VALUE:", repr(txt))
+
+                    text.SetVisibility(1)
+                    text.SetColour(0)
+                    text.SetMode(1)
+                    text.SetAlignment(2)
+                    text.SetStyle(1)
+                    text.SetHeight(0.2)
+                    text.SetSchemaLocation(x_center, y + height - 1.1)
+
+                    print("MOVED EQUIPMENT IDENTIFICATION:", repr(txt), "TO:", x_center, y + height - 1.1)
 
 
 # ================================================
@@ -710,6 +760,44 @@ for i in range(len(PIN_SIGNAL_INFO)):
         raise Exception(f"Failed placing main block for {conn_name}")
 
     print("BLOCK:", conn_name, "DEVICE VIEW:", parent_block, "SYMBOL:", block_symbol_id)
+
+    # =========================================
+    # ADD EQUIPMENT IDENTIFACATION DIRECTLY TO
+    # THE EXACT SECONDARY BLOCK SYMBOL WE JUST PLACED
+    # =========================================
+    block_sym.SetId(block_symbol_id)
+
+    equipment_attr_id = block_sym.AddAttributeValue("Equipment Identifacation", ADDITIONAL_PART_ID)
+
+    if equipment_attr_id == -1:
+        print("ADD EQUIPMENT IDENTIFACATION RETURNED -1:", "CONNECTOR:", conn_name, "VIEW:", parent_block, "SYMBOL:", block_symbol_id)
+    else:
+        print("ADDED EQUIPMENT IDENTIFACATION:", "CONNECTOR:", conn_name, "VIEW:", parent_block, "SYMBOL:", block_symbol_id, "ATTR ID:", equipment_attr_id, "VALUE:", repr(ADDITIONAL_PART_ID))
+
+    # =========================================
+    # VERIFY IT IS ACTUALLY ON THIS SYMBOL
+    # DO NOT DISPLAY OR FORMAT IT
+    # =========================================
+    verify_attr_info = block_sym.GetAttributeIds(None)
+    verify_attr_ids = [x for x in verify_attr_info[1] if x is not None]
+
+    equipment_attr_found = False
+
+    for verify_attr_id in verify_attr_ids:
+        attr.SetId(verify_attr_id)
+
+        try:
+            verify_attr_name = str(attr.GetName()).strip()
+        except Exception:
+            continue
+
+        if verify_attr_name == "Equipment Identifacation":
+            equipment_attr_found = True
+            print("VERIFIED EQUIPMENT IDENTIFACATION ON BLOCK SYMBOL:", "CONNECTOR:", conn_name, "VIEW:", parent_block, "SYMBOL:", block_symbol_id, "ATTR ID:", verify_attr_id)
+            break
+
+    if not equipment_attr_found:
+        print("WARNING - EQUIPMENT IDENTIFACATION NOT FOUND AFTER ADD:", "CONNECTOR:", conn_name, "VIEW:", parent_block, "SYMBOL:", block_symbol_id)
 
     # IMPORTANT - release this symbol object NOW
     del block_sym
