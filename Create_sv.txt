@@ -1,19 +1,16 @@
-def launch_test_after_main_exits():
-    main_pid = os.getpid()
+def launch_test_after_main():
     script_directory = os.path.dirname(os.path.abspath(__file__))
     test_path = os.path.join(script_directory, "test.py")
     python_path = sys.executable
 
-    def ps_escape(value):
-        return value.replace("'", "''")
+    print("TEST PATH:", test_path)
+    print("PYTHON PATH:", python_path)
 
-    python_path_ps = ps_escape(python_path)
-    test_path_ps = ps_escape(test_path)
-    script_directory_ps = ps_escape(script_directory)
+    if not os.path.isfile(test_path):
+        raise Exception("test.py was not found at: " + test_path)
 
-    command = f"$p = Get-Process -Id {main_pid} -ErrorAction SilentlyContinue; if ($p) {{ Wait-Process -Id {main_pid} }}; Start-Sleep -Seconds 2; Start-Process -FilePath '{python_path_ps}' -ArgumentList @('{test_path_ps}') -WorkingDirectory '{script_directory_ps}' -Wait"
+    command = f'timeout /t 4 /nobreak >nul & "{python_path}" "{test_path}"'
 
-    subprocess.Popen(["powershell.exe", "-NoProfile", "-Command", command], creationflags=subprocess.CREATE_NEW_CONSOLE)
+    process = subprocess.Popen(["cmd.exe", "/c", command], cwd=script_directory, creationflags=subprocess.CREATE_NEW_CONSOLE)
 
-
-
+    print("LAUNCHER PID:", process.pid)
