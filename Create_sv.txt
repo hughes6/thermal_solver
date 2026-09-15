@@ -1,68 +1,75 @@
 import os
 import sys
 import subprocess
-import time
 
 
-# ============================================================
-# ONE-CLICK SEQUENTIAL LAUNCHER
-#
-# First process:
-#   launches a completely separate Python process to run this
-#   same file as the E3 builder and WAITS for it to exit.
-#
-# After the builder Python process is completely gone:
-#   launches test.py as another completely fresh Python process.
-#
-# No command-line arguments are used.
-# ============================================================
-if os.environ.get("_E3_BLOCK_BUILDER_CHILD") != "1":
-    script_path = os.path.abspath(__file__)
-    script_directory = os.path.dirname(script_path)
-    test_path = os.path.join(script_directory, "test.py")
+script_directory = os.path.dirname(os.path.abspath(__file__))
 
-    if not os.path.isfile(test_path):
-        raise FileNotFoundError("Could not find test.py next to the main script: " + test_path)
+main_path = os.path.join(script_directory, "main.py")
+test_path = os.path.join(script_directory, "test.py")
 
-    child_environment = os.environ.copy()
-    child_environment["_E3_BLOCK_BUILDER_CHILD"] = "1"
 
-    print("")
-    print("============================================================")
-    print("STARTING E3 MAIN BUILDER IN A FRESH PYTHON PROCESS")
-    print("============================================================")
+print("")
+print("============================================================")
+print("STARTING MAIN.PY")
+print("============================================================")
+print("PYTHON:", sys.executable)
+print("MAIN:", main_path)
+print("TEST:", test_path)
+print("")
 
-    main_result = subprocess.run([sys.executable, script_path], cwd=script_directory, env=child_environment)
 
-    print("")
-    print("============================================================")
-    print("MAIN BUILDER PROCESS HAS FULLY EXITED")
-    print("RETURN CODE:", main_result.returncode)
-    print("============================================================")
+main_result = subprocess.run([sys.executable, main_path], cwd=script_directory)
 
-    if main_result.returncode != 0:
-        print("MAIN BUILDER FAILED")
-        print("FORMATTER WILL NOT RUN")
-        sys.exit(main_result.returncode)
 
-    print("MAIN BUILDER IS GONE", flush=True)
-    print("WAITING 2 SECONDS FOR E3 TO SETTLE", flush=True)
-    time.sleep(2.0)
+print("")
+print("============================================================")
+print("MAIN.PY PROCESS IS COMPLETELY FINISHED")
+print("RETURN CODE:", main_result.returncode)
+print("============================================================")
 
-    print("")
-    print("============================================================")
-    print("STARTING TEST.PY IN A NEW FRESH PYTHON PROCESS", flush=True)
-    print("============================================================")
 
-    formatter_result = subprocess.run([sys.executable, test_path], cwd=script_directory)
+if main_result.returncode != 0:
+    print("MAIN.PY FAILED")
+    print("TEST.PY WILL NOT RUN")
+    input("Press Enter to close...")
+    sys.exit(main_result.returncode)
 
-    print("")
-    print("============================================================")
-    print("TEST.PY HAS FINISHED", flush=True)
-    print("RETURN CODE:", formatter_result.returncode, flush=True)
-    print("============================================================")
 
-    sys.exit(formatter_result.returncode)
+print("")
+print("============================================================")
+print("STARTING TEST.PY")
+print("============================================================")
+
+
+test_result = subprocess.run([sys.executable, test_path], cwd=script_directory)
+
+
+print("")
+print("============================================================")
+print("TEST.PY PROCESS FINISHED")
+print("RETURN CODE:", test_result.returncode)
+print("============================================================")
+
+
+input("Press Enter to close...")
+
+sys.exit(test_result.returncode)
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 
 from openpyxl import load_workbook
@@ -380,220 +387,6 @@ def format_main_block_view(device_view_id, x, y, width, height):
                     text.SetSchemaLocation(x_center, y + height - 1.1)
 
                     print("MOVED EQUIPMENT IDENTIFICATION:", repr(txt), "TO:", x_center, y + height - 1.1)
-
-
-def wait_for_final_formatting():
-    root = tk.Tk()
-    root.title("Save and Reopen E3 Project")
-    root.attributes("-topmost", True)
-    root.geometry("620x280")
-
-    message = "MAIN CREATION IS COMPLETE\n\n1. Save the Zuken project\n2. Close the Zuken project\n3. Reopen the saved project\n4. Wait until the project is fully loaded\n\nThen click FINALIZE SCHEMATIC."
-
-    label = tk.Label(root, text=message, font=("Arial", 11), justify="center")
-    label.pack(pady=20)
-
-    button = tk.Button(root, text="FINALIZE SCHEMATIC", width=35, height=2, command=root.destroy)
-    button.pack(pady=10)
-
-    root.mainloop()
-
-
-def format_final_schematic_connectors():
-    def extract_ids(result):
-        if result is None:
-            return []
-
-        if isinstance(result, (tuple, list)):
-            if len(result) >= 2 and isinstance(result[1], (tuple, list)):
-                return [x for x in result[1] if x is not None and x != 0]
-
-            return [x for x in result if isinstance(x, int) and x != 0]
-
-        if isinstance(result, int):
-            if result != 0:
-                return [result]
-
-        return []
-
-    def get_pin_view_ids(pin_id):
-        pin.SetId(pin_id)
-
-        try:
-            result = pin.GetViewIds(None)
-            return extract_ids(result)
-        except Exception:
-            pass
-
-        try:
-            result = pin.GetViewIds()
-            return extract_ids(result)
-        except Exception as e:
-            print("GetViewIds ERROR:", pin_id, repr(e))
-            return []
-
-    modified_texts = []
-
-    print("")
-    print("============================================================")
-    print("FINAL SCHEMATIC CONNECTOR FORMATTING")
-    print("============================================================")
-
-    device_result = prj.GetAllDeviceIds(None)
-    device_ids = extract_ids(device_result)
-
-    for device_id in device_ids:
-        dev.SetId(device_id)
-
-        try:
-            device_name = str(dev.GetName())
-        except Exception:
-            continue
-
-        try:
-            symbol_result = dev.GetSymbolIds(None)
-            logical_symbol_ids = extract_ids(symbol_result)
-        except Exception:
-            logical_symbol_ids = []
-
-        is_connector = False
-
-        for logical_symbol_id in logical_symbol_ids:
-            sym.SetId(logical_symbol_id)
-
-            try:
-                text_result = sym.GetTextIds(None)
-                text_ids = extract_ids(text_result)
-            except Exception:
-                text_ids = []
-
-            for text_id in text_ids:
-                text.SetId(text_id)
-
-                try:
-                    text_type = text.GetType()
-                except Exception:
-                    continue
-
-                if text_type == 5:
-                    is_connector = True
-                    break
-
-            if is_connector:
-                break
-
-        if not is_connector:
-            continue
-
-        print("")
-        print("CONNECTOR:", device_name, "DEVICE ID:", device_id)
-
-        try:
-            pin_result = dev.GetPinIds(None)
-            logical_pin_ids = extract_ids(pin_result)
-        except Exception:
-            logical_pin_ids = []
-
-        for logical_pin_id in logical_pin_ids:
-            pin.SetId(logical_pin_id)
-
-            try:
-                pin_name = str(pin.GetName())
-            except Exception:
-                pin_name = "UNKNOWN"
-
-            pin_view_ids = get_pin_view_ids(logical_pin_id)
-
-            for pin_view_id in pin_view_ids:
-                sym.SetId(pin_view_id)
-
-                try:
-                    text_result = sym.GetTextIds(None)
-                    symbol_text_ids = extract_ids(text_result)
-                except Exception:
-                    symbol_text_ids = []
-
-                split_position = None
-
-                for text_id in symbol_text_ids:
-                    text.SetId(text_id)
-
-                    try:
-                        text_type = text.GetType()
-                        text_value = str(text.GetText()).strip()
-                    except Exception:
-                        continue
-
-                    if text_type == 213 and "/" in text_value and not text_value.startswith("*"):
-                        try:
-                            split_position = int(text_value.split("/")[0])
-                        except Exception:
-                            split_position = None
-
-                        break
-
-                if split_position is None:
-                    continue
-
-                print("PIN:", pin_name, "VIEW:", pin_view_id, "POSITION:", split_position)
-
-                for text_id in symbol_text_ids:
-                    text.SetId(text_id)
-
-                    try:
-                        text_type = text.GetType()
-                        text_value = str(text.GetText()).strip()
-                    except Exception:
-                        continue
-
-                    if text_type == 5:
-                        result = text.SetVisibility(0)
-                        print("    COMPONENT CODE OFF:", repr(text_value), "RESULT:", result)
-                        modified_texts.append({"text_id": text_id, "desired": 0, "type": 5, "value": text_value})
-
-                    elif text_type == 12:
-                        if split_position != 1:
-                            result = text.SetVisibility(0)
-                            print("    DEVICE DESIGNATION OFF:", repr(text_value), "RESULT:", result)
-                            modified_texts.append({"text_id": text_id, "desired": 0, "type": 12, "value": text_value})
-                        else:
-                            print("    TOP DEVICE DESIGNATION LEFT ALONE:", repr(text_value))
-
-                    elif text_type == 617:
-                        text.SetVisibility(1)
-                        text.SetColour(0)
-                        text.SetAlignment(3)
-                        text.SetStyle(1)
-                        text.SetHeight(0.2)
-                        print("    LOCAL SIGNAL ON:", repr(text_value))
-                        modified_texts.append({"text_id": text_id, "desired": 1, "type": 617, "value": text_value})
-
-    print("")
-    print("WAITING 5 SECONDS TO VERIFY VISIBILITY")
-    time.sleep(5.0)
-
-    passed = 0
-    failed = 0
-
-    for item in modified_texts:
-        text.SetId(item["text_id"])
-
-        try:
-            actual_visibility = text.GetVisibility()
-        except Exception as e:
-            actual_visibility = "ERROR: " + repr(e)
-
-        if actual_visibility == item["desired"]:
-            passed += 1
-        else:
-            failed += 1
-            print("VISIBILITY VERIFY FAIL:", "TYPE:", item["type"], "VALUE:", repr(item["value"]), "EXPECTED:", item["desired"], "ACTUAL:", actual_visibility)
-
-    print("")
-    print("============================================================")
-    print("FINAL FORMAT VERIFY PASS:", passed)
-    print("FINAL FORMAT VERIFY FAIL:", failed)
-    print("============================================================")
 
 
 # ================================================
@@ -1211,21 +1004,32 @@ for data in SCHEMATIC_DATA:
     format_main_block_view(data["parent_block"], layout["x start"], layout["y start"], layout["width"], layout["height"])
 
 #=========================================
-# MAIN CREATION PHASE IS COMPLETE
+# MAIN CREATION PHASE COMPLETE
 #
 # IMPORTANT:
-# DO NOT TRY TO DEL / CLOSE / GC THE E3 COM OBJECTS HERE.
-# THAT CLEANUP CAN BLOCK BEFORE THE PROCESS ACTUALLY ENDS.
-#
-# THE OUTER LAUNCHER IS WAITING FOR THIS BUILDER PROCESS.
-# FORCE THIS BUILDER PROCESS TO END NOW.
-# WINDOWS WILL TEAR DOWN ALL OF THIS PROCESS'S COM OBJECTS.
+# main.py does NOT launch test.py and does NOT import utils.
+# launcher.py waits for this entire Python process to exit,
+# then launcher.py starts test.py in a fresh Python process.
 #=========================================
 print("")
-print("============================================================", flush=True)
-print("MAIN E3 CREATION COMPLETE", flush=True)
-print("FORCING BUILDER PYTHON PROCESS TO TERMINATE NOW", flush=True)
-print("OUTER LAUNCHER WILL RUN TEST.PY AFTER THIS PROCESS IS DEAD", flush=True)
-print("============================================================", flush=True)
+print("============================================================")
+print("MAIN E3 CREATION COMPLETE")
+print("MAIN.PY WILL NOW END")
+print("============================================================")
 
-os._exit(0)
+# Close the SQL handles if possible.
+# Do not run the final text formatter here.
+try:
+    cur.close()
+except Exception:
+    pass
+
+try:
+    conn.close()
+except Exception:
+    pass
+
+
+
+
+
