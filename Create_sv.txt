@@ -1,3 +1,22 @@
+print("============================================================", flush=True)
+print("TEST.PY STARTED", flush=True)
+print("IMPORTING utils.run", flush=True)
+print("============================================================", flush=True)
+
+from utils import run
+
+print("CALLING run()", flush=True)
+run()
+print("run() RETURNED", flush=True)
+
+print("============================================================", flush=True)
+print("TEST.PY COMPLETE", flush=True)
+print("============================================================", flush=True)
+
+
+
+
+
 import os
 import sys
 import subprocess
@@ -43,6 +62,10 @@ if os.environ.get("_E3_BLOCK_BUILDER_CHILD") != "1":
         print("MAIN BUILDER FAILED")
         print("FORMATTER WILL NOT RUN")
         sys.exit(main_result.returncode)
+
+    print("MAIN BUILDER IS GONE")
+    print("WAITING 2 SECONDS FOR E3 TO SETTLE")
+    time.sleep(2.0)
 
     print("")
     print("============================================================")
@@ -1207,68 +1230,20 @@ for data in SCHEMATIC_DATA:
 
 #=========================================
 # MAIN CREATION PHASE IS COMPLETE
-# CLEAN UP THIS BUILDER PROCESS AND LET IT END
+#
+# IMPORTANT:
+# DO NOT TRY TO DEL / CLOSE / GC THE E3 COM OBJECTS HERE.
+# THAT CLEANUP CAN BLOCK BEFORE THE PROCESS ACTUALLY ENDS.
+#
+# THE OUTER LAUNCHER IS WAITING FOR THIS BUILDER PROCESS.
+# FORCE THIS BUILDER PROCESS TO END NOW.
+# WINDOWS WILL TEAR DOWN ALL OF THIS PROCESS'S COM OBJECTS.
 #=========================================
-try:
-    del attr
-except Exception:
-    pass
-
-try:
-    del text
-except Exception:
-    pass
-
-try:
-    del sym
-except Exception:
-    pass
-
-try:
-    del pin
-except Exception:
-    pass
-
-try:
-    del comp
-except Exception:
-    pass
-
-try:
-    del dev
-except Exception:
-    pass
-
-try:
-    del sht
-except Exception:
-    pass
-
-try:
-    del prj
-except Exception:
-    pass
-
-try:
-    del app
-except Exception:
-    pass
-
-try:
-    cur.close()
-except Exception:
-    pass
-
-try:
-    conn.close()
-except Exception:
-    pass
-
-gc.collect()
-
 print("")
-print("============================================================")
-print("MAIN E3 CREATION PROCESS COMPLETE")
-print("THIS BUILDER PROCESS WILL NOW END")
-print("THE OUTER LAUNCHER WILL START TEST.PY ONLY AFTER THIS PROCESS IS GONE")
-print("============================================================")
+print("============================================================", flush=True)
+print("MAIN E3 CREATION COMPLETE", flush=True)
+print("FORCING BUILDER PYTHON PROCESS TO TERMINATE NOW", flush=True)
+print("OUTER LAUNCHER WILL RUN TEST.PY AFTER THIS PROCESS IS DEAD", flush=True)
+print("============================================================", flush=True)
+
+os._exit(0)
