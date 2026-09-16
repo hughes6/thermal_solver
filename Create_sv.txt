@@ -1,8 +1,7 @@
 Option Explicit
 
-Private Const CONNECTOR_COUNT_CELL As String = "C4"
+Private Const CONNECTOR_COUNT_CELL As String = "C5"
 
-Private Const CONNECTOR_NAME_COLUMN As Long = 2
 Private Const CONNECTOR_NAME_FIRST_ROW As Long = 7
 
 Private Const TEMPLATE_FIRST_COLUMN As Long = 8
@@ -19,22 +18,9 @@ Private Const MAX_BLOCKS As Long = 40
 
 Private Sub Worksheet_Change(ByVal Target As Range)
 
-    Debug.Print String(70, "=")
-    Debug.Print "Worksheet_Change fired"
-    Debug.Print "Sheet:", Me.Name
-    Debug.Print "Target:", Target.Address
-    Debug.Print "Value:", Target.Value
-    Debug.Print "Time:", Now
-
-    If Intersect(Target, Me.Range(CONNECTOR_COUNT_CELL)) Is Nothing Then
-        Debug.Print "Target is not " & CONNECTOR_COUNT_CELL & ". Exiting."
-        Debug.Print String(70, "=")
-        Exit Sub
-    End If
+    If Intersect(Target, Me.Range(CONNECTOR_COUNT_CELL)) Is Nothing Then Exit Sub
 
     On Error GoTo CleanFail
-
-    Debug.Print "Target is connector count cell. Starting block update."
 
     Application.EnableEvents = False
     Application.ScreenUpdating = False
@@ -50,40 +36,17 @@ Private Sub Worksheet_Change(ByVal Target As Range)
     If connectorCount < 0 Then connectorCount = 0
     If connectorCount > MAX_BLOCKS Then connectorCount = MAX_BLOCKS
 
-    Debug.Print "Connector count:", connectorCount
-
-    Debug.Print "STEP 1 - BuildMissingBlocks"
     BuildMissingBlocks connectorCount
-    Debug.Print "STEP 1 COMPLETE"
-
-    Debug.Print "STEP 2 - UpdateActiveBlocks"
     UpdateActiveBlocks connectorCount
-    Debug.Print "STEP 2 COMPLETE"
-
-    Debug.Print "STEP 3 - ShowOnlyActiveBlocks"
     ShowOnlyActiveBlocks connectorCount
-    Debug.Print "STEP 3 COMPLETE"
-
-    Debug.Print "BLOCK UPDATE COMPLETE"
 
 CleanExit:
     Application.CutCopyMode = False
     Application.ScreenUpdating = True
     Application.EnableEvents = True
-
-    Debug.Print "Application.EnableEvents restored to:", Application.EnableEvents
-    Debug.Print String(70, "=")
     Exit Sub
 
 CleanFail:
-    Debug.Print String(70, "!")
-    Debug.Print "ERROR"
-    Debug.Print "ERROR NUMBER:", Err.Number
-    Debug.Print "ERROR DESCRIPTION:", Err.Description
-    Debug.Print "ERROR SOURCE:", Err.Source
-    Debug.Print "Target:", Target.Address
-    Debug.Print String(70, "!")
-
     MsgBox "Block update failed." & vbCrLf & vbCrLf & _
            "Error " & Err.Number & vbCrLf & _
            Err.Description, vbCritical, "Selection Sheet Macro Error"
@@ -95,25 +58,15 @@ End Sub
 
 Private Sub BuildMissingBlocks(ByVal connectorCount As Long)
 
-    Debug.Print "Entering BuildMissingBlocks. connectorCount =", connectorCount
-
     Dim blockNumber As Long
 
     For blockNumber = 2 To connectorCount
 
-        Debug.Print "Checking block:", blockNumber
-
         If Not BlockAlreadyExists(blockNumber) Then
-            Debug.Print "Block does not exist. Creating block:", blockNumber
             CreateBlock blockNumber
-            Debug.Print "Block created:", blockNumber
-        Else
-            Debug.Print "Block already exists:", blockNumber
         End If
 
     Next blockNumber
-
-    Debug.Print "Leaving BuildMissingBlocks"
 
 End Sub
 
@@ -122,24 +75,17 @@ Private Function BlockAlreadyExists(ByVal blockNumber As Long) As Boolean
 
     Dim startColumn As Long
     Dim checkRange As Range
-    Dim itemCount As Long
 
     startColumn = GetBlockStartColumn(blockNumber)
 
     Set checkRange = Me.Range(Me.Cells(BLOCK_TOP_ROW, startColumn), Me.Cells(TEMPLATE_BOTTOM_ROW, startColumn + BLOCK_WIDTH - 1))
 
-    itemCount = Application.WorksheetFunction.CountA(checkRange)
-
-    BlockAlreadyExists = itemCount > 0
-
-    Debug.Print "BlockAlreadyExists:", blockNumber, "StartCol:", startColumn, "CountA:", itemCount, "Exists:", BlockAlreadyExists
+    BlockAlreadyExists = Application.WorksheetFunction.CountA(checkRange) > 0
 
 End Function
 
 
 Private Sub CreateBlock(ByVal blockNumber As Long)
-
-    Debug.Print "Entering CreateBlock:", blockNumber
 
     Dim sourceHeader As Range
     Dim destinationHeader As Range
@@ -155,79 +101,56 @@ Private Sub CreateBlock(ByVal blockNumber As Long)
 
     destinationStartColumn = GetBlockStartColumn(blockNumber)
 
-    Debug.Print "Destination start column:", destinationStartColumn
-    Debug.Print "Destination start column letter:", ColumnLetter(destinationStartColumn)
-
     Set sourceHeader = Me.Range(Me.Cells(BLOCK_TOP_ROW, TEMPLATE_FIRST_COLUMN), Me.Cells(TEMPLATE_BOTTOM_ROW, TEMPLATE_FIRST_COLUMN + BLOCK_WIDTH - 1))
     Set destinationHeader = Me.Range(Me.Cells(BLOCK_TOP_ROW, destinationStartColumn), Me.Cells(TEMPLATE_BOTTOM_ROW, destinationStartColumn + BLOCK_WIDTH - 1))
 
     Set sourceFull = Me.Range(Me.Cells(BLOCK_TOP_ROW, TEMPLATE_FIRST_COLUMN), Me.Cells(RULES_LAST_ROW, TEMPLATE_FIRST_COLUMN + BLOCK_WIDTH - 1))
     Set destinationFull = Me.Range(Me.Cells(BLOCK_TOP_ROW, destinationStartColumn), Me.Cells(RULES_LAST_ROW, destinationStartColumn + BLOCK_WIDTH - 1))
 
-    Debug.Print "Copying formats:", sourceFull.Address, "->", destinationFull.Address
     sourceFull.Copy
     destinationFull.PasteSpecial Paste:=xlPasteFormats
 
-    Debug.Print "Copying validation"
     sourceFull.Copy
     destinationFull.PasteSpecial Paste:=xlPasteValidation
 
-    Debug.Print "Copying header/template:", sourceHeader.Address, "->", destinationHeader.Address
     sourceHeader.Copy
     destinationHeader.PasteSpecial Paste:=xlPasteAll
 
-    Debug.Print "Copying column widths"
     For columnOffset = 0 To BLOCK_WIDTH - 1
         Me.Columns(destinationStartColumn + columnOffset).ColumnWidth = Me.Columns(TEMPLATE_FIRST_COLUMN + columnOffset).ColumnWidth
     Next columnOffset
 
-    Set destinationInputs = Me.Range(Me.Cells(DATA_FIRST_ROW, destinationStartColumn + 1), Me.Cells(RULES_LAST_ROW, destinationStartColumn + 3))
-
-    Debug.Print "Clearing copied constants from:", destinationInputs.Address
+    Set destinationInputs = Me.Range(Me.Cells(DATA_FIRST_ROW, destinationStartColumn + 1), Me.Cells(RULES_LAST_ROW, destinationStartColumn + 2))
 
     Set constantsToClear = Nothing
 
     On Error Resume Next
     Set constantsToClear = destinationInputs.SpecialCells(xlCellTypeConstants)
-    On Error GoTo 0
+    On Error GoTo CleanFail
 
     If Not constantsToClear Is Nothing Then
-        Debug.Print "Constants found:", constantsToClear.Address
         constantsToClear.ClearContents
-    Else
-        Debug.Print "No constants to clear"
     End If
-
-    Debug.Print "Rebuilding conditional formatting for block:", blockNumber
-    RebuildConditionalFormatting blockNumber
 
     Application.CutCopyMode = False
 
-    Debug.Print "Leaving CreateBlock:", blockNumber
+    Exit Sub
+
+CleanFail:
+    Application.CutCopyMode = False
+    Err.Raise Err.Number, Err.Source, Err.Description
 
 End Sub
 
 
 Private Sub UpdateActiveBlocks(ByVal connectorCount As Long)
 
-    Debug.Print "Entering UpdateActiveBlocks. connectorCount =", connectorCount
-
     Dim blockNumber As Long
 
     For blockNumber = 1 To connectorCount
-
-        Debug.Print "Updating block:", blockNumber
-
         UpdateConnectorName blockNumber
         UpdateHelperSpill blockNumber
-
-        If blockNumber > 1 Then
-            RebuildConditionalFormatting blockNumber
-        End If
-
     Next blockNumber
-
-    Debug.Print "Leaving UpdateActiveBlocks"
 
 End Sub
 
@@ -245,8 +168,6 @@ Private Sub UpdateConnectorName(ByVal blockNumber As Long)
 
     connectorNameCell.Formula = "=$B$" & connectorSourceRow
 
-    Debug.Print "UpdateConnectorName block:", blockNumber, "Cell:", connectorNameCell.Address, "Formula:", connectorNameCell.Formula
-
 End Sub
 
 
@@ -261,10 +182,7 @@ Private Sub UpdateHelperSpill(ByVal blockNumber As Long)
 
     Set sourceHelper = Me.Cells(DATA_FIRST_ROW, TEMPLATE_FIRST_COLUMN)
 
-    If Not sourceHelper.HasFormula Then
-        Debug.Print "UpdateHelperSpill block:", blockNumber, "Template helper cell has no formula:", sourceHelper.Address
-        Exit Sub
-    End If
+    If Not sourceHelper.HasFormula Then Exit Sub
 
     destinationStartColumn = GetBlockStartColumn(blockNumber)
 
@@ -275,160 +193,21 @@ Private Sub UpdateHelperSpill(ByVal blockNumber As Long)
 
     destinationHelper.Formula2 = translatedFormula
 
-    Debug.Print "UpdateHelperSpill block:", blockNumber, "Cell:", destinationHelper.Address
-    Debug.Print "Source formula:", sourceFormula
-    Debug.Print "Translated formula:", translatedFormula
-
 End Sub
 
 
 Private Sub ShowOnlyActiveBlocks(ByVal connectorCount As Long)
 
-    Debug.Print "Entering ShowOnlyActiveBlocks. connectorCount =", connectorCount
-
     Dim blockNumber As Long
     Dim startColumn As Long
-    Dim shouldHide As Boolean
 
     For blockNumber = 1 To MAX_BLOCKS
 
         startColumn = GetBlockStartColumn(blockNumber)
-        shouldHide = blockNumber > connectorCount
 
-        Me.Range(Me.Columns(startColumn), Me.Columns(startColumn + BLOCK_WIDTH - 1)).EntireColumn.Hidden = shouldHide
-
-        If blockNumber <= connectorCount + 1 Then
-            Debug.Print "Block:", blockNumber, "Columns:", ColumnLetter(startColumn) & ":" & ColumnLetter(startColumn + BLOCK_WIDTH - 1), "Hidden:", shouldHide
-        End If
+        Me.Range(Me.Columns(startColumn), Me.Columns(startColumn + BLOCK_WIDTH - 1)).EntireColumn.Hidden = (blockNumber > connectorCount)
 
     Next blockNumber
-
-    Debug.Print "Leaving ShowOnlyActiveBlocks"
-
-End Sub
-
-
-Private Sub RebuildConditionalFormatting(ByVal blockNumber As Long)
-
-    If blockNumber = 1 Then
-        Debug.Print "RebuildConditionalFormatting skipped for template block 1"
-        Exit Sub
-    End If
-
-    Debug.Print "Entering RebuildConditionalFormatting:", blockNumber
-
-    Dim sourceFull As Range
-    Dim destinationFull As Range
-
-    Dim sourceCondition As FormatCondition
-    Dim destinationCondition As FormatCondition
-
-    Dim sourceApplyRange As Range
-    Dim sourceArea As Range
-    Dim destinationApplyRange As Range
-
-    Dim destinationStartColumn As Long
-    Dim columnShift As Long
-
-    Dim translatedFormula1 As String
-    Dim translatedFormula2 As String
-
-    Dim ruleCount As Long
-
-    destinationStartColumn = GetBlockStartColumn(blockNumber)
-    columnShift = destinationStartColumn - TEMPLATE_FIRST_COLUMN
-
-    Set sourceFull = Me.Range(Me.Cells(BLOCK_TOP_ROW, TEMPLATE_FIRST_COLUMN), Me.Cells(RULES_LAST_ROW, TEMPLATE_FIRST_COLUMN + BLOCK_WIDTH - 1))
-    Set destinationFull = Me.Range(Me.Cells(BLOCK_TOP_ROW, destinationStartColumn), Me.Cells(RULES_LAST_ROW, destinationStartColumn + BLOCK_WIDTH - 1))
-
-    Debug.Print "Deleting destination conditional formatting:", destinationFull.Address
-    destinationFull.FormatConditions.Delete
-
-    ruleCount = 0
-
-    For Each sourceCondition In sourceFull.FormatConditions
-
-        Set sourceApplyRange = Intersect(sourceCondition.AppliesTo, sourceFull)
-
-        If Not sourceApplyRange Is Nothing Then
-
-            For Each sourceArea In sourceApplyRange.Areas
-
-                Set destinationApplyRange = sourceArea.Offset(0, columnShift)
-
-                translatedFormula1 = ""
-                translatedFormula2 = ""
-
-                On Error Resume Next
-                translatedFormula1 = TranslateBlockFormula(sourceCondition.Formula1, destinationStartColumn)
-                translatedFormula2 = TranslateBlockFormula(sourceCondition.Formula2, destinationStartColumn)
-                On Error GoTo 0
-
-                Set destinationCondition = Nothing
-
-                If sourceCondition.Type = xlExpression Then
-
-                    Set destinationCondition = destinationApplyRange.FormatConditions.Add(Type:=xlExpression, Formula1:=translatedFormula1)
-
-                ElseIf sourceCondition.Type = xlCellValue Then
-
-                    Set destinationCondition = destinationApplyRange.FormatConditions.Add(Type:=xlCellValue, Operator:=sourceCondition.Operator, Formula1:=translatedFormula1, Formula2:=translatedFormula2)
-
-                Else
-
-                    Debug.Print "Skipping unsupported conditional format type:", sourceCondition.Type
-
-                End If
-
-                If Not destinationCondition Is Nothing Then
-
-                    CopyConditionalFormatStyle sourceCondition, destinationCondition
-
-                    On Error Resume Next
-                    destinationCondition.StopIfTrue = sourceCondition.StopIfTrue
-                    On Error GoTo 0
-
-                    ruleCount = ruleCount + 1
-
-                    Debug.Print "Created CF rule:", ruleCount, "AppliesTo:", destinationApplyRange.Address, "Formula1:", translatedFormula1
-
-                End If
-
-            Next sourceArea
-
-        End If
-
-    Next sourceCondition
-
-    Debug.Print "Conditional formatting rules created:", ruleCount
-    Debug.Print "Leaving RebuildConditionalFormatting:", blockNumber
-
-End Sub
-
-
-Private Sub CopyConditionalFormatStyle(ByVal sourceCondition As FormatCondition, ByVal destinationCondition As FormatCondition)
-
-    Dim edge As Variant
-
-    On Error Resume Next
-
-    destinationCondition.Font.Color = sourceCondition.Font.Color
-    destinationCondition.Font.Bold = sourceCondition.Font.Bold
-    destinationCondition.Font.Italic = sourceCondition.Font.Italic
-    destinationCondition.Font.Strikethrough = sourceCondition.Font.Strikethrough
-
-    destinationCondition.Interior.Color = sourceCondition.Interior.Color
-    destinationCondition.Interior.Pattern = sourceCondition.Interior.Pattern
-
-    For Each edge In Array(xlEdgeLeft, xlEdgeTop, xlEdgeBottom, xlEdgeRight)
-
-        destinationCondition.Borders(edge).LineStyle = sourceCondition.Borders(edge).LineStyle
-        destinationCondition.Borders(edge).Weight = sourceCondition.Borders(edge).Weight
-        destinationCondition.Borders(edge).Color = sourceCondition.Borders(edge).Color
-
-    Next edge
-
-    On Error GoTo 0
 
 End Sub
 
@@ -473,65 +252,3 @@ Private Function ColumnLetter(ByVal columnNumber As Long) As String
     ColumnLetter = Split(Me.Cells(1, columnNumber).Address(False, False), "1")(0)
 
 End Function
-
-
-Public Sub ResetExcelEvents()
-
-    Application.EnableEvents = True
-    Application.ScreenUpdating = True
-    Application.CutCopyMode = False
-
-    Debug.Print "Excel events manually reset."
-    Debug.Print "Application.EnableEvents =", Application.EnableEvents
-
-    MsgBox "Excel events are enabled again.", vbInformation, "Events Reset"
-
-End Sub
-
-
-Public Sub TestBlockMacro()
-
-    Debug.Print String(70, "=")
-    Debug.Print "MANUAL TEST STARTED"
-    Debug.Print "Connector count cell:", CONNECTOR_COUNT_CELL
-    Debug.Print "Connector count value:", Me.Range(CONNECTOR_COUNT_CELL).Value
-
-    On Error GoTo TestFail
-
-    Application.EnableEvents = False
-    Application.ScreenUpdating = False
-
-    Dim connectorCount As Long
-
-    If IsNumeric(Me.Range(CONNECTOR_COUNT_CELL).Value) Then
-        connectorCount = CLng(Me.Range(CONNECTOR_COUNT_CELL).Value)
-    Else
-        connectorCount = 0
-    End If
-
-    If connectorCount < 0 Then connectorCount = 0
-    If connectorCount > MAX_BLOCKS Then connectorCount = MAX_BLOCKS
-
-    BuildMissingBlocks connectorCount
-    UpdateActiveBlocks connectorCount
-    ShowOnlyActiveBlocks connectorCount
-
-TestExit:
-    Application.CutCopyMode = False
-    Application.ScreenUpdating = True
-    Application.EnableEvents = True
-
-    Debug.Print "MANUAL TEST COMPLETE"
-    Debug.Print String(70, "=")
-    Exit Sub
-
-TestFail:
-    Debug.Print "MANUAL TEST ERROR:", Err.Number, Err.Description
-
-    MsgBox "Manual test failed." & vbCrLf & vbCrLf & _
-           "Error " & Err.Number & vbCrLf & _
-           Err.Description, vbCritical, "Selection Sheet Macro Error"
-
-    Resume TestExit
-
-End Sub
