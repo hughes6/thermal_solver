@@ -1,1103 +1,1394 @@
+import json
+import time
+import traceback
+from datetime import datetime
+from pathlib import Path
 
-====================================================================================================
-E3 PIN VIEW / SPLIT CONNECTOR BEHAVIOR AUDIT
-====================================================================================================
-CONNECTOR_NAME = SCP-J1
+import pythoncom
+import win32com.client
+
+
+# ============================================================
+# USER SETTINGS
+# ============================================================
+
+CONNECTOR_NAME = "SCP-J1"
+
 FIXED_X = 5.5
 Y_MIN = 28.0
 Y_MAX = 30.25
 Y_STEP = 0.25
+
+ROTATION = "0"
+SCALE = 1.0
+MAINTAIN_TEXT_SIZE = 1
+
 TOP_IS_HIGH_Y = True
 
-====================================================================================================
-CONNECTING TO E3
-====================================================================================================
-APPLICATION: <win32com.gen_py.E3.series 2025.2543 Type Library.IApplicationInterface instance at 0x2550832225248>
-PROJECT / JOB OBJECT: <win32com.gen_py.E3.series 2025.2543 Type Library.IJobInterface instance at 0x2550832226592>
-DEVICE OBJECT CREATED
-PIN OBJECT CREATED
-SYMBOL OBJECT CREATED
-
-====================================================================================================
-FIND CONNECTOR: SCP-J1
-====================================================================================================
-
-----------------------------------------------------------------------------------------------------
-PROJECT GetAllDeviceIds SIGNATURE
-----------------------------------------------------------------------------------------------------
-FOUND: False
-NAMES: None
-FUNC DESC: None
-DOCUMENTATION: None
-PYTHON DOC: method GetAllDeviceIds
-
-----------------------------------------------------------------------------------------------------
-e3Device IDENTITY-RELATED METHODS
-----------------------------------------------------------------------------------------------------
-CreateDeviceOnBlock
-GetAssignment
-GetAssignmentEx
-GetAssignmentLockChangeable
-GetBlockDeviceIds
-GetBomType
-GetComponentAttributeValue
-GetComponentName
-GetComponentVersion
-GetCounterpartComponentName
-GetCounterpartComponentVersion
-GetDeviceCount
-GetDeviceIds
-GetFileName
-GetInheritName
-GetLocation
-GetLocationEx
-GetLocationLockChangeable
-GetMasterPinName
-GetModelName
-GetMountTypes
-GetName
-GetNameEx
-GetNameLockChangeable
-GetPanelLocation
-GetPanelLocationXYZEulerAngles
-GetReferenceType
-GetSchematicTypes
-GetTerminalType
-GetValidComponentCodes
-GetValidComponentCodesEx
-IsAssignmentLockChangeable
-IsDevice
-IsLocationLockChangeable
-IsNameLockChangeable
-LoadAndPlaceComponent
-SetAssignment
-SetAssignmentLockChangeable
-SetCompleteName
-SetComponentName
-SetFileName
-SetInheritName
-SetLocation
-SetLocationLockChangeable
-SetMasterPinName
-SetName
-SetNameLockChangeable
-SetPanelLocation
-SetPanelLocationEx
-SetPanelLocationXYZEulerAngles
-SetReferenceType
-_ApplyTypes_
-__init_subclass__
-__subclasshook__
-
-----------------------------------------------------------------------------------------------------
-RAW GetAllDeviceIds ENUMERATION
-----------------------------------------------------------------------------------------------------
-TRY: GetAllDeviceIds(BYREF VARIANT)
-    RETURN VALUE: (4, (None, 72258, 64611, 67783, 137415))
-    OUT VARIANT VALUE: None
-    NO DEVICE IDS EXTRACTED
-TRY: GetAllDeviceIds(BYREF SAFEARRAY I4)
-    RETURN VALUE: (4, (None, 72258, 64611, 67783, 137415))
-    OUT ARRAY VALUE: []
-    NO DEVICE IDS EXTRACTED
-TRY: GetAllDeviceIds(None)
-    RAW RESULT: (4, (None, 72258, 64611, 67783, 137415))
-    CLEAN DEVICE IDS: [72258, 64611, 67783, 137415]
-
-TOTAL DEVICE IDS RETURNED BY GetAllDeviceIds: 4
-DEVICE IDS: [72258, 64611, 67783, 137415]
-
-----------------------------------------------------------------------------------------------------
-DEVICE ID 72258
-----------------------------------------------------------------------------------------------------
-SetId: SUCCESS
-GetAssignmentLockChangeable: 0
-GetInheritName: 0
-GetLocationLockChangeable: 0
-GetName: Wires
-GetNameLockChangeable: 0
-GetReferenceType: -1
-GetTerminalType: 0
-fallback_get_device_name: Wires
-MATCH SCORE: 0
-
-----------------------------------------------------------------------------------------------------
-DEVICE ID 64611
-----------------------------------------------------------------------------------------------------
-SetId: SUCCESS
-GetAssignmentLockChangeable: 1
-GetComponentName: Generic_D-Sub_9P_Plug
-GetComponentVersion: 1
-GetInheritName: 0
-GetLocation: BxRxUx
-GetLocationLockChangeable: 1
-GetName: SCP-J1
-GetNameLockChangeable: 1
-GetReferenceType: 3
-GetTerminalType: 0
-fallback_get_device_name: SCP-J1
-MATCH SCORE: 1000
-    exact normalized match in GetName: SCP-J1
-    exact normalized match in fallback_get_device_name: SCP-J1
-    target appears across combined identity fields
-    all target tokens found across identity fields: ['SCP', 'J1']
-
-----------------------------------------------------------------------------------------------------
-DEVICE ID 67783
-----------------------------------------------------------------------------------------------------
-SetId: SUCCESS
-GetAssignmentLockChangeable: 1
-GetComponentName: Generic_RJ45_Plug
-GetComponentVersion: 1
-GetInheritName: 0
-GetLocation: BxRxUx
-GetLocationLockChangeable: 1
-GetName: SCP-J2
-GetNameLockChangeable: 1
-GetReferenceType: 3
-GetTerminalType: 0
-fallback_get_device_name: SCP-J2
-MATCH SCORE: 0
-
-----------------------------------------------------------------------------------------------------
-DEVICE ID 137415
-----------------------------------------------------------------------------------------------------
-SetId: SUCCESS
-GetAssignmentLockChangeable: 1
-GetInheritName: 0
-GetLocation: BxRxUx
-GetLocationLockChangeable: 1
-GetName: TEST_NAME_100000
-GetNameLockChangeable: 1
-GetReferenceType: 3
-GetTerminalType: 0
-fallback_get_device_name: TEST_NAME_100000
-MATCH SCORE: 0
-
-====================================================================================================
-CONNECTOR DISCOVERY RESULT
-====================================================================================================
-SELECTED DEVICE ID: 64611
-SCORE: 1000
-IDENTITY: {'GetAssignmentLockChangeable': '1', 'GetComponentName': 'Generic_D-Sub_9P_Plug', 'GetComponentVersion': '1', 'GetInheritName': '0', 'GetLocation': 'BxRxUx', 'GetLocationLockChangeable': '1', 'GetName': 'SCP-J1', 'GetNameLockChangeable': '1', 'GetReferenceType': '3', 'GetTerminalType': '0', 'fallback_get_device_name': 'SCP-J1'}
-
-====================================================================================================
-KEY COM METHOD SIGNATURE AUDIT
-====================================================================================================
-
-----------------------------------------------------------------------------------------------------
-e3Pin.GetViewIds
-----------------------------------------------------------------------------------------------------
-FOUND: False
-NAMES: None
-FUNC DESC: None
-DOCUMENTATION: None
-PYTHON DOC: method GetViewIds
-
-----------------------------------------------------------------------------------------------------
-e3Pin.IsPinView
-----------------------------------------------------------------------------------------------------
-FOUND: False
-NAMES: None
-FUNC DESC: None
-DOCUMENTATION: None
-PYTHON DOC: method IsPinView
-
-----------------------------------------------------------------------------------------------------
-e3Pin.IsView
-----------------------------------------------------------------------------------------------------
-FOUND: False
-NAMES: None
-FUNC DESC: None
-DOCUMENTATION: None
-PYTHON DOC: method IsView
-
-----------------------------------------------------------------------------------------------------
-e3Pin.GetPhysicalPosition
-----------------------------------------------------------------------------------------------------
-FOUND: False
-NAMES: None
-FUNC DESC: None
-DOCUMENTATION: None
-PYTHON DOC: method GetPhysicalPosition
-
-----------------------------------------------------------------------------------------------------
-e3Pin.GetSchemaLocation
-----------------------------------------------------------------------------------------------------
-FOUND: False
-NAMES: None
-FUNC DESC: None
-DOCUMENTATION: None
-PYTHON DOC: method GetSchemaLocation
-
-----------------------------------------------------------------------------------------------------
-e3Pin.GetSymbolName
-----------------------------------------------------------------------------------------------------
-FOUND: False
-NAMES: None
-FUNC DESC: None
-DOCUMENTATION: None
-PYTHON DOC: None
-
-----------------------------------------------------------------------------------------------------
-e3Pin.GetTemplateSymbolId
-----------------------------------------------------------------------------------------------------
-FOUND: False
-NAMES: None
-FUNC DESC: None
-DOCUMENTATION: None
-PYTHON DOC: method GetTemplateSymbolId
-
-----------------------------------------------------------------------------------------------------
-e3Pin.GetTemplateSymbolIds
-----------------------------------------------------------------------------------------------------
-FOUND: False
-NAMES: None
-FUNC DESC: None
-DOCUMENTATION: None
-PYTHON DOC: None
-
-----------------------------------------------------------------------------------------------------
-e3Pin.PlaceNode
-----------------------------------------------------------------------------------------------------
-FOUND: False
-NAMES: None
-FUNC DESC: None
-DOCUMENTATION: None
-PYTHON DOC: method PlaceNode
-
-----------------------------------------------------------------------------------------------------
-e3Symbol.Place
-----------------------------------------------------------------------------------------------------
-FOUND: False
-NAMES: None
-FUNC DESC: None
-DOCUMENTATION: None
-PYTHON DOC: method Place
-
-----------------------------------------------------------------------------------------------------
-e3Symbol.PlaceInteractively
-----------------------------------------------------------------------------------------------------
-FOUND: False
-NAMES: None
-FUNC DESC: None
-DOCUMENTATION: None
-PYTHON DOC: method PlaceInteractively
-
-----------------------------------------------------------------------------------------------------
-e3Symbol.PlacePinView
-----------------------------------------------------------------------------------------------------
-FOUND: False
-NAMES: None
-FUNC DESC: None
-DOCUMENTATION: None
-PYTHON DOC: method PlacePinView
-
-----------------------------------------------------------------------------------------------------
-e3Symbol.PlacePins
-----------------------------------------------------------------------------------------------------
-FOUND: False
-NAMES: None
-FUNC DESC: None
-DOCUMENTATION: None
-PYTHON DOC: method PlacePins
-
-----------------------------------------------------------------------------------------------------
-e3Symbol.GetArea
-----------------------------------------------------------------------------------------------------
-FOUND: False
-NAMES: None
-FUNC DESC: None
-DOCUMENTATION: None
-PYTHON DOC: method GetArea
-
-----------------------------------------------------------------------------------------------------
-e3Symbol.GetPlacedArea
-----------------------------------------------------------------------------------------------------
-FOUND: False
-NAMES: None
-FUNC DESC: None
-DOCUMENTATION: None
-PYTHON DOC: method GetPlacedArea
-
-----------------------------------------------------------------------------------------------------
-e3Symbol.GetSchemaLocation
-----------------------------------------------------------------------------------------------------
-FOUND: False
-NAMES: None
-FUNC DESC: None
-DOCUMENTATION: None
-PYTHON DOC: method GetSchemaLocation
-
-----------------------------------------------------------------------------------------------------
-e3Symbol.GetSchemaLocationShared
-----------------------------------------------------------------------------------------------------
-FOUND: False
-NAMES: None
-FUNC DESC: None
-DOCUMENTATION: None
-PYTHON DOC: None
-
-----------------------------------------------------------------------------------------------------
-e3Symbol.GetDynamicParentId
-----------------------------------------------------------------------------------------------------
-FOUND: False
-NAMES: None
-FUNC DESC: None
-DOCUMENTATION: None
-PYTHON DOC: method GetDynamicParentId
-
-----------------------------------------------------------------------------------------------------
-e3Symbol.GetDynamicChildrenIds
-----------------------------------------------------------------------------------------------------
-FOUND: False
-NAMES: None
-FUNC DESC: None
-DOCUMENTATION: None
-PYTHON DOC: method GetDynamicChildrenIds
-
-----------------------------------------------------------------------------------------------------
-e3Symbol.GetMasterIds
-----------------------------------------------------------------------------------------------------
-FOUND: False
-NAMES: None
-FUNC DESC: None
-DOCUMENTATION: None
-PYTHON DOC: method GetMasterIds
-
-----------------------------------------------------------------------------------------------------
-e3Symbol.GetSlaveIds
-----------------------------------------------------------------------------------------------------
-FOUND: False
-NAMES: None
-FUNC DESC: None
-DOCUMENTATION: None
-PYTHON DOC: method GetSlaveIds
-
-----------------------------------------------------------------------------------------------------
-e3Symbol.GetStateId
-----------------------------------------------------------------------------------------------------
-FOUND: False
-NAMES: None
-FUNC DESC: None
-DOCUMENTATION: None
-PYTHON DOC: None
-
-----------------------------------------------------------------------------------------------------
-e3Symbol.GetStateIds
-----------------------------------------------------------------------------------------------------
-FOUND: False
-NAMES: None
-FUNC DESC: None
-DOCUMENTATION: None
-PYTHON DOC: None
-
-----------------------------------------------------------------------------------------------------
-e3Symbol.GetTargetObjectId
-----------------------------------------------------------------------------------------------------
-FOUND: False
-NAMES: None
-FUNC DESC: None
-DOCUMENTATION: None
-PYTHON DOC: None
-
-----------------------------------------------------------------------------------------------------
-e3Symbol.GetValidCharacteristics
-----------------------------------------------------------------------------------------------------
-FOUND: False
-NAMES: None
-FUNC DESC: None
-DOCUMENTATION: None
-PYTHON DOC: method GetValidCharacteristics
-
-----------------------------------------------------------------------------------------------------
-e3Symbol.IsPinView
-----------------------------------------------------------------------------------------------------
-FOUND: False
-NAMES: None
-FUNC DESC: None
-DOCUMENTATION: None
-PYTHON DOC: method IsPinView
-
-----------------------------------------------------------------------------------------------------
-e3Symbol.GetPinIds
-----------------------------------------------------------------------------------------------------
-FOUND: False
-NAMES: None
-FUNC DESC: None
-DOCUMENTATION: None
-PYTHON DOC: method GetPinIds
-
-----------------------------------------------------------------------------------------------------
-e3Symbol.GetDevicePinIds
-----------------------------------------------------------------------------------------------------
-FOUND: False
-NAMES: None
-FUNC DESC: None
-DOCUMENTATION: None
-PYTHON DOC: None
-
-====================================================================================================
-INITIAL BASELINE SNAPSHOT
-====================================================================================================
-CONNECTOR NAME: SCP-J1
-CONNECTOR DEVICE ID: 64611
-LOGICAL PIN COUNT: 2
-
-PIN 
-    LOGICAL ID: 9
-    LOGICAL IsView: -1
-    LOGICAL IsPinView: 0
-    VIEW IDS: [0, -2147352572]
-    VIEW 0
-        PIN OBJECT SetId OK: True
-        PIN OBJECT name: 
-        PIN OBJECT IsView: -1
-        PIN OBJECT IsPinView: 0
-        PIN OBJECT physical position: (0, -2147352572, -2147352572, -2147352572)
-        PIN OBJECT schema location: (0, -2147352572, -2147352572, -2147352572, -2147352572, -2147352572)
-        PIN OBJECT symbol name: 
-        SYMBOL OBJECT SetId OK: True
-        SYMBOL OBJECT name: 
-        SYMBOL OBJECT IsPinView: 0
-        SYMBOL OBJECT sheet ID: 204828
-        SYMBOL OBJECT area: [-2147352572.0, -2147352572.0, -2147352572.0, -2147352572.0]
-        SYMBOL OBJECT center: (-2147352572.0, -2147352572.0)
-        RELATIONSHIPS: {'GetDynamicParentId': 0, 'GetDynamicChildrenIds': (0, -2147352572), 'GetMasterIds': (0, -2147352572), 'GetSlaveIds': (0, -2147352572), 'GetStateId': 0, 'GetStateIds': (0, -2147352572), 'GetTargetObjectId': 0, 'GetValidCharacteristics': (0, -2147352572), 'GetPinIds': (0, -2147352572), 'GetDevicePinIds': (0, -2147352572), 'GetGateId': 0, 'GetGroupId': 0, 'GetBoundIds': (0, -2147352572)}
-    VIEW -2147352572
-        PIN OBJECT SetId OK: True
-        PIN OBJECT name: 
-        PIN OBJECT IsView: -1
-        PIN OBJECT IsPinView: 0
-        PIN OBJECT physical position: (0, -2147352572, -2147352572, -2147352572)
-        PIN OBJECT schema location: (0, -2147352572, -2147352572, -2147352572, -2147352572, -2147352572)
-        PIN OBJECT symbol name: 
-        SYMBOL OBJECT SetId OK: True
-        SYMBOL OBJECT name: 
-        SYMBOL OBJECT IsPinView: 0
-        SYMBOL OBJECT sheet ID: 204828
-        SYMBOL OBJECT area: [-2147352572.0, -2147352572.0, -2147352572.0, -2147352572.0]
-        SYMBOL OBJECT center: (-2147352572.0, -2147352572.0)
-        RELATIONSHIPS: {'GetDynamicParentId': 0, 'GetDynamicChildrenIds': (0, -2147352572), 'GetMasterIds': (0, -2147352572), 'GetSlaveIds': (0, -2147352572), 'GetStateId': 0, 'GetStateIds': (0, -2147352572), 'GetTargetObjectId': 0, 'GetValidCharacteristics': (0, -2147352572), 'GetPinIds': (0, -2147352572), 'GetDevicePinIds': (0, -2147352572), 'GetGateId': 0, 'GetGroupId': 0, 'GetBoundIds': (0, -2147352572)}
-
-PIN 
-    LOGICAL ID: -2147352572
-    LOGICAL IsView: -1
-    LOGICAL IsPinView: 0
-    VIEW IDS: [0, -2147352572]
-    VIEW 0
-        PIN OBJECT SetId OK: True
-        PIN OBJECT name: 
-        PIN OBJECT IsView: -1
-        PIN OBJECT IsPinView: 0
-        PIN OBJECT physical position: (0, -2147352572, -2147352572, -2147352572)
-        PIN OBJECT schema location: (0, -2147352572, -2147352572, -2147352572, -2147352572, -2147352572)
-        PIN OBJECT symbol name: 
-        SYMBOL OBJECT SetId OK: True
-        SYMBOL OBJECT name: 
-        SYMBOL OBJECT IsPinView: 0
-        SYMBOL OBJECT sheet ID: 204828
-        SYMBOL OBJECT area: [-2147352572.0, -2147352572.0, -2147352572.0, -2147352572.0]
-        SYMBOL OBJECT center: (-2147352572.0, -2147352572.0)
-        RELATIONSHIPS: {'GetDynamicParentId': 0, 'GetDynamicChildrenIds': (0, -2147352572), 'GetMasterIds': (0, -2147352572), 'GetSlaveIds': (0, -2147352572), 'GetStateId': 0, 'GetStateIds': (0, -2147352572), 'GetTargetObjectId': 0, 'GetValidCharacteristics': (0, -2147352572), 'GetPinIds': (0, -2147352572), 'GetDevicePinIds': (0, -2147352572), 'GetGateId': 0, 'GetGroupId': 0, 'GetBoundIds': (0, -2147352572)}
-    VIEW -2147352572
-        PIN OBJECT SetId OK: True
-        PIN OBJECT name: 
-        PIN OBJECT IsView: -1
-        PIN OBJECT IsPinView: 0
-        PIN OBJECT physical position: (0, -2147352572, -2147352572, -2147352572)
-        PIN OBJECT schema location: (0, -2147352572, -2147352572, -2147352572, -2147352572, -2147352572)
-        PIN OBJECT symbol name: 
-        SYMBOL OBJECT SetId OK: True
-        SYMBOL OBJECT name: 
-        SYMBOL OBJECT IsPinView: 0
-        SYMBOL OBJECT sheet ID: 204828
-        SYMBOL OBJECT area: [-2147352572.0, -2147352572.0, -2147352572.0, -2147352572.0]
-        SYMBOL OBJECT center: (-2147352572.0, -2147352572.0)
-        RELATIONSHIPS: {'GetDynamicParentId': 0, 'GetDynamicChildrenIds': (0, -2147352572), 'GetMasterIds': (0, -2147352572), 'GetSlaveIds': (0, -2147352572), 'GetStateId': 0, 'GetStateIds': (0, -2147352572), 'GetTargetObjectId': 0, 'GetValidCharacteristics': (0, -2147352572), 'GetPinIds': (0, -2147352572), 'GetDevicePinIds': (0, -2147352572), 'GetGateId': 0, 'GetGroupId': 0, 'GetBoundIds': (0, -2147352572)}
-
-POSITION ORDER LOW Y -> HIGH Y
-    PIN  | VIEW 0 | X -2147352572.0 | Y -2147352572.0
-    PIN  | VIEW -2147352572 | X -2147352572.0 | Y -2147352572.0
-    PIN  | VIEW 0 | X -2147352572.0 | Y -2147352572.0
-    PIN  | VIEW -2147352572 | X -2147352572.0 | Y -2147352572.0
-
-POSITION ORDER HIGH Y -> LOW Y
-    PIN  | VIEW 0 | X -2147352572.0 | Y -2147352572.0
-    PIN  | VIEW -2147352572 | X -2147352572.0 | Y -2147352572.0
-    PIN  | VIEW 0 | X -2147352572.0 | Y -2147352572.0
-    PIN  | VIEW -2147352572 | X -2147352572.0 | Y -2147352572.0
-
-====================================================================================================
-TEST MENU
-====================================================================================================
-1  - Full connector snapshot
-2  - Compare before/after ONE manual pin move
-3  - Manual TOP move, then script test the new top
-4  - Manual BOTTOM move, then script test the new bottom
-5  - Controlled e3Symbol.Place test on a selected pin
-6  - Audit PlacePinView signature only
-7  - Audit PlacePins signature only
-8  - EXPERIMENTAL PlacePinView candidate calls
-9  - Repeated script move test
-10 - Raw relationship call audit for one pin view
-11 - Re-run all key COM method signatures
-q  - Save and quit
-
-====================================================================================================
-MANUAL TOP -> SCRIPT NEXT PIN TEST
-====================================================================================================
-CURRENT TOP CANDIDATE BEFORE MANUAL MOVE: {'pin_name': '', 'logical_pin_id': 9, 'view_id': 0, 'sheet_id': 204828, 'center_x': -2147352572.0, 'center_y': -2147352572.0}
-
-====================================================================================================
-BEFORE MANUAL TOP MOVE
-====================================================================================================
-CONNECTOR NAME: SCP-J1
-CONNECTOR DEVICE ID: 64611
-LOGICAL PIN COUNT: 2
-
-PIN 
-    LOGICAL ID: 9
-    LOGICAL IsView: -1
-    LOGICAL IsPinView: 0
-    VIEW IDS: [0, -2147352572]
-    VIEW 0
-        PIN OBJECT SetId OK: True
-        PIN OBJECT name: 
-        PIN OBJECT IsView: -1
-        PIN OBJECT IsPinView: 0
-        PIN OBJECT physical position: (0, -2147352572, -2147352572, -2147352572)
-        PIN OBJECT schema location: (0, -2147352572, -2147352572, -2147352572, -2147352572, -2147352572)
-        PIN OBJECT symbol name: 
-        SYMBOL OBJECT SetId OK: True
-        SYMBOL OBJECT name: 
-        SYMBOL OBJECT IsPinView: 0
-        SYMBOL OBJECT sheet ID: 204828
-        SYMBOL OBJECT area: [-2147352572.0, -2147352572.0, -2147352572.0, -2147352572.0]
-        SYMBOL OBJECT center: (-2147352572.0, -2147352572.0)
-        RELATIONSHIPS: {'GetDynamicParentId': 0, 'GetDynamicChildrenIds': (0, -2147352572), 'GetMasterIds': (0, -2147352572), 'GetSlaveIds': (0, -2147352572), 'GetStateId': 0, 'GetStateIds': (0, -2147352572), 'GetTargetObjectId': 0, 'GetValidCharacteristics': (0, -2147352572), 'GetPinIds': (0, -2147352572), 'GetDevicePinIds': (0, -2147352572), 'GetGateId': 0, 'GetGroupId': 0, 'GetBoundIds': (0, -2147352572)}
-    VIEW -2147352572
-        PIN OBJECT SetId OK: True
-        PIN OBJECT name: 
-        PIN OBJECT IsView: -1
-        PIN OBJECT IsPinView: 0
-        PIN OBJECT physical position: (0, -2147352572, -2147352572, -2147352572)
-        PIN OBJECT schema location: (0, -2147352572, -2147352572, -2147352572, -2147352572, -2147352572)
-        PIN OBJECT symbol name: 
-        SYMBOL OBJECT SetId OK: True
-        SYMBOL OBJECT name: 
-        SYMBOL OBJECT IsPinView: 0
-        SYMBOL OBJECT sheet ID: 204828
-        SYMBOL OBJECT area: [-2147352572.0, -2147352572.0, -2147352572.0, -2147352572.0]
-        SYMBOL OBJECT center: (-2147352572.0, -2147352572.0)
-        RELATIONSHIPS: {'GetDynamicParentId': 0, 'GetDynamicChildrenIds': (0, -2147352572), 'GetMasterIds': (0, -2147352572), 'GetSlaveIds': (0, -2147352572), 'GetStateId': 0, 'GetStateIds': (0, -2147352572), 'GetTargetObjectId': 0, 'GetValidCharacteristics': (0, -2147352572), 'GetPinIds': (0, -2147352572), 'GetDevicePinIds': (0, -2147352572), 'GetGateId': 0, 'GetGroupId': 0, 'GetBoundIds': (0, -2147352572)}
-
-PIN 
-    LOGICAL ID: -2147352572
-    LOGICAL IsView: -1
-    LOGICAL IsPinView: 0
-    VIEW IDS: [0, -2147352572]
-    VIEW 0
-        PIN OBJECT SetId OK: True
-        PIN OBJECT name: 
-        PIN OBJECT IsView: -1
-        PIN OBJECT IsPinView: 0
-        PIN OBJECT physical position: (0, -2147352572, -2147352572, -2147352572)
-        PIN OBJECT schema location: (0, -2147352572, -2147352572, -2147352572, -2147352572, -2147352572)
-        PIN OBJECT symbol name: 
-        SYMBOL OBJECT SetId OK: True
-        SYMBOL OBJECT name: 
-        SYMBOL OBJECT IsPinView: 0
-        SYMBOL OBJECT sheet ID: 204828
-        SYMBOL OBJECT area: [-2147352572.0, -2147352572.0, -2147352572.0, -2147352572.0]
-        SYMBOL OBJECT center: (-2147352572.0, -2147352572.0)
-        RELATIONSHIPS: {'GetDynamicParentId': 0, 'GetDynamicChildrenIds': (0, -2147352572), 'GetMasterIds': (0, -2147352572), 'GetSlaveIds': (0, -2147352572), 'GetStateId': 0, 'GetStateIds': (0, -2147352572), 'GetTargetObjectId': 0, 'GetValidCharacteristics': (0, -2147352572), 'GetPinIds': (0, -2147352572), 'GetDevicePinIds': (0, -2147352572), 'GetGateId': 0, 'GetGroupId': 0, 'GetBoundIds': (0, -2147352572)}
-    VIEW -2147352572
-        PIN OBJECT SetId OK: True
-        PIN OBJECT name: 
-        PIN OBJECT IsView: -1
-        PIN OBJECT IsPinView: 0
-        PIN OBJECT physical position: (0, -2147352572, -2147352572, -2147352572)
-        PIN OBJECT schema location: (0, -2147352572, -2147352572, -2147352572, -2147352572, -2147352572)
-        PIN OBJECT symbol name: 
-        SYMBOL OBJECT SetId OK: True
-        SYMBOL OBJECT name: 
-        SYMBOL OBJECT IsPinView: 0
-        SYMBOL OBJECT sheet ID: 204828
-        SYMBOL OBJECT area: [-2147352572.0, -2147352572.0, -2147352572.0, -2147352572.0]
-        SYMBOL OBJECT center: (-2147352572.0, -2147352572.0)
-        RELATIONSHIPS: {'GetDynamicParentId': 0, 'GetDynamicChildrenIds': (0, -2147352572), 'GetMasterIds': (0, -2147352572), 'GetSlaveIds': (0, -2147352572), 'GetStateId': 0, 'GetStateIds': (0, -2147352572), 'GetTargetObjectId': 0, 'GetValidCharacteristics': (0, -2147352572), 'GetPinIds': (0, -2147352572), 'GetDevicePinIds': (0, -2147352572), 'GetGateId': 0, 'GetGroupId': 0, 'GetBoundIds': (0, -2147352572)}
-
-POSITION ORDER LOW Y -> HIGH Y
-    PIN  | VIEW 0 | X -2147352572.0 | Y -2147352572.0
-    PIN  | VIEW -2147352572 | X -2147352572.0 | Y -2147352572.0
-    PIN  | VIEW 0 | X -2147352572.0 | Y -2147352572.0
-    PIN  | VIEW -2147352572 | X -2147352572.0 | Y -2147352572.0
-
-POSITION ORDER HIGH Y -> LOW Y
-    PIN  | VIEW 0 | X -2147352572.0 | Y -2147352572.0
-    PIN  | VIEW -2147352572 | X -2147352572.0 | Y -2147352572.0
-    PIN  | VIEW 0 | X -2147352572.0 | Y -2147352572.0
-    PIN  | VIEW -2147352572 | X -2147352572.0 | Y -2147352572.0
-
-Manually move the current TOP pin off the line in E3.
-Return here afterward.
-
-====================================================================================================
-AFTER MANUAL TOP MOVE
-====================================================================================================
-CONNECTOR NAME: SCP-J1
-CONNECTOR DEVICE ID: 64611
-LOGICAL PIN COUNT: 2
-
-PIN 
-    LOGICAL ID: 9
-    LOGICAL IsView: -1
-    LOGICAL IsPinView: 0
-    VIEW IDS: [0, -2147352572]
-    VIEW 0
-        PIN OBJECT SetId OK: True
-        PIN OBJECT name: 
-        PIN OBJECT IsView: -1
-        PIN OBJECT IsPinView: 0
-        PIN OBJECT physical position: (0, -2147352572, -2147352572, -2147352572)
-        PIN OBJECT schema location: (0, -2147352572, -2147352572, -2147352572, -2147352572, -2147352572)
-        PIN OBJECT symbol name: 
-        SYMBOL OBJECT SetId OK: True
-        SYMBOL OBJECT name: 
-        SYMBOL OBJECT IsPinView: 0
-        SYMBOL OBJECT sheet ID: 204828
-        SYMBOL OBJECT area: [-2147352572.0, -2147352572.0, -2147352572.0, -2147352572.0]
-        SYMBOL OBJECT center: (-2147352572.0, -2147352572.0)
-        RELATIONSHIPS: {'GetDynamicParentId': 0, 'GetDynamicChildrenIds': (0, -2147352572), 'GetMasterIds': (0, -2147352572), 'GetSlaveIds': (0, -2147352572), 'GetStateId': 0, 'GetStateIds': (0, -2147352572), 'GetTargetObjectId': 0, 'GetValidCharacteristics': (0, -2147352572), 'GetPinIds': (0, -2147352572), 'GetDevicePinIds': (0, -2147352572), 'GetGateId': 0, 'GetGroupId': 0, 'GetBoundIds': (0, -2147352572)}
-    VIEW -2147352572
-        PIN OBJECT SetId OK: True
-        PIN OBJECT name: 
-        PIN OBJECT IsView: -1
-        PIN OBJECT IsPinView: 0
-        PIN OBJECT physical position: (0, -2147352572, -2147352572, -2147352572)
-        PIN OBJECT schema location: (0, -2147352572, -2147352572, -2147352572, -2147352572, -2147352572)
-        PIN OBJECT symbol name: 
-        SYMBOL OBJECT SetId OK: True
-        SYMBOL OBJECT name: 
-        SYMBOL OBJECT IsPinView: 0
-        SYMBOL OBJECT sheet ID: 204828
-        SYMBOL OBJECT area: [-2147352572.0, -2147352572.0, -2147352572.0, -2147352572.0]
-        SYMBOL OBJECT center: (-2147352572.0, -2147352572.0)
-        RELATIONSHIPS: {'GetDynamicParentId': 0, 'GetDynamicChildrenIds': (0, -2147352572), 'GetMasterIds': (0, -2147352572), 'GetSlaveIds': (0, -2147352572), 'GetStateId': 0, 'GetStateIds': (0, -2147352572), 'GetTargetObjectId': 0, 'GetValidCharacteristics': (0, -2147352572), 'GetPinIds': (0, -2147352572), 'GetDevicePinIds': (0, -2147352572), 'GetGateId': 0, 'GetGroupId': 0, 'GetBoundIds': (0, -2147352572)}
-
-PIN 
-    LOGICAL ID: -2147352572
-    LOGICAL IsView: -1
-    LOGICAL IsPinView: 0
-    VIEW IDS: [0, -2147352572]
-    VIEW 0
-        PIN OBJECT SetId OK: True
-        PIN OBJECT name: 
-        PIN OBJECT IsView: -1
-        PIN OBJECT IsPinView: 0
-        PIN OBJECT physical position: (0, -2147352572, -2147352572, -2147352572)
-        PIN OBJECT schema location: (0, -2147352572, -2147352572, -2147352572, -2147352572, -2147352572)
-        PIN OBJECT symbol name: 
-        SYMBOL OBJECT SetId OK: True
-        SYMBOL OBJECT name: 
-        SYMBOL OBJECT IsPinView: 0
-        SYMBOL OBJECT sheet ID: 204828
-        SYMBOL OBJECT area: [-2147352572.0, -2147352572.0, -2147352572.0, -2147352572.0]
-        SYMBOL OBJECT center: (-2147352572.0, -2147352572.0)
-        RELATIONSHIPS: {'GetDynamicParentId': 0, 'GetDynamicChildrenIds': (0, -2147352572), 'GetMasterIds': (0, -2147352572), 'GetSlaveIds': (0, -2147352572), 'GetStateId': 0, 'GetStateIds': (0, -2147352572), 'GetTargetObjectId': 0, 'GetValidCharacteristics': (0, -2147352572), 'GetPinIds': (0, -2147352572), 'GetDevicePinIds': (0, -2147352572), 'GetGateId': 0, 'GetGroupId': 0, 'GetBoundIds': (0, -2147352572)}
-    VIEW -2147352572
-        PIN OBJECT SetId OK: True
-        PIN OBJECT name: 
-        PIN OBJECT IsView: -1
-        PIN OBJECT IsPinView: 0
-        PIN OBJECT physical position: (0, -2147352572, -2147352572, -2147352572)
-        PIN OBJECT schema location: (0, -2147352572, -2147352572, -2147352572, -2147352572, -2147352572)
-        PIN OBJECT symbol name: 
-        SYMBOL OBJECT SetId OK: True
-        SYMBOL OBJECT name: 
-        SYMBOL OBJECT IsPinView: 0
-        SYMBOL OBJECT sheet ID: 204828
-        SYMBOL OBJECT area: [-2147352572.0, -2147352572.0, -2147352572.0, -2147352572.0]
-        SYMBOL OBJECT center: (-2147352572.0, -2147352572.0)
-        RELATIONSHIPS: {'GetDynamicParentId': 0, 'GetDynamicChildrenIds': (0, -2147352572), 'GetMasterIds': (0, -2147352572), 'GetSlaveIds': (0, -2147352572), 'GetStateId': 0, 'GetStateIds': (0, -2147352572), 'GetTargetObjectId': 0, 'GetValidCharacteristics': (0, -2147352572), 'GetPinIds': (0, -2147352572), 'GetDevicePinIds': (0, -2147352572), 'GetGateId': 0, 'GetGroupId': 0, 'GetBoundIds': (0, -2147352572)}
-
-POSITION ORDER LOW Y -> HIGH Y
-    PIN  | VIEW 0 | X -2147352572.0 | Y -2147352572.0
-    PIN  | VIEW -2147352572 | X -2147352572.0 | Y -2147352572.0
-    PIN  | VIEW 0 | X -2147352572.0 | Y -2147352572.0
-    PIN  | VIEW -2147352572 | X -2147352572.0 | Y -2147352572.0
-
-POSITION ORDER HIGH Y -> LOW Y
-    PIN  | VIEW 0 | X -2147352572.0 | Y -2147352572.0
-    PIN  | VIEW -2147352572 | X -2147352572.0 | Y -2147352572.0
-    PIN  | VIEW 0 | X -2147352572.0 | Y -2147352572.0
-    PIN  | VIEW -2147352572 | X -2147352572.0 | Y -2147352572.0
-
-====================================================================================================
-WHAT THE MANUAL TOP MOVE CHANGED
-====================================================================================================
-NO DIFFERENCES DETECTED
-
-NEW TOP CANDIDATE AFTER MANUAL MOVE: {'pin_name': '', 'logical_pin_id': 9, 'view_id': 0, 'sheet_id': 204828, 'center_x': -2147352572.0, 'center_y': -2147352572.0}
-NEXT SCRIPT TEST WILL TRY PIN 
-VIEW ID: 0
-TARGET: (5.5, 30.0)
-
-====================================================================================================
-CONTROLLED e3Symbol.Place TEST
-====================================================================================================
-
-====================================================================================================
-PRE-PLACE SNAPSHOT
-====================================================================================================
-CONNECTOR NAME: SCP-J1
-CONNECTOR DEVICE ID: 64611
-LOGICAL PIN COUNT: 2
-
-PIN 
-    LOGICAL ID: 9
-    LOGICAL IsView: -1
-    LOGICAL IsPinView: 0
-    VIEW IDS: [0, -2147352572]
-    VIEW 0
-        PIN OBJECT SetId OK: True
-        PIN OBJECT name: 
-        PIN OBJECT IsView: -1
-        PIN OBJECT IsPinView: 0
-        PIN OBJECT physical position: (0, -2147352572, -2147352572, -2147352572)
-        PIN OBJECT schema location: (0, -2147352572, -2147352572, -2147352572, -2147352572, -2147352572)
-        PIN OBJECT symbol name: 
-        SYMBOL OBJECT SetId OK: True
-        SYMBOL OBJECT name: 
-        SYMBOL OBJECT IsPinView: 0
-        SYMBOL OBJECT sheet ID: 204828
-        SYMBOL OBJECT area: [-2147352572.0, -2147352572.0, -2147352572.0, -2147352572.0]
-        SYMBOL OBJECT center: (-2147352572.0, -2147352572.0)
-        RELATIONSHIPS: {'GetDynamicParentId': 0, 'GetDynamicChildrenIds': (0, -2147352572), 'GetMasterIds': (0, -2147352572), 'GetSlaveIds': (0, -2147352572), 'GetStateId': 0, 'GetStateIds': (0, -2147352572), 'GetTargetObjectId': 0, 'GetValidCharacteristics': (0, -2147352572), 'GetPinIds': (0, -2147352572), 'GetDevicePinIds': (0, -2147352572), 'GetGateId': 0, 'GetGroupId': 0, 'GetBoundIds': (0, -2147352572)}
-    VIEW -2147352572
-        PIN OBJECT SetId OK: True
-        PIN OBJECT name: 
-        PIN OBJECT IsView: -1
-        PIN OBJECT IsPinView: 0
-        PIN OBJECT physical position: (0, -2147352572, -2147352572, -2147352572)
-        PIN OBJECT schema location: (0, -2147352572, -2147352572, -2147352572, -2147352572, -2147352572)
-        PIN OBJECT symbol name: 
-        SYMBOL OBJECT SetId OK: True
-        SYMBOL OBJECT name: 
-        SYMBOL OBJECT IsPinView: 0
-        SYMBOL OBJECT sheet ID: 204828
-        SYMBOL OBJECT area: [-2147352572.0, -2147352572.0, -2147352572.0, -2147352572.0]
-        SYMBOL OBJECT center: (-2147352572.0, -2147352572.0)
-        RELATIONSHIPS: {'GetDynamicParentId': 0, 'GetDynamicChildrenIds': (0, -2147352572), 'GetMasterIds': (0, -2147352572), 'GetSlaveIds': (0, -2147352572), 'GetStateId': 0, 'GetStateIds': (0, -2147352572), 'GetTargetObjectId': 0, 'GetValidCharacteristics': (0, -2147352572), 'GetPinIds': (0, -2147352572), 'GetDevicePinIds': (0, -2147352572), 'GetGateId': 0, 'GetGroupId': 0, 'GetBoundIds': (0, -2147352572)}
-
-PIN 
-    LOGICAL ID: -2147352572
-    LOGICAL IsView: -1
-    LOGICAL IsPinView: 0
-    VIEW IDS: [0, -2147352572]
-    VIEW 0
-        PIN OBJECT SetId OK: True
-        PIN OBJECT name: 
-        PIN OBJECT IsView: -1
-        PIN OBJECT IsPinView: 0
-        PIN OBJECT physical position: (0, -2147352572, -2147352572, -2147352572)
-        PIN OBJECT schema location: (0, -2147352572, -2147352572, -2147352572, -2147352572, -2147352572)
-        PIN OBJECT symbol name: 
-        SYMBOL OBJECT SetId OK: True
-        SYMBOL OBJECT name: 
-        SYMBOL OBJECT IsPinView: 0
-        SYMBOL OBJECT sheet ID: 204828
-        SYMBOL OBJECT area: [-2147352572.0, -2147352572.0, -2147352572.0, -2147352572.0]
-        SYMBOL OBJECT center: (-2147352572.0, -2147352572.0)
-        RELATIONSHIPS: {'GetDynamicParentId': 0, 'GetDynamicChildrenIds': (0, -2147352572), 'GetMasterIds': (0, -2147352572), 'GetSlaveIds': (0, -2147352572), 'GetStateId': 0, 'GetStateIds': (0, -2147352572), 'GetTargetObjectId': 0, 'GetValidCharacteristics': (0, -2147352572), 'GetPinIds': (0, -2147352572), 'GetDevicePinIds': (0, -2147352572), 'GetGateId': 0, 'GetGroupId': 0, 'GetBoundIds': (0, -2147352572)}
-    VIEW -2147352572
-        PIN OBJECT SetId OK: True
-        PIN OBJECT name: 
-        PIN OBJECT IsView: -1
-        PIN OBJECT IsPinView: 0
-        PIN OBJECT physical position: (0, -2147352572, -2147352572, -2147352572)
-        PIN OBJECT schema location: (0, -2147352572, -2147352572, -2147352572, -2147352572, -2147352572)
-        PIN OBJECT symbol name: 
-        SYMBOL OBJECT SetId OK: True
-        SYMBOL OBJECT name: 
-        SYMBOL OBJECT IsPinView: 0
-        SYMBOL OBJECT sheet ID: 204828
-        SYMBOL OBJECT area: [-2147352572.0, -2147352572.0, -2147352572.0, -2147352572.0]
-        SYMBOL OBJECT center: (-2147352572.0, -2147352572.0)
-        RELATIONSHIPS: {'GetDynamicParentId': 0, 'GetDynamicChildrenIds': (0, -2147352572), 'GetMasterIds': (0, -2147352572), 'GetSlaveIds': (0, -2147352572), 'GetStateId': 0, 'GetStateIds': (0, -2147352572), 'GetTargetObjectId': 0, 'GetValidCharacteristics': (0, -2147352572), 'GetPinIds': (0, -2147352572), 'GetDevicePinIds': (0, -2147352572), 'GetGateId': 0, 'GetGroupId': 0, 'GetBoundIds': (0, -2147352572)}
-
-POSITION ORDER LOW Y -> HIGH Y
-    PIN  | VIEW 0 | X -2147352572.0 | Y -2147352572.0
-    PIN  | VIEW -2147352572 | X -2147352572.0 | Y -2147352572.0
-    PIN  | VIEW 0 | X -2147352572.0 | Y -2147352572.0
-    PIN  | VIEW -2147352572 | X -2147352572.0 | Y -2147352572.0
-
-POSITION ORDER HIGH Y -> LOW Y
-    PIN  | VIEW 0 | X -2147352572.0 | Y -2147352572.0
-    PIN  | VIEW -2147352572 | X -2147352572.0 | Y -2147352572.0
-    PIN  | VIEW 0 | X -2147352572.0 | Y -2147352572.0
-    PIN  | VIEW -2147352572 | X -2147352572.0 | Y -2147352572.0
-PIN: 
-VIEW ID: 0
-SHEET ID: 204828
-CURRENT CENTER: (-2147352572.0, -2147352572.0)
-TARGET: (5.5, 30.25)
-Place RETURN: 0
-Place ELAPSED: 0.001529 sec
-
-====================================================================================================
-e3Symbol.Place PIN  AT +0.000 SEC
-====================================================================================================
-NO DIFFERENCES DETECTED
-
-====================================================================================================
-e3Symbol.Place PIN  AT +0.050 SEC
-====================================================================================================
-NO DIFFERENCES DETECTED
-
-====================================================================================================
-e3Symbol.Place PIN  AT +0.250 SEC
-====================================================================================================
-NO DIFFERENCES DETECTED
-
-====================================================================================================
-e3Symbol.Place PIN  AT +1.000 SEC
-====================================================================================================
-NO DIFFERENCES DETECTED
-
-====================================================================================================
-TEST MENU
-====================================================================================================
-1  - Full connector snapshot
-2  - Compare before/after ONE manual pin move
-3  - Manual TOP move, then script test the new top
-4  - Manual BOTTOM move, then script test the new bottom
-5  - Controlled e3Symbol.Place test on a selected pin
-6  - Audit PlacePinView signature only
-7  - Audit PlacePins signature only
-8  - EXPERIMENTAL PlacePinView candidate calls
-9  - Repeated script move test
-10 - Raw relationship call audit for one pin view
-11 - Re-run all key COM method signatures
-q  - Save and quit
-
-====================================================================================================
-FULL CONNECTOR SNAPSHOT
-====================================================================================================
-CONNECTOR NAME: SCP-J1
-CONNECTOR DEVICE ID: 64611
-LOGICAL PIN COUNT: 2
-
-PIN 
-    LOGICAL ID: 9
-    LOGICAL IsView: -1
-    LOGICAL IsPinView: 0
-    VIEW IDS: [0, -2147352572]
-    VIEW 0
-        PIN OBJECT SetId OK: True
-        PIN OBJECT name: 
-        PIN OBJECT IsView: -1
-        PIN OBJECT IsPinView: 0
-        PIN OBJECT physical position: (0, -2147352572, -2147352572, -2147352572)
-        PIN OBJECT schema location: (0, -2147352572, -2147352572, -2147352572, -2147352572, -2147352572)
-        PIN OBJECT symbol name: 
-        SYMBOL OBJECT SetId OK: True
-        SYMBOL OBJECT name: 
-        SYMBOL OBJECT IsPinView: 0
-        SYMBOL OBJECT sheet ID: 204828
-        SYMBOL OBJECT area: [-2147352572.0, -2147352572.0, -2147352572.0, -2147352572.0]
-        SYMBOL OBJECT center: (-2147352572.0, -2147352572.0)
-        RELATIONSHIPS: {'GetDynamicParentId': 0, 'GetDynamicChildrenIds': (0, -2147352572), 'GetMasterIds': (0, -2147352572), 'GetSlaveIds': (0, -2147352572), 'GetStateId': 0, 'GetStateIds': (0, -2147352572), 'GetTargetObjectId': 0, 'GetValidCharacteristics': (0, -2147352572), 'GetPinIds': (0, -2147352572), 'GetDevicePinIds': (0, -2147352572), 'GetGateId': 0, 'GetGroupId': 0, 'GetBoundIds': (0, -2147352572)}
-    VIEW -2147352572
-        PIN OBJECT SetId OK: True
-        PIN OBJECT name: 
-        PIN OBJECT IsView: -1
-        PIN OBJECT IsPinView: 0
-        PIN OBJECT physical position: (0, -2147352572, -2147352572, -2147352572)
-        PIN OBJECT schema location: (0, -2147352572, -2147352572, -2147352572, -2147352572, -2147352572)
-        PIN OBJECT symbol name: 
-        SYMBOL OBJECT SetId OK: True
-        SYMBOL OBJECT name: 
-        SYMBOL OBJECT IsPinView: 0
-        SYMBOL OBJECT sheet ID: 204828
-        SYMBOL OBJECT area: [-2147352572.0, -2147352572.0, -2147352572.0, -2147352572.0]
-        SYMBOL OBJECT center: (-2147352572.0, -2147352572.0)
-        RELATIONSHIPS: {'GetDynamicParentId': 0, 'GetDynamicChildrenIds': (0, -2147352572), 'GetMasterIds': (0, -2147352572), 'GetSlaveIds': (0, -2147352572), 'GetStateId': 0, 'GetStateIds': (0, -2147352572), 'GetTargetObjectId': 0, 'GetValidCharacteristics': (0, -2147352572), 'GetPinIds': (0, -2147352572), 'GetDevicePinIds': (0, -2147352572), 'GetGateId': 0, 'GetGroupId': 0, 'GetBoundIds': (0, -2147352572)}
-
-PIN 
-    LOGICAL ID: -2147352572
-    LOGICAL IsView: -1
-    LOGICAL IsPinView: 0
-    VIEW IDS: [0, -2147352572]
-    VIEW 0
-        PIN OBJECT SetId OK: True
-        PIN OBJECT name: 
-        PIN OBJECT IsView: -1
-        PIN OBJECT IsPinView: 0
-        PIN OBJECT physical position: (0, -2147352572, -2147352572, -2147352572)
-        PIN OBJECT schema location: (0, -2147352572, -2147352572, -2147352572, -2147352572, -2147352572)
-        PIN OBJECT symbol name: 
-        SYMBOL OBJECT SetId OK: True
-        SYMBOL OBJECT name: 
-        SYMBOL OBJECT IsPinView: 0
-        SYMBOL OBJECT sheet ID: 204828
-        SYMBOL OBJECT area: [-2147352572.0, -2147352572.0, -2147352572.0, -2147352572.0]
-        SYMBOL OBJECT center: (-2147352572.0, -2147352572.0)
-        RELATIONSHIPS: {'GetDynamicParentId': 0, 'GetDynamicChildrenIds': (0, -2147352572), 'GetMasterIds': (0, -2147352572), 'GetSlaveIds': (0, -2147352572), 'GetStateId': 0, 'GetStateIds': (0, -2147352572), 'GetTargetObjectId': 0, 'GetValidCharacteristics': (0, -2147352572), 'GetPinIds': (0, -2147352572), 'GetDevicePinIds': (0, -2147352572), 'GetGateId': 0, 'GetGroupId': 0, 'GetBoundIds': (0, -2147352572)}
-    VIEW -2147352572
-        PIN OBJECT SetId OK: True
-        PIN OBJECT name: 
-        PIN OBJECT IsView: -1
-        PIN OBJECT IsPinView: 0
-        PIN OBJECT physical position: (0, -2147352572, -2147352572, -2147352572)
-        PIN OBJECT schema location: (0, -2147352572, -2147352572, -2147352572, -2147352572, -2147352572)
-        PIN OBJECT symbol name: 
-        SYMBOL OBJECT SetId OK: True
-        SYMBOL OBJECT name: 
-        SYMBOL OBJECT IsPinView: 0
-        SYMBOL OBJECT sheet ID: 204828
-        SYMBOL OBJECT area: [-2147352572.0, -2147352572.0, -2147352572.0, -2147352572.0]
-        SYMBOL OBJECT center: (-2147352572.0, -2147352572.0)
-        RELATIONSHIPS: {'GetDynamicParentId': 0, 'GetDynamicChildrenIds': (0, -2147352572), 'GetMasterIds': (0, -2147352572), 'GetSlaveIds': (0, -2147352572), 'GetStateId': 0, 'GetStateIds': (0, -2147352572), 'GetTargetObjectId': 0, 'GetValidCharacteristics': (0, -2147352572), 'GetPinIds': (0, -2147352572), 'GetDevicePinIds': (0, -2147352572), 'GetGateId': 0, 'GetGroupId': 0, 'GetBoundIds': (0, -2147352572)}
-
-POSITION ORDER LOW Y -> HIGH Y
-    PIN  | VIEW 0 | X -2147352572.0 | Y -2147352572.0
-    PIN  | VIEW -2147352572 | X -2147352572.0 | Y -2147352572.0
-    PIN  | VIEW 0 | X -2147352572.0 | Y -2147352572.0
-    PIN  | VIEW -2147352572 | X -2147352572.0 | Y -2147352572.0
-
-POSITION ORDER HIGH Y -> LOW Y
-    PIN  | VIEW 0 | X -2147352572.0 | Y -2147352572.0
-    PIN  | VIEW -2147352572 | X -2147352572.0 | Y -2147352572.0
-    PIN  | VIEW 0 | X -2147352572.0 | Y -2147352572.0
-    PIN  | VIEW -2147352572 | X -2147352572.0 | Y -2147352572.0
-
-====================================================================================================
-TEST MENU
-====================================================================================================
-1  - Full connector snapshot
-2  - Compare before/after ONE manual pin move
-3  - Manual TOP move, then script test the new top
-4  - Manual BOTTOM move, then script test the new bottom
-5  - Controlled e3Symbol.Place test on a selected pin
-6  - Audit PlacePinView signature only
-7  - Audit PlacePins signature only
-8  - EXPERIMENTAL PlacePinView candidate calls
-9  - Repeated script move test
-10 - Raw relationship call audit for one pin view
-11 - Re-run all key COM method signatures
-q  - Save and quit
-
-====================================================================================================
-CONTROLLED e3Symbol.Place TEST
-====================================================================================================
-
-====================================================================================================
-PRE-PLACE SNAPSHOT
-====================================================================================================
-CONNECTOR NAME: SCP-J1
-CONNECTOR DEVICE ID: 64611
-LOGICAL PIN COUNT: 2
-
-PIN 
-    LOGICAL ID: 9
-    LOGICAL IsView: -1
-    LOGICAL IsPinView: 0
-    VIEW IDS: [0, -2147352572]
-    VIEW 0
-        PIN OBJECT SetId OK: True
-        PIN OBJECT name: 
-        PIN OBJECT IsView: -1
-        PIN OBJECT IsPinView: 0
-        PIN OBJECT physical position: (0, -2147352572, -2147352572, -2147352572)
-        PIN OBJECT schema location: (0, -2147352572, -2147352572, -2147352572, -2147352572, -2147352572)
-        PIN OBJECT symbol name: 
-        SYMBOL OBJECT SetId OK: True
-        SYMBOL OBJECT name: 
-        SYMBOL OBJECT IsPinView: 0
-        SYMBOL OBJECT sheet ID: 204828
-        SYMBOL OBJECT area: [-2147352572.0, -2147352572.0, -2147352572.0, -2147352572.0]
-        SYMBOL OBJECT center: (-2147352572.0, -2147352572.0)
-        RELATIONSHIPS: {'GetDynamicParentId': 0, 'GetDynamicChildrenIds': (0, -2147352572), 'GetMasterIds': (0, -2147352572), 'GetSlaveIds': (0, -2147352572), 'GetStateId': 0, 'GetStateIds': (0, -2147352572), 'GetTargetObjectId': 0, 'GetValidCharacteristics': (0, -2147352572), 'GetPinIds': (0, -2147352572), 'GetDevicePinIds': (0, -2147352572), 'GetGateId': 0, 'GetGroupId': 0, 'GetBoundIds': (0, -2147352572)}
-    VIEW -2147352572
-        PIN OBJECT SetId OK: True
-        PIN OBJECT name: 
-        PIN OBJECT IsView: -1
-        PIN OBJECT IsPinView: 0
-        PIN OBJECT physical position: (0, -2147352572, -2147352572, -2147352572)
-        PIN OBJECT schema location: (0, -2147352572, -2147352572, -2147352572, -2147352572, -2147352572)
-        PIN OBJECT symbol name: 
-        SYMBOL OBJECT SetId OK: True
-        SYMBOL OBJECT name: 
-        SYMBOL OBJECT IsPinView: 0
-        SYMBOL OBJECT sheet ID: 204828
-        SYMBOL OBJECT area: [-2147352572.0, -2147352572.0, -2147352572.0, -2147352572.0]
-        SYMBOL OBJECT center: (-2147352572.0, -2147352572.0)
-        RELATIONSHIPS: {'GetDynamicParentId': 0, 'GetDynamicChildrenIds': (0, -2147352572), 'GetMasterIds': (0, -2147352572), 'GetSlaveIds': (0, -2147352572), 'GetStateId': 0, 'GetStateIds': (0, -2147352572), 'GetTargetObjectId': 0, 'GetValidCharacteristics': (0, -2147352572), 'GetPinIds': (0, -2147352572), 'GetDevicePinIds': (0, -2147352572), 'GetGateId': 0, 'GetGroupId': 0, 'GetBoundIds': (0, -2147352572)}
-
-PIN 
-    LOGICAL ID: -2147352572
-    LOGICAL IsView: -1
-    LOGICAL IsPinView: 0
-    VIEW IDS: [0, -2147352572]
-    VIEW 0
-        PIN OBJECT SetId OK: True
-        PIN OBJECT name: 
-        PIN OBJECT IsView: -1
-        PIN OBJECT IsPinView: 0
-        PIN OBJECT physical position: (0, -2147352572, -2147352572, -2147352572)
-        PIN OBJECT schema location: (0, -2147352572, -2147352572, -2147352572, -2147352572, -2147352572)
-        PIN OBJECT symbol name: 
-        SYMBOL OBJECT SetId OK: True
-        SYMBOL OBJECT name: 
-        SYMBOL OBJECT IsPinView: 0
-        SYMBOL OBJECT sheet ID: 204828
-        SYMBOL OBJECT area: [-2147352572.0, -2147352572.0, -2147352572.0, -2147352572.0]
-        SYMBOL OBJECT center: (-2147352572.0, -2147352572.0)
-        RELATIONSHIPS: {'GetDynamicParentId': 0, 'GetDynamicChildrenIds': (0, -2147352572), 'GetMasterIds': (0, -2147352572), 'GetSlaveIds': (0, -2147352572), 'GetStateId': 0, 'GetStateIds': (0, -2147352572), 'GetTargetObjectId': 0, 'GetValidCharacteristics': (0, -2147352572), 'GetPinIds': (0, -2147352572), 'GetDevicePinIds': (0, -2147352572), 'GetGateId': 0, 'GetGroupId': 0, 'GetBoundIds': (0, -2147352572)}
-    VIEW -2147352572
-        PIN OBJECT SetId OK: True
-        PIN OBJECT name: 
-        PIN OBJECT IsView: -1
-        PIN OBJECT IsPinView: 0
-        PIN OBJECT physical position: (0, -2147352572, -2147352572, -2147352572)
-        PIN OBJECT schema location: (0, -2147352572, -2147352572, -2147352572, -2147352572, -2147352572)
-        PIN OBJECT symbol name: 
-        SYMBOL OBJECT SetId OK: True
-        SYMBOL OBJECT name: 
-        SYMBOL OBJECT IsPinView: 0
-        SYMBOL OBJECT sheet ID: 204828
-        SYMBOL OBJECT area: [-2147352572.0, -2147352572.0, -2147352572.0, -2147352572.0]
-        SYMBOL OBJECT center: (-2147352572.0, -2147352572.0)
-        RELATIONSHIPS: {'GetDynamicParentId': 0, 'GetDynamicChildrenIds': (0, -2147352572), 'GetMasterIds': (0, -2147352572), 'GetSlaveIds': (0, -2147352572), 'GetStateId': 0, 'GetStateIds': (0, -2147352572), 'GetTargetObjectId': 0, 'GetValidCharacteristics': (0, -2147352572), 'GetPinIds': (0, -2147352572), 'GetDevicePinIds': (0, -2147352572), 'GetGateId': 0, 'GetGroupId': 0, 'GetBoundIds': (0, -2147352572)}
-
-POSITION ORDER LOW Y -> HIGH Y
-    PIN  | VIEW 0 | X -2147352572.0 | Y -2147352572.0
-    PIN  | VIEW -2147352572 | X -2147352572.0 | Y -2147352572.0
-    PIN  | VIEW 0 | X -2147352572.0 | Y -2147352572.0
-    PIN  | VIEW -2147352572 | X -2147352572.0 | Y -2147352572.0
-
-POSITION ORDER HIGH Y -> LOW Y
-    PIN  | VIEW 0 | X -2147352572.0 | Y -2147352572.0
-    PIN  | VIEW -2147352572 | X -2147352572.0 | Y -2147352572.0
-    PIN  | VIEW 0 | X -2147352572.0 | Y -2147352572.0
-    PIN  | VIEW -2147352572 | X -2147352572.0 | Y -2147352572.0
-PIN 1 NOT FOUND
-
-====================================================================================================
-TEST MENU
-====================================================================================================
-1  - Full connector snapshot
-2  - Compare before/after ONE manual pin move
-3  - Manual TOP move, then script test the new top
-4  - Manual BOTTOM move, then script test the new bottom
-5  - Controlled e3Symbol.Place test on a selected pin
-6  - Audit PlacePinView signature only
-7  - Audit PlacePins signature only
-8  - EXPERIMENTAL PlacePinView candidate calls
-9  - Repeated script move test
-10 - Raw relationship call audit for one pin view
-11 - Re-run all key COM method signatures
-q  - Save and quit
-USER REQUESTED QUIT
+OBSERVATION_DELAYS = [0.0, 0.05, 0.25, 1.0]
+
+OUTPUT_DIRECTORY = Path(__file__).resolve().parent
+
+COM_MISSING = -2147352572
+
+
+# ============================================================
+# GLOBAL LOGGING
+# ============================================================
+
+LOG_LINES = []
+
+AUDIT_DATA = {
+    "started": None,
+    "finished": None,
+    "connector_name": CONNECTOR_NAME,
+    "fixed_x": FIXED_X,
+    "y_min": Y_MIN,
+    "y_max": Y_MAX,
+    "y_step": Y_STEP,
+    "events": [],
+}
+
+
+def log(message=""):
+
+    text = str(message)
+
+    print(text)
+
+    LOG_LINES.append(text)
+
+
+def section(title):
+
+    log()
+    log("=" * 100)
+    log(title)
+    log("=" * 100)
+
+
+def subsection(title):
+
+    log()
+    log("-" * 100)
+    log(title)
+    log("-" * 100)
+
+
+def add_event(event_type, data):
+
+    AUDIT_DATA["events"].append({
+        "time": datetime.now().isoformat(timespec="milliseconds"),
+        "type": event_type,
+        "data": data,
+    })
+
+
+# ============================================================
+# BASIC HELPERS
+# ============================================================
+
+def safe_string(value):
+
+    try:
+        return str(value)
+    except Exception:
+        return repr(value)
+
+
+def safe_float(value):
+
+    try:
+        return float(value)
+    except Exception:
+        return None
+
+
+def is_missing_value(value):
+
+    if value is None:
+        return True
+
+    try:
+        if int(value) == COM_MISSING:
+            return True
+    except Exception:
+        pass
+
+    return False
+
+
+def clean_id_list(values):
+
+    cleaned = []
+
+    if values is None:
+        return cleaned
+
+    if not isinstance(values, (tuple, list)):
+        values = [values]
+
+    for value in values:
+
+        if is_missing_value(value):
+            continue
+
+        try:
+            value = int(value)
+        except Exception:
+            continue
+
+        if value <= 0:
+            continue
+
+        cleaned.append(value)
+
+    return cleaned
+
+
+def parse_count_array_result(result):
+
+    parsed = {
+        "count": None,
+        "raw_array": None,
+        "values": [],
+    }
+
+    if result is None:
+        return parsed
+
+    if isinstance(result, (tuple, list)):
+
+        items = list(result)
+
+        if len(items) >= 2 and isinstance(items[1], (tuple, list)):
+
+            try:
+                parsed["count"] = int(items[0])
+            except Exception:
+                parsed["count"] = None
+
+            parsed["raw_array"] = items[1]
+            parsed["values"] = clean_id_list(items[1])
+
+            if parsed["count"] is not None and len(parsed["values"]) > parsed["count"]:
+                parsed["values"] = parsed["values"][-parsed["count"]:]
+
+            return parsed
+
+        if len(items) == 2 and is_missing_value(items[1]):
+
+            try:
+                parsed["count"] = int(items[0])
+            except Exception:
+                parsed["count"] = None
+
+            return parsed
+
+        parsed["raw_array"] = items
+        parsed["values"] = clean_id_list(items)
+
+        return parsed
+
+    parsed["raw_array"] = result
+    parsed["values"] = clean_id_list(result)
+
+    return parsed
+
+
+def parse_numeric_outputs(result, minimum_outputs=1):
+
+    if result is None:
+        return []
+
+    if not isinstance(result, (tuple, list)):
+        result = [result]
+
+    numeric = []
+
+    for value in result:
+
+        if is_missing_value(value):
+            continue
+
+        converted = safe_float(value)
+
+        if converted is not None:
+            numeric.append(converted)
+
+    if len(numeric) < minimum_outputs:
+        return []
+
+    return numeric
+
+
+def values_close(first, second, tolerance=0.0001):
+
+    if first is None or second is None:
+        return False
+
+    try:
+        return abs(float(first) - float(second)) <= tolerance
+    except Exception:
+        return False
+
+
+# ============================================================
+# E3 CONNECTION
+# ============================================================
+
+def connect_to_e3():
+
+    section("CONNECTING TO E3")
+
+    pythoncom.CoInitialize()
+
+    app = win32com.client.Dispatch("CT.Application")
+
+    prj = app.CreateJobObject()
+    dev = prj.CreateDeviceObject()
+    pin = prj.CreatePinObject()
+    sym = prj.CreateSymbolObject()
+
+    log(f"APPLICATION: {app}")
+    log(f"PROJECT / JOB: {prj}")
+    log("DEVICE OBJECT CREATED")
+    log("PIN OBJECT CREATED")
+    log("SYMBOL OBJECT CREATED")
+
+    return app, prj, dev, pin, sym
+
+
+# ============================================================
+# CORRECT E3 ARRAY GETTER
+# ============================================================
+
+def call_e3_id_array(method, method_name):
+
+    attempts = []
+
+    try:
+
+        result = method(None)
+
+        parsed = parse_count_array_result(result)
+
+        attempts.append({
+            "call": f"{method_name}(None)",
+            "raw": safe_string(result),
+            "count": parsed["count"],
+            "values": parsed["values"],
+        })
+
+        if parsed["values"]:
+
+            return parsed["values"], attempts
+
+    except Exception as exc:
+
+        attempts.append({
+            "call": f"{method_name}(None)",
+            "error": safe_string(exc),
+        })
+
+    try:
+
+        result = method()
+
+        parsed = parse_count_array_result(result)
+
+        attempts.append({
+            "call": f"{method_name}()",
+            "raw": safe_string(result),
+            "count": parsed["count"],
+            "values": parsed["values"],
+        })
+
+        if parsed["values"]:
+
+            return parsed["values"], attempts
+
+    except Exception as exc:
+
+        attempts.append({
+            "call": f"{method_name}()",
+            "error": safe_string(exc),
+        })
+
+    return [], attempts
+
+
+def print_array_attempts(label, attempts):
+
+    log(f"{label}")
+
+    for attempt in attempts:
+
+        if "error" in attempt:
+            log(f"    {attempt['call']} ERROR: {attempt['error']}")
+        else:
+            log(f"    {attempt['call']} RAW: {attempt['raw']}")
+            log(f"    {attempt['call']} COUNT: {attempt['count']}")
+            log(f"    {attempt['call']} VALUES: {attempt['values']}")
+
+
+# ============================================================
+# DEVICE ENUMERATION
+# ============================================================
+
+def get_all_device_ids(prj):
+
+    ids, attempts = call_e3_id_array(prj.GetAllDeviceIds, "GetAllDeviceIds")
+
+    print_array_attempts("DEVICE ENUMERATION", attempts)
+
+    return ids
+
+
+def get_device_name(dev):
+
+    try:
+        return str(dev.GetName())
+    except Exception:
+        return ""
+
+
+def get_device_identity(dev):
+
+    identity = {}
+
+    getter_names = [
+        "GetName",
+        "GetComponentName",
+        "GetComponentVersion",
+        "GetLocation",
+        "GetAssignment",
+        "GetModelName",
+        "GetFileName",
+        "GetReferenceType",
+    ]
+
+    for getter_name in getter_names:
+
+        if not hasattr(dev, getter_name):
+            continue
+
+        getter = getattr(dev, getter_name)
+
+        try:
+            value = getter()
+        except Exception:
+            continue
+
+        if value is None:
+            continue
+
+        text = safe_string(value).strip()
+
+        if text == "":
+            continue
+
+        identity[getter_name] = text
+
+    return identity
+
+
+def find_connector_device_id(prj, dev):
+
+    section(f"FIND CONNECTOR: {CONNECTOR_NAME}")
+
+    device_ids = get_all_device_ids(prj)
+
+    log(f"DEVICE IDS: {device_ids}")
+
+    exact = []
+
+    for device_id in device_ids:
+
+        try:
+            dev.SetId(device_id)
+        except Exception as exc:
+            log(f"DEVICE {device_id}: SetId FAILED: {exc}")
+            continue
+
+        identity = get_device_identity(dev)
+
+        log()
+        log(f"DEVICE {device_id}: {identity}")
+
+        name = identity.get("GetName", "")
+
+        if name == CONNECTOR_NAME:
+            exact.append(device_id)
+
+    if len(exact) == 1:
+
+        log()
+        log(f"SELECTED CONNECTOR DEVICE ID: {exact[0]}")
+
+        return exact[0]
+
+    if len(exact) > 1:
+        raise RuntimeError(f"Multiple devices named {CONNECTOR_NAME}: {exact}")
+
+    raise RuntimeError(f"Could not find connector {CONNECTOR_NAME}.")
+
+
+# ============================================================
+# CORRECT PIN ENUMERATION
+# ============================================================
+
+def get_device_pin_ids(dev, verbose=False):
+
+    ids, attempts = call_e3_id_array(dev.GetPinIds, "GetPinIds")
+
+    if verbose:
+        print_array_attempts("DEVICE PIN ENUMERATION", attempts)
+
+    return ids
+
+
+def get_pin_view_ids(pin, verbose=False):
+
+    ids, attempts = call_e3_id_array(pin.GetViewIds, "GetViewIds")
+
+    if verbose:
+        print_array_attempts("PIN VIEW ENUMERATION", attempts)
+
+    return ids
+
+
+def get_pin_name(pin):
+
+    try:
+        return safe_string(pin.GetName())
+    except Exception:
+        return ""
+
+
+# ============================================================
+# SYMBOL POSITION / METADATA
+# ============================================================
+
+def get_symbol_sheet_id(sym, prj):
+
+    for method_name in ["GetSheetId", "GetSheetID"]:
+
+        if not hasattr(sym, method_name):
+            continue
+
+        method = getattr(sym, method_name)
+
+        try:
+            value = method()
+
+            if not is_missing_value(value):
+                return int(value)
+        except Exception:
+            pass
+
+    for method_name in ["GetActiveSheetId", "GetActiveSheetID"]:
+
+        if not hasattr(prj, method_name):
+            continue
+
+        method = getattr(prj, method_name)
+
+        try:
+            value = method()
+
+            if not is_missing_value(value):
+                return int(value)
+        except Exception:
+            pass
+
+    return None
+
+
+def get_symbol_area(sym):
+
+    attempts = []
+
+    try:
+
+        result = sym.GetArea(None, None, None, None)
+
+        attempts.append({
+            "call": "GetArea(None,None,None,None)",
+            "raw": safe_string(result),
+        })
+
+        numeric = parse_numeric_outputs(result, 4)
+
+        if len(numeric) >= 4:
+
+            area = numeric[-4:]
+
+            if all(value > -1000000000 for value in area):
+                return area, attempts
+
+    except Exception as exc:
+
+        attempts.append({
+            "call": "GetArea(None,None,None,None)",
+            "error": safe_string(exc),
+        })
+
+    try:
+
+        result = sym.GetArea()
+
+        attempts.append({
+            "call": "GetArea()",
+            "raw": safe_string(result),
+        })
+
+        numeric = parse_numeric_outputs(result, 4)
+
+        if len(numeric) >= 4:
+
+            area = numeric[-4:]
+
+            if all(value > -1000000000 for value in area):
+                return area, attempts
+
+    except Exception as exc:
+
+        attempts.append({
+            "call": "GetArea()",
+            "error": safe_string(exc),
+        })
+
+    return None, attempts
+
+
+def area_center(area):
+
+    if area is None:
+        return None, None
+
+    if len(area) < 4:
+        return None, None
+
+    x = (area[0] + area[2]) / 2.0
+    y = (area[1] + area[3]) / 2.0
+
+    return x, y
+
+
+def get_symbol_name(sym):
+
+    try:
+        return safe_string(sym.GetName())
+    except Exception:
+        return ""
+
+
+def get_scalar_method(sym, method_name):
+
+    if not hasattr(sym, method_name):
+        return None
+
+    method = getattr(sym, method_name)
+
+    try:
+        value = method()
+
+        if is_missing_value(value):
+            return None
+
+        return value
+    except Exception:
+        return None
+
+
+def get_array_method(sym, method_name):
+
+    if not hasattr(sym, method_name):
+        return []
+
+    method = getattr(sym, method_name)
+
+    ids, attempts = call_e3_id_array(method, method_name)
+
+    return ids
+
+
+def get_symbol_relationships(sym):
+
+    relationships = {}
+
+    scalar_methods = [
+        "GetDynamicParentId",
+        "GetStateId",
+        "GetTargetObjectId",
+        "GetGateId",
+        "GetGroupId",
+    ]
+
+    array_methods = [
+        "GetDynamicChildrenIds",
+        "GetMasterIds",
+        "GetSlaveIds",
+        "GetStateIds",
+        "GetPinIds",
+        "GetDevicePinIds",
+        "GetBoundIds",
+    ]
+
+    for method_name in scalar_methods:
+        relationships[method_name] = get_scalar_method(sym, method_name)
+
+    for method_name in array_methods:
+        relationships[method_name] = get_array_method(sym, method_name)
+
+    return relationships
+
+
+# ============================================================
+# PIN OBJECT POSITION AUDIT
+# ============================================================
+
+def get_pin_physical_position(pin):
+
+    attempts = []
+
+    candidates = [
+        ("GetPhysicalPosition(None,None,None)", lambda: pin.GetPhysicalPosition(None, None, None)),
+        ("GetPhysicalPosition(None,None)", lambda: pin.GetPhysicalPosition(None, None)),
+        ("GetPhysicalPosition()", lambda: pin.GetPhysicalPosition()),
+    ]
+
+    for label, function in candidates:
+
+        try:
+            result = function()
+
+            attempts.append({
+                "call": label,
+                "raw": safe_string(result),
+            })
+
+            numeric = parse_numeric_outputs(result, 2)
+
+            clean_numeric = [value for value in numeric if value > -1000000000]
+
+            if clean_numeric:
+                return clean_numeric, attempts
+
+        except Exception as exc:
+
+            attempts.append({
+                "call": label,
+                "error": safe_string(exc),
+            })
+
+    return None, attempts
+
+
+def get_pin_schema_location(pin):
+
+    attempts = []
+
+    candidates = [
+        ("GetSchemaLocation(None,None,None,None,None)", lambda: pin.GetSchemaLocation(None, None, None, None, None)),
+        ("GetSchemaLocation(None,None,None)", lambda: pin.GetSchemaLocation(None, None, None)),
+        ("GetSchemaLocation()", lambda: pin.GetSchemaLocation()),
+    ]
+
+    for label, function in candidates:
+
+        try:
+            result = function()
+
+            attempts.append({
+                "call": label,
+                "raw": safe_string(result),
+            })
+
+            numeric = parse_numeric_outputs(result, 2)
+
+            clean_numeric = [value for value in numeric if value > -1000000000]
+
+            if clean_numeric:
+                return clean_numeric, attempts
+
+        except Exception as exc:
+
+            attempts.append({
+                "call": label,
+                "error": safe_string(exc),
+            })
+
+    return None, attempts
+
+
+# ============================================================
+# SNAPSHOT
+# ============================================================
+
+def build_snapshot(prj, dev, pin, sym, connector_device_id, verbose_enumeration=False):
+
+    snapshot = {
+        "time": datetime.now().isoformat(timespec="milliseconds"),
+        "connector_device_id": connector_device_id,
+        "connector_name": "",
+        "pins": [],
+    }
+
+    dev.SetId(connector_device_id)
+
+    snapshot["connector_name"] = get_device_name(dev)
+
+    pin_ids = get_device_pin_ids(dev, verbose=verbose_enumeration)
+
+    for pin_id in pin_ids:
+
+        pin_record = {
+            "pin_id": pin_id,
+            "pin_name": "",
+            "view_ids": [],
+            "views": [],
+        }
+
+        try:
+            pin.SetId(pin_id)
+        except Exception as exc:
+            pin_record["set_id_error"] = safe_string(exc)
+            snapshot["pins"].append(pin_record)
+            continue
+
+        pin_record["pin_name"] = get_pin_name(pin)
+
+        view_ids = get_pin_view_ids(pin, verbose=verbose_enumeration)
+
+        pin_record["view_ids"] = view_ids
+
+        for view_id in view_ids:
+
+            view_record = {
+                "view_id": view_id,
+                "pin_position": None,
+                "pin_schema_location": None,
+                "symbol_name": "",
+                "sheet_id": None,
+                "area": None,
+                "center_x": None,
+                "center_y": None,
+                "relationships": {},
+            }
+
+            try:
+                pin.SetId(view_id)
+
+                pin_position, pin_position_attempts = get_pin_physical_position(pin)
+                pin_schema_location, schema_attempts = get_pin_schema_location(pin)
+
+                view_record["pin_position"] = pin_position
+                view_record["pin_position_attempts"] = pin_position_attempts
+                view_record["pin_schema_location"] = pin_schema_location
+                view_record["pin_schema_attempts"] = schema_attempts
+
+            except Exception as exc:
+                view_record["pin_view_error"] = safe_string(exc)
+
+            try:
+                sym.SetId(view_id)
+
+                view_record["symbol_name"] = get_symbol_name(sym)
+                view_record["sheet_id"] = get_symbol_sheet_id(sym, prj)
+
+                area, area_attempts = get_symbol_area(sym)
+
+                view_record["area"] = area
+                view_record["area_attempts"] = area_attempts
+
+                center_x, center_y = area_center(area)
+
+                view_record["center_x"] = center_x
+                view_record["center_y"] = center_y
+                view_record["relationships"] = get_symbol_relationships(sym)
+
+            except Exception as exc:
+                view_record["symbol_view_error"] = safe_string(exc)
+
+            pin_record["views"].append(view_record)
+
+        snapshot["pins"].append(pin_record)
+
+    return snapshot
+
+
+def print_snapshot(snapshot, title):
+
+    section(title)
+
+    log(f"CONNECTOR: {snapshot['connector_name']}")
+    log(f"DEVICE ID: {snapshot['connector_device_id']}")
+    log(f"LOGICAL PIN COUNT: {len(snapshot['pins'])}")
+
+    positioned = []
+
+    for pin_record in snapshot["pins"]:
+
+        log()
+        log(f"PIN {pin_record['pin_name']} | PIN ID {pin_record['pin_id']} | VIEW IDS {pin_record['view_ids']}")
+
+        for view in pin_record["views"]:
+
+            log(f"    VIEW {view['view_id']}")
+            log(f"        SYMBOL NAME: {view['symbol_name']}")
+            log(f"        SHEET: {view['sheet_id']}")
+            log(f"        AREA: {view['area']}")
+            log(f"        CENTER: ({view['center_x']}, {view['center_y']})")
+            log(f"        PIN PHYSICAL POSITION: {view['pin_position']}")
+            log(f"        PIN SCHEMA LOCATION: {view['pin_schema_location']}")
+            log(f"        RELATIONSHIPS: {view['relationships']}")
+
+            if view["center_y"] is not None:
+
+                positioned.append({
+                    "pin_name": pin_record["pin_name"],
+                    "pin_id": pin_record["pin_id"],
+                    "view_id": view["view_id"],
+                    "x": view["center_x"],
+                    "y": view["center_y"],
+                })
+
+    log()
+    log("POSITIONED PIN VIEWS:")
+
+    if not positioned:
+        log("    NONE")
+        return
+
+    positioned = sorted(positioned, key=lambda item: item["y"], reverse=TOP_IS_HIGH_Y)
+
+    for item in positioned:
+        log(f"    PIN {item['pin_name']} | PIN ID {item['pin_id']} | VIEW {item['view_id']} | X {item['x']} | Y {item['y']}")
+
+
+# ============================================================
+# SNAPSHOT COMPARISON
+# ============================================================
+
+def snapshot_map(snapshot):
+
+    result = {}
+
+    for pin_record in snapshot["pins"]:
+
+        pin_name = pin_record["pin_name"]
+
+        result[pin_name] = {
+            "pin_id": pin_record["pin_id"],
+            "views": {},
+        }
+
+        for view in pin_record["views"]:
+
+            result[pin_name]["views"][view["view_id"]] = view
+
+    return result
+
+
+def compare_snapshots(before, after, title):
+
+    section(title)
+
+    before_map = snapshot_map(before)
+    after_map = snapshot_map(after)
+
+    names = sorted(set(before_map.keys()) | set(after_map.keys()))
+
+    changes = 0
+
+    for pin_name in names:
+
+        before_pin = before_map.get(pin_name)
+        after_pin = after_map.get(pin_name)
+
+        if before_pin is None:
+            log(f"PIN {pin_name}: ADDED")
+            changes += 1
+            continue
+
+        if after_pin is None:
+            log(f"PIN {pin_name}: REMOVED")
+            changes += 1
+            continue
+
+        before_view_ids = sorted(before_pin["views"].keys())
+        after_view_ids = sorted(after_pin["views"].keys())
+
+        if before_view_ids != after_view_ids:
+            log(f"PIN {pin_name}: VIEW IDS {before_view_ids} -> {after_view_ids}")
+            changes += 1
+
+        common_views = sorted(set(before_view_ids) & set(after_view_ids))
+
+        for view_id in common_views:
+
+            before_view = before_pin["views"][view_id]
+            after_view = after_pin["views"][view_id]
+
+            before_position = (before_view["center_x"], before_view["center_y"])
+            after_position = (after_view["center_x"], after_view["center_y"])
+
+            if before_position != after_position:
+                log(f"PIN {pin_name} VIEW {view_id}: POSITION {before_position} -> {after_position}")
+                changes += 1
+
+            before_rel = before_view["relationships"]
+            after_rel = after_view["relationships"]
+
+            relationship_names = sorted(set(before_rel.keys()) | set(after_rel.keys()))
+
+            for relationship_name in relationship_names:
+
+                before_value = before_rel.get(relationship_name)
+                after_value = after_rel.get(relationship_name)
+
+                if safe_string(before_value) != safe_string(after_value):
+                    log(f"PIN {pin_name} VIEW {view_id}: {relationship_name} {before_value} -> {after_value}")
+                    changes += 1
+
+    if changes == 0:
+        log("NO DIFFERENCES DETECTED")
+    else:
+        log(f"TOTAL DIFFERENCES: {changes}")
+
+    return changes
+
+
+# ============================================================
+# PIN SELECTION
+# ============================================================
+
+def positioned_views(snapshot):
+
+    records = []
+
+    for pin_record in snapshot["pins"]:
+
+        for view in pin_record["views"]:
+
+            if view["center_y"] is None:
+                continue
+
+            records.append({
+                "pin_name": pin_record["pin_name"],
+                "pin_id": pin_record["pin_id"],
+                "view_id": view["view_id"],
+                "sheet_id": view["sheet_id"],
+                "x": view["center_x"],
+                "y": view["center_y"],
+            })
+
+    return records
+
+
+def top_view(snapshot):
+
+    records = positioned_views(snapshot)
+
+    if not records:
+        return None
+
+    if TOP_IS_HIGH_Y:
+        return max(records, key=lambda item: item["y"])
+
+    return min(records, key=lambda item: item["y"])
+
+
+def bottom_view(snapshot):
+
+    records = positioned_views(snapshot)
+
+    if not records:
+        return None
+
+    if TOP_IS_HIGH_Y:
+        return min(records, key=lambda item: item["y"])
+
+    return max(records, key=lambda item: item["y"])
+
+
+def find_pin(snapshot, pin_name):
+
+    target = str(pin_name)
+
+    for pin_record in snapshot["pins"]:
+
+        if pin_record["pin_name"] == target:
+            return pin_record
+
+    return None
+
+
+# ============================================================
+# TARGET GENERATION
+# ============================================================
+
+def generate_y_targets():
+
+    targets = []
+
+    current = Y_MAX
+
+    while current >= Y_MIN - 0.000001:
+
+        targets.append(round(current, 6))
+
+        current -= Y_STEP
+
+    return targets
+
+
+def choose_target_y(current_y):
+
+    for candidate in generate_y_targets():
+
+        if current_y is None:
+            return candidate
+
+        if not values_close(candidate, current_y, tolerance=0.02):
+            return candidate
+
+    return Y_MIN
+
+
+def validate_target(x, y):
+
+    if not values_close(x, FIXED_X, tolerance=0.000001):
+        raise RuntimeError(f"X must equal {FIXED_X}.")
+
+    if y < Y_MIN:
+        raise RuntimeError(f"Y {y} below minimum {Y_MIN}.")
+
+    if y > Y_MAX:
+        raise RuntimeError(f"Y {y} above maximum {Y_MAX}.")
+
+
+# ============================================================
+# PLACE TEST
+# ============================================================
+
+def place_pin_by_name(prj, dev, pin, sym, connector_device_id, pin_name):
+
+    before = build_snapshot(prj, dev, pin, sym, connector_device_id)
+
+    pin_record = find_pin(before, pin_name)
+
+    if pin_record is None:
+        log(f"PIN {pin_name} NOT FOUND")
+        return
+
+    if not pin_record["views"]:
+        log(f"PIN {pin_name} HAS NO VIEW")
+        return
+
+    view = pin_record["views"][0]
+
+    view_id = view["view_id"]
+    sheet_id = view["sheet_id"]
+    current_y = view["center_y"]
+    target_y = choose_target_y(current_y)
+
+    section(f"PLACE TEST PIN {pin_name}")
+
+    log(f"PIN ID: {pin_record['pin_id']}")
+    log(f"VIEW ID: {view_id}")
+    log(f"SHEET ID: {sheet_id}")
+    log(f"CURRENT CENTER: ({view['center_x']}, {view['center_y']})")
+    log(f"TARGET: ({FIXED_X}, {target_y})")
+
+    validate_target(FIXED_X, target_y)
+
+    answer = input("Run sym.Place? [y/n]: ").strip().lower()
+
+    if answer != "y":
+        log("CANCELLED")
+        return
+
+    sym.SetId(view_id)
+
+    started = time.perf_counter()
+
+    try:
+        result = sym.Place(sheet_id, FIXED_X, target_y, ROTATION, SCALE, MAINTAIN_TEXT_SIZE)
+        elapsed = time.perf_counter() - started
+
+        log(f"Place RETURN: {result}")
+        log(f"Place ELAPSED: {elapsed:.6f} sec")
+
+    except Exception as exc:
+        elapsed = time.perf_counter() - started
+
+        log(f"Place EXCEPTION AFTER {elapsed:.6f} sec: {exc}")
+        log(traceback.format_exc())
+
+        return
+
+    observation_start = time.perf_counter()
+
+    for delay in OBSERVATION_DELAYS:
+
+        target_time = observation_start + delay
+        remaining = target_time - time.perf_counter()
+
+        if remaining > 0:
+            time.sleep(remaining)
+
+        after = build_snapshot(prj, dev, pin, sym, connector_device_id)
+
+        compare_snapshots(before, after, f"AFTER Place PIN {pin_name} AT +{delay:.3f} SEC")
+
+
+# ============================================================
+# MANUAL TOP TEST
+# ============================================================
+
+def manual_top_then_script(prj, dev, pin, sym, connector_device_id):
+
+    before = build_snapshot(prj, dev, pin, sym, connector_device_id)
+
+    print_snapshot(before, "BEFORE MANUAL TOP MOVE")
+
+    current_top = top_view(before)
+
+    log()
+    log(f"CURRENT TOP: {current_top}")
+
+    if current_top is None:
+        log("NO TOP PIN VIEW FOUND")
+        return
+
+    input("Manually move the top pin in E3, then press ENTER here: ")
+
+    after_manual = build_snapshot(prj, dev, pin, sym, connector_device_id)
+
+    print_snapshot(after_manual, "AFTER MANUAL TOP MOVE")
+
+    compare_snapshots(before, after_manual, "WHAT MANUAL TOP MOVE CHANGED")
+
+    new_top = top_view(after_manual)
+
+    log()
+    log(f"NEW TOP: {new_top}")
+
+    if new_top is None:
+        return
+
+    answer = input(f"Try script Place on new top pin {new_top['pin_name']}? [y/n]: ").strip().lower()
+
+    if answer == "y":
+        place_pin_by_name(prj, dev, pin, sym, connector_device_id, new_top["pin_name"])
+
+
+# ============================================================
+# MANUAL BOTTOM TEST
+# ============================================================
+
+def manual_bottom_then_script(prj, dev, pin, sym, connector_device_id):
+
+    before = build_snapshot(prj, dev, pin, sym, connector_device_id)
+
+    print_snapshot(before, "BEFORE MANUAL BOTTOM MOVE")
+
+    current_bottom = bottom_view(before)
+
+    log()
+    log(f"CURRENT BOTTOM: {current_bottom}")
+
+    if current_bottom is None:
+        log("NO BOTTOM PIN VIEW FOUND")
+        return
+
+    input("Manually move the bottom pin in E3, then press ENTER here: ")
+
+    after_manual = build_snapshot(prj, dev, pin, sym, connector_device_id)
+
+    print_snapshot(after_manual, "AFTER MANUAL BOTTOM MOVE")
+
+    compare_snapshots(before, after_manual, "WHAT MANUAL BOTTOM MOVE CHANGED")
+
+    new_bottom = bottom_view(after_manual)
+
+    log()
+    log(f"NEW BOTTOM: {new_bottom}")
+
+    if new_bottom is None:
+        return
+
+    answer = input(f"Try script Place on new bottom pin {new_bottom['pin_name']}? [y/n]: ").strip().lower()
+
+    if answer == "y":
+        place_pin_by_name(prj, dev, pin, sym, connector_device_id, new_bottom["pin_name"])
+
+
+# ============================================================
+# RAW ENUMERATION TEST
+# ============================================================
+
+def raw_enumeration_test(prj, dev, pin, connector_device_id):
+
+    section("RAW ENUMERATION TEST")
+
+    dev.SetId(connector_device_id)
+
+    pin_ids = get_device_pin_ids(dev, verbose=True)
+
+    log()
+    log(f"CLEAN PIN IDS: {pin_ids}")
+
+    for pin_id in pin_ids:
+
+        pin.SetId(pin_id)
+
+        log()
+        log(f"PIN ID {pin_id} NAME {get_pin_name(pin)}")
+
+        view_ids = get_pin_view_ids(pin, verbose=True)
+
+        log(f"CLEAN VIEW IDS: {view_ids}")
+
+
+# ============================================================
+# SAVE
+# ============================================================
+
+def save_results():
+
+    AUDIT_DATA["finished"] = datetime.now().isoformat(timespec="milliseconds")
+
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+
+    txt_path = OUTPUT_DIRECTORY / f"e3_pin_audit_v4_{timestamp}.txt"
+    json_path = OUTPUT_DIRECTORY / f"e3_pin_audit_v4_{timestamp}.json"
+
+    txt_path.write_text("\n".join(LOG_LINES), encoding="utf-8")
+    json_path.write_text(json.dumps(AUDIT_DATA, indent=2, default=str), encoding="utf-8")
+
+    print()
+    print("=" * 100)
+    print("AUDIT FILES WRITTEN")
+    print("=" * 100)
+    print(txt_path)
+    print(json_path)
+
+
+# ============================================================
+# MENU
+# ============================================================
+
+def print_menu():
+
+    section("TEST MENU")
+
+    log("1 - Full valid connector snapshot")
+    log("2 - Raw GetPinIds / GetViewIds enumeration audit")
+    log("3 - Manual TOP move -> compare -> script new top")
+    log("4 - Manual BOTTOM move -> compare -> script new bottom")
+    log("5 - Script Place a specific pin number")
+    log("q - Save and quit")
+
+
+# ============================================================
+# MAIN
+# ============================================================
+
+def main():
+
+    AUDIT_DATA["started"] = datetime.now().isoformat(timespec="milliseconds")
+
+    section("E3 SPLIT PIN AUDIT V4")
+
+    log("This version fixes E3 COM output-array handling.")
+    log(f"CONNECTOR_NAME = {CONNECTOR_NAME}")
+    log(f"FIXED_X = {FIXED_X}")
+    log(f"Y RANGE = {Y_MIN} to {Y_MAX}")
+
+    app, prj, dev, pin, sym = connect_to_e3()
+
+    connector_device_id = find_connector_device_id(prj, dev)
+
+    raw_enumeration_test(prj, dev, pin, connector_device_id)
+
+    baseline = build_snapshot(prj, dev, pin, sym, connector_device_id, verbose_enumeration=False)
+
+    print_snapshot(baseline, "INITIAL VALID BASELINE")
+
+    add_event("baseline", baseline)
+
+    while True:
+
+        print_menu()
+
+        choice = input("Select test: ").strip().lower()
+
+        if choice == "1":
+
+            snapshot = build_snapshot(prj, dev, pin, sym, connector_device_id)
+
+            print_snapshot(snapshot, "FULL VALID CONNECTOR SNAPSHOT")
+
+        elif choice == "2":
+
+            raw_enumeration_test(prj, dev, pin, connector_device_id)
+
+        elif choice == "3":
+
+            manual_top_then_script(prj, dev, pin, sym, connector_device_id)
+
+        elif choice == "4":
+
+            manual_bottom_then_script(prj, dev, pin, sym, connector_device_id)
+
+        elif choice == "5":
+
+            snapshot = build_snapshot(prj, dev, pin, sym, connector_device_id)
+
+            available = [record["pin_name"] for record in snapshot["pins"]]
+
+            log(f"AVAILABLE PIN NAMES: {available}")
+
+            pin_name = input("Pin name/number to test: ").strip()
+
+            place_pin_by_name(prj, dev, pin, sym, connector_device_id, pin_name)
+
+        elif choice == "q":
+
+            break
+
+        else:
+
+            log("INVALID SELECTION")
+
+
+if __name__ == "__main__":
+
+    try:
+        main()
+
+    except KeyboardInterrupt:
+        log()
+        log("STOPPED BY USER")
+
+    except Exception as exc:
+        log()
+        log("FATAL ERROR")
+        log(safe_string(exc))
+        log(traceback.format_exc())
+
+    finally:
+
+        try:
+            save_results()
+        except Exception as exc:
+            print(f"COULD NOT SAVE RESULTS: {exc}")
+
+        try:
+            pythoncom.CoUninitialize()
+        except Exception:
+            pass
