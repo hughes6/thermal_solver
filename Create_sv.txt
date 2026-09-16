@@ -1,1 +1,1270 @@
-=IF($C$5<1,"Fail",LET(blocks,SEQUENCE($C$5),checks,MAP(blocks,LAMBDA(b,LET(pinCol,9+(b-1)*5,pins,INDIRECT(ADDRESS(8,pinCol,4)&":"&ADDRESS(307,pinCol,4)),used,FILTER(pins,pins<>""),IFERROR(ROWS(used)=ROWS(UNIQUE(used)),TRUE())))),IF(AND(checks),"Pass","Fail")))
+import json
+import time
+import traceback
+from datetime import datetime
+from pathlib import Path
+
+import pythoncom
+import win32com.client
+
+
+# ============================================================
+# USER CONFIGURATION
+# ============================================================
+
+CONNECTOR_NAME = "SCP-J1"
+
+FIXED_X = 5.5
+Y_MIN = 28.0
+Y_MAX = 30.25
+Y_STEP = 0.25
+
+TOP_IS_HIGH_Y = True
+
+TEST_MODE = "PEEL"
+
+ONE_PIN_NAME = "1"
+
+PROMPT_FOR_MANUAL_TOP_MOVE = True
+PAUSE_BEFORE_EACH_AUTOMATIC_MOVE = True
+
+OBSERVATION_DELAYS = [0.0, 0.05, 0.25, 1.0]
+
+MAX_AUTOMATIC_MOVES = 25
+
+ROTATION = "0"
+SCALE = 1.0
+MAINTAIN_TEXT_SIZE = 1
+
+OUTPUT_DIRECTORY = Path(__file__).resolve().parent
+
+
+# ============================================================
+# GLOBAL LOGGING
+# ============================================================
+
+LOG_LINES = []
+AUDIT_DATA = {
+    "started": None,
+    "connector_name": CONNECTOR_NAME,
+    "fixed_x": FIXED_X,
+    "y_min": Y_MIN,
+    "y_max": Y_MAX,
+    "y_step": Y_STEP,
+    "top_is_high_y": TOP_IS_HIGH_Y,
+    "test_mode": TEST_MODE,
+    "events": [],
+}
+
+
+def log(message=""):
+
+    text = str(message)
+
+    print(text)
+
+    LOG_LINES.append(text)
+
+
+def log_section(title):
+
+    log()
+    log("=" * 90)
+    log(title)
+    log("=" * 90)
+
+
+def append_event(event_type, data):
+
+    event = {
+        "time": datetime.now().isoformat(timespec="milliseconds"),
+        "type": event_type,
+        "data": data,
+    }
+
+    AUDIT_DATA["events"].append(event)
+
+
+# ============================================================
+# BASIC HELPERS
+# ============================================================
+
+def normalize_ids(value):
+
+    if value is None:
+        return []
+
+    if isinstance(value, int):
+        return [value]
+
+    if isinstance(value, float):
+        return [int(value)]
+
+    if isinstance(value, str):
+        if value.strip() == "":
+            return []
+
+        try:
+            return [int(value)]
+        except Exception:
+            return [value]
+
+    try:
+        return list(value)
+    except Exception:
+        return [value]
+
+
+def safe_call(label, function, default=None):
+
+    try:
+        return function()
+    except Exception as exc:
+        log(f"{label} ERROR: {exc}")
+        return default
+
+
+def safe_string(value):
+
+    if value is None:
+        return ""
+
+    try:
+        return str(value)
+    except Exception:
+        return repr(value)
+
+
+def safe_float(value):
+
+    try:
+        return float(value)
+    except Exception:
+        return None
+
+
+def values_close(a, b, tolerance=0.0001):
+
+    if a is None or b is None:
+        return False
+
+    return abs(float(a) - float(b)) <= tolerance
+
+
+# ============================================================
+# E3 CONNECTION
+# ============================================================
+
+def connect_to_e3():
+
+    log_section("CONNECTING TO E3")
+
+    pythoncom.CoInitialize()
+
+    app = win32com.client.Dispatch("CT.Application")
+
+    log(f"APPLICATION OBJECT: {app}")
+
+    prj = app.CreateJobObject()
+
+    log(f"PROJECT/JOB OBJECT: {prj}")
+
+    dev = prj.CreateDeviceObject()
+    pin = prj.CreatePinObject()
+    sym = prj.CreateSymbolObject()
+
+    log("DEVICE OBJECT CREATED")
+    log("PIN OBJECT CREATED")
+    log("SYMBOL OBJECT CREATED")
+
+    return app, prj, dev, pin, sym
+
+
+# ============================================================
+# COM METHOD AUDIT
+# ============================================================
+
+def audit_relevant_methods(obj, object_name):
+
+    log_section(f"METHOD AUDIT: {object_name}")
+
+    keywords = [
+        "area",
+        "id",
+        "location",
+        "move",
+        "name",
+        "place",
+        "position",
+        "sheet",
+        "symbol",
+        "view",
+    ]
+
+    names = set()
+
+    try:
+        for name in dir(obj):
+            names.add(name)
+    except Exception as exc:
+        log(f"dir() ERROR: {exc}")
+
+    try:
+        type_info = obj._oleobj_.GetTypeInfo()
+        type_attr = type_info.GetTypeAttr()
+        function_count = type_attr[8]
+
+        for index in range(function_count):
+
+            try:
+                function_description = type_info.GetFuncDesc(index)
+                member_id = function_description[0]
+                function_name = type_info.GetDocumentation(member_id)[0]
+
+                if function_name:
+                    names.add(function_name)
+
+            except Exception:
+                pass
+
+    except Exception as exc:
+        log(f"TYPE INFO ERROR: {exc}")
+
+    relevant = []
+
+    for name in sorted(names):
+
+        lower_name = name.lower()
+
+        if any(keyword in lower_name for keyword in keywords):
+            relevant.append(name)
+
+    for name in relevant:
+        log(name)
+
+    append_event("method_audit", {
+        "object": object_name,
+        "methods": relevant,
+    })
+
+
+# ============================================================
+# E3 ACCESS HELPERS
+# ============================================================
+
+def get_all_device_ids(prj):
+
+    attempts = [
+        lambda: prj.GetAllDeviceIds(),
+        lambda: prj.GetAllDeviceIds(None),
+    ]
+
+    for attempt in attempts:
+
+        try:
+            result = attempt()
+            ids = normalize_ids(result)
+
+            if ids:
+                return ids
+
+        except Exception:
+            pass
+
+    return []
+
+
+def get_device_name(dev):
+
+    attempts = [
+        lambda: dev.GetName(),
+        lambda: dev.GetDeviceName(),
+    ]
+
+    for attempt in attempts:
+
+        try:
+            value = attempt()
+
+            if value is not None:
+                return safe_string(value)
+
+        except Exception:
+            pass
+
+    return ""
+
+
+def get_pin_name(pin):
+
+    attempts = [
+        lambda: pin.GetName(),
+        lambda: pin.GetPinName(),
+        lambda: pin.GetNumber(),
+    ]
+
+    for attempt in attempts:
+
+        try:
+            value = attempt()
+
+            if value is not None:
+                return safe_string(value)
+
+        except Exception:
+            pass
+
+    return ""
+
+
+def get_pin_ids(dev):
+
+    attempts = [
+        lambda: dev.GetPinIds(),
+        lambda: dev.GetPinIds(None),
+    ]
+
+    for attempt in attempts:
+
+        try:
+            result = attempt()
+            return normalize_ids(result)
+
+        except Exception:
+            pass
+
+    return []
+
+
+def get_view_ids(pin):
+
+    attempts = [
+        lambda: pin.GetViewIds(),
+        lambda: pin.GetViewIds(None),
+    ]
+
+    for attempt in attempts:
+
+        try:
+            result = attempt()
+            return normalize_ids(result)
+
+        except Exception:
+            pass
+
+    return []
+
+
+def get_symbol_sheet_id(sym, prj):
+
+    attempts = [
+        lambda: sym.GetSheetId(),
+        lambda: sym.GetSheetID(),
+    ]
+
+    for attempt in attempts:
+
+        try:
+            value = attempt()
+
+            if value is not None:
+                return int(value)
+
+        except Exception:
+            pass
+
+    attempts = [
+        lambda: prj.GetActiveSheetId(),
+        lambda: prj.GetActiveSheetID(),
+    ]
+
+    for attempt in attempts:
+
+        try:
+            value = attempt()
+
+            if value is not None:
+                return int(value)
+
+        except Exception:
+            pass
+
+    return None
+
+
+def get_symbol_area(sym):
+
+    attempts = [
+        lambda: sym.GetArea(),
+        lambda: sym.GetArea(None, None, None, None),
+    ]
+
+    for attempt in attempts:
+
+        try:
+            value = attempt()
+
+            if value is None:
+                continue
+
+            if isinstance(value, (tuple, list)):
+                values = list(value)
+
+                numeric_values = []
+
+                for item in values:
+
+                    try:
+                        numeric_values.append(float(item))
+                    except Exception:
+                        pass
+
+                if len(numeric_values) >= 4:
+                    return numeric_values[-4:]
+
+        except Exception:
+            pass
+
+    return None
+
+
+def get_symbol_name(sym):
+
+    attempts = [
+        lambda: sym.GetSymbolName(),
+        lambda: sym.GetName(),
+    ]
+
+    for attempt in attempts:
+
+        try:
+            value = attempt()
+
+            if value is not None:
+                return safe_string(value)
+
+        except Exception:
+            pass
+
+    return ""
+
+
+def area_center(area):
+
+    if area is None:
+        return None, None
+
+    if len(area) < 4:
+        return None, None
+
+    x1 = safe_float(area[0])
+    y1 = safe_float(area[1])
+    x2 = safe_float(area[2])
+    y2 = safe_float(area[3])
+
+    if x1 is None or y1 is None or x2 is None or y2 is None:
+        return None, None
+
+    return (x1 + x2) / 2.0, (y1 + y2) / 2.0
+
+
+# ============================================================
+# CONNECTOR DISCOVERY
+# ============================================================
+
+def find_connector_device_id(prj, dev):
+
+    device_ids = get_all_device_ids(prj)
+
+    log(f"TOTAL DEVICE IDS FOUND: {len(device_ids)}")
+
+    exact_matches = []
+    partial_matches = []
+
+    for device_id in device_ids:
+
+        try:
+            dev.SetId(device_id)
+        except Exception:
+            continue
+
+        name = get_device_name(dev)
+
+        if name == CONNECTOR_NAME:
+            exact_matches.append(device_id)
+
+        if CONNECTOR_NAME.lower() in name.lower():
+            partial_matches.append((device_id, name))
+
+    if exact_matches:
+
+        log(f"EXACT CONNECTOR MATCH: {CONNECTOR_NAME} -> {exact_matches[0]}")
+
+        return exact_matches[0]
+
+    if partial_matches:
+
+        log("NO EXACT MATCH. PARTIAL MATCHES:")
+
+        for device_id, name in partial_matches:
+            log(f"    {device_id}: {name}")
+
+        selected_id = partial_matches[0][0]
+
+        log(f"USING FIRST PARTIAL MATCH: {selected_id}")
+
+        return selected_id
+
+    log(f"CONNECTOR NOT FOUND: {CONNECTOR_NAME}")
+
+    return None
+
+
+# ============================================================
+# SNAPSHOT / REDISCOVERY
+# ============================================================
+
+def build_connector_snapshot(prj, dev, pin, sym, connector_device_id):
+
+    snapshot = {
+        "time": datetime.now().isoformat(timespec="milliseconds"),
+        "connector_device_id": connector_device_id,
+        "connector_name": "",
+        "pins": [],
+    }
+
+    dev.SetId(connector_device_id)
+
+    snapshot["connector_name"] = get_device_name(dev)
+
+    pin_ids = get_pin_ids(dev)
+
+    for pin_id in pin_ids:
+
+        pin_record = {
+            "logical_pin_id": pin_id,
+            "pin_name": "",
+            "view_ids": [],
+            "views": [],
+        }
+
+        try:
+            pin.SetId(pin_id)
+        except Exception as exc:
+            pin_record["error"] = f"pin.SetId failed: {exc}"
+            snapshot["pins"].append(pin_record)
+            continue
+
+        pin_record["pin_name"] = get_pin_name(pin)
+
+        view_ids = get_view_ids(pin)
+
+        pin_record["view_ids"] = list(view_ids)
+
+        for view_id in view_ids:
+
+            view_record = {
+                "view_id": view_id,
+                "symbol_set_id_ok": False,
+                "symbol_name": "",
+                "sheet_id": None,
+                "area": None,
+                "center_x": None,
+                "center_y": None,
+            }
+
+            try:
+                sym.SetId(view_id)
+                view_record["symbol_set_id_ok"] = True
+            except Exception as exc:
+                view_record["symbol_error"] = safe_string(exc)
+                pin_record["views"].append(view_record)
+                continue
+
+            view_record["symbol_name"] = get_symbol_name(sym)
+            view_record["sheet_id"] = get_symbol_sheet_id(sym, prj)
+
+            area = get_symbol_area(sym)
+
+            view_record["area"] = area
+
+            center_x, center_y = area_center(area)
+
+            view_record["center_x"] = center_x
+            view_record["center_y"] = center_y
+
+            pin_record["views"].append(view_record)
+
+        snapshot["pins"].append(pin_record)
+
+    return snapshot
+
+
+def print_snapshot(snapshot, title):
+
+    log_section(title)
+
+    log(f"CONNECTOR: {snapshot.get('connector_name')}")
+    log(f"DEVICE ID: {snapshot.get('connector_device_id')}")
+    log(f"PIN COUNT: {len(snapshot.get('pins', []))}")
+
+    records = []
+
+    for pin_record in snapshot.get("pins", []):
+
+        pin_name = pin_record.get("pin_name")
+        logical_pin_id = pin_record.get("logical_pin_id")
+        views = pin_record.get("views", [])
+
+        if not views:
+            log(f"PIN {pin_name} | LOGICAL ID {logical_pin_id} | NO VIEWS")
+            continue
+
+        for view in views:
+
+            view_id = view.get("view_id")
+            sheet_id = view.get("sheet_id")
+            area = view.get("area")
+            center_x = view.get("center_x")
+            center_y = view.get("center_y")
+            symbol_name = view.get("symbol_name")
+
+            log(f"PIN {pin_name} | LOGICAL {logical_pin_id} | VIEW {view_id} | SHEET {sheet_id} | CENTER ({center_x}, {center_y}) | AREA {area} | SYMBOL {symbol_name}")
+
+            records.append({
+                "pin_name": pin_name,
+                "logical_pin_id": logical_pin_id,
+                "view_id": view_id,
+                "sheet_id": sheet_id,
+                "center_x": center_x,
+                "center_y": center_y,
+            })
+
+    positioned = [record for record in records if record["center_y"] is not None]
+
+    if positioned:
+
+        ascending = sorted(positioned, key=lambda item: item["center_y"])
+        descending = sorted(positioned, key=lambda item: item["center_y"], reverse=True)
+
+        log()
+        log("Y ORDER LOW -> HIGH")
+
+        for record in ascending:
+            log(f"    PIN {record['pin_name']} | VIEW {record['view_id']} | Y {record['center_y']}")
+
+        log()
+        log("Y ORDER HIGH -> LOW")
+
+        for record in descending:
+            log(f"    PIN {record['pin_name']} | VIEW {record['view_id']} | Y {record['center_y']}")
+
+
+def snapshot_pin_map(snapshot):
+
+    result = {}
+
+    for pin_record in snapshot.get("pins", []):
+
+        pin_name = pin_record.get("pin_name")
+
+        if pin_name not in result:
+            result[pin_name] = []
+
+        for view in pin_record.get("views", []):
+            result[pin_name].append(view)
+
+    return result
+
+
+def compare_snapshots(before, after, title):
+
+    log_section(title)
+
+    before_map = snapshot_pin_map(before)
+    after_map = snapshot_pin_map(after)
+
+    all_pin_names = sorted(set(before_map.keys()) | set(after_map.keys()), key=lambda value: safe_string(value))
+
+    changes_found = False
+
+    for pin_name in all_pin_names:
+
+        before_views = before_map.get(pin_name, [])
+        after_views = after_map.get(pin_name, [])
+
+        before_ids = [view.get("view_id") for view in before_views]
+        after_ids = [view.get("view_id") for view in after_views]
+
+        if before_ids != after_ids:
+            changes_found = True
+            log(f"PIN {pin_name}: VIEW IDS CHANGED {before_ids} -> {after_ids}")
+
+        before_positions = [(view.get("center_x"), view.get("center_y")) for view in before_views]
+        after_positions = [(view.get("center_x"), view.get("center_y")) for view in after_views]
+
+        if before_positions != after_positions:
+            changes_found = True
+            log(f"PIN {pin_name}: POSITIONS CHANGED {before_positions} -> {after_positions}")
+
+    if not changes_found:
+        log("NO VIEW-ID OR POSITION CHANGES DETECTED")
+
+
+# ============================================================
+# PIN LOOKUP
+# ============================================================
+
+def find_pin_record(snapshot, pin_name):
+
+    target = safe_string(pin_name)
+
+    for pin_record in snapshot.get("pins", []):
+
+        if safe_string(pin_record.get("pin_name")) == target:
+            return pin_record
+
+    return None
+
+
+def choose_current_top_pin(snapshot, excluded_pin_names=None):
+
+    if excluded_pin_names is None:
+        excluded_pin_names = set()
+
+    candidates = []
+
+    for pin_record in snapshot.get("pins", []):
+
+        pin_name = safe_string(pin_record.get("pin_name"))
+
+        if pin_name in excluded_pin_names:
+            continue
+
+        for view in pin_record.get("views", []):
+
+            center_y = view.get("center_y")
+
+            if center_y is None:
+                continue
+
+            candidates.append({
+                "pin_name": pin_name,
+                "logical_pin_id": pin_record.get("logical_pin_id"),
+                "view_id": view.get("view_id"),
+                "sheet_id": view.get("sheet_id"),
+                "center_x": view.get("center_x"),
+                "center_y": center_y,
+            })
+
+    if not candidates:
+        return None
+
+    if TOP_IS_HIGH_Y:
+        return max(candidates, key=lambda item: item["center_y"])
+
+    return min(candidates, key=lambda item: item["center_y"])
+
+
+# ============================================================
+# TARGET GENERATION
+# ============================================================
+
+def generate_y_targets():
+
+    values = []
+
+    current = Y_MAX
+
+    while current >= Y_MIN - 0.000001:
+
+        values.append(round(current, 6))
+
+        current = current - Y_STEP
+
+    return values
+
+
+def choose_target_y(current_y, attempt_number):
+
+    targets = generate_y_targets()
+
+    if not targets:
+        raise RuntimeError("No Y targets were generated.")
+
+    start_index = attempt_number % len(targets)
+
+    for offset in range(len(targets)):
+
+        index = (start_index + offset) % len(targets)
+
+        candidate = targets[index]
+
+        if current_y is None:
+            return candidate
+
+        if not values_close(candidate, current_y, tolerance=0.02):
+            return candidate
+
+    return targets[0]
+
+
+def validate_target(x, y):
+
+    if not values_close(x, FIXED_X, tolerance=0.000001):
+        raise RuntimeError(f"X target must always be {FIXED_X}. Received {x}.")
+
+    if y < Y_MIN:
+        raise RuntimeError(f"Y target {y} is below allowed minimum {Y_MIN}.")
+
+    if y > Y_MAX:
+        raise RuntimeError(f"Y target {y} is above allowed maximum {Y_MAX}.")
+
+
+# ============================================================
+# PLACE CALL
+# ============================================================
+
+def place_existing_symbol(sym, sheet_id, x, y):
+
+    validate_target(x, y)
+
+    if sheet_id is None:
+        raise RuntimeError("Cannot call Place because no valid sheet ID was found.")
+
+    log(f"CALLING sym.Place(sheet_id={sheet_id}, x={x}, y={y}, rotation={ROTATION}, scale={SCALE}, maintain_text_size={MAINTAIN_TEXT_SIZE})")
+
+    try:
+        result = sym.Place(sheet_id, x, y, ROTATION, SCALE, MAINTAIN_TEXT_SIZE)
+
+        return result
+
+    except pythoncom.com_error:
+        raise
+
+    except Exception:
+        raise
+
+
+# ============================================================
+# POST-PLACE OBSERVATION
+# ============================================================
+
+def observe_pin_after_place(prj, dev, pin, sym, connector_device_id, pin_name, before_snapshot):
+
+    observations = []
+
+    started = time.perf_counter()
+
+    for delay in OBSERVATION_DELAYS:
+
+        target_time = started + delay
+        remaining = target_time - time.perf_counter()
+
+        if remaining > 0:
+            time.sleep(remaining)
+
+        snapshot = build_connector_snapshot(prj, dev, pin, sym, connector_device_id)
+
+        pin_record = find_pin_record(snapshot, pin_name)
+
+        observation = {
+            "delay": delay,
+            "snapshot": snapshot,
+            "pin_record": pin_record,
+        }
+
+        observations.append(observation)
+
+        log()
+        log(f"OBSERVATION AT +{delay:.3f} s")
+
+        if pin_record is None:
+            log(f"PIN {pin_name} NOT FOUND AFTER PLACE")
+            continue
+
+        log(f"PIN {pin_name} LOGICAL ID: {pin_record.get('logical_pin_id')}")
+        log(f"PIN {pin_name} VIEW IDS: {pin_record.get('view_ids')}")
+
+        for view in pin_record.get("views", []):
+            log(f"    VIEW {view.get('view_id')} | CENTER ({view.get('center_x')}, {view.get('center_y')}) | AREA {view.get('area')} | SHEET {view.get('sheet_id')}")
+
+    if observations:
+        compare_snapshots(before_snapshot, observations[-1]["snapshot"], f"DIFF AFTER PLACE FOR PIN {pin_name}")
+
+    return observations
+
+
+# ============================================================
+# ONE AUTOMATIC MOVE ATTEMPT
+# ============================================================
+
+def automatic_move_attempt(prj, dev, pin, sym, connector_device_id, pin_name, target_y, attempt_number):
+
+    log_section(f"AUTOMATIC MOVE ATTEMPT {attempt_number}: PIN {pin_name}")
+
+    before_snapshot = build_connector_snapshot(prj, dev, pin, sym, connector_device_id)
+
+    pin_record = find_pin_record(before_snapshot, pin_name)
+
+    if pin_record is None:
+        log(f"PIN {pin_name} COULD NOT BE FOUND")
+
+        return {
+            "success": False,
+            "reason": "pin_not_found",
+        }
+
+    views = pin_record.get("views", [])
+
+    if not views:
+        log(f"PIN {pin_name} HAS NO VIEW")
+
+        return {
+            "success": False,
+            "reason": "no_view",
+        }
+
+    if len(views) > 1:
+        log(f"WARNING: PIN {pin_name} HAS {len(views)} VIEWS. USING FIRST VIEW.")
+
+    current_view = views[0]
+
+    current_view_id = current_view.get("view_id")
+    current_x = current_view.get("center_x")
+    current_y = current_view.get("center_y")
+    sheet_id = current_view.get("sheet_id")
+
+    log(f"CURRENT VIEW ID: {current_view_id}")
+    log(f"CURRENT SHEET ID: {sheet_id}")
+    log(f"CURRENT CENTER: ({current_x}, {current_y})")
+    log(f"TARGET CENTER REQUEST: ({FIXED_X}, {target_y})")
+
+    if PAUSE_BEFORE_EACH_AUTOMATIC_MOVE:
+
+        log()
+        response = input("Press ENTER to run this Place attempt, type S to skip, or Q to quit: ").strip().lower()
+
+        if response == "q":
+            raise KeyboardInterrupt()
+
+        if response == "s":
+            log("ATTEMPT SKIPPED")
+
+            return {
+                "success": False,
+                "reason": "user_skipped",
+            }
+
+    try:
+        sym.SetId(current_view_id)
+    except Exception as exc:
+        log(f"sym.SetId({current_view_id}) FAILED: {exc}")
+
+        return {
+            "success": False,
+            "reason": "symbol_set_id_failed",
+            "error": safe_string(exc),
+        }
+
+    place_started = time.perf_counter()
+
+    try:
+        result = place_existing_symbol(sym, sheet_id, FIXED_X, target_y)
+
+        elapsed = time.perf_counter() - place_started
+
+        log(f"PLACE RETURN VALUE: {result}")
+        log(f"PLACE CALL ELAPSED: {elapsed:.6f} s")
+
+    except Exception as exc:
+
+        elapsed = time.perf_counter() - place_started
+
+        log(f"PLACE EXCEPTION AFTER {elapsed:.6f} s: {exc}")
+        log(traceback.format_exc())
+
+        append_event("place_exception", {
+            "attempt": attempt_number,
+            "pin_name": pin_name,
+            "view_id": current_view_id,
+            "sheet_id": sheet_id,
+            "target_x": FIXED_X,
+            "target_y": target_y,
+            "error": safe_string(exc),
+        })
+
+        return {
+            "success": False,
+            "reason": "place_exception",
+            "error": safe_string(exc),
+        }
+
+    observations = observe_pin_after_place(prj, dev, pin, sym, connector_device_id, pin_name, before_snapshot)
+
+    event_data = {
+        "attempt": attempt_number,
+        "pin_name": pin_name,
+        "view_id_before": current_view_id,
+        "sheet_id": sheet_id,
+        "current_x": current_x,
+        "current_y": current_y,
+        "target_x": FIXED_X,
+        "target_y": target_y,
+        "place_result": safe_string(result),
+        "observations": [],
+    }
+
+    for observation in observations:
+
+        pin_record_after = observation.get("pin_record")
+
+        record = {
+            "delay": observation.get("delay"),
+            "view_ids": None,
+            "positions": [],
+        }
+
+        if pin_record_after is not None:
+
+            record["view_ids"] = pin_record_after.get("view_ids")
+
+            for view in pin_record_after.get("views", []):
+                record["positions"].append({
+                    "view_id": view.get("view_id"),
+                    "center_x": view.get("center_x"),
+                    "center_y": view.get("center_y"),
+                    "area": view.get("area"),
+                })
+
+        event_data["observations"].append(record)
+
+    append_event("place_attempt", event_data)
+
+    return {
+        "success": True,
+        "place_result": result,
+        "observations": observations,
+    }
+
+
+# ============================================================
+# PEEL TEST
+# ============================================================
+
+def run_peel_test(prj, dev, pin, sym, connector_device_id):
+
+    log_section("PEEL TEST")
+
+    log("The connector is rediscovered from scratch before every move.")
+    log("The current top pin is recalculated before every move.")
+    log(f"TOP_IS_HIGH_Y = {TOP_IS_HIGH_Y}")
+    log(f"Every Place attempt uses X = {FIXED_X}.")
+    log(f"Every Place attempt stays between Y = {Y_MIN} and Y = {Y_MAX}.")
+
+    attempted_pin_names = set()
+
+    for attempt_number in range(MAX_AUTOMATIC_MOVES):
+
+        current_snapshot = build_connector_snapshot(prj, dev, pin, sym, connector_device_id)
+
+        current_top = choose_current_top_pin(current_snapshot, attempted_pin_names)
+
+        if current_top is None:
+            log("NO MORE UNTESTED POSITIONED PINS FOUND")
+            break
+
+        pin_name = current_top["pin_name"]
+        current_y = current_top["center_y"]
+
+        target_y = choose_target_y(current_y, attempt_number)
+
+        log()
+        log(f"CURRENT TOP CANDIDATE: PIN {pin_name}")
+        log(f"CURRENT Y: {current_y}")
+        log(f"SELECTED TEST Y: {target_y}")
+
+        result = automatic_move_attempt(prj, dev, pin, sym, connector_device_id, pin_name, target_y, attempt_number + 1)
+
+        attempted_pin_names.add(pin_name)
+
+        after_snapshot = build_connector_snapshot(prj, dev, pin, sym, connector_device_id)
+
+        print_snapshot(after_snapshot, f"FULL CONNECTOR SNAPSHOT AFTER ATTEMPT {attempt_number + 1}")
+
+        if result.get("reason") == "user_skipped":
+            continue
+
+
+# ============================================================
+# ONE PIN SWEEP TEST
+# ============================================================
+
+def run_one_pin_sweep(prj, dev, pin, sym, connector_device_id):
+
+    log_section(f"ONE PIN SWEEP: PIN {ONE_PIN_NAME}")
+
+    targets = generate_y_targets()
+
+    log(f"TARGET Y VALUES: {targets}")
+
+    for index, target_y in enumerate(targets):
+
+        snapshot = build_connector_snapshot(prj, dev, pin, sym, connector_device_id)
+
+        pin_record = find_pin_record(snapshot, ONE_PIN_NAME)
+
+        if pin_record is None:
+            log(f"PIN {ONE_PIN_NAME} DISAPPEARED OR COULD NOT BE REDISCOVERED")
+            break
+
+        current_y = None
+
+        if pin_record.get("views"):
+            current_y = pin_record["views"][0].get("center_y")
+
+        if current_y is not None and values_close(current_y, target_y, tolerance=0.02):
+            log(f"SKIPPING Y {target_y} BECAUSE PIN IS ALREADY THERE")
+            continue
+
+        automatic_move_attempt(prj, dev, pin, sym, connector_device_id, ONE_PIN_NAME, target_y, index + 1)
+
+
+# ============================================================
+# MANUAL PRECONDITION
+# ============================================================
+
+def run_manual_precondition(prj, dev, pin, sym, connector_device_id):
+
+    before = build_connector_snapshot(prj, dev, pin, sym, connector_device_id)
+
+    print_snapshot(before, "SNAPSHOT BEFORE MANUAL MOVE")
+
+    log_section("MANUAL MOVE PRECONDITION")
+
+    log("In E3, manually move the CURRENT TOP PIN in the way that has previously unlocked movement.")
+    log("Do not close this console.")
+    log("When the manual move is complete, return here.")
+
+    input("Press ENTER after the manual top-pin move is complete: ")
+
+    after = build_connector_snapshot(prj, dev, pin, sym, connector_device_id)
+
+    print_snapshot(after, "SNAPSHOT AFTER MANUAL MOVE")
+
+    compare_snapshots(before, after, "CHANGES CAUSED BY MANUAL MOVE")
+
+    append_event("manual_precondition", {
+        "before": before,
+        "after": after,
+    })
+
+
+# ============================================================
+# SAVE RESULTS
+# ============================================================
+
+def save_results():
+
+    AUDIT_DATA["finished"] = datetime.now().isoformat(timespec="milliseconds")
+
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+
+    text_path = OUTPUT_DIRECTORY / f"e3_pin_place_audit_{timestamp}.txt"
+    json_path = OUTPUT_DIRECTORY / f"e3_pin_place_audit_{timestamp}.json"
+
+    text_path.write_text("\n".join(LOG_LINES), encoding="utf-8")
+    json_path.write_text(json.dumps(AUDIT_DATA, indent=2, default=str), encoding="utf-8")
+
+    print()
+    print("=" * 90)
+    print("AUDIT FILES WRITTEN")
+    print("=" * 90)
+    print(text_path)
+    print(json_path)
+
+
+# ============================================================
+# MAIN
+# ============================================================
+
+def main():
+
+    AUDIT_DATA["started"] = datetime.now().isoformat(timespec="milliseconds")
+
+    log_section("E3 PIN PLACE BEHAVIOR AUDIT")
+
+    log(f"CONNECTOR_NAME = {CONNECTOR_NAME}")
+    log(f"FIXED_X = {FIXED_X}")
+    log(f"Y_MIN = {Y_MIN}")
+    log(f"Y_MAX = {Y_MAX}")
+    log(f"Y_STEP = {Y_STEP}")
+    log(f"TEST_MODE = {TEST_MODE}")
+    log(f"PROMPT_FOR_MANUAL_TOP_MOVE = {PROMPT_FOR_MANUAL_TOP_MOVE}")
+
+    app, prj, dev, pin, sym = connect_to_e3()
+
+    audit_relevant_methods(pin, "e3Pin")
+    audit_relevant_methods(sym, "e3Symbol")
+
+    connector_device_id = find_connector_device_id(prj, dev)
+
+    if connector_device_id is None:
+        raise RuntimeError(f"Could not find connector {CONNECTOR_NAME}.")
+
+    baseline = build_connector_snapshot(prj, dev, pin, sym, connector_device_id)
+
+    print_snapshot(baseline, "BASELINE CONNECTOR SNAPSHOT")
+
+    append_event("baseline", baseline)
+
+    if PROMPT_FOR_MANUAL_TOP_MOVE:
+        run_manual_precondition(prj, dev, pin, sym, connector_device_id)
+
+    mode = TEST_MODE.strip().upper()
+
+    if mode == "SNAPSHOT_ONLY":
+        log("SNAPSHOT_ONLY MODE COMPLETE")
+
+    elif mode == "PEEL":
+        run_peel_test(prj, dev, pin, sym, connector_device_id)
+
+    elif mode == "ONE_PIN_SWEEP":
+        run_one_pin_sweep(prj, dev, pin, sym, connector_device_id)
+
+    else:
+        raise RuntimeError(f"Unknown TEST_MODE: {TEST_MODE}")
+
+    final_snapshot = build_connector_snapshot(prj, dev, pin, sym, connector_device_id)
+
+    print_snapshot(final_snapshot, "FINAL CONNECTOR SNAPSHOT")
+
+    append_event("final", final_snapshot)
+
+
+if __name__ == "__main__":
+
+    try:
+        main()
+
+    except KeyboardInterrupt:
+        log()
+        log("AUDIT STOPPED BY USER")
+
+    except Exception as exc:
+        log()
+        log("FATAL ERROR")
+        log(safe_string(exc))
+        log(traceback.format_exc())
+
+    finally:
+
+        try:
+            save_results()
+        except Exception as exc:
+            print(f"COULD NOT SAVE AUDIT FILES: {exc}")
+
+        try:
+            pythoncom.CoUninitialize()
+        except Exception:
+            pass
