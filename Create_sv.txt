@@ -1,508 +1,1031 @@
+import json
+import traceback
+from datetime import datetime
+from pathlib import Path
 
-====================================================================================================
-E3 SPLIT PIN AUDIT V4
-====================================================================================================
-This version fixes E3 COM output-array handling.
-CONNECTOR_NAME = SCP-J1
-FIXED_X = 5.5
-Y RANGE = 28.0 to 30.25
+import pythoncom
+import win32com.client
 
-====================================================================================================
-CONNECTING TO E3
-====================================================================================================
-APPLICATION: <win32com.gen_py.E3.series 2025.2543 Type Library.IApplicationInterface instance at 0x3046950556672>
-PROJECT / JOB: <win32com.gen_py.E3.series 2025.2543 Type Library.IJobInterface instance at 0x3046950558016>
-DEVICE OBJECT CREATED
-PIN OBJECT CREATED
-SYMBOL OBJECT CREATED
 
-====================================================================================================
-FIND CONNECTOR: SCP-J1
-====================================================================================================
-DEVICE ENUMERATION
-    GetAllDeviceIds(None) RAW: (4, (None, 72258, 64611, 67783, 137415))
-    GetAllDeviceIds(None) COUNT: 4
-    GetAllDeviceIds(None) VALUES: [72258, 64611, 67783, 137415]
-DEVICE IDS: [72258, 64611, 67783, 137415]
+# ============================================================
+# USER SETTINGS
+# ============================================================
 
-DEVICE 72258: {'GetName': 'Wires', 'GetReferenceType': '-1'}
+CONNECTOR_NAME = "SCP-J1"
 
-DEVICE 64611: {'GetName': 'SCP-J1', 'GetComponentName': 'Generic_D-Sub_9P_Plug', 'GetComponentVersion': '1', 'GetLocation': 'BxRxUx', 'GetReferenceType': '3'}
+DEFAULT_PIN_NAME = "1"
 
-DEVICE 67783: {'GetName': 'SCP-J2', 'GetComponentName': 'Generic_RJ45_Plug', 'GetComponentVersion': '1', 'GetLocation': 'BxRxUx', 'GetReferenceType': '3'}
+OUTPUT_DIRECTORY = Path(__file__).resolve().parent
 
-DEVICE 137415: {'GetName': 'TEST_NAME_100000', 'GetLocation': 'BxRxUx', 'GetReferenceType': '3'}
+COM_MISSING = -2147352572
 
-SELECTED CONNECTOR DEVICE ID: 64611
+METHOD_KEYWORDS = [
+    "bound",
+    "break",
+    "connect",
+    "connection",
+    "delete",
+    "disconnect",
+    "line",
+    "move",
+    "net",
+    "node",
+    "place",
+    "remove",
+    "segment",
+    "unbind",
+    "wire",
+]
 
-====================================================================================================
-RAW ENUMERATION TEST
-====================================================================================================
-DEVICE PIN ENUMERATION
-    GetPinIds(None) RAW: (9, (None, 64615, 64614, 64613, 64612, 64619, 64618, 64617, 64616, 64534))
-    GetPinIds(None) COUNT: 9
-    GetPinIds(None) VALUES: [64615, 64614, 64613, 64612, 64619, 64618, 64617, 64616, 64534]
+SAFE_GETTERS = [
+    "GetId",
+    "GetName",
+    "GetTypeName",
+    "GetSymbolTypeName",
+    "GetComponentName",
+    "GetSignalName",
+    "GetNetName",
+    "GetSheetId",
+    "GetNodeId",
+    "GetStartNodeId",
+    "GetEndNodeId",
+    "GetParentId",
+    "GetDeviceId",
+    "GetPinId",
+    "GetGID",
+    "GetGUID",
+]
 
-CLEAN PIN IDS: [64615, 64614, 64613, 64612, 64619, 64618, 64617, 64616, 64534]
 
-PIN ID 64615 NAME 1
-PIN VIEW ENUMERATION
-    GetViewIds(None) RAW: (1, (None, 70079))
-    GetViewIds(None) COUNT: 1
-    GetViewIds(None) VALUES: [70079]
-CLEAN VIEW IDS: [70079]
+# ============================================================
+# GLOBAL LOGGING
+# ============================================================
 
-PIN ID 64614 NAME 2
-PIN VIEW ENUMERATION
-    GetViewIds(None) RAW: (1, (None, 70077))
-    GetViewIds(None) COUNT: 1
-    GetViewIds(None) VALUES: [70077]
-CLEAN VIEW IDS: [70077]
+LOG_LINES = []
 
-PIN ID 64613 NAME 3
-PIN VIEW ENUMERATION
-    GetViewIds(None) RAW: (1, (None, 70075))
-    GetViewIds(None) COUNT: 1
-    GetViewIds(None) VALUES: [70075]
-CLEAN VIEW IDS: [70075]
+AUDIT_DATA = {
+    "started": None,
+    "finished": None,
+    "connector_name": CONNECTOR_NAME,
+    "events": [],
+}
 
-PIN ID 64612 NAME 4
-PIN VIEW ENUMERATION
-    GetViewIds(None) RAW: (1, (None, 70073))
-    GetViewIds(None) COUNT: 1
-    GetViewIds(None) VALUES: [70073]
-CLEAN VIEW IDS: [70073]
 
-PIN ID 64619 NAME 5
-PIN VIEW ENUMERATION
-    GetViewIds(None) RAW: (1, (None, 70067))
-    GetViewIds(None) COUNT: 1
-    GetViewIds(None) VALUES: [70067]
-CLEAN VIEW IDS: [70067]
+def log(message=""):
 
-PIN ID 64618 NAME 6
-PIN VIEW ENUMERATION
-    GetViewIds(None) RAW: (1, (None, 70061))
-    GetViewIds(None) COUNT: 1
-    GetViewIds(None) VALUES: [70061]
-CLEAN VIEW IDS: [70061]
+    text = str(message)
 
-PIN ID 64617 NAME 7
-PIN VIEW ENUMERATION
-    GetViewIds(None) RAW: (1, (None, 70055))
-    GetViewIds(None) COUNT: 1
-    GetViewIds(None) VALUES: [70055]
-CLEAN VIEW IDS: [70055]
+    print(text)
 
-PIN ID 64616 NAME 8
-PIN VIEW ENUMERATION
-    GetViewIds(None) RAW: (1, (None, 70049))
-    GetViewIds(None) COUNT: 1
-    GetViewIds(None) VALUES: [70049]
-CLEAN VIEW IDS: [70049]
+    LOG_LINES.append(text)
 
-PIN ID 64534 NAME 9
-PIN VIEW ENUMERATION
-    GetViewIds(None) RAW: (1, (None, 70043))
-    GetViewIds(None) COUNT: 1
-    GetViewIds(None) VALUES: [70043]
-CLEAN VIEW IDS: [70043]
 
-====================================================================================================
-INITIAL VALID BASELINE
-====================================================================================================
-CONNECTOR: SCP-J1
-DEVICE ID: 64611
-LOGICAL PIN COUNT: 9
+def section(title):
 
-PIN 1 | PIN ID 64615 | VIEW IDS [70079]
-    VIEW 70079
-        SYMBOL NAME: J1
-        SHEET: 204828
-        AREA: [-0.30023622047243465, -0.125, 0.0, 0.17499999999999996]
-        CENTER: (-0.15011811023621732, 0.02499999999999998)
-        PIN PHYSICAL POSITION: [0.0, 0.0, 0.0, 0.0]
-        PIN SCHEMA LOCATION: [204828.0, 7.699999999999999, 29.9, 7.0]
-        RELATIONSHIPS: {'GetDynamicParentId': 0, 'GetStateId': 0, 'GetTargetObjectId': 0, 'GetGateId': 0, 'GetGroupId': 0, 'GetDynamicChildrenIds': [], 'GetMasterIds': [], 'GetSlaveIds': [], 'GetStateIds': [], 'GetPinIds': [148313], 'GetDevicePinIds': [70079], 'GetBoundIds': [151245, 148789]}
+    log()
+    log("=" * 100)
+    log(title)
+    log("=" * 100)
 
-PIN 2 | PIN ID 64614 | VIEW IDS [70077]
-    VIEW 70077
-        SYMBOL NAME: J2
-        SHEET: 204828
-        AREA: [-0.3000000000000011, -0.125, 0.0, 0.125]
-        CENTER: (-0.15000000000000055, 0.0)
-        PIN PHYSICAL POSITION: [0.0, 0.0, 0.0, 0.0]
-        PIN SCHEMA LOCATION: [204828.0, 7.7, 29.650000000000002, 7.0]
-        RELATIONSHIPS: {'GetDynamicParentId': 0, 'GetStateId': 0, 'GetTargetObjectId': 0, 'GetGateId': 0, 'GetGroupId': 0, 'GetDynamicChildrenIds': [], 'GetMasterIds': [], 'GetSlaveIds': [], 'GetStateIds': [], 'GetPinIds': [204789], 'GetDevicePinIds': [70077], 'GetBoundIds': [151245, 148789, 148784, 148321]}
 
-PIN 3 | PIN ID 64613 | VIEW IDS [70075]
-    VIEW 70075
-        SYMBOL NAME: J3
-        SHEET: 204828
-        AREA: [-0.3000000000000011, -0.125, 0.0, 0.125]
-        CENTER: (-0.15000000000000055, 0.0)
-        PIN PHYSICAL POSITION: [0.0, 0.0, 0.0, 0.0]
-        PIN SCHEMA LOCATION: [204828.0, 7.7, 29.400000000000002, 7.0]
-        RELATIONSHIPS: {'GetDynamicParentId': 0, 'GetStateId': 0, 'GetTargetObjectId': 0, 'GetGateId': 0, 'GetGroupId': 0, 'GetDynamicChildrenIds': [], 'GetMasterIds': [], 'GetSlaveIds': [], 'GetStateIds': [], 'GetPinIds': [147144], 'GetDevicePinIds': [70075], 'GetBoundIds': [204790, 151244, 148784, 148321]}
+def subsection(title):
 
-PIN 4 | PIN ID 64612 | VIEW IDS [70073]
-    VIEW 70073
-        SYMBOL NAME: J4
-        SHEET: 204828
-        AREA: [-0.3000000000000011, -0.125, 0.0, 0.125]
-        CENTER: (-0.15000000000000055, 0.0)
-        PIN PHYSICAL POSITION: [0.0, 0.0, 0.0, 0.0]
-        PIN SCHEMA LOCATION: [204828.0, 7.7, 29.150000000000002, 7.0]
-        RELATIONSHIPS: {'GetDynamicParentId': 0, 'GetStateId': 0, 'GetTargetObjectId': 0, 'GetGateId': 0, 'GetGroupId': 0, 'GetDynamicChildrenIds': [], 'GetMasterIds': [], 'GetSlaveIds': [], 'GetStateIds': [], 'GetPinIds': [146024], 'GetDevicePinIds': [70073], 'GetBoundIds': [204818, 204796, 204790, 151244]}
+    log()
+    log("-" * 100)
+    log(title)
+    log("-" * 100)
 
-PIN 5 | PIN ID 64619 | VIEW IDS [70067]
-    VIEW 70067
-        SYMBOL NAME: J5
-        SHEET: 204828
-        AREA: [-0.3000000000000011, -0.125, 0.0, 0.125]
-        CENTER: (-0.15000000000000055, 0.0)
-        PIN PHYSICAL POSITION: [0.0, 0.0, 0.0, 0.0]
-        PIN SCHEMA LOCATION: [204828.0, 7.7, 28.900000000000002, 7.0]
-        RELATIONSHIPS: {'GetDynamicParentId': 0, 'GetStateId': 0, 'GetTargetObjectId': 0, 'GetGateId': 0, 'GetGroupId': 0, 'GetDynamicChildrenIds': [], 'GetMasterIds': [], 'GetSlaveIds': [], 'GetStateIds': [], 'GetPinIds': [147661], 'GetDevicePinIds': [70067], 'GetBoundIds': [204800, 204817, 204818, 204796]}
 
-PIN 6 | PIN ID 64618 | VIEW IDS [70061]
-    VIEW 70061
-        SYMBOL NAME: J6
-        SHEET: 204828
-        AREA: [-0.3000000000000011, -0.125, 0.0, 0.125]
-        CENTER: (-0.15000000000000055, 0.0)
-        PIN PHYSICAL POSITION: [0.0, 0.0, 0.0, 0.0]
-        PIN SCHEMA LOCATION: [204828.0, 7.7, 28.650000000000002, 7.0]
-        RELATIONSHIPS: {'GetDynamicParentId': 0, 'GetStateId': 0, 'GetTargetObjectId': 0, 'GetGateId': 0, 'GetGroupId': 0, 'GetDynamicChildrenIds': [], 'GetMasterIds': [], 'GetSlaveIds': [], 'GetStateIds': [], 'GetPinIds': [147660], 'GetDevicePinIds': [70061], 'GetBoundIds': [204800, 204817, 204816, 204819]}
+def add_event(event_type, data):
 
-PIN 7 | PIN ID 64617 | VIEW IDS [70055]
-    VIEW 70055
-        SYMBOL NAME: J7
-        SHEET: 204828
-        AREA: [-0.3000000000000011, -0.125, 0.0, 0.125]
-        CENTER: (-0.15000000000000055, 0.0)
-        PIN PHYSICAL POSITION: [0.0, 0.0, 0.0, 0.0]
-        PIN SCHEMA LOCATION: [204828.0, 7.7, 28.400000000000002, 7.0]
-        RELATIONSHIPS: {'GetDynamicParentId': 0, 'GetStateId': 0, 'GetTargetObjectId': 0, 'GetGateId': 0, 'GetGroupId': 0, 'GetDynamicChildrenIds': [], 'GetMasterIds': [], 'GetSlaveIds': [], 'GetStateIds': [], 'GetPinIds': [146064], 'GetDevicePinIds': [70055], 'GetBoundIds': [165992, 204845, 204816, 204819]}
+    AUDIT_DATA["events"].append({
+        "time": datetime.now().isoformat(timespec="milliseconds"),
+        "type": event_type,
+        "data": data,
+    })
 
-PIN 8 | PIN ID 64616 | VIEW IDS [70049]
-    VIEW 70049
-        SYMBOL NAME: J8
-        SHEET: 204828
-        AREA: [-0.3000000000000011, -0.125, 0.0, 0.125]
-        CENTER: (-0.15000000000000055, 0.0)
-        PIN PHYSICAL POSITION: [0.0, 0.0, 0.0, 0.0]
-        PIN SCHEMA LOCATION: [204828.0, 7.7, 28.150000000000002, 7.0]
-        RELATIONSHIPS: {'GetDynamicParentId': 0, 'GetStateId': 0, 'GetTargetObjectId': 0, 'GetGateId': 0, 'GetGroupId': 0, 'GetDynamicChildrenIds': [], 'GetMasterIds': [], 'GetSlaveIds': [], 'GetStateIds': [], 'GetPinIds': [146237], 'GetDevicePinIds': [70049], 'GetBoundIds': [165992, 204845, 204840, 204825]}
 
-PIN 9 | PIN ID 64534 | VIEW IDS [70043]
-    VIEW 70043
-        SYMBOL NAME: J9
-        SHEET: 204828
-        AREA: [-0.3000000000000279, -0.17499999999995453, -2.8645502418044983e-14, 0.12500000000004477]
-        CENTER: (-0.15000000000002828, -0.024999999999954878)
-        PIN PHYSICAL POSITION: [0.0, 0.0, 0.0, 0.0]
-        PIN SCHEMA LOCATION: [204828.0, 7.7, 27.900000000000002, 7.0]
-        RELATIONSHIPS: {'GetDynamicParentId': 0, 'GetStateId': 0, 'GetTargetObjectId': 0, 'GetGateId': 0, 'GetGroupId': 0, 'GetDynamicChildrenIds': [], 'GetMasterIds': [], 'GetSlaveIds': [], 'GetStateIds': [], 'GetPinIds': [204785], 'GetDevicePinIds': [70043], 'GetBoundIds': [204840, 204825]}
+# ============================================================
+# BASIC HELPERS
+# ============================================================
 
-POSITIONED PIN VIEWS:
-    PIN 1 | PIN ID 64615 | VIEW 70079 | X -0.15011811023621732 | Y 0.02499999999999998
-    PIN 2 | PIN ID 64614 | VIEW 70077 | X -0.15000000000000055 | Y 0.0
-    PIN 3 | PIN ID 64613 | VIEW 70075 | X -0.15000000000000055 | Y 0.0
-    PIN 4 | PIN ID 64612 | VIEW 70073 | X -0.15000000000000055 | Y 0.0
-    PIN 5 | PIN ID 64619 | VIEW 70067 | X -0.15000000000000055 | Y 0.0
-    PIN 6 | PIN ID 64618 | VIEW 70061 | X -0.15000000000000055 | Y 0.0
-    PIN 7 | PIN ID 64617 | VIEW 70055 | X -0.15000000000000055 | Y 0.0
-    PIN 8 | PIN ID 64616 | VIEW 70049 | X -0.15000000000000055 | Y 0.0
-    PIN 9 | PIN ID 64534 | VIEW 70043 | X -0.15000000000002828 | Y -0.024999999999954878
+def safe_string(value):
 
-====================================================================================================
-TEST MENU
-====================================================================================================
-1 - Full valid connector snapshot
-2 - Raw GetPinIds / GetViewIds enumeration audit
-3 - Manual TOP move -> compare -> script new top
-4 - Manual BOTTOM move -> compare -> script new bottom
-5 - Script Place a specific pin number
-q - Save and quit
+    try:
+        return str(value)
+    except Exception:
+        return repr(value)
 
-====================================================================================================
-BEFORE MANUAL TOP MOVE
-====================================================================================================
-CONNECTOR: SCP-J1
-DEVICE ID: 64611
-LOGICAL PIN COUNT: 9
 
-PIN 1 | PIN ID 64615 | VIEW IDS [70079]
-    VIEW 70079
-        SYMBOL NAME: J1
-        SHEET: 204828
-        AREA: [-0.30023622047243465, -0.125, 0.0, 0.17499999999999996]
-        CENTER: (-0.15011811023621732, 0.02499999999999998)
-        PIN PHYSICAL POSITION: [0.0, 0.0, 0.0, 0.0]
-        PIN SCHEMA LOCATION: [204828.0, 7.699999999999999, 29.9, 7.0]
-        RELATIONSHIPS: {'GetDynamicParentId': 0, 'GetStateId': 0, 'GetTargetObjectId': 0, 'GetGateId': 0, 'GetGroupId': 0, 'GetDynamicChildrenIds': [], 'GetMasterIds': [], 'GetSlaveIds': [], 'GetStateIds': [], 'GetPinIds': [148313], 'GetDevicePinIds': [70079], 'GetBoundIds': [151245, 148789]}
+def is_missing_value(value):
 
-PIN 2 | PIN ID 64614 | VIEW IDS [70077]
-    VIEW 70077
-        SYMBOL NAME: J2
-        SHEET: 204828
-        AREA: [-0.3000000000000011, -0.125, 0.0, 0.125]
-        CENTER: (-0.15000000000000055, 0.0)
-        PIN PHYSICAL POSITION: [0.0, 0.0, 0.0, 0.0]
-        PIN SCHEMA LOCATION: [204828.0, 7.7, 29.650000000000002, 7.0]
-        RELATIONSHIPS: {'GetDynamicParentId': 0, 'GetStateId': 0, 'GetTargetObjectId': 0, 'GetGateId': 0, 'GetGroupId': 0, 'GetDynamicChildrenIds': [], 'GetMasterIds': [], 'GetSlaveIds': [], 'GetStateIds': [], 'GetPinIds': [204789], 'GetDevicePinIds': [70077], 'GetBoundIds': [151245, 148789, 148784, 148321]}
+    if value is None:
+        return True
 
-PIN 3 | PIN ID 64613 | VIEW IDS [70075]
-    VIEW 70075
-        SYMBOL NAME: J3
-        SHEET: 204828
-        AREA: [-0.3000000000000011, -0.125, 0.0, 0.125]
-        CENTER: (-0.15000000000000055, 0.0)
-        PIN PHYSICAL POSITION: [0.0, 0.0, 0.0, 0.0]
-        PIN SCHEMA LOCATION: [204828.0, 7.7, 29.400000000000002, 7.0]
-        RELATIONSHIPS: {'GetDynamicParentId': 0, 'GetStateId': 0, 'GetTargetObjectId': 0, 'GetGateId': 0, 'GetGroupId': 0, 'GetDynamicChildrenIds': [], 'GetMasterIds': [], 'GetSlaveIds': [], 'GetStateIds': [], 'GetPinIds': [147144], 'GetDevicePinIds': [70075], 'GetBoundIds': [204790, 151244, 148784, 148321]}
+    try:
+        if int(value) == COM_MISSING:
+            return True
+    except Exception:
+        pass
 
-PIN 4 | PIN ID 64612 | VIEW IDS [70073]
-    VIEW 70073
-        SYMBOL NAME: J4
-        SHEET: 204828
-        AREA: [-0.3000000000000011, -0.125, 0.0, 0.125]
-        CENTER: (-0.15000000000000055, 0.0)
-        PIN PHYSICAL POSITION: [0.0, 0.0, 0.0, 0.0]
-        PIN SCHEMA LOCATION: [204828.0, 7.7, 29.150000000000002, 7.0]
-        RELATIONSHIPS: {'GetDynamicParentId': 0, 'GetStateId': 0, 'GetTargetObjectId': 0, 'GetGateId': 0, 'GetGroupId': 0, 'GetDynamicChildrenIds': [], 'GetMasterIds': [], 'GetSlaveIds': [], 'GetStateIds': [], 'GetPinIds': [146024], 'GetDevicePinIds': [70073], 'GetBoundIds': [204818, 204796, 204790, 151244]}
+    return False
 
-PIN 5 | PIN ID 64619 | VIEW IDS [70067]
-    VIEW 70067
-        SYMBOL NAME: J5
-        SHEET: 204828
-        AREA: [-0.3000000000000011, -0.125, 0.0, 0.125]
-        CENTER: (-0.15000000000000055, 0.0)
-        PIN PHYSICAL POSITION: [0.0, 0.0, 0.0, 0.0]
-        PIN SCHEMA LOCATION: [204828.0, 7.7, 28.900000000000002, 7.0]
-        RELATIONSHIPS: {'GetDynamicParentId': 0, 'GetStateId': 0, 'GetTargetObjectId': 0, 'GetGateId': 0, 'GetGroupId': 0, 'GetDynamicChildrenIds': [], 'GetMasterIds': [], 'GetSlaveIds': [], 'GetStateIds': [], 'GetPinIds': [147661], 'GetDevicePinIds': [70067], 'GetBoundIds': [204800, 204817, 204818, 204796]}
 
-PIN 6 | PIN ID 64618 | VIEW IDS [70061]
-    VIEW 70061
-        SYMBOL NAME: J6
-        SHEET: 204828
-        AREA: [-0.3000000000000011, -0.125, 0.0, 0.125]
-        CENTER: (-0.15000000000000055, 0.0)
-        PIN PHYSICAL POSITION: [0.0, 0.0, 0.0, 0.0]
-        PIN SCHEMA LOCATION: [204828.0, 7.7, 28.650000000000002, 7.0]
-        RELATIONSHIPS: {'GetDynamicParentId': 0, 'GetStateId': 0, 'GetTargetObjectId': 0, 'GetGateId': 0, 'GetGroupId': 0, 'GetDynamicChildrenIds': [], 'GetMasterIds': [], 'GetSlaveIds': [], 'GetStateIds': [], 'GetPinIds': [147660], 'GetDevicePinIds': [70061], 'GetBoundIds': [204800, 204817, 204816, 204819]}
+def clean_id_list(values):
 
-PIN 7 | PIN ID 64617 | VIEW IDS [70055]
-    VIEW 70055
-        SYMBOL NAME: J7
-        SHEET: 204828
-        AREA: [-0.3000000000000011, -0.125, 0.0, 0.125]
-        CENTER: (-0.15000000000000055, 0.0)
-        PIN PHYSICAL POSITION: [0.0, 0.0, 0.0, 0.0]
-        PIN SCHEMA LOCATION: [204828.0, 7.7, 28.400000000000002, 7.0]
-        RELATIONSHIPS: {'GetDynamicParentId': 0, 'GetStateId': 0, 'GetTargetObjectId': 0, 'GetGateId': 0, 'GetGroupId': 0, 'GetDynamicChildrenIds': [], 'GetMasterIds': [], 'GetSlaveIds': [], 'GetStateIds': [], 'GetPinIds': [146064], 'GetDevicePinIds': [70055], 'GetBoundIds': [165992, 204845, 204816, 204819]}
+    cleaned = []
 
-PIN 8 | PIN ID 64616 | VIEW IDS [70049]
-    VIEW 70049
-        SYMBOL NAME: J8
-        SHEET: 204828
-        AREA: [-0.3000000000000011, -0.125, 0.0, 0.125]
-        CENTER: (-0.15000000000000055, 0.0)
-        PIN PHYSICAL POSITION: [0.0, 0.0, 0.0, 0.0]
-        PIN SCHEMA LOCATION: [204828.0, 7.7, 28.150000000000002, 7.0]
-        RELATIONSHIPS: {'GetDynamicParentId': 0, 'GetStateId': 0, 'GetTargetObjectId': 0, 'GetGateId': 0, 'GetGroupId': 0, 'GetDynamicChildrenIds': [], 'GetMasterIds': [], 'GetSlaveIds': [], 'GetStateIds': [], 'GetPinIds': [146237], 'GetDevicePinIds': [70049], 'GetBoundIds': [165992, 204845, 204840, 204825]}
+    if values is None:
+        return cleaned
 
-PIN 9 | PIN ID 64534 | VIEW IDS [70043]
-    VIEW 70043
-        SYMBOL NAME: J9
-        SHEET: 204828
-        AREA: [-0.3000000000000279, -0.17499999999995453, -2.8645502418044983e-14, 0.12500000000004477]
-        CENTER: (-0.15000000000002828, -0.024999999999954878)
-        PIN PHYSICAL POSITION: [0.0, 0.0, 0.0, 0.0]
-        PIN SCHEMA LOCATION: [204828.0, 7.7, 27.900000000000002, 7.0]
-        RELATIONSHIPS: {'GetDynamicParentId': 0, 'GetStateId': 0, 'GetTargetObjectId': 0, 'GetGateId': 0, 'GetGroupId': 0, 'GetDynamicChildrenIds': [], 'GetMasterIds': [], 'GetSlaveIds': [], 'GetStateIds': [], 'GetPinIds': [204785], 'GetDevicePinIds': [70043], 'GetBoundIds': [204840, 204825]}
+    if not isinstance(values, (tuple, list)):
+        values = [values]
 
-POSITIONED PIN VIEWS:
-    PIN 1 | PIN ID 64615 | VIEW 70079 | X -0.15011811023621732 | Y 0.02499999999999998
-    PIN 2 | PIN ID 64614 | VIEW 70077 | X -0.15000000000000055 | Y 0.0
-    PIN 3 | PIN ID 64613 | VIEW 70075 | X -0.15000000000000055 | Y 0.0
-    PIN 4 | PIN ID 64612 | VIEW 70073 | X -0.15000000000000055 | Y 0.0
-    PIN 5 | PIN ID 64619 | VIEW 70067 | X -0.15000000000000055 | Y 0.0
-    PIN 6 | PIN ID 64618 | VIEW 70061 | X -0.15000000000000055 | Y 0.0
-    PIN 7 | PIN ID 64617 | VIEW 70055 | X -0.15000000000000055 | Y 0.0
-    PIN 8 | PIN ID 64616 | VIEW 70049 | X -0.15000000000000055 | Y 0.0
-    PIN 9 | PIN ID 64534 | VIEW 70043 | X -0.15000000000002828 | Y -0.024999999999954878
+    for value in values:
 
-CURRENT TOP: {'pin_name': '1', 'pin_id': 64615, 'view_id': 70079, 'sheet_id': 204828, 'x': -0.15011811023621732, 'y': 0.02499999999999998}
+        if is_missing_value(value):
+            continue
 
-====================================================================================================
-AFTER MANUAL TOP MOVE
-====================================================================================================
-CONNECTOR: SCP-J1
-DEVICE ID: 64611
-LOGICAL PIN COUNT: 9
+        try:
+            value = int(value)
+        except Exception:
+            continue
 
-PIN 1 | PIN ID 64615 | VIEW IDS [70079]
-    VIEW 70079
-        SYMBOL NAME: J1
-        SHEET: 204828
-        AREA: [-0.3000000000000029, -0.1750000000000031, 0.0, 0.125]
-        CENTER: (-0.15000000000000144, -0.02500000000000155)
-        PIN PHYSICAL POSITION: [0.0, 0.0, 0.0, 0.0]
-        PIN SCHEMA LOCATION: [204828.0, 6.1000000000000005, 30.199999999999996, 7.0]
-        RELATIONSHIPS: {'GetDynamicParentId': 0, 'GetStateId': 0, 'GetTargetObjectId': 0, 'GetGateId': 0, 'GetGroupId': 0, 'GetDynamicChildrenIds': [], 'GetMasterIds': [], 'GetSlaveIds': [], 'GetStateIds': [], 'GetPinIds': [146841], 'GetDevicePinIds': [70079], 'GetBoundIds': []}
+        if value <= 0:
+            continue
 
-PIN 2 | PIN ID 64614 | VIEW IDS [70077]
-    VIEW 70077
-        SYMBOL NAME: J2
-        SHEET: 204828
-        AREA: [-0.30023622047243465, -0.125, 0.0, 0.17499999999999996]
-        CENTER: (-0.15011811023621732, 0.02499999999999998)
-        PIN PHYSICAL POSITION: [0.0, 0.0, 0.0, 0.0]
-        PIN SCHEMA LOCATION: [204828.0, 7.7, 29.650000000000002, 7.0]
-        RELATIONSHIPS: {'GetDynamicParentId': 0, 'GetStateId': 0, 'GetTargetObjectId': 0, 'GetGateId': 0, 'GetGroupId': 0, 'GetDynamicChildrenIds': [], 'GetMasterIds': [], 'GetSlaveIds': [], 'GetStateIds': [], 'GetPinIds': [147134], 'GetDevicePinIds': [70077], 'GetBoundIds': [146930, 146927]}
+        cleaned.append(value)
 
-PIN 3 | PIN ID 64613 | VIEW IDS [70075]
-    VIEW 70075
-        SYMBOL NAME: J3
-        SHEET: 204828
-        AREA: [-0.3000000000000011, -0.125, 0.0, 0.125]
-        CENTER: (-0.15000000000000055, 0.0)
-        PIN PHYSICAL POSITION: [0.0, 0.0, 0.0, 0.0]
-        PIN SCHEMA LOCATION: [204828.0, 7.7, 29.400000000000002, 7.0]
-        RELATIONSHIPS: {'GetDynamicParentId': 0, 'GetStateId': 0, 'GetTargetObjectId': 0, 'GetGateId': 0, 'GetGroupId': 0, 'GetDynamicChildrenIds': [], 'GetMasterIds': [], 'GetSlaveIds': [], 'GetStateIds': [], 'GetPinIds': [147144], 'GetDevicePinIds': [70075], 'GetBoundIds': [146938, 146935, 146930, 146927]}
+    return cleaned
 
-PIN 4 | PIN ID 64612 | VIEW IDS [70073]
-    VIEW 70073
-        SYMBOL NAME: J4
-        SHEET: 204828
-        AREA: [-0.3000000000000011, -0.125, 0.0, 0.125]
-        CENTER: (-0.15000000000000055, 0.0)
-        PIN PHYSICAL POSITION: [0.0, 0.0, 0.0, 0.0]
-        PIN SCHEMA LOCATION: [204828.0, 7.7, 29.150000000000002, 7.0]
-        RELATIONSHIPS: {'GetDynamicParentId': 0, 'GetStateId': 0, 'GetTargetObjectId': 0, 'GetGateId': 0, 'GetGroupId': 0, 'GetDynamicChildrenIds': [], 'GetMasterIds': [], 'GetSlaveIds': [], 'GetStateIds': [], 'GetPinIds': [146024], 'GetDevicePinIds': [70073], 'GetBoundIds': [146970, 146969, 146938, 146935]}
 
-PIN 5 | PIN ID 64619 | VIEW IDS [70067]
-    VIEW 70067
-        SYMBOL NAME: J5
-        SHEET: 204828
-        AREA: [-0.3000000000000011, -0.125, 0.0, 0.125]
-        CENTER: (-0.15000000000000055, 0.0)
-        PIN PHYSICAL POSITION: [0.0, 0.0, 0.0, 0.0]
-        PIN SCHEMA LOCATION: [204828.0, 7.7, 28.900000000000002, 7.0]
-        RELATIONSHIPS: {'GetDynamicParentId': 0, 'GetStateId': 0, 'GetTargetObjectId': 0, 'GetGateId': 0, 'GetGroupId': 0, 'GetDynamicChildrenIds': [], 'GetMasterIds': [], 'GetSlaveIds': [], 'GetStateIds': [], 'GetPinIds': [147661], 'GetDevicePinIds': [70067], 'GetBoundIds': [146972, 146971, 146970, 146969]}
+def parse_count_array_result(result):
 
-PIN 6 | PIN ID 64618 | VIEW IDS [70061]
-    VIEW 70061
-        SYMBOL NAME: J6
-        SHEET: 204828
-        AREA: [-0.3000000000000011, -0.125, 0.0, 0.125]
-        CENTER: (-0.15000000000000055, 0.0)
-        PIN PHYSICAL POSITION: [0.0, 0.0, 0.0, 0.0]
-        PIN SCHEMA LOCATION: [204828.0, 7.7, 28.650000000000002, 7.0]
-        RELATIONSHIPS: {'GetDynamicParentId': 0, 'GetStateId': 0, 'GetTargetObjectId': 0, 'GetGateId': 0, 'GetGroupId': 0, 'GetDynamicChildrenIds': [], 'GetMasterIds': [], 'GetSlaveIds': [], 'GetStateIds': [], 'GetPinIds': [147660], 'GetDevicePinIds': [70061], 'GetBoundIds': [146972, 146971, 146964, 146961]}
+    parsed = {
+        "count": None,
+        "raw_array": None,
+        "values": [],
+    }
 
-PIN 7 | PIN ID 64617 | VIEW IDS [70055]
-    VIEW 70055
-        SYMBOL NAME: J7
-        SHEET: 204828
-        AREA: [-0.3000000000000011, -0.125, 0.0, 0.125]
-        CENTER: (-0.15000000000000055, 0.0)
-        PIN PHYSICAL POSITION: [0.0, 0.0, 0.0, 0.0]
-        PIN SCHEMA LOCATION: [204828.0, 7.7, 28.400000000000002, 7.0]
-        RELATIONSHIPS: {'GetDynamicParentId': 0, 'GetStateId': 0, 'GetTargetObjectId': 0, 'GetGateId': 0, 'GetGroupId': 0, 'GetDynamicChildrenIds': [], 'GetMasterIds': [], 'GetSlaveIds': [], 'GetStateIds': [], 'GetPinIds': [146064], 'GetDevicePinIds': [70055], 'GetBoundIds': [146964, 146961, 146946, 146945]}
+    if result is None:
+        return parsed
 
-PIN 8 | PIN ID 64616 | VIEW IDS [70049]
-    VIEW 70049
-        SYMBOL NAME: J8
-        SHEET: 204828
-        AREA: [-0.3000000000000011, -0.125, 0.0, 0.125]
-        CENTER: (-0.15000000000000055, 0.0)
-        PIN PHYSICAL POSITION: [0.0, 0.0, 0.0, 0.0]
-        PIN SCHEMA LOCATION: [204828.0, 7.7, 28.150000000000002, 7.0]
-        RELATIONSHIPS: {'GetDynamicParentId': 0, 'GetStateId': 0, 'GetTargetObjectId': 0, 'GetGateId': 0, 'GetGroupId': 0, 'GetDynamicChildrenIds': [], 'GetMasterIds': [], 'GetSlaveIds': [], 'GetStateIds': [], 'GetPinIds': [146237], 'GetDevicePinIds': [70049], 'GetBoundIds': [146956, 146951, 146946, 146945]}
+    if isinstance(result, (tuple, list)):
 
-PIN 9 | PIN ID 64534 | VIEW IDS [70043]
-    VIEW 70043
-        SYMBOL NAME: J9
-        SHEET: 204828
-        AREA: [-0.3000000000000029, -0.19999999999999893, -3.580687802255623e-15, 0.10000000000000214]
-        CENTER: (-0.15000000000000324, -0.04999999999999839)
-        PIN PHYSICAL POSITION: [0.0, 0.0, 0.0, 0.0]
-        PIN SCHEMA LOCATION: [204828.0, 7.7, 27.900000000000002, 7.0]
-        RELATIONSHIPS: {'GetDynamicParentId': 0, 'GetStateId': 0, 'GetTargetObjectId': 0, 'GetGateId': 0, 'GetGroupId': 0, 'GetDynamicChildrenIds': [], 'GetMasterIds': [], 'GetSlaveIds': [], 'GetStateIds': [], 'GetPinIds': [147030], 'GetDevicePinIds': [70043], 'GetBoundIds': [146956, 146951]}
+        items = list(result)
 
-POSITIONED PIN VIEWS:
-    PIN 2 | PIN ID 64614 | VIEW 70077 | X -0.15011811023621732 | Y 0.02499999999999998
-    PIN 3 | PIN ID 64613 | VIEW 70075 | X -0.15000000000000055 | Y 0.0
-    PIN 4 | PIN ID 64612 | VIEW 70073 | X -0.15000000000000055 | Y 0.0
-    PIN 5 | PIN ID 64619 | VIEW 70067 | X -0.15000000000000055 | Y 0.0
-    PIN 6 | PIN ID 64618 | VIEW 70061 | X -0.15000000000000055 | Y 0.0
-    PIN 7 | PIN ID 64617 | VIEW 70055 | X -0.15000000000000055 | Y 0.0
-    PIN 8 | PIN ID 64616 | VIEW 70049 | X -0.15000000000000055 | Y 0.0
-    PIN 1 | PIN ID 64615 | VIEW 70079 | X -0.15000000000000144 | Y -0.02500000000000155
-    PIN 9 | PIN ID 64534 | VIEW 70043 | X -0.15000000000000324 | Y -0.04999999999999839
+        if len(items) >= 2 and isinstance(items[1], (tuple, list)):
 
-====================================================================================================
-WHAT MANUAL TOP MOVE CHANGED
-====================================================================================================
-PIN 1 VIEW 70079: POSITION (-0.15011811023621732, 0.02499999999999998) -> (-0.15000000000000144, -0.02500000000000155)
-PIN 1 VIEW 70079: GetBoundIds [151245, 148789] -> []
-PIN 1 VIEW 70079: GetPinIds [148313] -> [146841]
-PIN 2 VIEW 70077: POSITION (-0.15000000000000055, 0.0) -> (-0.15011811023621732, 0.02499999999999998)
-PIN 2 VIEW 70077: GetBoundIds [151245, 148789, 148784, 148321] -> [146930, 146927]
-PIN 2 VIEW 70077: GetPinIds [204789] -> [147134]
-PIN 3 VIEW 70075: GetBoundIds [204790, 151244, 148784, 148321] -> [146938, 146935, 146930, 146927]
-PIN 4 VIEW 70073: GetBoundIds [204818, 204796, 204790, 151244] -> [146970, 146969, 146938, 146935]
-PIN 5 VIEW 70067: GetBoundIds [204800, 204817, 204818, 204796] -> [146972, 146971, 146970, 146969]
-PIN 6 VIEW 70061: GetBoundIds [204800, 204817, 204816, 204819] -> [146972, 146971, 146964, 146961]
-PIN 7 VIEW 70055: GetBoundIds [165992, 204845, 204816, 204819] -> [146964, 146961, 146946, 146945]
-PIN 8 VIEW 70049: GetBoundIds [165992, 204845, 204840, 204825] -> [146956, 146951, 146946, 146945]
-PIN 9 VIEW 70043: POSITION (-0.15000000000002828, -0.024999999999954878) -> (-0.15000000000000324, -0.04999999999999839)
-PIN 9 VIEW 70043: GetBoundIds [204840, 204825] -> [146956, 146951]
-PIN 9 VIEW 70043: GetPinIds [204785] -> [147030]
-TOTAL DIFFERENCES: 15
+            try:
+                parsed["count"] = int(items[0])
+            except Exception:
+                parsed["count"] = None
 
-NEW TOP: {'pin_name': '2', 'pin_id': 64614, 'view_id': 70077, 'sheet_id': 204828, 'x': -0.15011811023621732, 'y': 0.02499999999999998}
+            parsed["raw_array"] = items[1]
+            parsed["values"] = clean_id_list(items[1])
 
-====================================================================================================
-PLACE TEST PIN 2
-====================================================================================================
-PIN ID: 64614
-VIEW ID: 70077
-SHEET ID: 204828
-CURRENT CENTER: (-0.15011811023621732, 0.02499999999999998)
-TARGET: (5.5, 30.25)
-Place RETURN: 0
-Place ELAPSED: 0.073842 sec
+            if parsed["count"] is not None and len(parsed["values"]) > parsed["count"]:
+                parsed["values"] = parsed["values"][-parsed["count"]:]
 
-====================================================================================================
-AFTER Place PIN 2 AT +0.000 SEC
-====================================================================================================
-NO DIFFERENCES DETECTED
+            return parsed
 
-====================================================================================================
-AFTER Place PIN 2 AT +0.050 SEC
-====================================================================================================
-NO DIFFERENCES DETECTED
+        parsed["raw_array"] = items
+        parsed["values"] = clean_id_list(items)
 
-====================================================================================================
-AFTER Place PIN 2 AT +0.250 SEC
-====================================================================================================
-NO DIFFERENCES DETECTED
+        return parsed
 
-====================================================================================================
-AFTER Place PIN 2 AT +1.000 SEC
-====================================================================================================
-NO DIFFERENCES DETECTED
+    parsed["raw_array"] = result
+    parsed["values"] = clean_id_list(result)
 
-====================================================================================================
-TEST MENU
-====================================================================================================
-1 - Full valid connector snapshot
-2 - Raw GetPinIds / GetViewIds enumeration audit
-3 - Manual TOP move -> compare -> script new top
-4 - Manual BOTTOM move -> compare -> script new bottom
-5 - Script Place a specific pin number
-q - Save and quit
+    return parsed
+
+
+def call_id_array(method, method_name):
+
+    attempts = []
+
+    try:
+        result = method(None)
+        parsed = parse_count_array_result(result)
+
+        attempts.append({
+            "call": f"{method_name}(None)",
+            "raw": safe_string(result),
+            "count": parsed["count"],
+            "values": parsed["values"],
+        })
+
+        if parsed["values"]:
+            return parsed["values"], attempts
+
+    except Exception as exc:
+        attempts.append({
+            "call": f"{method_name}(None)",
+            "error": safe_string(exc),
+        })
+
+    try:
+        result = method()
+        parsed = parse_count_array_result(result)
+
+        attempts.append({
+            "call": f"{method_name}()",
+            "raw": safe_string(result),
+            "count": parsed["count"],
+            "values": parsed["values"],
+        })
+
+        if parsed["values"]:
+            return parsed["values"], attempts
+
+    except Exception as exc:
+        attempts.append({
+            "call": f"{method_name}()",
+            "error": safe_string(exc),
+        })
+
+    return [], attempts
+
+
+def get_method_names(obj):
+
+    names = set()
+
+    try:
+        for name in dir(obj):
+            names.add(name)
+    except Exception:
+        pass
+
+    try:
+        type_info = obj._oleobj_.GetTypeInfo()
+        type_attr = type_info.GetTypeAttr()
+        function_count = type_attr[8]
+
+        for index in range(function_count):
+
+            try:
+                func_desc = type_info.GetFuncDesc(index)
+                member_id = func_desc[0]
+                name = type_info.GetDocumentation(member_id)[0]
+
+                if name:
+                    names.add(name)
+
+            except Exception:
+                pass
+
+    except Exception:
+        pass
+
+    return sorted(names)
+
+
+# ============================================================
+# E3 CONNECTION
+# ============================================================
+
+def connect_to_e3():
+
+    section("CONNECTING TO E3")
+
+    pythoncom.CoInitialize()
+
+    app = win32com.client.Dispatch("CT.Application")
+    prj = app.CreateJobObject()
+    dev = prj.CreateDeviceObject()
+    pin = prj.CreatePinObject()
+    sym = prj.CreateSymbolObject()
+
+    log(f"APPLICATION: {app}")
+    log(f"PROJECT / JOB: {prj}")
+
+    return app, prj, dev, pin, sym
+
+
+# ============================================================
+# CONNECTOR / PIN DISCOVERY
+# ============================================================
+
+def get_all_device_ids(prj):
+
+    ids, attempts = call_id_array(prj.GetAllDeviceIds, "GetAllDeviceIds")
+
+    for attempt in attempts:
+
+        if "error" in attempt:
+            log(f"{attempt['call']} ERROR: {attempt['error']}")
+        else:
+            log(f"{attempt['call']} RAW: {attempt['raw']}")
+            log(f"{attempt['call']} VALUES: {attempt['values']}")
+
+    return ids
+
+
+def get_device_pin_ids(dev):
+
+    ids, attempts = call_id_array(dev.GetPinIds, "GetPinIds")
+
+    return ids
+
+
+def get_pin_view_ids(pin):
+
+    ids, attempts = call_id_array(pin.GetViewIds, "GetViewIds")
+
+    return ids
+
+
+def get_symbol_bound_ids(sym):
+
+    ids, attempts = call_id_array(sym.GetBoundIds, "GetBoundIds")
+
+    return ids, attempts
+
+
+def get_device_name(dev):
+
+    try:
+        return safe_string(dev.GetName())
+    except Exception:
+        return ""
+
+
+def get_pin_name(pin):
+
+    try:
+        return safe_string(pin.GetName())
+    except Exception:
+        return ""
+
+
+def find_connector_device_id(prj, dev):
+
+    section(f"FIND CONNECTOR: {CONNECTOR_NAME}")
+
+    device_ids = get_all_device_ids(prj)
+
+    log(f"DEVICE IDS: {device_ids}")
+
+    matches = []
+
+    for device_id in device_ids:
+
+        try:
+            dev.SetId(device_id)
+        except Exception:
+            continue
+
+        name = get_device_name(dev)
+
+        log(f"DEVICE {device_id}: {name}")
+
+        if name == CONNECTOR_NAME:
+            matches.append(device_id)
+
+    if len(matches) == 1:
+
+        log(f"SELECTED DEVICE ID: {matches[0]}")
+
+        return matches[0]
+
+    if len(matches) > 1:
+        raise RuntimeError(f"Multiple devices named {CONNECTOR_NAME}: {matches}")
+
+    raise RuntimeError(f"Could not find connector {CONNECTOR_NAME}.")
+
+
+def build_pin_table(dev, pin, sym, connector_device_id):
+
+    dev.SetId(connector_device_id)
+
+    pin_ids = get_device_pin_ids(dev)
+
+    records = []
+
+    for pin_id in pin_ids:
+
+        pin.SetId(pin_id)
+
+        pin_name = get_pin_name(pin)
+        view_ids = get_pin_view_ids(pin)
+
+        record = {
+            "pin_id": pin_id,
+            "pin_name": pin_name,
+            "view_ids": view_ids,
+            "views": [],
+        }
+
+        for view_id in view_ids:
+
+            sym.SetId(view_id)
+
+            bound_ids, bound_attempts = get_symbol_bound_ids(sym)
+
+            record["views"].append({
+                "view_id": view_id,
+                "bound_ids": bound_ids,
+                "bound_attempts": bound_attempts,
+            })
+
+        records.append(record)
+
+    return records
+
+
+def print_pin_table(records):
+
+    section("CONNECTOR PIN / BOUND TABLE")
+
+    for record in records:
+
+        log(f"PIN {record['pin_name']} | PIN ID {record['pin_id']} | VIEW IDS {record['view_ids']}")
+
+        for view in record["views"]:
+            log(f"    VIEW {view['view_id']} | BOUND IDS {view['bound_ids']}")
+
+
+def find_pin_record(records, pin_name):
+
+    target = str(pin_name)
+
+    for record in records:
+
+        if record["pin_name"] == target:
+            return record
+
+    return None
+
+
+# ============================================================
+# PROJECT CREATE*OBJECT DISCOVERY
+# ============================================================
+
+def get_project_creator_names(prj):
+
+    names = get_method_names(prj)
+
+    creators = []
+
+    for name in names:
+
+        if not name.startswith("Create"):
+            continue
+
+        if not name.endswith("Object"):
+            continue
+
+        creators.append(name)
+
+    return sorted(creators)
+
+
+def instantiate_project_objects(prj):
+
+    section("DISCOVERING PROJECT OBJECT FACTORIES")
+
+    creator_names = get_project_creator_names(prj)
+
+    log(f"FOUND {len(creator_names)} Create*Object METHODS")
+
+    objects = []
+
+    for creator_name in creator_names:
+
+        log(f"TRY {creator_name}")
+
+        try:
+            creator = getattr(prj, creator_name)
+            obj = creator()
+        except Exception as exc:
+            log(f"    CREATE FAILED: {exc}")
+            continue
+
+        if obj is None:
+            log("    RETURNED None")
+            continue
+
+        has_set_id = hasattr(obj, "SetId")
+        has_get_id = hasattr(obj, "GetId")
+
+        log(f"    CREATED: {obj}")
+        log(f"    HAS SetId: {has_set_id}")
+        log(f"    HAS GetId: {has_get_id}")
+
+        objects.append({
+            "creator_name": creator_name,
+            "object": obj,
+            "has_set_id": has_set_id,
+            "has_get_id": has_get_id,
+        })
+
+    add_event("project_object_factories", {
+        "creators": [item["creator_name"] for item in objects],
+    })
+
+    return objects
+
+
+# ============================================================
+# SAFE OBJECT FINGERPRINTING
+# ============================================================
+
+def safe_getter_call(obj, getter_name):
+
+    if not hasattr(obj, getter_name):
+        return {
+            "available": False,
+        }
+
+    getter = getattr(obj, getter_name)
+
+    try:
+        value = getter()
+
+        return {
+            "available": True,
+            "success": True,
+            "value": value,
+        }
+
+    except Exception as exc:
+
+        return {
+            "available": True,
+            "success": False,
+            "error": safe_string(exc),
+        }
+
+
+def object_identity_fingerprint(obj):
+
+    fingerprint = {}
+
+    for getter_name in SAFE_GETTERS:
+
+        result = safe_getter_call(obj, getter_name)
+
+        if not result.get("available"):
+            continue
+
+        fingerprint[getter_name] = result
+
+    return fingerprint
+
+
+def count_meaningful_fingerprint_values(fingerprint, bound_id):
+
+    count = 0
+
+    for getter_name, result in fingerprint.items():
+
+        if not result.get("success"):
+            continue
+
+        value = result.get("value")
+
+        if value is None:
+            continue
+
+        if is_missing_value(value):
+            continue
+
+        if getter_name == "GetId":
+
+            try:
+                if int(value) == int(bound_id):
+                    count += 2
+            except Exception:
+                pass
+
+            continue
+
+        if isinstance(value, str):
+
+            if value.strip() != "":
+                count += 1
+
+            continue
+
+        if isinstance(value, (tuple, list)):
+
+            if len(value) > 0:
+                count += 1
+
+            continue
+
+        try:
+            numeric_value = float(value)
+
+            if numeric_value != 0:
+                count += 1
+
+        except Exception:
+            count += 1
+
+    return count
+
+
+# ============================================================
+# METHOD AUDIT
+# ============================================================
+
+def get_relevant_methods(obj):
+
+    names = get_method_names(obj)
+
+    relevant = []
+
+    for name in names:
+
+        lower_name = name.lower()
+
+        if any(keyword in lower_name for keyword in METHOD_KEYWORDS):
+            relevant.append(name)
+
+    return relevant
+
+
+# ============================================================
+# BOUND-ID CLASSIFIER
+# ============================================================
+
+def classify_bound_id(bound_id, project_objects):
+
+    section(f"CLASSIFY BOUND ID {bound_id}")
+
+    matches = []
+
+    for item in project_objects:
+
+        creator_name = item["creator_name"]
+        obj = item["object"]
+
+        if not item["has_set_id"]:
+            continue
+
+        log()
+        log(f"TRYING {creator_name}")
+
+        try:
+            set_result = obj.SetId(bound_id)
+            log(f"    SetId({bound_id}) RETURN: {set_result}")
+        except Exception as exc:
+            log(f"    SetId FAILED: {exc}")
+            continue
+
+        returned_id = None
+
+        if item["has_get_id"]:
+
+            try:
+                returned_id = obj.GetId()
+                log(f"    GetId() RETURN: {returned_id}")
+            except Exception as exc:
+                log(f"    GetId FAILED: {exc}")
+
+        fingerprint = object_identity_fingerprint(obj)
+        meaningful_count = count_meaningful_fingerprint_values(fingerprint, bound_id)
+
+        id_match = False
+
+        try:
+            id_match = int(returned_id) == int(bound_id)
+        except Exception:
+            id_match = False
+
+        log(f"    ID MATCH: {id_match}")
+        log(f"    MEANINGFUL FINGERPRINT SCORE: {meaningful_count}")
+
+        for getter_name, result in fingerprint.items():
+
+            if result.get("success"):
+                log(f"    {getter_name}: {result.get('value')}")
+            else:
+                log(f"    {getter_name}: ERROR {result.get('error')}")
+
+        relevant_methods = get_relevant_methods(obj)
+
+        log("    RELEVANT METHODS:")
+
+        if relevant_methods:
+
+            for method_name in relevant_methods:
+                log(f"        {method_name}")
+
+        else:
+            log("        NONE")
+
+        if id_match or meaningful_count > 0:
+
+            match = {
+                "bound_id": bound_id,
+                "creator_name": creator_name,
+                "set_result": safe_string(set_result),
+                "returned_id": returned_id,
+                "id_match": id_match,
+                "meaningful_score": meaningful_count,
+                "fingerprint": fingerprint,
+                "relevant_methods": relevant_methods,
+            }
+
+            matches.append(match)
+
+    subsection(f"SUMMARY FOR BOUND ID {bound_id}")
+
+    if not matches:
+
+        log("NO PROJECT OBJECT INTERFACE PRODUCED A MEANINGFUL MATCH")
+
+    else:
+
+        ranked = sorted(matches, key=lambda item: (item["id_match"], item["meaningful_score"]), reverse=True)
+
+        for match in ranked:
+
+            log(f"{match['creator_name']} | ID MATCH {match['id_match']} | SCORE {match['meaningful_score']} | GetId {match['returned_id']}")
+
+    add_event("bound_id_classification", {
+        "bound_id": bound_id,
+        "matches": matches,
+    })
+
+    return matches
+
+
+def classify_pin_bounds(records, pin_name, project_objects):
+
+    pin_record = find_pin_record(records, pin_name)
+
+    if pin_record is None:
+        raise RuntimeError(f"Pin {pin_name} not found.")
+
+    section(f"BOUND CLASSIFICATION FOR PIN {pin_name}")
+
+    log(f"PIN ID: {pin_record['pin_id']}")
+
+    all_bound_ids = []
+
+    for view in pin_record["views"]:
+
+        log(f"VIEW {view['view_id']} -> BOUND IDS {view['bound_ids']}")
+
+        for bound_id in view["bound_ids"]:
+
+            if bound_id not in all_bound_ids:
+                all_bound_ids.append(bound_id)
+
+    if not all_bound_ids:
+
+        log("THIS PIN CURRENTLY HAS NO BOUND IDS")
+
+        return
+
+    for bound_id in all_bound_ids:
+        classify_bound_id(bound_id, project_objects)
+
+
+# ============================================================
+# MANUAL BEFORE / AFTER TEST
+# ============================================================
+
+def compare_bound_tables(before, after):
+
+    section("BOUND-ID DIFFERENCE REPORT")
+
+    before_map = {record["pin_name"]: record for record in before}
+    after_map = {record["pin_name"]: record for record in after}
+
+    pin_names = sorted(set(before_map.keys()) | set(after_map.keys()))
+
+    change_count = 0
+
+    for pin_name in pin_names:
+
+        before_record = before_map.get(pin_name)
+        after_record = after_map.get(pin_name)
+
+        if before_record is None or after_record is None:
+            log(f"PIN {pin_name}: PIN RECORD ADDED OR REMOVED")
+            change_count += 1
+            continue
+
+        before_bounds = []
+
+        for view in before_record["views"]:
+            before_bounds.extend(view["bound_ids"])
+
+        after_bounds = []
+
+        for view in after_record["views"]:
+            after_bounds.extend(view["bound_ids"])
+
+        before_bounds = sorted(set(before_bounds))
+        after_bounds = sorted(set(after_bounds))
+
+        if before_bounds != after_bounds:
+            log(f"PIN {pin_name}: {before_bounds} -> {after_bounds}")
+            change_count += 1
+
+    if change_count == 0:
+        log("NO BOUND-ID DIFFERENCES DETECTED")
+    else:
+        log(f"TOTAL PINS WITH BOUND-ID CHANGES: {change_count}")
+
+
+def manual_move_compare(dev, pin, sym, connector_device_id, project_objects):
+
+    before = build_pin_table(dev, pin, sym, connector_device_id)
+
+    print_pin_table(before)
+
+    pin_name = input(f"Pin to manually move [default {DEFAULT_PIN_NAME}]: ").strip()
+
+    if pin_name == "":
+        pin_name = DEFAULT_PIN_NAME
+
+    before_record = find_pin_record(before, pin_name)
+
+    if before_record is None:
+        log(f"PIN {pin_name} NOT FOUND")
+        return
+
+    log()
+    log(f"BEFORE MANUAL MOVE, PIN {pin_name} HAS:")
+
+    for view in before_record["views"]:
+        log(f"    VIEW {view['view_id']} -> {view['bound_ids']}")
+
+    input("Manually move that pin in E3, then press ENTER here: ")
+
+    after = build_pin_table(dev, pin, sym, connector_device_id)
+
+    print_pin_table(after)
+
+    compare_bound_tables(before, after)
+
+    after_record = find_pin_record(after, pin_name)
+
+    if after_record is not None:
+
+        log()
+        log(f"AFTER MANUAL MOVE, PIN {pin_name} HAS:")
+
+        for view in after_record["views"]:
+            log(f"    VIEW {view['view_id']} -> {view['bound_ids']}")
+
+    answer = input("Classify the OLD bound IDs from before the move? [y/n]: ").strip().lower()
+
+    if answer == "y":
+
+        old_bound_ids = []
+
+        for view in before_record["views"]:
+
+            for bound_id in view["bound_ids"]:
+
+                if bound_id not in old_bound_ids:
+                    old_bound_ids.append(bound_id)
+
+        for bound_id in old_bound_ids:
+            classify_bound_id(bound_id, project_objects)
+
+
+# ============================================================
+# SAVE RESULTS
+# ============================================================
+
+def save_results():
+
+    AUDIT_DATA["finished"] = datetime.now().isoformat(timespec="milliseconds")
+
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+
+    txt_path = OUTPUT_DIRECTORY / f"e3_bound_classifier_{timestamp}.txt"
+    json_path = OUTPUT_DIRECTORY / f"e3_bound_classifier_{timestamp}.json"
+
+    txt_path.write_text("\n".join(LOG_LINES), encoding="utf-8")
+    json_path.write_text(json.dumps(AUDIT_DATA, indent=2, default=str), encoding="utf-8")
+
+    print()
+    print("=" * 100)
+    print("AUDIT FILES WRITTEN")
+    print("=" * 100)
+    print(txt_path)
+    print(json_path)
+
+
+# ============================================================
+# MENU
+# ============================================================
+
+def print_menu():
+
+    section("TEST MENU")
+
+    log("1 - Show connector pins and GetBoundIds")
+    log("2 - Classify bound IDs for one selected pin")
+    log("3 - Classify bound IDs for every currently bound pin")
+    log("4 - Compare bound IDs before/after one manual pin move")
+    log("5 - Re-discover project Create*Object factories")
+    log("q - Save and quit")
+
+
+# ============================================================
+# MAIN
+# ============================================================
+
+def main():
+
+    AUDIT_DATA["started"] = datetime.now().isoformat(timespec="milliseconds")
+
+    section("E3 BOUND-ID CLASSIFIER")
+
+    log("READ-ONLY AUDIT")
+    log("THIS SCRIPT DOES NOT CALL Delete, Remove, Disconnect, Break, or any other destructive method.")
+    log(f"CONNECTOR_NAME = {CONNECTOR_NAME}")
+
+    app, prj, dev, pin, sym = connect_to_e3()
+
+    connector_device_id = find_connector_device_id(prj, dev)
+
+    project_objects = instantiate_project_objects(prj)
+
+    while True:
+
+        records = build_pin_table(dev, pin, sym, connector_device_id)
+
+        print_menu()
+
+        choice = input("Select test: ").strip().lower()
+
+        if choice == "1":
+
+            print_pin_table(records)
+
+        elif choice == "2":
+
+            print_pin_table(records)
+
+            pin_name = input(f"Pin to classify [default {DEFAULT_PIN_NAME}]: ").strip()
+
+            if pin_name == "":
+                pin_name = DEFAULT_PIN_NAME
+
+            classify_pin_bounds(records, pin_name, project_objects)
+
+        elif choice == "3":
+
+            print_pin_table(records)
+
+            for record in records:
+
+                has_bounds = any(view["bound_ids"] for view in record["views"])
+
+                if has_bounds:
+                    classify_pin_bounds(records, record["pin_name"], project_objects)
+
+        elif choice == "4":
+
+            manual_move_compare(dev, pin, sym, connector_device_id, project_objects)
+
+        elif choice == "5":
+
+            project_objects = instantiate_project_objects(prj)
+
+        elif choice == "q":
+
+            break
+
+        else:
+
+            log("INVALID SELECTION")
+
+
+if __name__ == "__main__":
+
+    try:
+        main()
+
+    except KeyboardInterrupt:
+        log()
+        log("STOPPED BY USER")
+
+    except Exception as exc:
+        log()
+        log("FATAL ERROR")
+        log(safe_string(exc))
+        log(traceback.format_exc())
+
+    finally:
+
+        try:
+            save_results()
+        except Exception as exc:
+            print(f"COULD NOT SAVE RESULTS: {exc}")
+
+        try:
+            pythoncom.CoUninitialize()
+        except Exception:
+            pass
