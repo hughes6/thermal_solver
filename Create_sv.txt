@@ -1,352 +1,301 @@
-dry run = true
+import inspect
+import traceback
+from datetime import datetime
+from pathlib import Path
 
-====================================================================================================
-E3 GRAPH-BOUND DETACH TEST V2
-====================================================================================================
-PURPOSE:
-Verify whether the objects returned by Symbol.GetBoundIds are Graph objects.
-Then optionally delete the bound graph objects from one endpoint pin.
-Then test whether the pin becomes movable with Symbol.Place.
-
-DRY_RUN = True
-TARGET CONNECTOR = SCP-J1
-TARGET PIN = 1
-
-====================================================================================================
-CONNECTING TO E3
-====================================================================================================
-APPLICATION: <win32com.gen_py.E3.series 2025.2543 Type Library.IApplicationInterface instance at 0x3078644994736>
-PROJECT: <win32com.gen_py.E3.series 2025.2543 Type Library.IJobInterface instance at 0x3078644996080>
-
-====================================================================================================
-FIND CONNECTOR SCP-J1
-====================================================================================================
-DEVICE IDS: [72258, 64611, 67783, 137415]
-DEVICE 72258: Wires
-DEVICE 64611: SCP-J1
-FOUND CONNECTOR ID: 64611
-
-====================================================================================================
-CONNECTOR BOUND TABLE
-====================================================================================================
-PIN 1 | PIN ID 64615 | VIEW IDS [70079] | BOUNDS [147262, 147264]
-PIN 2 | PIN ID 64614 | VIEW IDS [70077] | BOUNDS [147262, 147264, 147249, 147245]
-PIN 3 | PIN ID 64613 | VIEW IDS [70075] | BOUNDS [147261, 147260, 147249, 147245]
-PIN 4 | PIN ID 64612 | VIEW IDS [70073] | BOUNDS [147208, 147207, 147261, 147260]
-PIN 5 | PIN ID 64619 | VIEW IDS [70067] | BOUNDS [147405, 147406, 147208, 147207]
-PIN 6 | PIN ID 64618 | VIEW IDS [70061] | BOUNDS [147405, 147406, 147209, 147210]
-PIN 7 | PIN ID 64617 | VIEW IDS [70055] | BOUNDS [147244, 147243, 147209, 147210]
-PIN 8 | PIN ID 64616 | VIEW IDS [70049] | BOUNDS [147197, 147198, 147244, 147243]
-PIN 9 | PIN ID 64534 | VIEW IDS [70043] | BOUNDS [147197, 147198]
-
-====================================================================================================
-PIN 1 CURRENT STATE
-====================================================================================================
-LOGICAL PIN ID: 64615
-VIEW IDS: [70079]
-VIEW 70079
-    SCHEMA LOCATION: [204828.0, 7.699999999999999, 29.9, 7.0]
-    BOUND IDS: [147262, 147264]
-
-====================================================================================================
-VERIFY TARGET BOUNDS ARE GRAPH OBJECTS
-====================================================================================================
-
-====================================================================================================
-GRAPH OBJECT 147262
-====================================================================================================
-SetId RETURN: 147262
-GetId RETURN: 147262
-GID: 0-56-0-9079
-GetLine DOC: method GetLine
-GetLineColour DOC: method GetLineColour
-GetLineStyle DOC: method GetLineStyle
-GetLineWidth DOC: method GetLineWidth
-Delete DOC: method Delete
-Place DOC: method Place
-GetLine() -> (1, -2147352572, -2147352572, -2147352572, -2147352572)
-GetLine(None,None,None,None) -> (1, 7.999999999999999, 29.900000000000002, 7.999999999999999, 29.650000000000002)
-
-====================================================================================================
-GRAPH OBJECT 147264
-====================================================================================================
-SetId RETURN: 147264
-GetId RETURN: 147264
-GID: 0-56-0-907a
-GetLine DOC: method GetLine
-GetLineColour DOC: method GetLineColour
-GetLineStyle DOC: method GetLineStyle
-GetLineWidth DOC: method GetLineWidth
-Delete DOC: method Delete
-Place DOC: method Place
-GetLine() -> (1, -2147352572, -2147352572, -2147352572, -2147352572)
-GetLine(None,None,None,None) -> (1, 7.7, 29.900000000000002, 7.7, 29.650000000000002)
-
-BOUND IDS: [147262, 147264]
-VALID GRAPH IDS: [147262, 147264]
-
-====================================================================================================
-DRY RUN COMPLETE
-====================================================================================================
-No graph objects were deleted.
-Set DRY_RUN = False only after reviewing this output.
+import pythoncom
+import win32com.client
 
 
+OUTPUT_DIRECTORY = Path(__file__).resolve().parent
 
 
-dry_run=false
+LOG_LINES = []
 
 
-====================================================================================================
-E3 GRAPH-BOUND DETACH TEST V2
-====================================================================================================
-PURPOSE:
-Verify whether the objects returned by Symbol.GetBoundIds are Graph objects.
-Then optionally delete the bound graph objects from one endpoint pin.
-Then test whether the pin becomes movable with Symbol.Place.
+def log(message=""):
 
-DRY_RUN = False
-TARGET CONNECTOR = SCP-J1
-TARGET PIN = 1
+    text = str(message)
 
-====================================================================================================
-CONNECTING TO E3
-====================================================================================================
-APPLICATION: <win32com.gen_py.E3.series 2025.2543 Type Library.IApplicationInterface instance at 0x2248502383280>
-PROJECT: <win32com.gen_py.E3.series 2025.2543 Type Library.IJobInterface instance at 0x2248502384624>
+    print(text)
 
-====================================================================================================
-FIND CONNECTOR SCP-J1
-====================================================================================================
-DEVICE IDS: [72258, 64611, 67783, 137415]
-DEVICE 72258: Wires
-DEVICE 64611: SCP-J1
-FOUND CONNECTOR ID: 64611
-
-====================================================================================================
-CONNECTOR BOUND TABLE
-====================================================================================================
-PIN 1 | PIN ID 64615 | VIEW IDS [70079] | BOUNDS [147262, 147264]
-PIN 2 | PIN ID 64614 | VIEW IDS [70077] | BOUNDS [147262, 147264, 147249, 147245]
-PIN 3 | PIN ID 64613 | VIEW IDS [70075] | BOUNDS [147261, 147260, 147249, 147245]
-PIN 4 | PIN ID 64612 | VIEW IDS [70073] | BOUNDS [147208, 147207, 147261, 147260]
-PIN 5 | PIN ID 64619 | VIEW IDS [70067] | BOUNDS [147405, 147406, 147208, 147207]
-PIN 6 | PIN ID 64618 | VIEW IDS [70061] | BOUNDS [147405, 147406, 147209, 147210]
-PIN 7 | PIN ID 64617 | VIEW IDS [70055] | BOUNDS [147244, 147243, 147209, 147210]
-PIN 8 | PIN ID 64616 | VIEW IDS [70049] | BOUNDS [147197, 147198, 147244, 147243]
-PIN 9 | PIN ID 64534 | VIEW IDS [70043] | BOUNDS [147197, 147198]
-
-====================================================================================================
-PIN 1 CURRENT STATE
-====================================================================================================
-LOGICAL PIN ID: 64615
-VIEW IDS: [70079]
-VIEW 70079
-    SCHEMA LOCATION: [204828.0, 7.699999999999999, 29.9, 7.0]
-    BOUND IDS: [147262, 147264]
-
-====================================================================================================
-VERIFY TARGET BOUNDS ARE GRAPH OBJECTS
-====================================================================================================
-
-====================================================================================================
-GRAPH OBJECT 147262
-====================================================================================================
-SetId RETURN: 147262
-GetId RETURN: 147262
-GID: 0-56-0-9079
-GetLine DOC: method GetLine
-GetLineColour DOC: method GetLineColour
-GetLineStyle DOC: method GetLineStyle
-GetLineWidth DOC: method GetLineWidth
-Delete DOC: method Delete
-Place DOC: method Place
-GetLine() -> (1, -2147352572, -2147352572, -2147352572, -2147352572)
-GetLine(None,None,None,None) -> (1, 7.999999999999999, 29.900000000000002, 7.999999999999999, 29.650000000000002)
-
-====================================================================================================
-GRAPH OBJECT 147264
-====================================================================================================
-SetId RETURN: 147264
-GetId RETURN: 147264
-GID: 0-56-0-907a
-GetLine DOC: method GetLine
-GetLineColour DOC: method GetLineColour
-GetLineStyle DOC: method GetLineStyle
-GetLineWidth DOC: method GetLineWidth
-Delete DOC: method Delete
-Place DOC: method Place
-GetLine() -> (1, -2147352572, -2147352572, -2147352572, -2147352572)
-GetLine(None,None,None,None) -> (1, 7.7, 29.900000000000002, 7.7, 29.650000000000002)
-
-BOUND IDS: [147262, 147264]
-VALID GRAPH IDS: [147262, 147264]
-
-====================================================================================================
-DESTRUCTIVE TEST WARNING
-====================================================================================================
-The next operation can delete graphical bound objects from the selected pin.
-Use this only on a disposable/test project or after saving a recoverable copy.
-V2 rediscoveries GetBoundIds after EVERY deletion.
-It does not assume that the old graph IDs remain valid after E3 rebuilds the connector graphics.
-You must confirm each individual graph deletion using its exact ID.
+    LOG_LINES.append(text)
 
 
-====================================================================================================
-PIN 1 CURRENT STATE
-====================================================================================================
-LOGICAL PIN ID: 64615
-VIEW IDS: [70079]
-VIEW 70079
-    SCHEMA LOCATION: [204828.0, 7.699999999999999, 29.9, 7.0]
-    BOUND IDS: [147262, 147264]
+def section(title):
 
-CURRENT BOUNDS BEFORE DELETE ITERATION 1: [147262, 147264]
+    log()
+    log("=" * 100)
+    log(title)
+    log("=" * 100)
 
-====================================================================================================
-VERIFY CURRENT GRAPH 147262
-====================================================================================================
 
-====================================================================================================
-GRAPH OBJECT 147262
-====================================================================================================
-SetId RETURN: 147262
-GetId RETURN: 147262
-GID: 0-56-0-9079
-GetLine DOC: method GetLine
-GetLineColour DOC: method GetLineColour
-GetLineStyle DOC: method GetLineStyle
-GetLineWidth DOC: method GetLineWidth
-Delete DOC: method Delete
-Place DOC: method Place
-GetLine() -> (1, -2147352572, -2147352572, -2147352572, -2147352572)
-GetLine(None,None,None,None) -> (1, 7.999999999999999, 29.900000000000002, 7.999999999999999, 29.650000000000002)
+def save_log():
 
-The script will delete exactly ONE CURRENT bound graph.
-Afterward it will rediscover the pin and all bound IDs from E3.
-It will never rely on the previous bound-ID list.
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
 
-====================================================================================================
-DELETE CURRENT GRAPH 147262
-====================================================================================================
-graph.Delete() FOR 147262 RETURNED: 147262
+    path = OUTPUT_DIRECTORY / f"e3_method_signature_audit_{timestamp}.txt"
 
-====================================================================================================
-PIN 1 CURRENT STATE
-====================================================================================================
-LOGICAL PIN ID: 64615
-VIEW IDS: [70079]
-VIEW 70079
-    SCHEMA LOCATION: [204828.0, 7.699999999999999, 29.9, 7.0]
-    BOUND IDS: [147262, 147264]
+    path.write_text("\n".join(LOG_LINES), encoding="utf-8")
 
-====================================================================================================
-CONNECTOR BOUND TABLE
-====================================================================================================
-PIN 1 | PIN ID 64615 | VIEW IDS [70079] | BOUNDS [147262, 147264]
-PIN 2 | PIN ID 64614 | VIEW IDS [70077] | BOUNDS [147262, 147264, 147249, 147245]
-PIN 3 | PIN ID 64613 | VIEW IDS [70075] | BOUNDS [147261, 147260, 147249, 147245]
-PIN 4 | PIN ID 64612 | VIEW IDS [70073] | BOUNDS [147208, 147207, 147261, 147260]
-PIN 5 | PIN ID 64619 | VIEW IDS [70067] | BOUNDS [147405, 147406, 147208, 147207]
-PIN 6 | PIN ID 64618 | VIEW IDS [70061] | BOUNDS [147405, 147406, 147209, 147210]
-PIN 7 | PIN ID 64617 | VIEW IDS [70055] | BOUNDS [147244, 147243, 147209, 147210]
-PIN 8 | PIN ID 64616 | VIEW IDS [70049] | BOUNDS [147197, 147198, 147244, 147243]
-PIN 9 | PIN ID 64534 | VIEW IDS [70043] | BOUNDS [147197, 147198]
-REMAINING BOUNDS AFTER DELETE: [147262, 147264]
+    print()
+    print(f"LOG WRITTEN: {path}")
 
-====================================================================================================
-PIN 1 CURRENT STATE
-====================================================================================================
-LOGICAL PIN ID: 64615
-VIEW IDS: [70079]
-VIEW 70079
-    SCHEMA LOCATION: [204828.0, 7.699999999999999, 29.9, 7.0]
-    BOUND IDS: [147262, 147264]
 
-CURRENT BOUNDS BEFORE DELETE ITERATION 2: [147262, 147264]
+def safe_string(value):
 
-====================================================================================================
-VERIFY CURRENT GRAPH 147262
-====================================================================================================
+    try:
+        return str(value)
+    except Exception:
+        return repr(value)
 
-====================================================================================================
-GRAPH OBJECT 147262
-====================================================================================================
-SetId RETURN: 147262
-GetId RETURN: 147262
-GID: 0-56-0-9079
-GetLine DOC: method GetLine
-GetLineColour DOC: method GetLineColour
-GetLineStyle DOC: method GetLineStyle
-GetLineWidth DOC: method GetLineWidth
-Delete DOC: method Delete
-Place DOC: method Place
-GetLine() -> (1, -2147352572, -2147352572, -2147352572, -2147352572)
-GetLine(None,None,None,None) -> (1, 7.999999999999999, 29.900000000000002, 7.999999999999999, 29.650000000000002)
 
-The script will delete exactly ONE CURRENT bound graph.
-Afterward it will rediscover the pin and all bound IDs from E3.
-It will never rely on the previous bound-ID list.
+def connect_to_e3():
 
-====================================================================================================
-DELETE CURRENT GRAPH 147262
-====================================================================================================
-graph.Delete() FOR 147262 RETURNED: 147262
+    section("CONNECTING TO E3")
 
-====================================================================================================
-PIN 1 CURRENT STATE
-====================================================================================================
-LOGICAL PIN ID: 64615
-VIEW IDS: [70079]
-VIEW 70079
-    SCHEMA LOCATION: [204828.0, 7.699999999999999, 29.9, 7.0]
-    BOUND IDS: [147262, 147264]
+    pythoncom.CoInitialize()
 
-====================================================================================================
-CONNECTOR BOUND TABLE
-====================================================================================================
-PIN 1 | PIN ID 64615 | VIEW IDS [70079] | BOUNDS [147262, 147264]
-PIN 2 | PIN ID 64614 | VIEW IDS [70077] | BOUNDS [147262, 147264, 147249, 147245]
-PIN 3 | PIN ID 64613 | VIEW IDS [70075] | BOUNDS [147261, 147260, 147249, 147245]
-PIN 4 | PIN ID 64612 | VIEW IDS [70073] | BOUNDS [147208, 147207, 147261, 147260]
-PIN 5 | PIN ID 64619 | VIEW IDS [70067] | BOUNDS [147405, 147406, 147208, 147207]
-PIN 6 | PIN ID 64618 | VIEW IDS [70061] | BOUNDS [147405, 147406, 147209, 147210]
-PIN 7 | PIN ID 64617 | VIEW IDS [70055] | BOUNDS [147244, 147243, 147209, 147210]
-PIN 8 | PIN ID 64616 | VIEW IDS [70049] | BOUNDS [147197, 147198, 147244, 147243]
-PIN 9 | PIN ID 64534 | VIEW IDS [70043] | BOUNDS [147197, 147198]
-REMAINING BOUNDS AFTER DELETE: [147262, 147264]
+    app = win32com.client.Dispatch("CT.Application")
 
-====================================================================================================
-PIN 1 CURRENT STATE
-====================================================================================================
-LOGICAL PIN ID: 64615
-VIEW IDS: [70079]
-VIEW 70079
-    SCHEMA LOCATION: [204828.0, 7.699999999999999, 29.9, 7.0]
-    BOUND IDS: [147262, 147264]
+    prj = app.CreateJobObject()
+    sym = prj.CreateSymbolObject()
+    graph = prj.CreateGraphObject()
+    pin = prj.CreatePinObject()
 
-CURRENT BOUNDS BEFORE DELETE ITERATION 3: [147262, 147264]
+    log(f"APPLICATION: {app}")
+    log(f"PROJECT: {prj}")
+    log(f"SYMBOL OBJECT: {sym}")
+    log(f"GRAPH OBJECT: {graph}")
+    log(f"PIN OBJECT: {pin}")
 
-====================================================================================================
-VERIFY CURRENT GRAPH 147262
-====================================================================================================
+    return app, prj, sym, graph, pin
 
-====================================================================================================
-GRAPH OBJECT 147262
-====================================================================================================
-SetId RETURN: 147262
-GetId RETURN: 147262
-GID: 0-56-0-9079
-GetLine DOC: method GetLine
-GetLineColour DOC: method GetLineColour
-GetLineStyle DOC: method GetLineStyle
-GetLineWidth DOC: method GetLineWidth
-Delete DOC: method Delete
-Place DOC: method Place
-GetLine() -> (1, -2147352572, -2147352572, -2147352572, -2147352572)
-GetLine(None,None,None,None) -> (1, 7.999999999999999, 29.900000000000002, 7.999999999999999, 29.650000000000002)
 
-The script will delete exactly ONE CURRENT bound graph.
-Afterward it will rediscover the pin and all bound IDs from E3.
-It will never rely on the previous bound-ID list.
-DELETE LOOP STOPPED BY USER
+def print_class_module_info(obj, object_name):
+
+    section(f"{object_name} CLASS / MODULE INFO")
+
+    cls = obj.__class__
+
+    log(f"CLASS: {cls}")
+    log(f"CLASS NAME: {getattr(cls, '__name__', None)}")
+    log(f"MODULE NAME: {getattr(cls, '__module__', None)}")
+
+    try:
+        module = inspect.getmodule(cls)
+    except Exception:
+        module = None
+
+    log(f"MODULE OBJECT: {module}")
+
+    if module is not None:
+
+        log(f"MODULE FILE: {getattr(module, '__file__', None)}")
+
+    try:
+        source_file = inspect.getsourcefile(cls)
+    except Exception as exc:
+        source_file = None
+        log(f"inspect.getsourcefile ERROR: {exc}")
+
+    log(f"SOURCE FILE: {source_file}")
+
+    return source_file
+
+
+def method_signature_details(obj, object_name, method_name):
+
+    section(f"{object_name}.{method_name}")
+
+    if not hasattr(obj, method_name):
+
+        log("METHOD DOES NOT EXIST")
+
+        return
+
+    method = getattr(obj, method_name)
+
+    log(f"METHOD OBJECT: {method}")
+
+    try:
+        signature = inspect.signature(method)
+        log(f"inspect.signature: {signature}")
+    except Exception as exc:
+        log(f"inspect.signature ERROR: {exc}")
+
+    try:
+        fullargspec = inspect.getfullargspec(method)
+        log(f"inspect.getfullargspec: {fullargspec}")
+    except Exception as exc:
+        log(f"inspect.getfullargspec ERROR: {exc}")
+
+    log(f"__doc__: {safe_string(getattr(method, '__doc__', None))}")
+    log(f"__defaults__: {safe_string(getattr(method, '__defaults__', None))}")
+    log(f"__kwdefaults__: {safe_string(getattr(method, '__kwdefaults__', None))}")
+
+    function_object = getattr(method, "__func__", method)
+
+    code_object = getattr(function_object, "__code__", None)
+
+    if code_object is not None:
+
+        log(f"co_argcount: {code_object.co_argcount}")
+        log(f"co_posonlyargcount: {getattr(code_object, 'co_posonlyargcount', None)}")
+        log(f"co_kwonlyargcount: {code_object.co_kwonlyargcount}")
+        log(f"co_varnames: {code_object.co_varnames}")
+        log(f"co_names: {code_object.co_names}")
+        log(f"co_consts: {code_object.co_consts}")
+
+    try:
+        source = inspect.getsource(method)
+        log("PYTHON GENERATED SOURCE:")
+        log(source)
+    except Exception as exc:
+        log(f"inspect.getsource ERROR: {exc}")
+
+    try:
+        source_file = inspect.getsourcefile(method)
+        log(f"METHOD SOURCE FILE: {source_file}")
+    except Exception as exc:
+        log(f"METHOD SOURCE FILE ERROR: {exc}")
+
+
+def extract_method_source_from_file(source_file, method_names):
+
+    section("RAW GENERATED WRAPPER SOURCE EXTRACT")
+
+    if source_file is None:
+
+        log("NO SOURCE FILE AVAILABLE")
+
+        return
+
+    path = Path(source_file)
+
+    if not path.exists():
+
+        log(f"SOURCE FILE DOES NOT EXIST: {path}")
+
+        return
+
+    log(f"READING: {path}")
+
+    try:
+        lines = path.read_text(encoding="utf-8", errors="replace").splitlines()
+    except Exception as exc:
+        log(f"READ ERROR: {exc}")
+
+        return
+
+    for method_name in method_names:
+
+        section(f"RAW SOURCE AROUND def {method_name}")
+
+        target = f"def {method_name}("
+
+        matches = []
+
+        for index, line in enumerate(lines):
+
+            if target in line:
+                matches.append(index)
+
+        if not matches:
+
+            log("NO MATCH FOUND")
+
+            continue
+
+        for match_index in matches:
+
+            start = max(0, match_index - 5)
+            end = min(len(lines), match_index + 35)
+
+            log(f"MATCH AT FILE LINE {match_index + 1}")
+
+            for index in range(start, end):
+                log(f"{index + 1:6d}: {lines[index]}")
+
+
+def audit_object_methods(obj, object_name, method_names):
+
+    source_file = print_class_module_info(obj, object_name)
+
+    for method_name in method_names:
+        method_signature_details(obj, object_name, method_name)
+
+    extract_method_source_from_file(source_file, method_names)
+
+
+def main():
+
+    section("E3 METHOD SIGNATURE / GENERATED WRAPPER AUDIT")
+
+    log("READ-ONLY")
+    log("THIS SCRIPT DOES NOT MOVE, DELETE, PLACE, OR MODIFY ANYTHING.")
+
+    app, prj, sym, graph, pin = connect_to_e3()
+
+    symbol_methods = [
+        "Place",
+        "PlacePinView",
+        "PlacePins",
+        "PlaceInteractively",
+        "GetBoundIds",
+        "IsConnected",
+        "AssignToConnector",
+        "GetSchemaLocation",
+    ]
+
+    graph_methods = [
+        "Delete",
+        "Place",
+        "GetLine",
+        "CreateLine",
+        "GetLineColour",
+        "GetLineStyle",
+        "GetLineWidth",
+    ]
+
+    pin_methods = [
+        "PlaceNode",
+        "GetSchemaLocation",
+        "GetPhysicalPosition",
+        "GetViewIds",
+        "GetNodeIds",
+        "GetConnectedNodeIds",
+        "SetNodeId",
+    ]
+
+    audit_object_methods(sym, "e3Symbol", symbol_methods)
+    audit_object_methods(graph, "e3Graph", graph_methods)
+    audit_object_methods(pin, "e3Pin", pin_methods)
+
+
+if __name__ == "__main__":
+
+    try:
+        main()
+
+    except KeyboardInterrupt:
+        log()
+        log("STOPPED BY USER")
+
+    except Exception as exc:
+        log()
+        log("FATAL ERROR")
+        log(safe_string(exc))
+        log(traceback.format_exc())
+
+    finally:
+
+        try:
+            save_log()
+        except Exception as exc:
+            print(f"COULD NOT SAVE LOG: {exc}")
+
+        try:
+            pythoncom.CoUninitialize()
+        except Exception:
+            pass
