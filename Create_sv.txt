@@ -112,6 +112,10 @@ Private Sub RefreshBlockStructure(ByVal blockNumber As Long)
     sourceData.Copy
     destinationData.PasteSpecial Paste:=xlPasteValidation
 
+    ' Keep the two helper / bracket columns tight to the pin-order area.
+    Me.Range(Me.Cells(DATA_FIRST_ROW, destinationStartColumn), Me.Cells(RULES_LAST_ROW, destinationStartColumn)).HorizontalAlignment = xlRight
+    Me.Range(Me.Cells(DATA_FIRST_ROW, destinationStartColumn + BLOCK_WIDTH - 1), Me.Cells(RULES_LAST_ROW, destinationStartColumn + BLOCK_WIDTH - 1)).HorizontalAlignment = xlLeft
+
     ' Match the template column widths.
     For columnOffset = 0 To BLOCK_WIDTH - 1
         Me.Columns(destinationStartColumn + columnOffset).ColumnWidth = Me.Columns(TEMPLATE_FIRST_COLUMN + columnOffset).ColumnWidth
@@ -141,25 +145,58 @@ End Sub
 
 Private Sub UpdateHelperSpill(ByVal blockNumber As Long)
 
-    Dim sourceHelper As Range
-    Dim destinationHelper As Range
-
     Dim destinationStartColumn As Long
+
+    Dim sourceLeftHelper As Range
+    Dim destinationLeftHelper As Range
+
+    Dim sourceRightHelper As Range
+    Dim destinationRightHelper As Range
+
     Dim sourceFormula As String
     Dim translatedFormula As String
 
-    Set sourceHelper = Me.Cells(DATA_FIRST_ROW, TEMPLATE_FIRST_COLUMN)
-
-    If Not sourceHelper.HasFormula Then Exit Sub
-
     destinationStartColumn = GetBlockStartColumn(blockNumber)
 
-    Set destinationHelper = Me.Cells(DATA_FIRST_ROW, destinationStartColumn)
+    ' ============================================================
+    ' LEFT EDGE HELPER / SEQUENCE BRACKET
+    ' Template = H8
+    ' Destination = first column of each 4-column block
+    ' ============================================================
+    Set sourceLeftHelper = Me.Cells(DATA_FIRST_ROW, TEMPLATE_FIRST_COLUMN)
+    Set destinationLeftHelper = Me.Cells(DATA_FIRST_ROW, destinationStartColumn)
 
-    sourceFormula = sourceHelper.Formula2
-    translatedFormula = TranslateBlockFormula(sourceFormula, destinationStartColumn)
+    If sourceLeftHelper.HasFormula Then
 
-    destinationHelper.Formula2 = translatedFormula
+        sourceFormula = sourceLeftHelper.Formula2
+        translatedFormula = TranslateBlockFormula(sourceFormula, destinationStartColumn)
+
+        destinationLeftHelper.Formula2 = translatedFormula
+
+    End If
+
+    ' Put the left-side | / bracket directly against the left-pin area.
+    Me.Range(Me.Cells(DATA_FIRST_ROW, destinationStartColumn), Me.Cells(RULES_LAST_ROW, destinationStartColumn)).HorizontalAlignment = xlRight
+
+    ' ============================================================
+    ' RIGHT EDGE HELPER / SEQUENCE BRACKET
+    ' Template = K8
+    ' Destination = fourth/last column of each 4-column block
+    ' ============================================================
+    Set sourceRightHelper = Me.Cells(DATA_FIRST_ROW, TEMPLATE_FIRST_COLUMN + BLOCK_WIDTH - 1)
+    Set destinationRightHelper = Me.Cells(DATA_FIRST_ROW, destinationStartColumn + BLOCK_WIDTH - 1)
+
+    If sourceRightHelper.HasFormula Then
+
+        sourceFormula = sourceRightHelper.Formula2
+        translatedFormula = TranslateBlockFormula(sourceFormula, destinationStartColumn)
+
+        destinationRightHelper.Formula2 = translatedFormula
+
+    End If
+
+    ' Put the right-side | / bracket directly against the right-pin area.
+    Me.Range(Me.Cells(DATA_FIRST_ROW, destinationStartColumn + BLOCK_WIDTH - 1), Me.Cells(RULES_LAST_ROW, destinationStartColumn + BLOCK_WIDTH - 1)).HorizontalAlignment = xlLeft
 
 End Sub
 
