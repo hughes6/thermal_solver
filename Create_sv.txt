@@ -1,212 +1,803 @@
+import time
+import traceback
+from datetime import datetime
+from pathlib import Path
 
-====================================================================================================
-E3 DELETE + RECREATE PIN VIEW TEST
-====================================================================================================
-Goal:
-1) Delete ONLY the existing placed endpoint view for pin 1.
-2) Verify the logical pin still exists.
-3) Verify whether pin 2 becomes the new END_TOP.
-4) If pin 1 now has no view, recreate it as END_SPLIT at the target coordinate.
+import pythoncom
+import win32com.client
+
+
+# ============================================================
+# USER SETTINGS
+# ============================================================
+
+CONNECTOR_NAME = "SCP-J1"
+TARGET_PIN_NAME = "1"
+
+TARGET_X = 5.5
+TARGET_Y = 30.25
+
+RECREATE_SYMBOL_NAME = "MilSymbolReceptacle¶END_SPLIT"
+RECREATE_SYMBOL_VERSION = "1"
+
+MAINTAIN_TEXT_SIZE = 1
 
 DRY_RUN = True
-CONNECTOR = SCP-J1
-TARGET PIN = 1
-RECREATE SYMBOL = MilSymbolReceptacle¶END_SPLIT
-TARGET = (5.5, 30.25)
 
-====================================================================================================
-CONNECTING TO E3
-====================================================================================================
-APPLICATION: <win32com.gen_py.E3.series 2025.2543 Type Library.IApplicationInterface instance at 0x1345251480576>
-PROJECT: <win32com.gen_py.E3.series 2025.2543 Type Library.IJobInterface instance at 0x1345251481920>
+OUTPUT_DIRECTORY = Path(__file__).resolve().parent
 
-====================================================================================================
-FIND CONNECTOR SCP-J1
-====================================================================================================
-DEVICE 72258: Wires
-DEVICE 64611: SCP-J1
-FOUND CONNECTOR ID: 64611
-
-====================================================================================================
-TARGET VIEW BEFORE TEST
-====================================================================================================
-LOGICAL PIN ID: 64615
-VIEW ID: 70079
-    SCHEMA LOCATION: [204828.0, 7.699999999999999, 29.9, 7.0]
-    NODE IDS: [206166]
-    BOUND IDS: [206158, 206163]
-    SYMBOL TYPE: MilSymbolReceptacle¶END_TOP
-    CHARACTERISTIC: END_TOP
-    ROTATION: y
-    SCALING: 1.0
-    NAME: J1
-    CODE: 10
-
-====================================================================================================
-FULL CONNECTOR BEFORE TEST
-====================================================================================================
-PIN 1 | LOGICAL PIN ID 64615 | VIEW IDS [70079]
-    VIEW 70079 | LOCATION [204828.0, 7.699999999999999, 29.9, 7.0] | NODE IDS [206166] | BOUNDS [206158, 206163] | TYPE MilSymbolReceptacle¶END_TOP | CHARACTERISTIC END_TOP
-PIN 2 | LOGICAL PIN ID 64614 | VIEW IDS [70077]
-    VIEW 70077 | LOCATION [204828.0, 7.7, 29.650000000000002, 7.0] | NODE IDS [204813] | BOUNDS [206158, 206163, 204849, 204825] | TYPE MilSymbolReceptacle¶CONNECTOR_PIN | CHARACTERISTIC CONNECTOR_PIN
-PIN 3 | LOGICAL PIN ID 64613 | VIEW IDS [70075]
-    VIEW 70075 | LOCATION [204828.0, 7.7, 29.400000000000002, 7.0] | NODE IDS [147144] | BOUNDS [204847, 204868, 204849, 204825] | TYPE MilSymbolReceptacle¶CONNECTOR_PIN | CHARACTERISTIC CONNECTOR_PIN
-PIN 4 | LOGICAL PIN ID 64612 | VIEW IDS [70073]
-    VIEW 70073 | LOCATION [204828.0, 7.7, 29.150000000000002, 7.0] | NODE IDS [146024] | BOUNDS [204869, 204848, 204847, 204868] | TYPE MilSymbolReceptacle¶CONNECTOR_PIN | CHARACTERISTIC CONNECTOR_PIN
-PIN 5 | LOGICAL PIN ID 64619 | VIEW IDS [70067]
-    VIEW 70067 | LOCATION [204828.0, 7.7, 28.900000000000002, 7.0] | NODE IDS [147661] | BOUNDS [147371, 204815, 204869, 204848] | TYPE MilSymbolReceptacle¶CONNECTOR_PIN | CHARACTERISTIC CONNECTOR_PIN
-PIN 6 | LOGICAL PIN ID 64618 | VIEW IDS [70061]
-    VIEW 70061 | LOCATION [204828.0, 7.7, 28.650000000000002, 7.0] | NODE IDS [147660] | BOUNDS [147371, 204815, 204816, 204876] | TYPE MilSymbolReceptacle¶CONNECTOR_PIN | CHARACTERISTIC CONNECTOR_PIN
-PIN 7 | LOGICAL PIN ID 64617 | VIEW IDS [70055]
-    VIEW 70055 | LOCATION [204828.0, 7.7, 28.400000000000002, 7.0] | NODE IDS [146064] | BOUNDS [206160, 206159, 204816, 204876] | TYPE MilSymbolReceptacle¶CONNECTOR_PIN | CHARACTERISTIC CONNECTOR_PIN
-PIN 8 | LOGICAL PIN ID 64616 | VIEW IDS [70049]
-    VIEW 70049 | LOCATION [204828.0, 7.7, 28.150000000000002, 7.0] | NODE IDS [146237] | BOUNDS [148799, 151244, 206160, 206159] | TYPE MilSymbolReceptacle¶CONNECTOR_PIN | CHARACTERISTIC CONNECTOR_PIN
-PIN 9 | LOGICAL PIN ID 64534 | VIEW IDS [70043]
-    VIEW 70043 | LOCATION [204828.0, 7.7, 27.900000000000002, 7.0] | NODE IDS [204814] | BOUNDS [148799, 151244] | TYPE MilSymbolReceptacle¶END_BOTTOM | CHARACTERISTIC END_BOTTOM
-
-====================================================================================================
-PLANNED OPERATIONS
-====================================================================================================
-DELETE VIEW: sym.SetId(70079) then sym.Delete()
-RECHECK logical pin 64615 using pin.GetViewIds()
-IF pin has no view, call:
-sym.PlacePinView(64615, 204828, 'MilSymbolReceptacle¶END_SPLIT', '1', 5.5, 30.25, 'y', 1.0, 1)
-
-====================================================================================================
-DRY RUN COMPLETE
-====================================================================================================
-No E3 objects were modified.
-Set DRY_RUN = False only on the disposable/test project.
+COM_MISSING = -2147352572
 
 
+# ============================================================
+# LOGGING
+# ============================================================
+
+LOG_LINES = []
 
 
+def log(message=""):
+
+    text = str(message)
+
+    print(text)
+
+    LOG_LINES.append(text)
 
 
+def section(title):
+
+    log()
+    log("=" * 100)
+    log(title)
+    log("=" * 100)
 
 
+def save_log():
+
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+
+    path = OUTPUT_DIRECTORY / f"e3_recreate_ghost_pin_view_{timestamp}.txt"
+
+    path.write_text("\n".join(LOG_LINES), encoding="utf-8")
+
+    print()
+    print("=" * 100)
+    print("LOG WRITTEN")
+    print("=" * 100)
+    print(path)
 
 
+# ============================================================
+# BASIC HELPERS
+# ============================================================
+
+def safe_string(value):
+
+    try:
+        return str(value)
+    except Exception:
+        return repr(value)
 
 
+def is_missing_value(value):
+
+    if value is None:
+        return True
+
+    try:
+        return int(value) == COM_MISSING
+    except Exception:
+        return False
 
 
+def clean_id_list(values):
+
+    cleaned = []
+
+    if values is None:
+        return cleaned
+
+    if not isinstance(values, (tuple, list)):
+        values = [values]
+
+    for value in values:
+
+        if is_missing_value(value):
+            continue
+
+        try:
+            value = int(value)
+        except Exception:
+            continue
+
+        if value > 0:
+            cleaned.append(value)
+
+    return cleaned
 
 
-====================================================================================================
-E3 DELETE + RECREATE PIN VIEW TEST
-====================================================================================================
-Goal:
-1) Delete ONLY the existing placed endpoint view for pin 1.
-2) Verify the logical pin still exists.
-3) Verify whether pin 2 becomes the new END_TOP.
-4) If pin 1 now has no view, recreate it as END_SPLIT at the target coordinate.
+def parse_count_array_result(result):
 
-DRY_RUN = False
-CONNECTOR = SCP-J1
-TARGET PIN = 1
-RECREATE SYMBOL = MilSymbolReceptacle¶END_SPLIT
-TARGET = (5.5, 30.25)
+    if result is None:
+        return []
 
-====================================================================================================
-CONNECTING TO E3
-====================================================================================================
-APPLICATION: <win32com.gen_py.E3.series 2025.2543 Type Library.IApplicationInterface instance at 0x2150733419520>
-PROJECT: <win32com.gen_py.E3.series 2025.2543 Type Library.IJobInterface instance at 0x2150733420864>
+    if isinstance(result, (tuple, list)):
 
-====================================================================================================
-FIND CONNECTOR SCP-J1
-====================================================================================================
-DEVICE 72258: Wires
-DEVICE 64611: SCP-J1
-FOUND CONNECTOR ID: 64611
+        items = list(result)
 
-====================================================================================================
-TARGET VIEW BEFORE TEST
-====================================================================================================
-LOGICAL PIN ID: 64615
-VIEW ID: 70079
-    SCHEMA LOCATION: [204828.0, 7.699999999999999, 29.9, 7.0]
-    NODE IDS: [206166]
-    BOUND IDS: [206158, 206163]
-    SYMBOL TYPE: MilSymbolReceptacle¶END_TOP
-    CHARACTERISTIC: END_TOP
-    ROTATION: y
-    SCALING: 1.0
-    NAME: J1
-    CODE: 10
+        if len(items) >= 2 and isinstance(items[1], (tuple, list)):
 
-====================================================================================================
-FULL CONNECTOR BEFORE TEST
-====================================================================================================
-PIN 1 | LOGICAL PIN ID 64615 | VIEW IDS [70079]
-    VIEW 70079 | LOCATION [204828.0, 7.699999999999999, 29.9, 7.0] | NODE IDS [206166] | BOUNDS [206158, 206163] | TYPE MilSymbolReceptacle¶END_TOP | CHARACTERISTIC END_TOP
-PIN 2 | LOGICAL PIN ID 64614 | VIEW IDS [70077]
-    VIEW 70077 | LOCATION [204828.0, 7.7, 29.650000000000002, 7.0] | NODE IDS [204813] | BOUNDS [206158, 206163, 204849, 204825] | TYPE MilSymbolReceptacle¶CONNECTOR_PIN | CHARACTERISTIC CONNECTOR_PIN
-PIN 3 | LOGICAL PIN ID 64613 | VIEW IDS [70075]
-    VIEW 70075 | LOCATION [204828.0, 7.7, 29.400000000000002, 7.0] | NODE IDS [147144] | BOUNDS [204847, 204868, 204849, 204825] | TYPE MilSymbolReceptacle¶CONNECTOR_PIN | CHARACTERISTIC CONNECTOR_PIN
-PIN 4 | LOGICAL PIN ID 64612 | VIEW IDS [70073]
-    VIEW 70073 | LOCATION [204828.0, 7.7, 29.150000000000002, 7.0] | NODE IDS [146024] | BOUNDS [204869, 204848, 204847, 204868] | TYPE MilSymbolReceptacle¶CONNECTOR_PIN | CHARACTERISTIC CONNECTOR_PIN
-PIN 5 | LOGICAL PIN ID 64619 | VIEW IDS [70067]
-    VIEW 70067 | LOCATION [204828.0, 7.7, 28.900000000000002, 7.0] | NODE IDS [147661] | BOUNDS [147371, 204815, 204869, 204848] | TYPE MilSymbolReceptacle¶CONNECTOR_PIN | CHARACTERISTIC CONNECTOR_PIN
-PIN 6 | LOGICAL PIN ID 64618 | VIEW IDS [70061]
-    VIEW 70061 | LOCATION [204828.0, 7.7, 28.650000000000002, 7.0] | NODE IDS [147660] | BOUNDS [147371, 204815, 204816, 204876] | TYPE MilSymbolReceptacle¶CONNECTOR_PIN | CHARACTERISTIC CONNECTOR_PIN
-PIN 7 | LOGICAL PIN ID 64617 | VIEW IDS [70055]
-    VIEW 70055 | LOCATION [204828.0, 7.7, 28.400000000000002, 7.0] | NODE IDS [146064] | BOUNDS [206160, 206159, 204816, 204876] | TYPE MilSymbolReceptacle¶CONNECTOR_PIN | CHARACTERISTIC CONNECTOR_PIN
-PIN 8 | LOGICAL PIN ID 64616 | VIEW IDS [70049]
-    VIEW 70049 | LOCATION [204828.0, 7.7, 28.150000000000002, 7.0] | NODE IDS [146237] | BOUNDS [148799, 151244, 206160, 206159] | TYPE MilSymbolReceptacle¶CONNECTOR_PIN | CHARACTERISTIC CONNECTOR_PIN
-PIN 9 | LOGICAL PIN ID 64534 | VIEW IDS [70043]
-    VIEW 70043 | LOCATION [204828.0, 7.7, 27.900000000000002, 7.0] | NODE IDS [204814] | BOUNDS [148799, 151244] | TYPE MilSymbolReceptacle¶END_BOTTOM | CHARACTERISTIC END_BOTTOM
+            try:
+                count = int(items[0])
+            except Exception:
+                count = None
 
-====================================================================================================
-PLANNED OPERATIONS
-====================================================================================================
-DELETE VIEW: sym.SetId(70079) then sym.Delete()
-RECHECK logical pin 64615 using pin.GetViewIds()
-IF pin has no view, call:
-sym.PlacePinView(64615, 204828, 'MilSymbolReceptacle¶END_SPLIT', '1', 5.5, 30.25, 'y', 1.0, 1)
+            values = clean_id_list(items[1])
 
-====================================================================================================
-PHASE 1 WARNING
-====================================================================================================
-This will delete the currently placed connector endpoint view.
-The script does NOT delete the logical pin.
-After deletion it stops and inspects the connector before doing anything else.
+            if count is not None and len(values) > count:
+                values = values[-count:]
 
-====================================================================================================
-DELETE EXISTING VIEW 70079
-====================================================================================================
-CURRENT SYMBOL ID: 148790
-sym.Delete RETURN: 0
-sym.Delete ELAPSED: 0.019580 SEC
+            return values
 
-====================================================================================================
-PIN 1 AFTER VIEW DELETE
-====================================================================================================
-LOGICAL PIN STILL EXISTS: 64615
-VIEW IDS AFTER DELETE: [70079]
+        return clean_id_list(items)
 
-====================================================================================================
-FULL CONNECTOR AFTER VIEW DELETE
-====================================================================================================
-PIN 1 | LOGICAL PIN ID 64615 | VIEW IDS [70079]
-    VIEW 70079 | LOCATION None | NODE IDS [] | BOUNDS [] | TYPE  | CHARACTERISTIC 
-PIN 2 | LOGICAL PIN ID 64614 | VIEW IDS [70077]
-    VIEW 70077 | LOCATION [204828.0, 7.7, 29.650000000000002, 7.0] | NODE IDS [147507] | BOUNDS [146797, 147010] | TYPE MilSymbolReceptacle¶END_TOP | CHARACTERISTIC END_TOP
-PIN 3 | LOGICAL PIN ID 64613 | VIEW IDS [70075]
-    VIEW 70075 | LOCATION [204828.0, 7.7, 29.400000000000002, 7.0] | NODE IDS [147144] | BOUNDS [147475, 147480, 146797, 147010] | TYPE MilSymbolReceptacle¶CONNECTOR_PIN | CHARACTERISTIC CONNECTOR_PIN
-PIN 4 | LOGICAL PIN ID 64612 | VIEW IDS [70073]
-    VIEW 70073 | LOCATION [204828.0, 7.7, 29.150000000000002, 7.0] | NODE IDS [146024] | BOUNDS [147438, 147439, 147475, 147480] | TYPE MilSymbolReceptacle¶CONNECTOR_PIN | CHARACTERISTIC CONNECTOR_PIN
-PIN 5 | LOGICAL PIN ID 64619 | VIEW IDS [70067]
-    VIEW 70067 | LOCATION [204828.0, 7.7, 28.900000000000002, 7.0] | NODE IDS [147661] | BOUNDS [147436, 147437, 147438, 147439] | TYPE MilSymbolReceptacle¶CONNECTOR_PIN | CHARACTERISTIC CONNECTOR_PIN
-PIN 6 | LOGICAL PIN ID 64618 | VIEW IDS [70061]
-    VIEW 70061 | LOCATION [204828.0, 7.7, 28.650000000000002, 7.0] | NODE IDS [147660] | BOUNDS [147436, 147437, 147446, 147451] | TYPE MilSymbolReceptacle¶CONNECTOR_PIN | CHARACTERISTIC CONNECTOR_PIN
-PIN 7 | LOGICAL PIN ID 64617 | VIEW IDS [70055]
-    VIEW 70055 | LOCATION [204828.0, 7.7, 28.400000000000002, 7.0] | NODE IDS [146064] | BOUNDS [147446, 147451, 147468, 147470] | TYPE MilSymbolReceptacle¶CONNECTOR_PIN | CHARACTERISTIC CONNECTOR_PIN
-PIN 8 | LOGICAL PIN ID 64616 | VIEW IDS [70049]
-    VIEW 70049 | LOCATION [204828.0, 7.7, 28.150000000000002, 7.0] | NODE IDS [146237] | BOUNDS [147456, 147461, 147468, 147470] | TYPE MilSymbolReceptacle¶CONNECTOR_PIN | CHARACTERISTIC CONNECTOR_PIN
-PIN 9 | LOGICAL PIN ID 64534 | VIEW IDS [70043]
-    VIEW 70043 | LOCATION [204828.0, 7.7, 27.900000000000002, 7.0] | NODE IDS [204844] | BOUNDS [147456, 147461] | TYPE MilSymbolReceptacle¶SPLIT_BOTTOM | CHARACTERISTIC SPLIT_BOTTOM
-OLD VIEW ID IS STILL PRESENT.
-sym.Delete did not remove the view.
-STOPPING WITHOUT RECREATE.
+    return clean_id_list(result)
+
+
+def call_id_array(method):
+
+    try:
+        result = method(None)
+
+        values = parse_count_array_result(result)
+
+        if values:
+            return values
+
+    except Exception:
+        pass
+
+    try:
+        result = method()
+
+        values = parse_count_array_result(result)
+
+        if values:
+            return values
+
+    except Exception:
+        pass
+
+    return []
+
+
+def call_noarg(obj, method_name):
+
+    if not hasattr(obj, method_name):
+        return None
+
+    try:
+        return getattr(obj, method_name)()
+    except Exception:
+        return None
+
+
+# ============================================================
+# E3 CONNECTION
+# ============================================================
+
+def connect_to_e3():
+
+    section("CONNECTING TO E3")
+
+    pythoncom.CoInitialize()
+
+    app = win32com.client.Dispatch("CT.Application")
+
+    prj = app.CreateJobObject()
+    dev = prj.CreateDeviceObject()
+    pin = prj.CreatePinObject()
+    sym = prj.CreateSymbolObject()
+
+    log(f"APPLICATION: {app}")
+    log(f"PROJECT: {prj}")
+
+    return app, prj, dev, pin, sym
+
+
+# ============================================================
+# DISCOVERY
+# ============================================================
+
+def get_device_ids(prj):
+
+    return call_id_array(prj.GetAllDeviceIds)
+
+
+def get_pin_ids(dev):
+
+    return call_id_array(dev.GetPinIds)
+
+
+def get_view_ids(pin):
+
+    return call_id_array(pin.GetViewIds)
+
+
+def get_bound_ids(sym):
+
+    return call_id_array(sym.GetBoundIds)
+
+
+def get_node_ids(pin):
+
+    return call_id_array(pin.GetNodeIds)
+
+
+def get_pin_name(pin):
+
+    try:
+        return str(pin.GetName())
+    except Exception:
+        return ""
+
+
+def find_connector(prj, dev):
+
+    section(f"FIND CONNECTOR {CONNECTOR_NAME}")
+
+    for device_id in get_device_ids(prj):
+
+        dev.SetId(device_id)
+
+        try:
+            name = str(dev.GetName())
+        except Exception:
+            name = ""
+
+        log(f"DEVICE {device_id}: {name}")
+
+        if name == CONNECTOR_NAME:
+            log(f"FOUND CONNECTOR ID: {device_id}")
+            return device_id
+
+    raise RuntimeError(f"Could not find connector {CONNECTOR_NAME}.")
+
+
+def find_pin(dev, pin, connector_device_id, pin_name):
+
+    dev.SetId(connector_device_id)
+
+    for pin_id in get_pin_ids(dev):
+
+        pin.SetId(pin_id)
+
+        if get_pin_name(pin) == str(pin_name):
+
+            return {
+                "pin_id": pin_id,
+                "pin_name": str(pin_name),
+                "view_ids": get_view_ids(pin),
+            }
+
+    return None
+
+
+# ============================================================
+# VIEW METADATA
+# ============================================================
+
+def get_schema_location(pin):
+
+    attempts = [
+        lambda: pin.GetSchemaLocation(None, None, None, None, None),
+        lambda: pin.GetSchemaLocation(None, None, None),
+        lambda: pin.GetSchemaLocation(),
+    ]
+
+    for attempt in attempts:
+
+        try:
+            result = attempt()
+        except Exception:
+            continue
+
+        if not isinstance(result, (tuple, list)):
+            continue
+
+        numeric = []
+
+        for value in result:
+
+            if is_missing_value(value):
+                continue
+
+            try:
+                numeric.append(float(value))
+            except Exception:
+                pass
+
+        if len(numeric) >= 3:
+            return numeric
+
+    return None
+
+
+def read_view_metadata(pin, sym, view_id):
+
+    metadata = {
+        "view_id": view_id,
+        "pin_set_result": None,
+        "symbol_set_result": None,
+        "symbol_id": None,
+        "schema_location": None,
+        "node_ids": [],
+        "bound_ids": [],
+        "symbol_type_name": "",
+        "characteristic": "",
+        "rotation": None,
+        "scaling": None,
+        "name": "",
+        "code": None,
+        "live": False,
+    }
+
+    try:
+        metadata["pin_set_result"] = pin.SetId(view_id)
+    except Exception:
+        pass
+
+    metadata["schema_location"] = get_schema_location(pin)
+    metadata["node_ids"] = get_node_ids(pin)
+
+    try:
+        metadata["symbol_set_result"] = sym.SetId(view_id)
+    except Exception:
+        pass
+
+    metadata["symbol_id"] = call_noarg(sym, "GetId")
+    metadata["bound_ids"] = get_bound_ids(sym)
+
+    symbol_type_name = call_noarg(sym, "GetSymbolTypeName")
+    characteristic = call_noarg(sym, "GetCharacteristic")
+    rotation = call_noarg(sym, "GetRotation")
+    scaling = call_noarg(sym, "GetScaling")
+    name = call_noarg(sym, "GetName")
+    code = call_noarg(sym, "GetCode")
+
+    if isinstance(symbol_type_name, str):
+        metadata["symbol_type_name"] = symbol_type_name
+
+    if isinstance(characteristic, str):
+        metadata["characteristic"] = characteristic
+
+    metadata["rotation"] = rotation
+    metadata["scaling"] = scaling
+
+    if isinstance(name, str):
+        metadata["name"] = name
+
+    metadata["code"] = code
+
+    has_location = metadata["schema_location"] is not None
+    has_symbol_type = metadata["symbol_type_name"] != ""
+    has_characteristic = metadata["characteristic"] != ""
+
+    metadata["live"] = has_location and (has_symbol_type or has_characteristic)
+
+    return metadata
+
+
+def print_metadata(metadata, prefix=""):
+
+    log(f"{prefix}VIEW ID: {metadata['view_id']}")
+    log(f"{prefix}    PIN SetId RETURN: {metadata['pin_set_result']}")
+    log(f"{prefix}    SYMBOL SetId RETURN: {metadata['symbol_set_result']}")
+    log(f"{prefix}    SYMBOL GetId: {metadata['symbol_id']}")
+    log(f"{prefix}    LIVE: {metadata['live']}")
+    log(f"{prefix}    LOCATION: {metadata['schema_location']}")
+    log(f"{prefix}    NODE IDS: {metadata['node_ids']}")
+    log(f"{prefix}    BOUNDS: {metadata['bound_ids']}")
+    log(f"{prefix}    TYPE: {metadata['symbol_type_name']}")
+    log(f"{prefix}    CHARACTERISTIC: {metadata['characteristic']}")
+    log(f"{prefix}    ROTATION: {metadata['rotation']}")
+    log(f"{prefix}    SCALING: {metadata['scaling']}")
+    log(f"{prefix}    NAME: {metadata['name']}")
+    log(f"{prefix}    CODE: {metadata['code']}")
+
+
+# ============================================================
+# CONNECTOR SNAPSHOT
+# ============================================================
+
+def get_connector_snapshot(dev, pin, sym, connector_device_id):
+
+    snapshot = []
+
+    dev.SetId(connector_device_id)
+
+    for pin_id in get_pin_ids(dev):
+
+        pin.SetId(pin_id)
+
+        pin_name = get_pin_name(pin)
+        view_ids = get_view_ids(pin)
+
+        pin_record = {
+            "pin_id": pin_id,
+            "pin_name": pin_name,
+            "view_ids": view_ids,
+            "views": [],
+        }
+
+        for view_id in view_ids:
+
+            pin_record["views"].append(read_view_metadata(pin, sym, view_id))
+
+        snapshot.append(pin_record)
+
+    return snapshot
+
+
+def print_connector_snapshot(snapshot, title):
+
+    section(title)
+
+    for pin_record in snapshot:
+
+        log(f"PIN {pin_record['pin_name']} | LOGICAL PIN ID {pin_record['pin_id']} | VIEW IDS {pin_record['view_ids']}")
+
+        for metadata in pin_record["views"]:
+            log(f"    VIEW {metadata['view_id']} | LIVE {metadata['live']} | SYMBOL ID {metadata['symbol_id']} | LOCATION {metadata['schema_location']} | NODE IDS {metadata['node_ids']} | BOUNDS {metadata['bound_ids']} | TYPE {metadata['symbol_type_name']} | CHARACTERISTIC {metadata['characteristic']}")
+
+
+def find_reference_live_view(snapshot, target_pin_name):
+
+    for pin_record in snapshot:
+
+        if pin_record["pin_name"] == str(target_pin_name):
+            continue
+
+        for metadata in pin_record["views"]:
+
+            if metadata["live"]:
+                return metadata
+
+    return None
+
+
+# ============================================================
+# DELETE / RECREATE
+# ============================================================
+
+def delete_live_view(sym, view_id):
+
+    section(f"DELETE LIVE VIEW {view_id}")
+
+    set_result = sym.SetId(view_id)
+
+    before_symbol_id = call_noarg(sym, "GetId")
+
+    log(f"sym.SetId({view_id}) RETURN: {set_result}")
+    log(f"sym.GetId() BEFORE DELETE: {before_symbol_id}")
+
+    started = time.perf_counter()
+
+    try:
+        result = sym.Delete()
+    except Exception as exc:
+        elapsed = time.perf_counter() - started
+
+        log(f"sym.Delete EXCEPTION AFTER {elapsed:.6f} SEC: {exc}")
+        log(traceback.format_exc())
+
+        return None
+
+    elapsed = time.perf_counter() - started
+
+    log(f"sym.Delete RETURN: {result}")
+    log(f"sym.Delete ELAPSED: {elapsed:.6f} SEC")
+
+    return result
+
+
+def recreate_view(sym, logical_pin_id, sheet_id, rotation, scaling):
+
+    section("CALL PlacePinView ON UNPLACED / GHOST PIN")
+
+    log(f"LOGICAL PIN ID: {logical_pin_id}")
+    log(f"SHEET ID: {sheet_id}")
+    log(f"SYMBOL: {RECREATE_SYMBOL_NAME}")
+    log(f"VERSION: {RECREATE_SYMBOL_VERSION}")
+    log(f"TARGET X: {TARGET_X}")
+    log(f"TARGET Y: {TARGET_Y}")
+    log(f"ROTATION: {rotation}")
+    log(f"SCALING: {scaling}")
+    log(f"MAINTAIN TEXT SIZE: {MAINTAIN_TEXT_SIZE}")
+
+    started = time.perf_counter()
+
+    try:
+        result = sym.PlacePinView(logical_pin_id, sheet_id, RECREATE_SYMBOL_NAME, RECREATE_SYMBOL_VERSION, TARGET_X, TARGET_Y, rotation, scaling, MAINTAIN_TEXT_SIZE)
+    except Exception as exc:
+        elapsed = time.perf_counter() - started
+
+        log(f"PlacePinView EXCEPTION AFTER {elapsed:.6f} SEC: {exc}")
+        log(traceback.format_exc())
+
+        return None
+
+    elapsed = time.perf_counter() - started
+
+    log(f"PlacePinView RETURN: {result}")
+    log(f"PlacePinView ELAPSED: {elapsed:.6f} SEC")
+
+    return result
+
+
+# ============================================================
+# MAIN
+# ============================================================
+
+def main():
+
+    section("E3 GHOST PIN-VIEW RECREATE TEST")
+
+    log("This script treats a retained GetViewIds() value as a ghost/unplaced view if:")
+    log("1) GetSchemaLocation is unavailable")
+    log("2) symbol type / characteristic are blank")
+    log()
+    log("That is the state created by the previous successful sym.Delete test.")
+    log()
+    log(f"DRY_RUN = {DRY_RUN}")
+    log(f"CONNECTOR = {CONNECTOR_NAME}")
+    log(f"TARGET PIN = {TARGET_PIN_NAME}")
+    log(f"RECREATE SYMBOL = {RECREATE_SYMBOL_NAME}")
+    log(f"TARGET = ({TARGET_X}, {TARGET_Y})")
+
+    app, prj, dev, pin, sym = connect_to_e3()
+
+    connector_device_id = find_connector(prj, dev)
+
+    snapshot = get_connector_snapshot(dev, pin, sym, connector_device_id)
+
+    print_connector_snapshot(snapshot, "CURRENT CONNECTOR STATE")
+
+    target_pin = find_pin(dev, pin, connector_device_id, TARGET_PIN_NAME)
+
+    if target_pin is None:
+        raise RuntimeError(f"Could not find logical pin {TARGET_PIN_NAME}.")
+
+    target_metadata = []
+
+    for view_id in target_pin["view_ids"]:
+
+        target_metadata.append(read_view_metadata(pin, sym, view_id))
+
+    section("TARGET PIN VIEW STATE")
+
+    log(f"LOGICAL PIN ID: {target_pin['pin_id']}")
+    log(f"GetViewIds(): {target_pin['view_ids']}")
+
+    for metadata in target_metadata:
+        print_metadata(metadata)
+
+    live_target_views = [metadata for metadata in target_metadata if metadata["live"]]
+    ghost_target_views = [metadata for metadata in target_metadata if not metadata["live"]]
+
+    log()
+    log(f"LIVE TARGET VIEW IDS: {[metadata['view_id'] for metadata in live_target_views]}")
+    log(f"GHOST / UNPLACED VIEW IDS: {[metadata['view_id'] for metadata in ghost_target_views]}")
+
+    reference = find_reference_live_view(snapshot, TARGET_PIN_NAME)
+
+    if reference is None:
+        raise RuntimeError("Could not find a live neighboring connector view for sheet/rotation/scaling reference.")
+
+    sheet_id = int(reference["schema_location"][0])
+
+    rotation = reference["rotation"]
+
+    if not isinstance(rotation, str) or rotation == "":
+        rotation = "y"
+
+    try:
+        scaling = float(reference["scaling"])
+    except Exception:
+        scaling = 1.0
+
+    section("REFERENCE METADATA FOR RECREATE")
+
+    log(f"REFERENCE VIEW ID: {reference['view_id']}")
+    log(f"SHEET ID: {sheet_id}")
+    log(f"ROTATION: {rotation}")
+    log(f"SCALING: {scaling}")
+
+    if live_target_views:
+
+        if len(live_target_views) != 1:
+            raise RuntimeError(f"Expected at most one live target view, found {[metadata['view_id'] for metadata in live_target_views]}.")
+
+        live_view = live_target_views[0]
+
+        section("TARGET STILL HAS A LIVE VIEW")
+
+        log("The target pin is still placed.")
+        log("Phase 1 must delete that live view before PlacePinView can be tested.")
+        log(f"LIVE VIEW ID: {live_view['view_id']}")
+
+        if DRY_RUN:
+
+            log("DRY RUN: no delete will be performed.")
+            log(f"Would call sym.SetId({live_view['view_id']}) then sym.Delete().")
+            log("Then the script would verify the view became ghost/unplaced before recreating it.")
+
+            return
+
+        confirmation = input(f"Type DELETEVIEW {live_view['view_id']} to delete the live target view: ").strip()
+
+        if confirmation != f"DELETEVIEW {live_view['view_id']}":
+            log("DELETE CANCELLED")
+            return
+
+        delete_live_view(sym, live_view["view_id"])
+
+        time.sleep(0.5)
+
+        target_pin = find_pin(dev, pin, connector_device_id, TARGET_PIN_NAME)
+
+        if target_pin is None:
+            raise RuntimeError("Logical pin disappeared after deleting the placed view.")
+
+        target_metadata = []
+
+        for view_id in target_pin["view_ids"]:
+            target_metadata.append(read_view_metadata(pin, sym, view_id))
+
+        live_target_views = [metadata for metadata in target_metadata if metadata["live"]]
+        ghost_target_views = [metadata for metadata in target_metadata if not metadata["live"]]
+
+        section("TARGET STATE AFTER DELETE")
+
+        log(f"GetViewIds(): {target_pin['view_ids']}")
+        log(f"LIVE TARGET VIEW IDS: {[metadata['view_id'] for metadata in live_target_views]}")
+        log(f"GHOST / UNPLACED VIEW IDS: {[metadata['view_id'] for metadata in ghost_target_views]}")
+
+        for metadata in target_metadata:
+            print_metadata(metadata)
+
+        snapshot_after_delete = get_connector_snapshot(dev, pin, sym, connector_device_id)
+
+        print_connector_snapshot(snapshot_after_delete, "CONNECTOR AFTER DELETE")
+
+        if live_target_views:
+            log("A live target view still exists.")
+            log("STOPPING WITHOUT PlacePinView.")
+
+            return
+
+    section("TARGET IS NOW UNPLACED / GHOST")
+
+    log("The logical pin exists, but there is no live placed symbol view.")
+    log("This is the state in which PlacePinView should be tested.")
+    log()
+    log("EXACT CALL:")
+    log(f"sym.PlacePinView({target_pin['pin_id']}, {sheet_id}, {repr(RECREATE_SYMBOL_NAME)}, {repr(RECREATE_SYMBOL_VERSION)}, {TARGET_X}, {TARGET_Y}, {repr(rotation)}, {scaling}, {MAINTAIN_TEXT_SIZE})")
+
+    if DRY_RUN:
+
+        log()
+        log("DRY RUN: PlacePinView will not be called.")
+        log("Set DRY_RUN = False to perform the recreate test.")
+
+        return
+
+    confirmation = input("Type RECREATE to call PlacePinView now: ").strip()
+
+    if confirmation != "RECREATE":
+        log("RECREATE CANCELLED")
+        return
+
+    recreate_result = recreate_view(sym, target_pin["pin_id"], sheet_id, rotation, scaling)
+
+    if recreate_result is None:
+        return
+
+    time.sleep(0.5)
+
+    target_pin_after = find_pin(dev, pin, connector_device_id, TARGET_PIN_NAME)
+
+    if target_pin_after is None:
+        raise RuntimeError("Logical pin disappeared after PlacePinView.")
+
+    section("TARGET AFTER RECREATE")
+
+    log(f"PlacePinView RETURN: {recreate_result}")
+    log(f"GetViewIds(): {target_pin_after['view_ids']}")
+
+    recreated_live_views = []
+
+    for view_id in target_pin_after["view_ids"]:
+
+        metadata = read_view_metadata(pin, sym, view_id)
+
+        print_metadata(metadata)
+
+        if metadata["live"]:
+            recreated_live_views.append(metadata)
+
+    final_snapshot = get_connector_snapshot(dev, pin, sym, connector_device_id)
+
+    print_connector_snapshot(final_snapshot, "FINAL CONNECTOR STATE")
+
+    section("FINAL RESULT")
+
+    if not recreated_live_views:
+        log("No live pin view exists after PlacePinView.")
+        log("The recreate attempt failed.")
+
+        return
+
+    log(f"LIVE VIEW IDS AFTER RECREATE: {[metadata['view_id'] for metadata in recreated_live_views]}")
+
+    for metadata in recreated_live_views:
+
+        log()
+        log(f"VIEW {metadata['view_id']}:")
+        log(f"    LOCATION: {metadata['schema_location']}")
+        log(f"    TYPE: {metadata['symbol_type_name']}")
+        log(f"    CHARACTERISTIC: {metadata['characteristic']}")
+        log(f"    BOUNDS: {metadata['bound_ids']}")
+        log(f"    NODE IDS: {metadata['node_ids']}")
+
+    expected_type = RECREATE_SYMBOL_NAME
+    expected_characteristic = "END_SPLIT"
+
+    successful = False
+
+    for metadata in recreated_live_views:
+
+        correct_type = metadata["symbol_type_name"] == expected_type
+        correct_characteristic = metadata["characteristic"] == expected_characteristic
+        no_bounds = len(metadata["bound_ids"]) == 0
+        has_location = metadata["schema_location"] is not None
+
+        if correct_type and correct_characteristic and no_bounds and has_location:
+            successful = True
+
+    if successful:
+        log()
+        log("SUCCESS: pin 1 is now a live, unbound END_SPLIT view.")
+        log("This reproduces the important state produced by the manual GUI detach.")
+    else:
+        log()
+        log("A live view exists, but it does not yet match the full manual-detach state.")
+
+
+if __name__ == "__main__":
+
+    try:
+        main()
+
+    except KeyboardInterrupt:
+        log()
+        log("STOPPED BY USER")
+
+    except Exception as exc:
+        log()
+        log("FATAL ERROR")
+        log(safe_string(exc))
+        log(traceback.format_exc())
+
+    finally:
+
+        try:
+            save_log()
+        except Exception as exc:
+            print(f"COULD NOT SAVE LOG: {exc}")
+
+        try:
+            pythoncom.CoUninitialize()
+        except Exception:
+            pass
