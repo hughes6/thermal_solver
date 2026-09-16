@@ -1,315 +1,1323 @@
+import json
+import time
+import traceback
+from datetime import datetime
+from pathlib import Path
 
-====================================================================================================
-E3 PEEL FIRST THREE -> STAGGERED MIDDLE STAGE -> REORDER LEFT/RIGHT
-====================================================================================================
-PROCESS:
-1) Record every connector pin and original location.
-2) Identify the first three pins from the top.
-3) Peel them one at a time using the proven stable pin-view-ID workflow.
-4) Place each peeled pin in a staggered middle staging area so it cannot reconnect to the original stack or another staged pin.
-5) Re-place those three out of order into left/right test positions.
-6) Apply split text tweaks to the final live symbols.
+import pythoncom
+import win32com.client
+
+
+# ============================================================
+# TEST CONFIGURATION
+# ============================================================
+
+CONNECTOR_NAME = "SCP-J1"
+
+PEEL_COUNT = 3
+
+DETACHED_SYMBOL_NAME = "MilSymbolReceptacle¶END_SPLIT"
+DETACHED_SYMBOL_VERSION = "1"
+
+MAINTAIN_TEXT_SIZE = 1
+
+STAGING_X_BASE_OFFSET = -0.80
+STAGING_X_STEP = -0.35
+STAGING_Y_OFFSET = 1.00
+STAGING_Y_SPACING = 0.30
+
+LEFT_X_OFFSET = -2.20
+RIGHT_X_OFFSET = 0.00
+
+FINAL_Y_OFFSET = 0.35
+FINAL_Y_SPACING = 0.25
 
 DRY_RUN = True
 
-====================================================================================================
-CONNECTING TO E3
-====================================================================================================
-APPLICATION: <win32com.gen_py.E3.series 2025.2543 Type Library.IApplicationInterface instance at 0x2681782523552>
-PROJECT: <win32com.gen_py.E3.series 2025.2543 Type Library.IJobInterface instance at 0x2681782524896>
+REQUIRE_RUN_CONFIRMATION = True
 
-====================================================================================================
-FIND CONNECTOR SCP-J1
-====================================================================================================
-DEVICE 72258: Wires
-DEVICE 64611: SCP-J1
-FOUND CONNECTOR ID: 64611
+OUTPUT_DIRECTORY = Path(__file__).resolve().parent
 
-====================================================================================================
-VERIFY END_SPLIT SYMBOL
-====================================================================================================
-Load RETURN: 148869
-
-====================================================================================================
-INITIAL CONNECTOR SNAPSHOT
-====================================================================================================
-PIN 1 | LOGICAL PIN ID 64615 | VIEW IDS [70079]
-    VIEW 70079 | LIVE SYMBOL 146270 | LOCATION [204828.0, 7.699999999999999, 29.9, 7.0] | NODE IDS [146245] | TYPE MilSymbolReceptacle¶END_TOP | CHARACTERISTIC END_TOP | BOUNDS [146261, 146260]
-PIN 2 | LOGICAL PIN ID 64614 | VIEW IDS [70077]
-    VIEW 70077 | LIVE SYMBOL 146275 | LOCATION [204828.0, 7.7, 29.650000000000002, 7.0] | NODE IDS [146244] | TYPE MilSymbolReceptacle¶CONNECTOR_PIN | CHARACTERISTIC CONNECTOR_PIN | BOUNDS [146261, 146260, 146231, 146230]
-PIN 3 | LOGICAL PIN ID 64613 | VIEW IDS [70075]
-    VIEW 70075 | LIVE SYMBOL 146239 | LOCATION [204828.0, 7.7, 29.400000000000002, 7.0] | NODE IDS [147144] | TYPE MilSymbolReceptacle¶CONNECTOR_PIN | CHARACTERISTIC CONNECTOR_PIN | BOUNDS [146264, 146265, 146231, 146230]
-PIN 4 | LOGICAL PIN ID 64612 | VIEW IDS [70073]
-    VIEW 70073 | LIVE SYMBOL 146765 | LOCATION [204828.0, 7.7, 29.150000000000002, 7.0] | NODE IDS [146024] | TYPE MilSymbolReceptacle¶CONNECTOR_PIN | CHARACTERISTIC CONNECTOR_PIN | BOUNDS [146238, 146236, 146264, 146265]
-PIN 5 | LOGICAL PIN ID 64619 | VIEW IDS [70067]
-    VIEW 70067 | LIVE SYMBOL 145922 | LOCATION [204828.0, 7.7, 28.900000000000002, 7.0] | NODE IDS [147661] | TYPE MilSymbolReceptacle¶CONNECTOR_PIN | CHARACTERISTIC CONNECTOR_PIN | BOUNDS [146247, 146246, 146238, 146236]
-PIN 6 | LOGICAL PIN ID 64618 | VIEW IDS [70061]
-    VIEW 70061 | LIVE SYMBOL 146059 | LOCATION [204828.0, 7.7, 28.650000000000002, 7.0] | NODE IDS [147660] | TYPE MilSymbolReceptacle¶CONNECTOR_PIN | CHARACTERISTIC CONNECTOR_PIN | BOUNDS [146247, 146246, 146243, 146242]
-PIN 7 | LOGICAL PIN ID 64617 | VIEW IDS [70055]
-    VIEW 70055 | LIVE SYMBOL 204784 | LOCATION [204828.0, 7.7, 28.400000000000002, 7.0] | NODE IDS [146064] | TYPE MilSymbolReceptacle¶CONNECTOR_PIN | CHARACTERISTIC CONNECTOR_PIN | BOUNDS [146259, 146258, 146243, 146242]
-PIN 8 | LOGICAL PIN ID 64616 | VIEW IDS [70049]
-    VIEW 70049 | LIVE SYMBOL 146079 | LOCATION [204828.0, 7.7, 28.150000000000002, 7.0] | NODE IDS [146237] | TYPE MilSymbolReceptacle¶CONNECTOR_PIN | CHARACTERISTIC CONNECTOR_PIN | BOUNDS [146251, 146250, 146259, 146258]
-PIN 9 | LOGICAL PIN ID 64534 | VIEW IDS [70043]
-    VIEW 70043 | LIVE SYMBOL 146274 | LOCATION [204828.0, 7.7, 27.900000000000002, 7.0] | NODE IDS [146235] | TYPE MilSymbolReceptacle¶END_BOTTOM | CHARACTERISTIC END_BOTTOM | BOUNDS [146251, 146250]
-
-====================================================================================================
-FIRST THREE PINS FROM TOP
-====================================================================================================
-1: PIN 1 | VIEW 70079 | LOCATION (7.699999999999999, 29.9) | TYPE MilSymbolReceptacle¶END_TOP | CHARACTERISTIC END_TOP
-2: PIN 2 | VIEW 70077 | LOCATION (7.7, 29.650000000000002) | TYPE MilSymbolReceptacle¶CONNECTOR_PIN | CHARACTERISTIC CONNECTOR_PIN
-3: PIN 3 | VIEW 70075 | LOCATION (7.7, 29.400000000000002) | TYPE MilSymbolReceptacle¶CONNECTOR_PIN | CHARACTERISTIC CONNECTOR_PIN
-ESTIMATED NOMINAL PIN PITCH: 0.25
-CURRENT FIRST GAP: 0.24999999999999645
-NOMINAL ORIGINAL TOP Y: 29.9
-
-====================================================================================================
-COMPUTED TEST COORDINATES
-====================================================================================================
-ORIGINAL CONNECTOR X: 7.699999999999999
-STAGING X START: 6.8999999999999995
-STAGING X STEP: -0.35
-STAGING Y START: 30.9
-STAGING Y SPACING: 0.3
-LEFT FINAL X: 5.499999999999999
-RIGHT FINAL X: 9.899999999999999
-FINAL TOP Y: 30.25
-FINAL Y SPACING: 0.25
-
-====================================================================================================
-DRY RUN PLAN
-====================================================================================================
-PEEL PIN 1 -> STAGE (6.8999999999999995, 30.9)
-PEEL PIN 2 -> STAGE (6.55, 30.599999999999998)
-PEEL PIN 3 -> STAGE (6.199999999999999, 30.299999999999997)
-
-OUT-OF-ORDER FINAL PLAN:
-PIN 3 -> LEFT ROW 0 -> (5.499999999999999, 30.25)
-PIN 1 -> RIGHT ROW 0 -> (9.899999999999999, 30.25)
-PIN 2 -> LEFT ROW 1 -> (5.499999999999999, 30.0)
-
-No E3 objects were changed.
-Set DRY_RUN = False to run the proof-of-process.
+COM_MISSING = -2147352572
 
 
+# ============================================================
+# OUTPUT / LOGGING
+# ============================================================
+
+LOG_LINES = []
+
+RUN_RECORD = {
+    "started": None,
+    "finished": None,
+    "connector_name": CONNECTOR_NAME,
+    "peel_count": PEEL_COUNT,
+    "initial_snapshot": [],
+    "peeled": [],
+    "staged_snapshot": [],
+    "final_plan": [],
+    "final_snapshot": [],
+}
 
 
+def log(message=""):
+
+    text = str(message)
+
+    print(text)
+
+    LOG_LINES.append(text)
 
 
+def section(title):
+
+    log()
+    log("=" * 100)
+    log(title)
+    log("=" * 100)
 
 
+def save_results():
+
+    RUN_RECORD["finished"] = datetime.now().isoformat(timespec="milliseconds")
+
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+
+    txt_path = OUTPUT_DIRECTORY / f"e3_peel_three_reorder_{timestamp}.txt"
+    json_path = OUTPUT_DIRECTORY / f"e3_peel_three_reorder_{timestamp}.json"
+
+    txt_path.write_text("\n".join(LOG_LINES), encoding="utf-8")
+    json_path.write_text(json.dumps(RUN_RECORD, indent=2, default=str), encoding="utf-8")
+
+    print()
+    print("=" * 100)
+    print("RESULT FILES")
+    print("=" * 100)
+    print(txt_path)
+    print(json_path)
 
 
+# ============================================================
+# BASIC HELPERS
+# ============================================================
+
+def safe_string(value):
+
+    try:
+        return str(value)
+    except Exception:
+        return repr(value)
 
 
+def is_missing_value(value):
 
-====================================================================================================
-E3 PEEL FIRST THREE -> STAGGERED MIDDLE STAGE -> REORDER LEFT/RIGHT
-====================================================================================================
-PROCESS:
-1) Record every connector pin and original location.
-2) Identify the first three pins from the top.
-3) Peel them one at a time using the proven stable pin-view-ID workflow.
-4) Place each peeled pin in a staggered middle staging area so it cannot reconnect to the original stack or another staged pin.
-5) Re-place those three out of order into left/right test positions.
-6) Apply split text tweaks to the final live symbols.
+    if value is None:
+        return True
 
-DRY_RUN = False
+    try:
+        return int(value) == COM_MISSING
+    except Exception:
+        return False
 
-====================================================================================================
-CONNECTING TO E3
-====================================================================================================
-APPLICATION: <win32com.gen_py.E3.series 2025.2543 Type Library.IApplicationInterface instance at 0x1950888744608>
-PROJECT: <win32com.gen_py.E3.series 2025.2543 Type Library.IJobInterface instance at 0x1950888745952>
 
-====================================================================================================
-FIND CONNECTOR SCP-J1
-====================================================================================================
-DEVICE 72258: Wires
-DEVICE 64611: SCP-J1
-FOUND CONNECTOR ID: 64611
+def clean_id_list(values):
 
-====================================================================================================
-VERIFY END_SPLIT SYMBOL
-====================================================================================================
-Load RETURN: 148869
+    cleaned = []
 
-====================================================================================================
-INITIAL CONNECTOR SNAPSHOT
-====================================================================================================
-PIN 1 | LOGICAL PIN ID 64615 | VIEW IDS [70079]
-    VIEW 70079 | LIVE SYMBOL 146270 | LOCATION [204828.0, 7.699999999999999, 29.9, 7.0] | NODE IDS [146245] | TYPE MilSymbolReceptacle¶END_TOP | CHARACTERISTIC END_TOP | BOUNDS [146261, 146260]
-PIN 2 | LOGICAL PIN ID 64614 | VIEW IDS [70077]
-    VIEW 70077 | LIVE SYMBOL 146275 | LOCATION [204828.0, 7.7, 29.650000000000002, 7.0] | NODE IDS [146244] | TYPE MilSymbolReceptacle¶CONNECTOR_PIN | CHARACTERISTIC CONNECTOR_PIN | BOUNDS [146261, 146260, 146231, 146230]
-PIN 3 | LOGICAL PIN ID 64613 | VIEW IDS [70075]
-    VIEW 70075 | LIVE SYMBOL 146239 | LOCATION [204828.0, 7.7, 29.400000000000002, 7.0] | NODE IDS [147144] | TYPE MilSymbolReceptacle¶CONNECTOR_PIN | CHARACTERISTIC CONNECTOR_PIN | BOUNDS [146264, 146265, 146231, 146230]
-PIN 4 | LOGICAL PIN ID 64612 | VIEW IDS [70073]
-    VIEW 70073 | LIVE SYMBOL 146765 | LOCATION [204828.0, 7.7, 29.150000000000002, 7.0] | NODE IDS [146024] | TYPE MilSymbolReceptacle¶CONNECTOR_PIN | CHARACTERISTIC CONNECTOR_PIN | BOUNDS [146238, 146236, 146264, 146265]
-PIN 5 | LOGICAL PIN ID 64619 | VIEW IDS [70067]
-    VIEW 70067 | LIVE SYMBOL 145922 | LOCATION [204828.0, 7.7, 28.900000000000002, 7.0] | NODE IDS [147661] | TYPE MilSymbolReceptacle¶CONNECTOR_PIN | CHARACTERISTIC CONNECTOR_PIN | BOUNDS [146247, 146246, 146238, 146236]
-PIN 6 | LOGICAL PIN ID 64618 | VIEW IDS [70061]
-    VIEW 70061 | LIVE SYMBOL 146059 | LOCATION [204828.0, 7.7, 28.650000000000002, 7.0] | NODE IDS [147660] | TYPE MilSymbolReceptacle¶CONNECTOR_PIN | CHARACTERISTIC CONNECTOR_PIN | BOUNDS [146247, 146246, 146243, 146242]
-PIN 7 | LOGICAL PIN ID 64617 | VIEW IDS [70055]
-    VIEW 70055 | LIVE SYMBOL 204784 | LOCATION [204828.0, 7.7, 28.400000000000002, 7.0] | NODE IDS [146064] | TYPE MilSymbolReceptacle¶CONNECTOR_PIN | CHARACTERISTIC CONNECTOR_PIN | BOUNDS [146259, 146258, 146243, 146242]
-PIN 8 | LOGICAL PIN ID 64616 | VIEW IDS [70049]
-    VIEW 70049 | LIVE SYMBOL 146079 | LOCATION [204828.0, 7.7, 28.150000000000002, 7.0] | NODE IDS [146237] | TYPE MilSymbolReceptacle¶CONNECTOR_PIN | CHARACTERISTIC CONNECTOR_PIN | BOUNDS [146251, 146250, 146259, 146258]
-PIN 9 | LOGICAL PIN ID 64534 | VIEW IDS [70043]
-    VIEW 70043 | LIVE SYMBOL 146274 | LOCATION [204828.0, 7.7, 27.900000000000002, 7.0] | NODE IDS [146235] | TYPE MilSymbolReceptacle¶END_BOTTOM | CHARACTERISTIC END_BOTTOM | BOUNDS [146251, 146250]
+    if values is None:
+        return cleaned
 
-====================================================================================================
-FIRST THREE PINS FROM TOP
-====================================================================================================
-1: PIN 1 | VIEW 70079 | LOCATION (7.699999999999999, 29.9) | TYPE MilSymbolReceptacle¶END_TOP | CHARACTERISTIC END_TOP
-2: PIN 2 | VIEW 70077 | LOCATION (7.7, 29.650000000000002) | TYPE MilSymbolReceptacle¶CONNECTOR_PIN | CHARACTERISTIC CONNECTOR_PIN
-3: PIN 3 | VIEW 70075 | LOCATION (7.7, 29.400000000000002) | TYPE MilSymbolReceptacle¶CONNECTOR_PIN | CHARACTERISTIC CONNECTOR_PIN
-ESTIMATED NOMINAL PIN PITCH: 0.25
-CURRENT FIRST GAP: 0.24999999999999645
-NOMINAL ORIGINAL TOP Y: 29.9
+    if not isinstance(values, (tuple, list)):
+        values = [values]
 
-====================================================================================================
-COMPUTED TEST COORDINATES
-====================================================================================================
-ORIGINAL CONNECTOR X: 7.699999999999999
-STAGING X START: 6.8999999999999995
-STAGING X STEP: -0.35
-STAGING Y START: 30.9
-STAGING Y SPACING: 0.3
-LEFT FINAL X: 5.499999999999999
-RIGHT FINAL X: 9.899999999999999
-FINAL TOP Y: 30.25
-FINAL Y SPACING: 0.25
+    for value in values:
 
-====================================================================================================
-PEEL PIN 1 TO STAGING
-====================================================================================================
-PIN NAME: 1
-LOGICAL PIN ID: 64615
-STABLE PIN-VIEW ID: 70079
-CURRENT LIVE SYMBOL ID: 146270
-CURRENT TYPE: MilSymbolReceptacle¶END_TOP
-CURRENT CHARACTERISTIC: END_TOP
-CURRENT LOCATION: [204828.0, 7.699999999999999, 29.9, 7.0]
-STAGING LOCATION: (6.8999999999999995, 30.9)
-NEW STAGED SYMBOL ID: 146791
-NEW TYPE: MilSymbolReceptacle¶END_SPLIT
-NEW CHARACTERISTIC: END_SPLIT
-NEW SYMBOL LOCATION: [204828.0, 6.8999999999999995, 30.9, 7.0]
-NEW BOUNDS: []
-STAGING VERIFIED: END_SPLIT + NO BOUNDS
+        if is_missing_value(value):
+            continue
 
-====================================================================================================
-PEEL PIN 2 TO STAGING
-====================================================================================================
-PIN NAME: 2
-LOGICAL PIN ID: 64614
-STABLE PIN-VIEW ID: 70077
-CURRENT LIVE SYMBOL ID: 146752
-CURRENT TYPE: MilSymbolReceptacle¶END_TOP
-CURRENT CHARACTERISTIC: END_TOP
-CURRENT LOCATION: [204828.0, 7.7, 29.650000000000002, 7.0]
-STAGING LOCATION: (6.55, 30.599999999999998)
-NEW STAGED SYMBOL ID: 146704
-NEW TYPE: MilSymbolReceptacle¶END_SPLIT
-NEW CHARACTERISTIC: END_SPLIT
-NEW SYMBOL LOCATION: [204828.0, 6.55, 30.599999999999998, 7.0]
-NEW BOUNDS: []
-STAGING VERIFIED: END_SPLIT + NO BOUNDS
+        try:
+            value = int(value)
+        except Exception:
+            continue
 
-====================================================================================================
-PEEL PIN 3 TO STAGING
-====================================================================================================
-PIN NAME: 3
-LOGICAL PIN ID: 64613
-STABLE PIN-VIEW ID: 70075
-CURRENT LIVE SYMBOL ID: 147078
-CURRENT TYPE: MilSymbolReceptacle¶END_TOP
-CURRENT CHARACTERISTIC: END_TOP
-CURRENT LOCATION: [204828.0, 7.7, 29.400000000000002, 7.0]
-STAGING LOCATION: (6.199999999999999, 30.299999999999997)
-NEW STAGED SYMBOL ID: 146151
-NEW TYPE: MilSymbolReceptacle¶END_SPLIT
-NEW CHARACTERISTIC: END_SPLIT
-NEW SYMBOL LOCATION: [204828.0, 6.199999999999999, 30.299999999999997, 7.0]
-NEW BOUNDS: []
-STAGING VERIFIED: END_SPLIT + NO BOUNDS
+        if value > 0:
+            cleaned.append(value)
 
-====================================================================================================
-CONNECTOR AFTER FIRST THREE ARE STAGED
-====================================================================================================
-PIN 1 | LOGICAL PIN ID 64615 | VIEW IDS [70079]
-    VIEW 70079 | LIVE SYMBOL None | LOCATION None | NODE IDS [147075] | TYPE None | CHARACTERISTIC None | BOUNDS []
-PIN 2 | LOGICAL PIN ID 64614 | VIEW IDS [70077]
-    VIEW 70077 | LIVE SYMBOL None | LOCATION None | NODE IDS [147143] | TYPE None | CHARACTERISTIC None | BOUNDS []
-PIN 3 | LOGICAL PIN ID 64613 | VIEW IDS [70075]
-    VIEW 70075 | LIVE SYMBOL None | LOCATION None | NODE IDS [146150] | TYPE None | CHARACTERISTIC None | BOUNDS []
-PIN 4 | LOGICAL PIN ID 64612 | VIEW IDS [70073]
-    VIEW 70073 | LIVE SYMBOL 147219 | LOCATION [204828.0, 7.7, 29.150000000000002, 7.0] | NODE IDS [147006] | TYPE MilSymbolReceptacle¶END_TOP | CHARACTERISTIC END_TOP | BOUNDS [146977, 146783]
-PIN 5 | LOGICAL PIN ID 64619 | VIEW IDS [70067]
-    VIEW 70067 | LIVE SYMBOL 145922 | LOCATION [204828.0, 7.7, 28.900000000000002, 7.0] | NODE IDS [147661] | TYPE MilSymbolReceptacle¶CONNECTOR_PIN | CHARACTERISTIC CONNECTOR_PIN | BOUNDS [147044, 146824, 146977, 146783]
-PIN 6 | LOGICAL PIN ID 64618 | VIEW IDS [70061]
-    VIEW 70061 | LIVE SYMBOL 146059 | LOCATION [204828.0, 7.7, 28.650000000000002, 7.0] | NODE IDS [147660] | TYPE MilSymbolReceptacle¶CONNECTOR_PIN | CHARACTERISTIC CONNECTOR_PIN | BOUNDS [147044, 146824, 146784, 147366]
-PIN 7 | LOGICAL PIN ID 64617 | VIEW IDS [70055]
-    VIEW 70055 | LIVE SYMBOL 204784 | LOCATION [204828.0, 7.7, 28.400000000000002, 7.0] | NODE IDS [146064] | TYPE MilSymbolReceptacle¶CONNECTOR_PIN | CHARACTERISTIC CONNECTOR_PIN | BOUNDS [146784, 147366, 147089, 147106]
-PIN 8 | LOGICAL PIN ID 64616 | VIEW IDS [70049]
-    VIEW 70049 | LIVE SYMBOL 146079 | LOCATION [204828.0, 7.7, 28.150000000000002, 7.0] | NODE IDS [146237] | TYPE MilSymbolReceptacle¶CONNECTOR_PIN | CHARACTERISTIC CONNECTOR_PIN | BOUNDS [147622, 146716, 147089, 147106]
-PIN 9 | LOGICAL PIN ID 64534 | VIEW IDS [70043]
-    VIEW 70043 | LIVE SYMBOL 147379 | LOCATION [204828.0, 7.7, 27.900000000000002, 7.0] | NODE IDS [147464] | TYPE MilSymbolReceptacle¶SPLIT_BOTTOM | CHARACTERISTIC SPLIT_BOTTOM | BOUNDS [147622, 146716]
+    return cleaned
 
-====================================================================================================
-OUT-OF-ORDER FINAL PLAN
-====================================================================================================
-PIN 3 -> LEFT ROW 0 -> (5.499999999999999, 30.25)
-PIN 1 -> RIGHT ROW 0 -> (9.899999999999999, 30.25)
-PIN 2 -> LEFT ROW 1 -> (5.499999999999999, 30.0)
 
-====================================================================================================
-FINAL PLACE PIN 3 -> LEFT ROW 0
-====================================================================================================
-STABLE PIN-VIEW ID: 70075
-CURRENT STAGED SYMBOL ID: 146151
-FINAL X: 5.499999999999999
-FINAL Y: 30.25
-FINAL SYMBOL ID: 145863
-FINAL TYPE: MilSymbolReceptacle¶END_SPLIT
-FINAL CHARACTERISTIC: END_SPLIT
-FINAL LOCATION: [204828.0, 5.499999999999999, 30.25, 7.0]
-FINAL BOUNDS: []
+def parse_count_array_result(result):
 
-====================================================================================================
-TEXT TWEAKS FOR SYMBOL 145863
-====================================================================================================
-SetBlockHatchColour(58): -1
-TEXT 145861 | TYPE 213 | VALUE '3/9'
-    LEFT ALONE
-TEXT 145860 | TYPE 203 | VALUE '3'
-    SetVisibility(1)=1 | SetStyle(1)=1
-TEXT 145859 | TYPE 5 | VALUE 'Generic_D-Sub_9P_Plug'
-    SetVisibility(0)=1
-TEXT 145858 | TYPE 12 | VALUE 'SCP-J1#1'
-    LEFT ALONE FOR TOP SPLIT
-TEXT 145855 | TYPE 617 | VALUE 'T3'
-    SetVisibility(1)=1 | SetColour(0)=1 | SetAlignment(3)=0 | SetStyle(1)=1 | SetHeight(0.2)=1
+    if result is None:
+        return []
 
-====================================================================================================
-FINAL PLACE PIN 1 -> RIGHT ROW 0
-====================================================================================================
-STABLE PIN-VIEW ID: 70079
-CURRENT STAGED SYMBOL ID: 146791
-FINAL X: 9.899999999999999
-FINAL Y: 30.25
+    if isinstance(result, (tuple, list)):
 
-FATAL ERROR
-PlacePinView failed for stable pin-view ID 70079.
-Traceback (most recent call last):
-  File "C:\Users\conner.hughes\OneDrive - BAE Systems Inc\Documents\Python\Block Pin Orderer\test2.py", line 1205, in <module>
-    main()
-    ~~~~^^
-  File "C:\Users\conner.hughes\OneDrive - BAE Systems Inc\Documents\Python\Block Pin Orderer\test2.py", line 1178, in main
-    move_staged_pin_to_final(prj, peeled_record, final_item)
-    ~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "C:\Users\conner.hughes\OneDrive - BAE Systems Inc\Documents\Python\Block Pin Orderer\test2.py", line 1017, in move_staged_pin_to_final
-    move_result = move_pin_by_delete_recreate(prj, pin_view_id, current_live_symbol_id, sheet_id, x, y, rotation, scaling)
-  File "C:\Users\conner.hughes\OneDrive - BAE Systems Inc\Documents\Python\Block Pin Orderer\test2.py", line 697, in move_pin_by_delete_recreate
+        items = list(result)
+
+        if len(items) >= 2 and isinstance(items[1], (tuple, list)):
+
+            try:
+                count = int(items[0])
+            except Exception:
+                count = None
+
+            values = clean_id_list(items[1])
+
+            if count is not None and len(values) > count:
+                values = values[-count:]
+
+            return values
+
+        return clean_id_list(items)
+
+    return clean_id_list(result)
+
+
+def call_id_array(method):
+
+    try:
+        result = method(None)
+
+        values = parse_count_array_result(result)
+
+        if values:
+            return values
+
+    except Exception:
+        pass
+
+    try:
+        result = method()
+
+        values = parse_count_array_result(result)
+
+        if values:
+            return values
+
+    except Exception:
+        pass
+
+    return []
+
+
+def call_noarg(obj, method_name):
+
+    if not hasattr(obj, method_name):
+        return None
+
+    try:
+        return getattr(obj, method_name)()
+    except Exception:
+        return None
+
+
+def extract_numeric_values(result):
+
+    values = []
+
+    if not isinstance(result, (tuple, list)):
+        return values
+
+    for value in result:
+
+        if is_missing_value(value):
+            continue
+
+        try:
+            values.append(float(value))
+        except Exception:
+            pass
+
+    return values
+
+
+# ============================================================
+# CONNECT TO E3
+# ============================================================
+
+def connect_to_e3():
+
+    section("CONNECTING TO E3")
+
+    pythoncom.CoInitialize()
+
+    app = win32com.client.Dispatch("CT.Application")
+
+    prj = app.CreateJobObject()
+    dev = prj.CreateDeviceObject()
+    pin = prj.CreatePinObject()
+
+    log(f"APPLICATION: {app}")
+    log(f"PROJECT: {prj}")
+
+    return app, prj, dev, pin
+
+
+# ============================================================
+# E3 DISCOVERY
+# ============================================================
+
+def get_device_ids(prj):
+
+    return call_id_array(prj.GetAllDeviceIds)
+
+
+def get_pin_ids(dev):
+
+    return call_id_array(dev.GetPinIds)
+
+
+def get_view_ids(pin):
+
+    return call_id_array(pin.GetViewIds)
+
+
+def get_node_ids(pin):
+
+    return call_id_array(pin.GetNodeIds)
+
+
+def get_bound_ids(sym):
+
+    return call_id_array(sym.GetBoundIds)
+
+
+def get_text_ids(sym):
+
+    return call_id_array(sym.GetTextIds)
+
+
+def get_pin_name(pin):
+
+    try:
+        return str(pin.GetName())
+    except Exception:
+        return ""
+
+
+def find_connector(prj, dev):
+
+    section(f"FIND CONNECTOR {CONNECTOR_NAME}")
+
+    for device_id in get_device_ids(prj):
+
+        dev.SetId(device_id)
+
+        try:
+            name = str(dev.GetName())
+        except Exception:
+            name = ""
+
+        log(f"DEVICE {device_id}: {name}")
+
+        if name == CONNECTOR_NAME:
+            log(f"FOUND CONNECTOR ID: {device_id}")
+            return device_id
+
+    raise RuntimeError(f"Could not find connector {CONNECTOR_NAME}.")
+
+
+def find_logical_pin(dev, pin, connector_device_id, pin_name):
+
+    dev.SetId(connector_device_id)
+
+    for logical_pin_id in get_pin_ids(dev):
+
+        pin.SetId(logical_pin_id)
+
+        if get_pin_name(pin) == str(pin_name):
+
+            return {
+                "pin_name": str(pin_name),
+                "logical_pin_id": logical_pin_id,
+                "view_ids": get_view_ids(pin),
+            }
+
+    return None
+
+
+# ============================================================
+# LOCATION / LIVE SYMBOL RESOLUTION
+# ============================================================
+
+def get_pin_view_schema_location(pin, pin_view_id):
+
+    pin.SetId(pin_view_id)
+
+    attempts = [
+        lambda: pin.GetSchemaLocation(None, None, None, None, None),
+        lambda: pin.GetSchemaLocation(None, None, None),
+        lambda: pin.GetSchemaLocation(),
+    ]
+
+    for attempt in attempts:
+
+        try:
+            result = attempt()
+        except Exception:
+            continue
+
+        values = extract_numeric_values(result)
+
+        if len(values) >= 3:
+            return values
+
+    return None
+
+
+def get_symbol_schema_location(sym):
+
+    attempts = [
+        lambda: sym.GetSchemaLocation(None, None, None, None, None),
+        lambda: sym.GetSchemaLocation(None, None, None),
+        lambda: sym.GetSchemaLocation(),
+    ]
+
+    for attempt in attempts:
+
+        try:
+            result = attempt()
+        except Exception:
+            continue
+
+        values = extract_numeric_values(result)
+
+        if len(values) >= 2:
+            return values
+
+    return None
+
+
+def resolve_live_symbol_from_pin_view(prj, pin_view_id):
+
+    sym = prj.CreateSymbolObject()
+
+    try:
+        live_symbol_id = sym.SetId(pin_view_id)
+    except Exception:
+        live_symbol_id = 0
+
+    if live_symbol_id is None:
+        live_symbol_id = 0
+
+    try:
+        live_symbol_id = int(live_symbol_id)
+    except Exception:
+        live_symbol_id = 0
+
+    if live_symbol_id <= 0:
+        return None
+
+    resolved_symbol_id = call_noarg(sym, "GetId")
+
+    return {
+        "symbol_object": sym,
+        "live_symbol_id": live_symbol_id,
+        "resolved_symbol_id": resolved_symbol_id,
+    }
+
+
+def inspect_live_symbol_by_id(prj, symbol_id):
+
+    sym = prj.CreateSymbolObject()
+
+    set_result = sym.SetId(symbol_id)
+
+    if set_result is None:
+        set_result = 0
+
+    try:
+        set_result = int(set_result)
+    except Exception:
+        set_result = 0
+
+    if set_result <= 0:
+        return None
+
+    return {
+        "symbol_id": symbol_id,
+        "resolved_id": call_noarg(sym, "GetId"),
+        "symbol_type_name": call_noarg(sym, "GetSymbolTypeName"),
+        "characteristic": call_noarg(sym, "GetCharacteristic"),
+        "rotation": call_noarg(sym, "GetRotation"),
+        "scaling": call_noarg(sym, "GetScaling"),
+        "sheet_id": call_noarg(sym, "GetSheetId"),
+        "schema_location": get_symbol_schema_location(sym),
+        "bound_ids": get_bound_ids(sym),
+        "text_ids": get_text_ids(sym),
+    }
+
+
+# ============================================================
+# SNAPSHOT ALL CONNECTOR PINS
+# ============================================================
+
+def snapshot_connector(prj, dev, pin, connector_device_id):
+
+    snapshot = []
+
+    dev.SetId(connector_device_id)
+
+    for logical_pin_id in get_pin_ids(dev):
+
+        pin.SetId(logical_pin_id)
+
+        pin_name = get_pin_name(pin)
+        view_ids = get_view_ids(pin)
+
+        record = {
+            "pin_name": pin_name,
+            "logical_pin_id": logical_pin_id,
+            "view_ids": view_ids,
+            "views": [],
+        }
+
+        for pin_view_id in view_ids:
+
+            location = get_pin_view_schema_location(pin, pin_view_id)
+            node_ids = get_node_ids(pin)
+            live = resolve_live_symbol_from_pin_view(prj, pin_view_id)
+
+            view_record = {
+                "pin_view_id": pin_view_id,
+                "location": location,
+                "node_ids": node_ids,
+                "live_symbol_id": None,
+                "symbol_type_name": None,
+                "characteristic": None,
+                "rotation": None,
+                "scaling": None,
+                "bound_ids": [],
+            }
+
+            if live is not None:
+
+                live_symbol_id = live["live_symbol_id"]
+                sym = live["symbol_object"]
+
+                view_record["live_symbol_id"] = live_symbol_id
+                view_record["symbol_type_name"] = call_noarg(sym, "GetSymbolTypeName")
+                view_record["characteristic"] = call_noarg(sym, "GetCharacteristic")
+                view_record["rotation"] = call_noarg(sym, "GetRotation")
+                view_record["scaling"] = call_noarg(sym, "GetScaling")
+                view_record["bound_ids"] = get_bound_ids(sym)
+
+            record["views"].append(view_record)
+
+        snapshot.append(record)
+
+    return snapshot
+
+
+def print_snapshot(snapshot, title):
+
+    section(title)
+
+    for record in snapshot:
+
+        log(f"PIN {record['pin_name']} | LOGICAL PIN ID {record['logical_pin_id']} | VIEW IDS {record['view_ids']}")
+
+        for view in record["views"]:
+
+            log(f"    VIEW {view['pin_view_id']} | LIVE SYMBOL {view['live_symbol_id']} | LOCATION {view['location']} | NODE IDS {view['node_ids']} | TYPE {view['symbol_type_name']} | CHARACTERISTIC {view['characteristic']} | BOUNDS {view['bound_ids']}")
+
+
+def get_top_sorted_live_pin_records(snapshot):
+
+    candidates = []
+
+    for record in snapshot:
+
+        if len(record["views"]) != 1:
+            continue
+
+        view = record["views"][0]
+
+        location = view["location"]
+
+        if location is None or len(location) < 3:
+            continue
+
+        if view["live_symbol_id"] is None:
+            continue
+
+        candidates.append({
+            "pin_name": record["pin_name"],
+            "logical_pin_id": record["logical_pin_id"],
+            "pin_view_id": view["pin_view_id"],
+            "live_symbol_id": view["live_symbol_id"],
+            "sheet_id": int(location[0]),
+            "x": float(location[1]),
+            "y": float(location[2]),
+            "grid": float(location[3]) if len(location) >= 4 else None,
+            "symbol_type_name": view["symbol_type_name"],
+            "characteristic": view["characteristic"],
+            "rotation": view["rotation"],
+            "scaling": view["scaling"],
+        })
+
+    candidates.sort(key=lambda item: item["y"], reverse=True)
+
+    return candidates
+
+
+def estimate_nominal_top_y(sorted_pins):
+
+    if len(sorted_pins) < 3:
+        return sorted_pins[0]["y"]
+
+    differences = []
+
+    for index in range(len(sorted_pins) - 1):
+
+        difference = abs(sorted_pins[index]["y"] - sorted_pins[index + 1]["y"])
+
+        if difference > 0.000001:
+            differences.append(difference)
+
+    if not differences:
+        return sorted_pins[0]["y"]
+
+    ordered = sorted(differences)
+
+    middle = len(ordered) // 2
+
+    if len(ordered) % 2 == 0:
+        nominal_pitch = (ordered[middle - 1] + ordered[middle]) / 2.0
+    else:
+        nominal_pitch = ordered[middle]
+
+    first_gap = abs(sorted_pins[0]["y"] - sorted_pins[1]["y"])
+
+    if nominal_pitch > 0 and first_gap > nominal_pitch * 1.5:
+        nominal_top_y = sorted_pins[1]["y"] + nominal_pitch
+    else:
+        nominal_top_y = sorted_pins[0]["y"]
+
+    log(f"ESTIMATED NOMINAL PIN PITCH: {nominal_pitch}")
+    log(f"CURRENT FIRST GAP: {first_gap}")
+    log(f"NOMINAL ORIGINAL TOP Y: {nominal_top_y}")
+
+    return nominal_top_y
+
+
+# ============================================================
+# VERIFY SYMBOL EXISTS
+# ============================================================
+
+def verify_detached_symbol_load(prj):
+
+    section("VERIFY END_SPLIT SYMBOL")
+
+    probe = prj.CreateSymbolObject()
+
+    result = probe.Load(DETACHED_SYMBOL_NAME, 1)
+
+    log(f"Load RETURN: {result}")
+
+    if result == 0:
+        raise RuntimeError(f"Could not load {DETACHED_SYMBOL_NAME}.")
+
+
+# ============================================================
+# CORE PROVEN DELETE -> GHOST -> PlacePinView OPERATION
+# ============================================================
+
+def delete_live_symbol(prj, live_symbol_id):
+
+    sym = prj.CreateSymbolObject()
+
+    set_result = sym.SetId(live_symbol_id)
+
+    if set_result is None:
+        set_result = 0
+
+    try:
+        set_result = int(set_result)
+    except Exception:
+        set_result = 0
+
+    if set_result <= 0:
+        raise RuntimeError(f"Could not resolve live symbol ID {live_symbol_id}.")
+
+    delete_result = sym.Delete()
+
+    return delete_result
+
+
+def verify_ghost(prj, pin_view_id):
+
+    sym = prj.CreateSymbolObject()
+
+    set_result = sym.SetId(pin_view_id)
+
+    if set_result is None:
+        set_result = 0
+
+    try:
+        set_result = int(set_result)
+    except Exception:
+        set_result = 0
+
+    return set_result == 0
+
+
+def place_ghost_pin_view(prj, pin_view_id, sheet_id, x, y, rotation, scaling):
+
+    placement = prj.CreateSymbolObject()
+
+    new_symbol_id = placement.PlacePinView(pin_view_id, sheet_id, DETACHED_SYMBOL_NAME, DETACHED_SYMBOL_VERSION, x, y, rotation, scaling, MAINTAIN_TEXT_SIZE)
+
+    if new_symbol_id is None:
+        new_symbol_id = 0
+
+    try:
+        new_symbol_id = int(new_symbol_id)
+    except Exception:
+        new_symbol_id = 0
+
+    if new_symbol_id <= 0:
+        raise RuntimeError(f"PlacePinView failed for stable pin-view ID {pin_view_id}.")
+
+    return new_symbol_id
+
+
+def move_pin_by_delete_recreate(prj, pin_view_id, current_live_symbol_id, sheet_id, x, y, rotation, scaling):
+
+    delete_result = delete_live_symbol(prj, current_live_symbol_id)
+
+    time.sleep(0.15)
+
+    ghost_ok = verify_ghost(prj, pin_view_id)
+
+    if not ghost_ok:
+        raise RuntimeError(f"Pin-view ID {pin_view_id} did not become ghost/unplaced after deleting symbol {current_live_symbol_id}.")
+
     new_symbol_id = place_ghost_pin_view(prj, pin_view_id, sheet_id, x, y, rotation, scaling)
-  File "C:\Users\conner.hughes\OneDrive - BAE Systems Inc\Documents\Python\Block Pin Orderer\test2.py", line 681, in place_ghost_pin_view
-    raise RuntimeError(f"PlacePinView failed for stable pin-view ID {pin_view_id}.")
-RuntimeError: PlacePinView failed for stable pin-view ID 70079.
+
+    time.sleep(0.15)
+
+    new_metadata = inspect_live_symbol_by_id(prj, new_symbol_id)
+
+    if new_metadata is None:
+        raise RuntimeError(f"Returned symbol ID {new_symbol_id} could not be resolved.")
+
+    return {
+        "delete_result": delete_result,
+        "new_symbol_id": new_symbol_id,
+        "new_metadata": new_metadata,
+    }
+
+
+# ============================================================
+# PEEL CURRENT TOP ENDPOINT
+# ============================================================
+
+def peel_pin_to_staging(prj, dev, pin, connector_device_id, pin_name, stage_x, stage_y):
+
+    section(f"PEEL PIN {pin_name} TO STAGING")
+
+    pin_record = find_logical_pin(dev, pin, connector_device_id, pin_name)
+
+    if pin_record is None:
+        raise RuntimeError(f"Could not find pin {pin_name}.")
+
+    if len(pin_record["view_ids"]) != 1:
+        raise RuntimeError(f"Pin {pin_name} must have exactly one stable view.")
+
+    pin_view_id = pin_record["view_ids"][0]
+
+    location = get_pin_view_schema_location(pin, pin_view_id)
+
+    if location is None or len(location) < 3:
+        raise RuntimeError(f"Pin {pin_name} has no live pin-view location.")
+
+    live = resolve_live_symbol_from_pin_view(prj, pin_view_id)
+
+    if live is None:
+        raise RuntimeError(f"Could not resolve current live symbol for pin-view ID {pin_view_id}.")
+
+    current_live_symbol_id = live["live_symbol_id"]
+    current_sym = live["symbol_object"]
+
+    characteristic = call_noarg(current_sym, "GetCharacteristic")
+    symbol_type_name = call_noarg(current_sym, "GetSymbolTypeName")
+    rotation = call_noarg(current_sym, "GetRotation")
+    scaling = call_noarg(current_sym, "GetScaling")
+
+    if characteristic not in ("END_TOP", "END_BOTTOM", "SPLIT_BOTTOM"):
+        raise RuntimeError(f"Pin {pin_name} is not currently an endpoint. Characteristic: {characteristic}")
+
+    if not isinstance(rotation, str) or rotation == "":
+        rotation = "y"
+
+    try:
+        scaling = float(scaling)
+    except Exception:
+        scaling = 1.0
+
+    sheet_id = int(location[0])
+
+    log(f"PIN NAME: {pin_name}")
+    log(f"LOGICAL PIN ID: {pin_record['logical_pin_id']}")
+    log(f"STABLE PIN-VIEW ID: {pin_view_id}")
+    log(f"CURRENT LIVE SYMBOL ID: {current_live_symbol_id}")
+    log(f"CURRENT TYPE: {symbol_type_name}")
+    log(f"CURRENT CHARACTERISTIC: {characteristic}")
+    log(f"CURRENT LOCATION: {location}")
+    log(f"STAGING LOCATION: ({stage_x}, {stage_y})")
+
+    move_result = move_pin_by_delete_recreate(prj, pin_view_id, current_live_symbol_id, sheet_id, stage_x, stage_y, rotation, scaling)
+
+    new_symbol_id = move_result["new_symbol_id"]
+    new_metadata = move_result["new_metadata"]
+
+    log(f"NEW STAGED SYMBOL ID: {new_symbol_id}")
+    log(f"NEW TYPE: {new_metadata['symbol_type_name']}")
+    log(f"NEW CHARACTERISTIC: {new_metadata['characteristic']}")
+    log(f"NEW SYMBOL LOCATION: {new_metadata['schema_location']}")
+    log(f"NEW BOUNDS: {new_metadata['bound_ids']}")
+
+    staged_type = new_metadata["symbol_type_name"]
+    staged_characteristic = new_metadata["characteristic"]
+    staged_bounds = new_metadata["bound_ids"]
+
+    if staged_type != DETACHED_SYMBOL_NAME:
+        raise RuntimeError(f"Pin {pin_name} reattached while staging. Expected {DETACHED_SYMBOL_NAME}, got {staged_type}.")
+
+    if staged_characteristic != "END_SPLIT":
+        raise RuntimeError(f"Pin {pin_name} reattached while staging. Expected END_SPLIT, got {staged_characteristic}.")
+
+    if staged_bounds:
+        raise RuntimeError(f"Pin {pin_name} reattached while staging. Expected no bounds, got {staged_bounds}.")
+
+    log("STAGING VERIFIED: END_SPLIT + NO BOUNDS")
+
+    return {
+        "pin_name": pin_name,
+        "logical_pin_id": pin_record["logical_pin_id"],
+        "pin_view_id": pin_view_id,
+        "original_live_symbol_id": current_live_symbol_id,
+        "current_live_symbol_id": new_symbol_id,
+        "sheet_id": sheet_id,
+        "rotation": rotation,
+        "scaling": scaling,
+        "original_location": location,
+        "stage_x": stage_x,
+        "stage_y": stage_y,
+        "stage_symbol_id": new_symbol_id,
+        "stage_metadata": new_metadata,
+    }
+
+
+# ============================================================
+# TEXT TWEAKS
+# ============================================================
+
+def apply_text_tweaks(prj, live_symbol_id, is_top_split):
+
+    section(f"TEXT TWEAKS FOR SYMBOL {live_symbol_id}")
+
+    sym = prj.CreateSymbolObject()
+    text = prj.CreateTextObject()
+
+    set_result = sym.SetId(live_symbol_id)
+
+    if set_result is None:
+        set_result = 0
+
+    try:
+        set_result = int(set_result)
+    except Exception:
+        set_result = 0
+
+    if set_result <= 0:
+        raise RuntimeError(f"Could not resolve live symbol {live_symbol_id} for text formatting.")
+
+    tweaks = []
+
+    try:
+        hatch_result = sym.SetBlockHatchColour(58)
+    except Exception as exc:
+        hatch_result = f"ERROR: {exc}"
+
+    log(f"SetBlockHatchColour(58): {hatch_result}")
+
+    for text_id in get_text_ids(sym):
+
+        text.SetId(text_id)
+
+        try:
+            text_type = text.GetType()
+        except Exception:
+            continue
+
+        try:
+            text_value = str(text.GetText())
+        except Exception:
+            text_value = ""
+
+        actions = []
+
+        if text_type == 5:
+
+            try:
+                result = text.SetVisibility(0)
+                actions.append(f"SetVisibility(0)={result}")
+            except Exception as exc:
+                actions.append(f"SetVisibility ERROR={exc}")
+
+        elif text_type == 12:
+
+            if is_top_split:
+                actions.append("LEFT ALONE FOR TOP SPLIT")
+            else:
+                try:
+                    result = text.SetVisibility(0)
+                    actions.append(f"SetVisibility(0)={result}")
+                except Exception as exc:
+                    actions.append(f"SetVisibility ERROR={exc}")
+
+        elif text_type == 617:
+
+            try:
+                actions.append(f"SetVisibility(1)={text.SetVisibility(1)}")
+            except Exception as exc:
+                actions.append(f"SetVisibility ERROR={exc}")
+
+            try:
+                actions.append(f"SetColour(0)={text.SetColour(0)}")
+            except Exception as exc:
+                actions.append(f"SetColour ERROR={exc}")
+
+            try:
+                actions.append(f"SetAlignment(3)={text.SetAlignment(3)}")
+            except Exception as exc:
+                actions.append(f"SetAlignment ERROR={exc}")
+
+            try:
+                actions.append(f"SetStyle(1)={text.SetStyle(1)}")
+            except Exception as exc:
+                actions.append(f"SetStyle ERROR={exc}")
+
+            try:
+                actions.append(f"SetHeight(0.2)={text.SetHeight(0.2)}")
+            except Exception as exc:
+                actions.append(f"SetHeight ERROR={exc}")
+
+        elif text_type == 203:
+
+            try:
+                actions.append(f"SetVisibility(1)={text.SetVisibility(1)}")
+            except Exception as exc:
+                actions.append(f"SetVisibility ERROR={exc}")
+
+            try:
+                actions.append(f"SetStyle(1)={text.SetStyle(1)}")
+            except Exception as exc:
+                actions.append(f"SetStyle ERROR={exc}")
+
+        elif text_type == 213:
+
+            actions.append("LEFT ALONE")
+
+        if actions:
+
+            log(f"TEXT {text_id} | TYPE {text_type} | VALUE {repr(text_value)}")
+            log(f"    {' | '.join(actions)}")
+
+            tweaks.append({
+                "text_id": text_id,
+                "text_type": text_type,
+                "text_value": text_value,
+                "actions": actions,
+            })
+
+    return tweaks
+
+
+# ============================================================
+# FINAL TEST LAYOUT
+# ============================================================
+
+def build_final_plan(peeled_records, center_x, top_y):
+
+    if len(peeled_records) != 3:
+        raise RuntimeError("This proof-of-process script expects exactly three peeled pins.")
+
+    first = peeled_records[0]
+    second = peeled_records[1]
+    third = peeled_records[2]
+
+    left_x = center_x + LEFT_X_OFFSET
+    right_x = center_x + RIGHT_X_OFFSET
+    row_0_y = top_y + FINAL_Y_OFFSET
+    row_1_y = row_0_y - FINAL_Y_SPACING
+
+    plan = [
+        {
+            "pin_name": third["pin_name"],
+            "side": "LEFT",
+            "row": 0,
+            "x": left_x,
+            "y": row_0_y,
+        },
+        {
+            "pin_name": first["pin_name"],
+            "side": "RIGHT",
+            "row": 0,
+            "x": right_x,
+            "y": row_0_y,
+        },
+        {
+            "pin_name": second["pin_name"],
+            "side": "LEFT",
+            "row": 1,
+            "x": left_x,
+            "y": row_1_y,
+        },
+    ]
+
+    return plan
+
+
+def find_peeled_record(peeled_records, pin_name):
+
+    for record in peeled_records:
+
+        if record["pin_name"] == pin_name:
+            return record
+
+    raise RuntimeError(f"Could not find peeled record for pin {pin_name}.")
+
+
+# ============================================================
+# PLACE STAGED PINS INTO FINAL OUT-OF-ORDER POSITIONS
+# ============================================================
+
+def move_staged_pin_to_final(prj, peeled_record, final_item):
+
+    section(f"FINAL PLACE PIN {peeled_record['pin_name']} -> {final_item['side']} ROW {final_item['row']}")
+
+    pin_view_id = peeled_record["pin_view_id"]
+    current_live_symbol_id = peeled_record["current_live_symbol_id"]
+    sheet_id = peeled_record["sheet_id"]
+    rotation = peeled_record["rotation"]
+    scaling = peeled_record["scaling"]
+
+    x = final_item["x"]
+    y = final_item["y"]
+
+    log(f"STABLE PIN-VIEW ID: {pin_view_id}")
+    log(f"CURRENT STAGED SYMBOL ID: {current_live_symbol_id}")
+    log(f"FINAL X: {x}")
+    log(f"FINAL Y: {y}")
+
+    move_result = move_pin_by_delete_recreate(prj, pin_view_id, current_live_symbol_id, sheet_id, x, y, rotation, scaling)
+
+    new_symbol_id = move_result["new_symbol_id"]
+    metadata = move_result["new_metadata"]
+
+    log(f"FINAL SYMBOL ID: {new_symbol_id}")
+    log(f"FINAL TYPE: {metadata['symbol_type_name']}")
+    log(f"FINAL CHARACTERISTIC: {metadata['characteristic']}")
+    log(f"FINAL LOCATION: {metadata['schema_location']}")
+    log(f"FINAL BOUNDS: {metadata['bound_ids']}")
+
+    peeled_record["current_live_symbol_id"] = new_symbol_id
+    peeled_record["final_symbol_id"] = new_symbol_id
+    peeled_record["final_side"] = final_item["side"]
+    peeled_record["final_row"] = final_item["row"]
+    peeled_record["final_x"] = x
+    peeled_record["final_y"] = y
+    peeled_record["final_metadata_immediate"] = metadata
+
+    return peeled_record
+
+
+def resolve_current_final_symbol_id(prj, peeled_record):
+
+    pin_view_id = peeled_record["pin_view_id"]
+    stored_symbol_id = peeled_record.get("current_live_symbol_id")
+
+    by_view = prj.CreateSymbolObject()
+
+    try:
+        view_result = by_view.SetId(pin_view_id)
+    except Exception:
+        view_result = 0
+
+    try:
+        view_result = int(view_result)
+    except Exception:
+        view_result = 0
+
+    if view_result > 0:
+        resolved_id = call_noarg(by_view, "GetId")
+
+        try:
+            resolved_id = int(resolved_id)
+        except Exception:
+            resolved_id = view_result
+
+        if resolved_id > 0:
+            return resolved_id, "stable pin-view ID"
+
+    if stored_symbol_id is not None:
+
+        by_symbol = prj.CreateSymbolObject()
+
+        try:
+            symbol_result = by_symbol.SetId(stored_symbol_id)
+        except Exception:
+            symbol_result = 0
+
+        try:
+            symbol_result = int(symbol_result)
+        except Exception:
+            symbol_result = 0
+
+        if symbol_result > 0:
+            resolved_id = call_noarg(by_symbol, "GetId")
+
+            try:
+                resolved_id = int(resolved_id)
+            except Exception:
+                resolved_id = symbol_result
+
+            if resolved_id > 0:
+                return resolved_id, "last returned live symbol ID"
+
+    return None, None
+
+
+def apply_final_text_tweaks(prj, peeled_records):
+
+    section("FINAL TEXT TWEAK PASS AFTER ALL PLACEMENTS")
+
+    for peeled_record in peeled_records:
+
+        symbol_id, resolution_source = resolve_current_final_symbol_id(prj, peeled_record)
+
+        log()
+        log(f"PIN {peeled_record['pin_name']} | SIDE {peeled_record.get('final_side')} | ROW {peeled_record.get('final_row')}")
+        log(f"STABLE PIN-VIEW ID: {peeled_record['pin_view_id']}")
+        log(f"LAST RETURNED SYMBOL ID: {peeled_record.get('current_live_symbol_id')}")
+        log(f"RESOLVED CURRENT SYMBOL ID: {symbol_id}")
+        log(f"RESOLUTION SOURCE: {resolution_source}")
+
+        if symbol_id is None:
+            raise RuntimeError(f"Could not resolve final live symbol for pin {peeled_record['pin_name']}.")
+
+        metadata = inspect_live_symbol_by_id(prj, symbol_id)
+
+        if metadata is None:
+            raise RuntimeError(f"Could not inspect final live symbol {symbol_id} for pin {peeled_record['pin_name']}.")
+
+        log(f"FINAL TYPE BEFORE TEXT: {metadata['symbol_type_name']}")
+        log(f"FINAL CHARACTERISTIC BEFORE TEXT: {metadata['characteristic']}")
+        log(f"FINAL BOUNDS BEFORE TEXT: {metadata['bound_ids']}")
+
+        is_top_split = peeled_record.get("final_row") == 0
+
+        tweaks = apply_text_tweaks(prj, symbol_id, is_top_split)
+
+        peeled_record["final_resolved_symbol_id"] = symbol_id
+        peeled_record["final_resolution_source"] = resolution_source
+        peeled_record["final_metadata_before_text"] = metadata
+        peeled_record["text_tweaks"] = tweaks
+
+
+# ============================================================
+# MAIN
+# ============================================================
+
+def main():
+
+    RUN_RECORD["started"] = datetime.now().isoformat(timespec="milliseconds")
+
+    section("E3 PEEL FIRST THREE -> STAGGERED MIDDLE STAGE -> REORDER LEFT/RIGHT")
+
+    log("PROCESS:")
+    log("1) Record every connector pin and original location.")
+    log("2) Identify the first three pins from the top.")
+    log("3) Peel them one at a time using the proven stable pin-view-ID workflow.")
+    log("4) Place each peeled pin in a staggered middle staging area so it cannot reconnect to the original stack or another staged pin.")
+    log("5) Re-place those three out of order into left/right test positions.")
+    log("6) Use the original connector X for the right side; do not place outside the block.")
+    log("7) Wait until ALL final placements are complete, then resolve the final live symbols and apply text tweaks.")
+    log()
+    log(f"DRY_RUN = {DRY_RUN}")
+
+    app, prj, dev, pin = connect_to_e3()
+
+    connector_device_id = find_connector(prj, dev)
+
+    verify_detached_symbol_load(prj)
+
+    initial_snapshot = snapshot_connector(prj, dev, pin, connector_device_id)
+
+    RUN_RECORD["initial_snapshot"] = initial_snapshot
+
+    print_snapshot(initial_snapshot, "INITIAL CONNECTOR SNAPSHOT")
+
+    sorted_pins = get_top_sorted_live_pin_records(initial_snapshot)
+
+    if len(sorted_pins) < PEEL_COUNT:
+        raise RuntimeError(f"Need at least {PEEL_COUNT} live connector pins.")
+
+    peel_targets = sorted_pins[:PEEL_COUNT]
+
+    section("FIRST THREE PINS FROM TOP")
+
+    for index, target in enumerate(peel_targets, start=1):
+        log(f"{index}: PIN {target['pin_name']} | VIEW {target['pin_view_id']} | LOCATION ({target['x']}, {target['y']}) | TYPE {target['symbol_type_name']} | CHARACTERISTIC {target['characteristic']}")
+
+    center_x = peel_targets[0]["x"]
+    original_top_y = estimate_nominal_top_y(sorted_pins)
+    stage_x_start = center_x + STAGING_X_BASE_OFFSET
+    stage_y_start = original_top_y + STAGING_Y_OFFSET
+
+    section("COMPUTED TEST COORDINATES")
+
+    log(f"ORIGINAL CONNECTOR X: {center_x}")
+    log(f"STAGING X START: {stage_x_start}")
+    log(f"STAGING X STEP: {STAGING_X_STEP}")
+    log(f"STAGING Y START: {stage_y_start}")
+    log(f"STAGING Y SPACING: {STAGING_Y_SPACING}")
+    log(f"LEFT FINAL X: {center_x + LEFT_X_OFFSET}")
+    log(f"RIGHT FINAL X: {center_x + RIGHT_X_OFFSET}")
+    log("RIGHT FINAL X intentionally reuses the original connector X instead of going outside the block.")
+    log(f"FINAL TOP Y: {original_top_y + FINAL_Y_OFFSET}")
+    log(f"FINAL Y SPACING: {FINAL_Y_SPACING}")
+
+    if DRY_RUN:
+
+        section("DRY RUN PLAN")
+
+        for index, target in enumerate(peel_targets):
+
+            stage_x = stage_x_start + (index * STAGING_X_STEP)
+            stage_y = stage_y_start - (index * STAGING_Y_SPACING)
+
+            log(f"PEEL PIN {target['pin_name']} -> STAGE ({stage_x}, {stage_y})")
+
+        fake_records = []
+
+        for target in peel_targets:
+
+            fake_records.append({
+                "pin_name": target["pin_name"],
+            })
+
+        final_plan = build_final_plan(fake_records, center_x, original_top_y)
+
+        log()
+        log("OUT-OF-ORDER FINAL PLAN:")
+
+        for item in final_plan:
+            log(f"PIN {item['pin_name']} -> {item['side']} ROW {item['row']} -> ({item['x']}, {item['y']})")
+
+        log()
+        log("No E3 objects were changed.")
+        log("Set DRY_RUN = False to run the proof-of-process.")
+
+        return
+
+    if REQUIRE_RUN_CONFIRMATION:
+
+        confirmation = input("Type RUN THREE PIN REORDER to execute the mutation test: ").strip()
+
+        if confirmation != "RUN THREE PIN REORDER":
+            log("RUN CANCELLED")
+            return
+
+    peeled_records = []
+
+    for index, target in enumerate(peel_targets):
+
+        stage_x = stage_x_start + (index * STAGING_X_STEP)
+        stage_y = stage_y_start - (index * STAGING_Y_SPACING)
+
+        peeled = peel_pin_to_staging(prj, dev, pin, connector_device_id, target["pin_name"], stage_x, stage_y)
+
+        peeled_records.append(peeled)
+
+        RUN_RECORD["peeled"] = peeled_records
+
+        time.sleep(0.2)
+
+    staged_snapshot = snapshot_connector(prj, dev, pin, connector_device_id)
+
+    RUN_RECORD["staged_snapshot"] = staged_snapshot
+
+    print_snapshot(staged_snapshot, "CONNECTOR AFTER FIRST THREE ARE STAGED")
+
+    final_plan = build_final_plan(peeled_records, center_x, original_top_y)
+
+    RUN_RECORD["final_plan"] = final_plan
+
+    section("OUT-OF-ORDER FINAL PLAN")
+
+    for item in final_plan:
+        log(f"PIN {item['pin_name']} -> {item['side']} ROW {item['row']} -> ({item['x']}, {item['y']})")
+
+    for final_item in final_plan:
+
+        peeled_record = find_peeled_record(peeled_records, final_item["pin_name"])
+
+        move_staged_pin_to_final(prj, peeled_record, final_item)
+
+        time.sleep(0.3)
+
+    apply_final_text_tweaks(prj, peeled_records)
+
+    time.sleep(0.3)
+
+    final_snapshot = snapshot_connector(prj, dev, pin, connector_device_id)
+
+    RUN_RECORD["peeled"] = peeled_records
+    RUN_RECORD["final_snapshot"] = final_snapshot
+
+    print_snapshot(final_snapshot, "FINAL CONNECTOR SNAPSHOT")
+
+    section("FINAL SUMMARY")
+
+    log("PEELED / FINAL PINS:")
+
+    for record in peeled_records:
+
+        log(f"PIN {record['pin_name']} | STABLE VIEW {record['pin_view_id']} | FINAL SYMBOL {record.get('final_symbol_id')} | SIDE {record.get('final_side')} | ROW {record.get('final_row')} | TARGET ({record.get('final_x')}, {record.get('final_y')})")
+
+    log()
+    log("OUT-OF-ORDER TEST COMPLETE.")
+    log("The JSON output contains the original connector locations, staging records, final plan, final symbol IDs, and text-tweak results.")
+
+
+if __name__ == "__main__":
+
+    try:
+        main()
+
+    except KeyboardInterrupt:
+        log()
+        log("STOPPED BY USER")
+
+    except Exception as exc:
+        log()
+        log("FATAL ERROR")
+        log(safe_string(exc))
+        log(traceback.format_exc())
+
+    finally:
+
+        try:
+            save_results()
+        except Exception as exc:
+            print(f"COULD NOT SAVE RESULTS: {exc}")
+
+        try:
+            pythoncom.CoUninitialize()
+        except Exception:
+            pass
