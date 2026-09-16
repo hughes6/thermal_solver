@@ -1,106 +1,306 @@
-from openpyxl import load_workbook
+]from openpyxl import load_workbook
+import inspect
+import os
 import time
 import pyodbc
+import pythoncom
 import win32com.client as win32
+
+
+# ================================================
+# USER SETTINGS
+# ================================================
+
+# Put the MAIN BLOCK DEVICE name here.
+# Example:
+# TARGET_DEVICE_NAME = "TEST_NAME_100000"
+TARGET_DEVICE_NAME = ""
+
+# Optional:
+# If you already know the exact block symbol ID, put it here.
+# Otherwise leave as None and this script will probe symbols/views found from the device.
+TARGET_SYMBOL_ID = None
+
+# If True, print every E3 device name so we can identify the correct main block device.
+PRINT_ALL_DEVICE_NAMES = True
+
+# Save the output beside this script.
+OUTPUT_FOLDER = os.path.dirname(os.path.abspath(__file__))
+
 
 # ================================================
 # HELPER FXN
 # ================================================
-def ask_save_path(default_full_path=""):
-    import os
-    import tkinter as tk
-    from tkinter import filedialog
 
-    default_folder = os.path.dirname(default_full_path)
+COM_MISSING = -2147352572
 
-    # Create Tk root
-    root = tk.Tk()
-    root.withdraw()
-    root.attributes("-topmost", True)
-    root.update()
+LOG_LINES = []
+
+
+def log(message=""):
+
+    text_value = str(message)
+
+    print(text_value)
+
+    LOG_LINES.append(text_value)
+
+
+def section(title):
+
+    log()
+    log("=" * 120)
+    log(title)
+    log("=" * 120)
+
+
+def save_log():
+
+    output_path = os.path.join(OUTPUT_FOLDER, "e3_block_location_size_test_output.txt")
+
+    with open(output_path, "w", encoding="utf-8") as file:
+        file.write("\n".join(LOG_LINES))
+
+    print()
+    print("=" * 120)
+    print("OUTPUT WRITTEN")
+    print("=" * 120)
+    print(output_path)
+
+
+def is_missing_value(value):
+
+    if value is None:
+        return True
 
     try:
-        # Let user PICK an existing Excel file
-        selected_path = filedialog.askopenfilename(
-            initialdir=default_folder,
-            filetypes=[("Excel Files", "*.xlsm"), ("All Files", "*.*")]
-        )
+        return int(value) == COM_MISSING
     except Exception:
-        return None
+        return False
 
-    # Cancel or X
-    if not selected_path:
-        root.destroy()
-        return None
-    root.destroy()
-    # Return ONLY the file name (not full path)
-    return os.path.abspath(selected_path)
+
+def clean_id_list(values):
+
+    cleaned = []
+
+    if values is None:
+        return cleaned
+
+    if not isinstance(values, (tuple, list)):
+        values = [values]
+
+    for value in values:
+
+        if is_missing_value(value):
+            continue
+
+        try:
+            value = int(value)
+        except Exception:
+            continue
+
+        if value > 0:
+            cleaned.append(value)
+
+    return cleaned
+
+
+def parse_count_array_result(result):
+
+    if result is None:
+        return []
+
+    if isinstance(result, (tuple, list)):
+
+        items = list(result)
+
+        if len(items) >= 2 and isinstance(items[1], (tuple, list)):
+
+            try:
+                count = int(items[0])
+            except Exception:
+                count = None
+
+            values = clean_id_list(items[1])
+
+            if count is not None and len(values) > count:
+                values = values[-count:]
+
+            return values
+
+        return clean_id_list(items)
+
+    return clean_id_list(result)
+
+
+def call_id_array(method):
+
+    attempts = [
+        ("method(None)", lambda: method(None)),
+        ("method()", lambda: method()),
+    ]
+
+    for label, attempt in attempts:
+
+        try:
+            raw = attempt()
+            values = parse_count_array_result(raw)
+
+            log(f"    {label} RAW: {raw}")
+            log(f"    {label} PARSED IDS: {values}")
+
+            if values:
+                return values
+
+        except Exception as exc:
+            log(f"    {label} ERROR: {exc}")
+
+    return []
+
+
+def show_method_signature(obj, method_name):
+
+    if not hasattr(obj, method_name):
+        log(f"{method_name}: METHOD NOT PRESENT")
+        return
+
+    method = getattr(obj, method_name)
+
+    try:
+        signature = inspect.signature(method)
+    except Exception as exc:
+        signature = f"<signature error: {exc}>"
+
+    try:
+        doc = method.__doc__
+    except Exception:
+        doc = None
+
+    log(f"{method_name}:")
+    log(f"    signature: {signature}")
+    log(f"    doc: {doc}")
+
+
+def call_variants(obj, method_name, variants):
+
+    section(f"CALL VARIANTS: {method_name}")
+
+    if not hasattr(obj, method_name):
+        log("METHOD NOT PRESENT")
+        return []
+
+    method = getattr(obj, method_name)
+
+    results = []
+
+    for label, args in variants:
+
+        try:
+            result = method(*args)
+
+            log(f"{label}")
+            log(f"    RETURN: {result}")
+
+            results.append({
+                "label": label,
+                "args": args,
+                "result": result,
+                "error": None,
+            })
+
+        except Exception as exc:
+
+            log(f"{label}")
+            log(f"    ERROR: {exc}")
+
+            results.append({
+                "label": label,
+                "args": args,
+                "result": None,
+                "error": str(exc),
+            })
+
+    return results
+
+
+def print_relevant_methods(obj, object_label):
+
+    section(f"RELEVANT METHODS ON {object_label}")
+
+    keywords = (
+        "dynamic",
+        "model",
+        "size",
+        "location",
+        "position",
+        "schema",
+        "symbol",
+        "view",
+        "area",
+        "placed",
+        "bound",
+        "parent",
+        "child",
+    )
+
+    method_names = []
+
+    for name in dir(obj):
+
+        lowered = name.lower()
+
+        if any(keyword in lowered for keyword in keywords):
+            method_names.append(name)
+
+    for name in sorted(method_names):
+
+        attribute = getattr(obj, name, None)
+
+        if not callable(attribute):
+            continue
+
+        try:
+            signature = inspect.signature(attribute)
+        except Exception:
+            signature = "<unknown>"
+
+        log(f"{name}{signature}")
+
+
+def normalize_name(value):
+
+    if value is None:
+        return ""
+
+    return str(value).strip()
 
 
 # ================================================
 # PARSE EXCEL
 # ================================================
-BLOCK_OFFSET = 4
-# output_path = ask_save_path()
-output_path = 'C:/Users/conner.hughes/Downloads/Block_Pin_Ordering_Template.xlsm'
-wb = load_workbook(output_path, data_only=True)
-ws = wb.active
 
-NUMBER_OF_CONNECTORS = ws["C5"].value
+# This test does not need to modify or parse the workbook yet.
+# The section is intentionally kept here so it matches the structure of the main script.
+#
+# Later, once the E3 location/size calls are proven, the block geometry can be tied directly
+# into the existing Excel-driven connector ordering code.
 
-CONNECTOR_MODEL_CHECK = ws["B2"].value
-if CONNECTOR_MODEL_CHECK != "Pass":
-    raise Exception("Connector model check is failing, fix it")
-DUPLICATE_PIN_CHECK = ws["C2"].value
-if DUPLICATE_PIN_CHECK != "Pass":
-    raise Exception("Duplicate pin check is failing, fix it")
-
-CONNECTOR_PIN_INFO = []
-for i in range(NUMBER_OF_CONNECTORS):
-    left_pin_col = 9 + (i * BLOCK_OFFSET)
-    right_pin_col = left_pin_col + 1
-
-    number_of_pins = ws.cell(row=5, column=right_pin_col).value
-    connector_name = ws.cell(row=6, column=right_pin_col).value
-
-    if number_of_pins is None:
-        number_of_pins = 0
-    number_of_pins = int(number_of_pins)
-    temp = [{'connector name': connector_name, 'number of pins': number_of_pins, 'left pins': [], 'right pins': []}]
-    end_row = 8 + number_of_pins - 1
-    left = []
-    right = []
-    for r in range(8, end_row + 1):
-        left_pin = ws.cell(row=r, column=left_pin_col).value
-        right_pin = ws.cell(row=r, column=right_pin_col).value
-        if left_pin is not None:
-            left.append(left_pin)
-        if right_pin is not None:
-            right.append(right_pin)
-    temp[0]['left pins'].extend(left)
-    temp[0]['right pins'].extend(right) 
-    CONNECTOR_PIN_INFO.append(temp)
-
-wb.close()
-
-print(CONNECTOR_PIN_INFO)
 
 # ================================================
 # CONNECT TO DB
 # ================================================
-CONNECTION_STRING = (
-    "DRIVER={SQL Server};"
-    "SERVER=sql-zuken-prd;"
-    "DATABASE=Zuken_E3Library;"
-    "Trusted_Connection=yes;"
-)
 
-conn = pyodbc.connect(CONNECTION_STRING, autocommit=True)
-cur = conn.cursor()
+# This test does not need the database yet.
+# The section is intentionally kept here so it matches the structure of the main script.
 
-# set objects
-#====================================================================================================================================
-app = win32.gencache.EnsureDispatch('CT.Application')
+
+# ================================================
+# SET OBJECTS
+# ================================================
+
+pythoncom.CoInitialize()
+
+app = win32.gencache.EnsureDispatch("CT.Application")
 prj = app.CreateJobObject()
 text = prj.CreateTextObject()
 comp = prj.CreateComponentObject()
@@ -108,37 +308,393 @@ dev = prj.CreateDeviceObject()
 sym = prj.CreateSymbolObject()
 pin = prj.CreatePinObject()
 attr = prj.CreateAttributeObject()
-#====================================================================================================================================
-# more setup
-#====================================================================================================================================
-app.PutMessage("\n Starting Block Making Scrpit")
-
 sht = prj.CreateSheetObject()
+
+
+# ================================================
+# MORE SETUP
+# ================================================
+
+app.PutMessage("\nStarting Block Location / Size Test")
+
 sheet_info = prj.GetAllSheetIds(None)
 sheet_count = sheet_info[0]
 sheet_ids = sheet_info[1]
-sheet_ids = [x for x in sheet_ids if x is not None]
+sheet_ids = [value for value in sheet_ids if value is not None]
 
 SHEET_ID_DICT = {}
-for id in sheet_ids:
-    sht.SetId(id)
+sheet_1_id = None
+
+for sheet_id in sheet_ids:
+
+    sht.SetId(sheet_id)
+
     name = sht.GetName()
-    SHEET_ID_DICT[name] = id
-    if sht.GetName() == "1":
-        sheet_1_id = id
 
-sheet1 = sht.SetId(sheet_1_id)
+    SHEET_ID_DICT[name] = sheet_id
 
-# generate pin location maps, get block dimensions and find the block centers 
-
-# place all pins peel order on block centers, maybe later add increase block height if not tall enought
-
-# based on pin maps and block geom generated -> start populating pins based on excel parsed data
+    if name == "1":
+        sheet_1_id = sheet_id
 
 
-#=========================================
+# ================================================
+# TEST DEVICE / BLOCK LOCATION AND SIZE
+# ================================================
+
+try:
+
+    section("E3 BLOCK LOCATION / SIZE TEST")
+
+    log(f"TARGET_DEVICE_NAME = {repr(TARGET_DEVICE_NAME)}")
+    log(f"TARGET_SYMBOL_ID = {repr(TARGET_SYMBOL_ID)}")
+    log(f"SHEET COUNT = {sheet_count}")
+    log(f"SHEET MAP = {SHEET_ID_DICT}")
+
+    # --------------------------------------------
+    # Show likely useful methods first
+    # --------------------------------------------
+
+    print_relevant_methods(dev, "e3Device")
+    print_relevant_methods(sym, "e3Symbol")
+
+    section("KEY METHOD SIGNATURES")
+
+    show_method_signature(dev, "GetDynamicModelSize")
+    show_method_signature(dev, "GetSchemaLocation")
+    show_method_signature(dev, "GetSymbolIds")
+    show_method_signature(dev, "GetViewIds")
+    show_method_signature(dev, "GetArea")
+    show_method_signature(dev, "GetPlacedArea")
+    show_method_signature(dev, "GetPlacedPolygon")
+
+    show_method_signature(sym, "GetSchemaLocation")
+    show_method_signature(sym, "GetArea")
+    show_method_signature(sym, "GetPlacedArea")
+    show_method_signature(sym, "GetPlacedPolygon")
+    show_method_signature(sym, "GetDynamicParentId")
+    show_method_signature(sym, "GetDynamicChildrenIds")
+    show_method_signature(sym, "GetBlockId")
+    show_method_signature(sym, "GetSheetId")
+
+    # --------------------------------------------
+    # Enumerate devices
+    # --------------------------------------------
+
+    section("DEVICE ENUMERATION")
+
+    device_ids = call_id_array(prj.GetAllDeviceIds)
+
+    log(f"TOTAL DEVICE IDS: {len(device_ids)}")
+
+    target_device_id = None
+
+    for device_id in device_ids:
+
+        dev.SetId(device_id)
+
+        try:
+            device_name = normalize_name(dev.GetName())
+        except Exception:
+            device_name = ""
+
+        try:
+            device_code = normalize_name(dev.GetCode())
+        except Exception:
+            device_code = ""
+
+        if PRINT_ALL_DEVICE_NAMES:
+            log(f"DEVICE {device_id} | NAME {repr(device_name)} | CODE {repr(device_code)}")
+
+        if TARGET_DEVICE_NAME and device_name == TARGET_DEVICE_NAME:
+            target_device_id = device_id
+
+    if TARGET_DEVICE_NAME and target_device_id is None:
+        raise RuntimeError(f"Could not find device named {TARGET_DEVICE_NAME}.")
+
+    if not TARGET_DEVICE_NAME:
+        section("NO TARGET DEVICE NAME SET")
+        log("Set TARGET_DEVICE_NAME at the top of this file to the MAIN BLOCK device name.")
+        log("The device list above is intentionally printed so you can identify the correct one.")
+
+    # --------------------------------------------
+    # Probe target device
+    # --------------------------------------------
+
+    if target_device_id is not None:
+
+        section(f"TARGET DEVICE {TARGET_DEVICE_NAME}")
+
+        dev.SetId(target_device_id)
+
+        log(f"DEVICE ID: {target_device_id}")
+        log(f"NAME: {dev.GetName()}")
+
+        try:
+            log(f"CODE: {dev.GetCode()}")
+        except Exception as exc:
+            log(f"CODE ERROR: {exc}")
+
+        try:
+            log(f"COMPONENT NAME: {dev.GetComponentName()}")
+        except Exception as exc:
+            log(f"COMPONENT NAME ERROR: {exc}")
+
+        # ----------------------------------------
+        # DEVICE.GetDynamicModelSize
+        # ----------------------------------------
+
+        show_method_signature(dev, "GetDynamicModelSize")
+
+        call_variants(
+            dev,
+            "GetDynamicModelSize",
+            [
+                ("GetDynamicModelSize()", ()),
+                ("GetDynamicModelSize(None)", (None,)),
+                ("GetDynamicModelSize(None, None)", (None, None)),
+                ("GetDynamicModelSize(None, None, None)", (None, None, None)),
+                ("GetDynamicModelSize(None, None, None, None)", (None, None, None, None)),
+            ],
+        )
+
+        # ----------------------------------------
+        # DEVICE.GetSchemaLocation if available
+        # ----------------------------------------
+
+        show_method_signature(dev, "GetSchemaLocation")
+
+        call_variants(
+            dev,
+            "GetSchemaLocation",
+            [
+                ("GetSchemaLocation()", ()),
+                ("GetSchemaLocation(None, None)", (None, None)),
+                ("GetSchemaLocation(None, None, None)", (None, None, None)),
+                ("GetSchemaLocation(None, None, None, None, None)", (None, None, None, None, None)),
+            ],
+        )
+
+        # ----------------------------------------
+        # DEVICE SYMBOL / VIEW IDS
+        # ----------------------------------------
+
+        section("TARGET DEVICE SYMBOL IDS")
+
+        device_symbol_ids = []
+
+        if hasattr(dev, "GetSymbolIds"):
+            device_symbol_ids = call_id_array(dev.GetSymbolIds)
+        else:
+            log("dev.GetSymbolIds NOT PRESENT")
+
+        section("TARGET DEVICE VIEW IDS")
+
+        device_view_ids = []
+
+        if hasattr(dev, "GetViewIds"):
+            device_view_ids = call_id_array(dev.GetViewIds)
+        else:
+            log("dev.GetViewIds NOT PRESENT")
+
+        combined_symbol_ids = []
+
+        for candidate_id in device_symbol_ids + device_view_ids:
+
+            if candidate_id not in combined_symbol_ids:
+                combined_symbol_ids.append(candidate_id)
+
+        if TARGET_SYMBOL_ID is not None and TARGET_SYMBOL_ID not in combined_symbol_ids:
+            combined_symbol_ids.append(int(TARGET_SYMBOL_ID))
+
+        log(f"COMBINED SYMBOL / VIEW CANDIDATES: {combined_symbol_ids}")
+
+        # ----------------------------------------
+        # Probe each symbol/view candidate
+        # ----------------------------------------
+
+        for candidate_id in combined_symbol_ids:
+
+            section(f"SYMBOL / VIEW CANDIDATE {candidate_id}")
+
+            try:
+                set_result = sym.SetId(candidate_id)
+            except Exception as exc:
+                log(f"sym.SetId({candidate_id}) ERROR: {exc}")
+                continue
+
+            log(f"sym.SetId({candidate_id}) RETURN: {set_result}")
+
+            try:
+                log(f"sym.GetId(): {sym.GetId()}")
+            except Exception as exc:
+                log(f"sym.GetId ERROR: {exc}")
+
+            for method_name in (
+                "GetName",
+                "GetCode",
+                "GetSymbolTypeName",
+                "GetCharacteristic",
+                "GetRotation",
+                "GetScaling",
+                "GetSheetId",
+                "GetDynamicParentId",
+                "IsDynamic",
+                "IsDynamicFixed",
+                "IsConnectorMaster",
+                "IsPinView",
+            ):
+
+                if hasattr(sym, method_name):
+
+                    try:
+                        result = getattr(sym, method_name)()
+                        log(f"{method_name}(): {result}")
+                    except Exception as exc:
+                        log(f"{method_name} ERROR: {exc}")
+
+            # ------------------------------------
+            # SYMBOL.GetSchemaLocation
+            # ------------------------------------
+
+            show_method_signature(sym, "GetSchemaLocation")
+
+            call_variants(
+                sym,
+                "GetSchemaLocation",
+                [
+                    ("GetSchemaLocation()", ()),
+                    ("GetSchemaLocation(None, None)", (None, None)),
+                    ("GetSchemaLocation(None, None, None)", (None, None, None)),
+                    ("GetSchemaLocation(None, None, None, None, None)", (None, None, None, None, None)),
+                ],
+            )
+
+            # ------------------------------------
+            # SYMBOL.GetArea
+            # ------------------------------------
+
+            show_method_signature(sym, "GetArea")
+
+            call_variants(
+                sym,
+                "GetArea",
+                [
+                    ("GetArea()", ()),
+                    ("GetArea(None, None, None, None)", (None, None, None, None)),
+                ],
+            )
+
+            # ------------------------------------
+            # SYMBOL.GetPlacedArea
+            # ------------------------------------
+
+            show_method_signature(sym, "GetPlacedArea")
+
+            call_variants(
+                sym,
+                "GetPlacedArea",
+                [
+                    ("GetPlacedArea()", ()),
+                    ("GetPlacedArea(None, None, None, None)", (None, None, None, None)),
+                ],
+            )
+
+            # ------------------------------------
+            # SYMBOL.GetPlacedPolygon
+            # ------------------------------------
+
+            show_method_signature(sym, "GetPlacedPolygon")
+
+            call_variants(
+                sym,
+                "GetPlacedPolygon",
+                [
+                    ("GetPlacedPolygon()", ()),
+                    ("GetPlacedPolygon(None)", (None,)),
+                    ("GetPlacedPolygon(None, None)", (None, None)),
+                ],
+            )
+
+            # ------------------------------------
+            # Dynamic child IDs
+            # ------------------------------------
+
+            if hasattr(sym, "GetDynamicChildrenIds"):
+
+                section("GetDynamicChildrenIds")
+
+                call_id_array(sym.GetDynamicChildrenIds)
+
+    # --------------------------------------------
+    # Explicit symbol probe if user gave one
+    # --------------------------------------------
+
+    if TARGET_SYMBOL_ID is not None and target_device_id is None:
+
+        section(f"EXPLICIT TARGET SYMBOL ID {TARGET_SYMBOL_ID}")
+
+        set_result = sym.SetId(int(TARGET_SYMBOL_ID))
+
+        log(f"sym.SetId({TARGET_SYMBOL_ID}) RETURN: {set_result}")
+
+        call_variants(
+            sym,
+            "GetSchemaLocation",
+            [
+                ("GetSchemaLocation()", ()),
+                ("GetSchemaLocation(None, None)", (None, None)),
+                ("GetSchemaLocation(None, None, None)", (None, None, None)),
+                ("GetSchemaLocation(None, None, None, None, None)", (None, None, None, None, None)),
+            ],
+        )
+
+        call_variants(
+            sym,
+            "GetArea",
+            [
+                ("GetArea()", ()),
+                ("GetArea(None, None, None, None)", (None, None, None, None)),
+            ],
+        )
+
+        call_variants(
+            sym,
+            "GetPlacedArea",
+            [
+                ("GetPlacedArea()", ()),
+                ("GetPlacedArea(None, None, None, None)", (None, None, None, None)),
+            ],
+        )
+
+    section("TEST COMPLETE")
+
+    log("Send me the generated e3_block_location_size_test_output.txt.")
+    log("The most important lines will be:")
+    log("1) e3Device.GetDynamicModelSize signature + raw return")
+    log("2) e3Symbol.GetSchemaLocation signature + raw return")
+    log("3) e3Symbol.GetArea / GetPlacedArea raw returns")
+    log("4) device GetSymbolIds / GetViewIds results")
+    log("5) the exact symbol candidate that corresponds to the CABBLOCK")
+
+
+except Exception as exc:
+
+    section("FATAL ERROR")
+
+    log(str(exc))
+
+    log(traceback.format_exc())
+
+
+# ==========================================
 # RESET BEFORE MAIN BLOCK FORMATTING
-#=========================================
+# ==========================================
+
+try:
+    save_log()
+except Exception as exc:
+    print(f"Could not save log: {exc}")
+
 del attr
 del text
 del sym
@@ -148,3 +704,5 @@ del dev
 del sht
 del prj
 del app
+
+pythoncom.CoUninitialize()
