@@ -1,10 +1,9 @@
-from openpyxl import load_workbook
 import json
 import math
 import os
 import time
 import traceback
-import pyodbc
+import csv
 import pythoncom
 import win32com.client as win32
 
@@ -13,28 +12,27 @@ import win32com.client as win32
 # USER SETTINGS
 # ================================================
 
-BLOCK_OFFSET = 4
-
-output_path = "C:/Users/conner.hughes/Downloads/Block_Pin_Ordering_Template.xlsm"
-
 MAIN_DEVICE_NAME = "TEST_NAME_100000"
+TARGET_CONNECTOR_NAME = "SCP-J1"
 
-DRY_RUN = True
-
-# Set to "SCP-J1" for the first real run if you only want to modify one connector.
-# Leave as None to process every connector in Excel.
-CONNECTOR_FILTER = None
+TEST_PIN_NAMES = (
+    "1",
+    "2",
+    "3",
+    "4",
+    "5",
+    "6",
+    "7",
+    "8",
+    "9",
+)
 
 PIN_EDGE_INSET = 0.30
 
-STAGING_LANE_OFFSET = 0.35
-STAGING_EDGE_CLEARANCE = 0.15
+CENTER_STACK_X_OFFSET = 0.0
 STAGING_TOP_BOTTOM_CLEARANCE = 0.20
 
 LEFT_FLIP = "0"
-RIGHT_FLIP = "/1"
-
-BLOCK_BOTTOM_CLEARANCE = 0.30
 
 DETACHED_SYMBOL_NAME = "MilSymbolReceptacle¶END_SPLIT"
 DETACHED_SYMBOL_VERSION = "1"
@@ -43,6 +41,78 @@ MAINTAIN_TEXT_SIZE = 1
 SYMBOL_SCAN_COORDINATE_TOLERANCE = 0.06
 
 COM_MISSING = -2147352572
+
+# IMPORTANT:
+# True = inspect setup only. No E3 symbols are deleted or placed.
+# False = physically run the exhaustive E3 permutation test.
+DRY_RUN = True
+
+# This suite intentionally runs only one representative of each nasty
+# permutation-construction pattern instead of all 9! permutations.
+ACTION_SLEEP_SECONDS = 0.15
+
+# Set True if you want every individual pin move printed.
+VERBOSE_PIN_LOG = False
+
+OUTPUT_FOLDER = os.path.dirname(os.path.abspath(__file__))
+RESULTS_CSV_PATH = os.path.join(OUTPUT_FOLDER, "scp_j1_targeted_permutation_results.csv")
+FAILURE_PATH = os.path.join(OUTPUT_FOLDER, "scp_j1_targeted_permutation_failure.json")
+
+# Start with SCP-J1 physically arranged ALL LEFT in canonical order 1..9.
+# Each target becomes the source for the next case, so every pattern is tested
+# both as a target-construction pattern and then as a source-peel pattern.
+TARGET_CASES = [
+    {
+        "name": "REVERSE",
+        "order": ("9", "8", "7", "6", "5", "4", "3", "2", "1"),
+        "purpose": "Pure bottom-to-top construction. Proves the stack can be built upward.",
+    },
+    {
+        "name": "ODDS_THEN_EVENS",
+        "order": ("1", "3", "5", "7", "9", "2", "4", "6", "8"),
+        "purpose": "Creates large gaps first, then fills/bridges them.",
+    },
+    {
+        "name": "EVENS_THEN_ODDS",
+        "order": ("2", "4", "6", "8", "1", "3", "5", "7", "9"),
+        "purpose": "Opposite parity gap pattern.",
+    },
+    {
+        "name": "OUTSIDE_IN",
+        "order": ("1", "9", "2", "8", "3", "7", "4", "6", "5"),
+        "purpose": "Builds both extremes first, then closes toward the middle.",
+    },
+    {
+        "name": "INSIDE_OUT",
+        "order": ("5", "4", "6", "3", "7", "2", "8", "1", "9"),
+        "purpose": "Starts in the middle and expands upward/downward.",
+    },
+    {
+        "name": "ISLANDS_THEN_BRIDGES",
+        "order": ("1", "5", "9", "3", "7", "2", "4", "6", "8"),
+        "purpose": "Creates multiple disconnected temporary islands, then joins them.",
+    },
+    {
+        "name": "REVERSE_GAP_BRIDGE",
+        "order": ("9", "6", "3", "8", "5", "2", "7", "4", "1"),
+        "purpose": "Reverse-biased construction with repeated interior bridging.",
+    },
+    {
+        "name": "RANDOM_MIXED_A",
+        "order": ("4", "9", "2", "7", "1", "8", "5", "3", "6"),
+        "purpose": "Irregular mixed-direction stress case.",
+    },
+    {
+        "name": "RANDOM_MIXED_B",
+        "order": ("7", "2", "9", "4", "1", "6", "3", "8", "5"),
+        "purpose": "Second unrelated irregular stress case.",
+    },
+    {
+        "name": "RETURN_CANONICAL",
+        "order": ("1", "2", "3", "4", "5", "6", "7", "8", "9"),
+        "purpose": "Returns SCP-J1 to normal order and re-proves straightforward downward construction.",
+    },
+]
 
 LOG_LINES = []
 
@@ -1029,14 +1099,14 @@ def move_pin_by_delete_recreate(prj, pin_view_id, current_live_symbol_id, sheet_
 
     delete_live_symbol(prj, current_live_symbol_id)
 
-    time.sleep(0.15)
+    time.sleep(ACTION_SLEEP_SECONDS)
 
     if not verify_ghost(prj, pin_view_id):
         raise RuntimeError(f"Pin-view ID {pin_view_id} did not become a ghost after delete.")
 
     new_symbol_id = place_ghost_pin_view(prj, pin_view_id, sheet_id, x, y, rotation, scaling)
 
-    time.sleep(0.15)
+    time.sleep(ACTION_SLEEP_SECONDS)
 
     metadata = inspect_live_symbol_by_id(prj, new_symbol_id)
 
@@ -1362,14 +1432,14 @@ def move_center_stacks_to_final(prj, sht, connector_name, staged_records, final_
 
         delete_live_symbol(prj, current_live_symbol_id)
 
-        time.sleep(0.15)
+        time.sleep(ACTION_SLEEP_SECONDS)
 
         if not verify_ghost(prj, staged_record["pin_view_id"]):
             raise RuntimeError(f"Pin {staged_record['pin_name']} did not become ghost/unplaced after deleting it from the center stack.")
 
         new_symbol_id = place_ghost_pin_view(prj, staged_record["pin_view_id"], staged_record["sheet_id"], final_item["x"], final_item["y"], final_item["flip"], staged_record["scaling"])
 
-        time.sleep(0.15)
+        time.sleep(ACTION_SLEEP_SECONDS)
 
         metadata = inspect_live_symbol_by_id(prj, new_symbol_id)
 
@@ -1589,98 +1659,467 @@ def resolve_and_format_final_pins(prj, sht, connector_name, staged_records):
         staged_record["final_resolved_symbol_id"] = identity["symbol_id"]
 
 
-# ================================================
-# PARSE EXCEL
-# ================================================
-
-wb = load_workbook(output_path, data_only=True)
-
-if "Selection" in wb.sheetnames:
-    ws = wb["Selection"]
-else:
-    ws = wb.active
-
-NUMBER_OF_CONNECTORS = ws["C5"].value
-
-if NUMBER_OF_CONNECTORS is None:
-    raise Exception("Number of connectors is blank")
-
-NUMBER_OF_CONNECTORS = int(NUMBER_OF_CONNECTORS)
-
-CONNECTOR_MODEL_CHECK = ws["B2"].value
-
-if CONNECTOR_MODEL_CHECK != "Pass":
-    raise Exception("Connector model check is failing, fix it")
-
-DUPLICATE_PIN_CHECK = ws["C2"].value
-
-if DUPLICATE_PIN_CHECK != "Pass":
-    raise Exception("Duplicate pin check is failing, fix it")
-
-CONNECTOR_PIN_INFO = []
-
-for i in range(NUMBER_OF_CONNECTORS):
-
-    left_pin_col = 9 + (i * BLOCK_OFFSET)
-    right_pin_col = left_pin_col + 1
-
-    number_of_pins = ws.cell(row=5, column=right_pin_col).value
-    connector_name = ws.cell(row=6, column=right_pin_col).value
-
-    if number_of_pins is None:
-        number_of_pins = 0
-
-    number_of_pins = int(number_of_pins)
-    connector_name = str(connector_name).strip()
-
-    left = []
-    right = []
-
-    end_row = 8 + number_of_pins - 1
-
-    for r in range(8, end_row + 1):
-
-        left_pin = normalize_pin_value(ws.cell(row=r, column=left_pin_col).value)
-        right_pin = normalize_pin_value(ws.cell(row=r, column=right_pin_col).value)
-
-        if left_pin not in (None, ""):
-            left.append(left_pin)
-
-        if right_pin not in (None, ""):
-            right.append(right_pin)
-
-    if len(left) + len(right) != number_of_pins:
-        raise Exception(f"{connector_name}: Excel contains {len(left) + len(right)} pin entries but pin count is {number_of_pins}")
-
-    CONNECTOR_PIN_INFO.append({
-        "connector name": connector_name,
-        "number of pins": number_of_pins,
-        "left pins": left,
-        "right pins": right,
-    })
-
-wb.close()
-
-print(CONNECTOR_PIN_INFO)
-
 
 # ================================================
-# CONNECT TO DB
+# EXHAUSTIVE 9-PIN PERMUTATION TEST HELPERS
 # ================================================
 
-CONNECTION_STRING = (
-    "DRIVER={SQL Server};"
-    "SERVER=sql-zuken-prd;"
-    "DATABASE=Zuken_E3Library;"
-    "Trusted_Connection=yes;"
-)
+def permutation_count(items):
 
-conn = pyodbc.connect(CONNECTION_STRING, autocommit=True)
-cur = conn.cursor()
+    return math.factorial(len(items))
 
 
-# set objects
-#====================================================================================================================================
+def nth_permutation(items, index):
+
+    items = list(items)
+    total = math.factorial(len(items))
+
+    if index < 0 or index >= total:
+        raise ValueError(f"Permutation index {index} is outside 0..{total - 1}.")
+
+    remaining = list(items)
+    result = []
+    value = int(index)
+
+    for size in range(len(items), 0, -1):
+
+        block_size = math.factorial(size - 1)
+        selection_index = value // block_size
+        value = value % block_size
+
+        result.append(remaining.pop(selection_index))
+
+    return tuple(result)
+
+
+def write_json(path, data):
+
+    temp_path = path + ".tmp"
+
+    with open(temp_path, "w", encoding="utf-8") as file:
+        json.dump(data, file, indent=2)
+
+    os.replace(temp_path, path)
+
+
+def read_json(path):
+
+    with open(path, "r", encoding="utf-8") as file:
+        return json.load(file)
+
+
+def append_result_row(row):
+
+    fieldnames = [
+        "case_index",
+        "source_permutation_index",
+        "target_permutation_index",
+        "source_order",
+        "target_order",
+        "status",
+        "seconds",
+        "stage_pass",
+        "final_pass",
+        "error",
+    ]
+
+    file_exists = os.path.exists(RESULTS_CSV_PATH)
+
+    with open(RESULTS_CSV_PATH, "a", newline="", encoding="utf-8") as file:
+
+        writer = csv.DictWriter(file, fieldnames=fieldnames)
+
+        if not file_exists:
+            writer.writeheader()
+
+        writer.writerow(row)
+
+
+def get_connector_and_block(prj, dev):
+
+    main_device_id = find_device_id(prj, dev, MAIN_DEVICE_NAME)
+
+    if main_device_id is None:
+        raise RuntimeError(f"Could not find main device {MAIN_DEVICE_NAME}.")
+
+    connector_device_id = find_device_id(prj, dev, TARGET_CONNECTOR_NAME)
+
+    if connector_device_id is None:
+        raise RuntimeError(f"Could not find connector {TARGET_CONNECTOR_NAME}.")
+
+    block_geometry = get_connector_block_geometry(prj, dev, connector_device_id, main_device_id)
+
+    return main_device_id, connector_device_id, block_geometry
+
+
+def scan_connector_state(prj, sht, block_geometry):
+
+    discovered = discover_current_connector_pin_symbols(prj, sht, TARGET_CONNECTOR_NAME, block_geometry)
+
+    state = {}
+
+    for pin_name in TEST_PIN_NAMES:
+
+        if pin_name not in discovered:
+            continue
+
+        item = discovered[pin_name]
+
+        state[pin_name] = {
+            "symbol_id": item["symbol_id"],
+            "x": item["location"]["x"] if item["location"] is not None else None,
+            "y": item["location"]["y"] if item["location"] is not None else None,
+            "symbol_type_name": item["symbol_type_name"],
+            "characteristic": item["characteristic"],
+            "rotation": item["rotation"],
+            "scaling": item["scaling"],
+            "bound_ids": item["bound_ids"],
+        }
+
+    return state
+
+
+def order_from_state(state):
+
+    rows = []
+
+    for pin_name, item in state.items():
+
+        if item["x"] is None or item["y"] is None:
+            continue
+
+        rows.append((float(item["y"]), pin_name))
+
+    rows.sort(key=lambda item: item[0], reverse=True)
+
+    return tuple(item[1] for item in rows)
+
+
+def verify_all_test_pins_present(state):
+
+    missing = []
+
+    for pin_name in TEST_PIN_NAMES:
+
+        if pin_name not in state:
+            missing.append(pin_name)
+
+    if missing:
+        raise RuntimeError(f"Missing live test pins: {missing}.")
+
+
+def derive_fixed_test_geometry(prj, dev, pin, sht, connector_device_id, block_geometry):
+
+    state = scan_connector_state(prj, sht, block_geometry)
+
+    verify_all_test_pins_present(state)
+
+    current_order = order_from_state(state)
+
+    if len(current_order) != len(TEST_PIN_NAMES):
+        raise RuntimeError(f"Expected {len(TEST_PIN_NAMES)} current pins, found order {current_order}.")
+
+    current_y_values = sorted([float(state[pin_name]["y"]) for pin_name in TEST_PIN_NAMES], reverse=True)
+
+    y_differences = []
+
+    for index in range(len(current_y_values) - 1):
+
+        difference = abs(current_y_values[index] - current_y_values[index + 1])
+
+        if difference > 0.000001:
+            y_differences.append(difference)
+
+    pin_pitch = median(y_differences)
+
+    if pin_pitch is None:
+        raise RuntimeError("Could not derive pin pitch from the current SCP-J1 geometry.")
+
+    final_top_y = max(current_y_values)
+    final_left_x = block_geometry["block_left"] + PIN_EDGE_INSET
+    center_x = block_geometry["block_center_x"] + CENTER_STACK_X_OFFSET
+
+    stack_height = (len(TEST_PIN_NAMES) - 1) * pin_pitch
+    center_top_y = block_geometry["block_center_y"] + (stack_height / 2.0)
+    center_bottom_y = center_top_y - stack_height
+
+    allowed_top = block_geometry["block_top"] - STAGING_TOP_BOTTOM_CLEARANCE
+    allowed_bottom = block_geometry["block_bottom"] + STAGING_TOP_BOTTOM_CLEARANCE
+
+    if center_top_y > allowed_top:
+        raise RuntimeError(f"Center test stack top Y {center_top_y} exceeds allowed Y {allowed_top}.")
+
+    if center_bottom_y < allowed_bottom:
+        raise RuntimeError(f"Center test stack bottom Y {center_bottom_y} is below allowed Y {allowed_bottom}.")
+
+    canonical_stage_map = {}
+
+    for row, pin_name in enumerate(TEST_PIN_NAMES):
+
+        canonical_stage_map[pin_name] = {
+            "x": center_x,
+            "y": center_top_y - (row * pin_pitch),
+            "row": row,
+        }
+
+    return {
+        "pin_pitch": pin_pitch,
+        "final_top_y": final_top_y,
+        "final_left_x": final_left_x,
+        "center_x": center_x,
+        "center_top_y": center_top_y,
+        "center_bottom_y": center_bottom_y,
+        "canonical_stage_map": canonical_stage_map,
+        "current_order": current_order,
+    }
+
+
+def expected_final_map(target_order, geometry):
+
+    result = {}
+
+    for row, pin_name in enumerate(target_order):
+
+        result[pin_name] = {
+            "x": geometry["final_left_x"],
+            "y": geometry["final_top_y"] - (row * geometry["pin_pitch"]),
+            "row": row,
+        }
+
+    return result
+
+
+def verify_state_matches_map(state, expected_map, label):
+
+    verify_all_test_pins_present(state)
+
+    errors = []
+
+    for pin_name in TEST_PIN_NAMES:
+
+        expected = expected_map[pin_name]
+        actual = state[pin_name]
+
+        if abs(float(actual["x"]) - float(expected["x"])) > SYMBOL_SCAN_COORDINATE_TOLERANCE:
+            errors.append(f"pin {pin_name} X actual={actual['x']} expected={expected['x']}")
+
+        if abs(float(actual["y"]) - float(expected["y"])) > SYMBOL_SCAN_COORDINATE_TOLERANCE:
+            errors.append(f"pin {pin_name} Y actual={actual['y']} expected={expected['y']}")
+
+    if errors:
+        raise RuntimeError(f"{label} geometry verification failed: " + " | ".join(errors))
+
+
+def current_pin_live_record(prj, sht, block_geometry, pin_name):
+
+    live = resolve_current_live_pin_symbol(prj, sht, TARGET_CONNECTOR_NAME, pin_name, block_geometry)
+
+    if live is None:
+        raise RuntimeError(f"Could not find current live symbol for pin {pin_name}.")
+
+    return live
+
+
+def get_pin_view_id(dev, pin, connector_device_id, pin_name):
+
+    logical_pin = find_logical_pin(dev, pin, connector_device_id, pin_name)
+
+    if logical_pin is None:
+        raise RuntimeError(f"Could not find logical pin {pin_name}.")
+
+    if len(logical_pin["view_ids"]) != 1:
+        raise RuntimeError(f"Pin {pin_name} has {len(logical_pin['view_ids'])} pin views instead of exactly one.")
+
+    return logical_pin["view_ids"][0]
+
+
+def safe_delete_and_place(prj, pin_view_id, live_symbol_id, sheet_id, x, y, rotation, scaling):
+
+    delete_live_symbol(prj, live_symbol_id)
+
+    time.sleep(ACTION_SLEEP_SECONDS)
+
+    if not verify_ghost(prj, pin_view_id):
+        raise RuntimeError(f"Pin-view {pin_view_id} did not become ghost/unplaced after deleting live symbol {live_symbol_id}.")
+
+    new_symbol_id = place_ghost_pin_view(prj, pin_view_id, sheet_id, x, y, rotation, scaling)
+
+    time.sleep(ACTION_SLEEP_SECONDS)
+
+    metadata = inspect_live_symbol_by_id(prj, new_symbol_id)
+
+    if metadata is None:
+        raise RuntimeError(f"Returned symbol {new_symbol_id} could not be inspected.")
+
+    return new_symbol_id, metadata
+
+
+def stage_source_order_into_canonical_stack(prj, dev, pin, sht, connector_device_id, block_geometry, geometry, source_order, trace):
+
+    for move_index, pin_name in enumerate(source_order):
+
+        live = current_pin_live_record(prj, sht, block_geometry, pin_name)
+
+        characteristic = live["characteristic"]
+
+        if characteristic not in ("END_TOP", "END_SPLIT"):
+            raise RuntimeError(f"Source pin {pin_name} is not safely exposed before staging. Characteristic={characteristic}.")
+
+        pin_view_id = get_pin_view_id(dev, pin, connector_device_id, pin_name)
+
+        rotation = live["rotation"]
+
+        if not isinstance(rotation, str) or rotation == "":
+            rotation = LEFT_FLIP
+
+        try:
+            scaling = float(live["scaling"])
+        except Exception:
+            scaling = 1.0
+
+        destination = geometry["canonical_stage_map"][pin_name]
+
+        if VERBOSE_PIN_LOG:
+            log(f"    STAGE {move_index + 1}/9 | PIN {pin_name} | {characteristic} -> ({destination['x']}, {destination['y']})")
+
+        new_symbol_id, metadata = safe_delete_and_place(prj, pin_view_id, live["symbol_id"], block_geometry["sheet_id"], destination["x"], destination["y"], rotation, scaling)
+
+        trace.append({
+            "phase": "stage",
+            "move": move_index + 1,
+            "pin": pin_name,
+            "source_characteristic": characteristic,
+            "returned_symbol_id": new_symbol_id,
+            "returned_characteristic": metadata["characteristic"],
+            "returned_type": metadata["symbol_type_name"],
+            "destination_x": destination["x"],
+            "destination_y": destination["y"],
+        })
+
+
+def verify_canonical_stack_extractable(prj, sht, block_geometry, geometry):
+
+    state = scan_connector_state(prj, sht, block_geometry)
+
+    verify_state_matches_map(state, geometry["canonical_stage_map"], "CENTER CANONICAL STACK")
+
+    for pin_name in TEST_PIN_NAMES:
+
+        live = state[pin_name]
+
+        if pin_name == TEST_PIN_NAMES[0]:
+            if live["characteristic"] not in ("END_TOP", "END_SPLIT"):
+                raise RuntimeError(f"Canonical center top pin {pin_name} is not exposed. Characteristic={live['characteristic']}.")
+
+
+def move_canonical_center_to_target(prj, dev, pin, sht, connector_device_id, block_geometry, geometry, target_order, trace):
+
+    target_map = expected_final_map(target_order, geometry)
+
+    for move_index, pin_name in enumerate(TEST_PIN_NAMES):
+
+        live = current_pin_live_record(prj, sht, block_geometry, pin_name)
+
+        characteristic = live["characteristic"]
+
+        if characteristic not in ("END_TOP", "END_SPLIT"):
+            raise RuntimeError(f"Center pin {pin_name} is not safely exposed for extraction. Characteristic={characteristic}.")
+
+        expected_center = geometry["canonical_stage_map"][pin_name]
+
+        actual_location = live["location"]
+
+        if actual_location is None:
+            raise RuntimeError(f"Center pin {pin_name} has no schema location.")
+
+        if abs(float(actual_location["x"]) - float(expected_center["x"])) > SYMBOL_SCAN_COORDINATE_TOLERANCE:
+            raise RuntimeError(f"Center pin {pin_name} X moved unexpectedly. Actual={actual_location['x']} expected={expected_center['x']}.")
+
+        if abs(float(actual_location["y"]) - float(expected_center["y"])) > SYMBOL_SCAN_COORDINATE_TOLERANCE:
+            raise RuntimeError(f"Center pin {pin_name} Y moved unexpectedly. Actual={actual_location['y']} expected={expected_center['y']}.")
+
+        pin_view_id = get_pin_view_id(dev, pin, connector_device_id, pin_name)
+
+        try:
+            scaling = float(live["scaling"])
+        except Exception:
+            scaling = 1.0
+
+        destination = target_map[pin_name]
+
+        if VERBOSE_PIN_LOG:
+            log(f"    FINAL {move_index + 1}/9 | PIN {pin_name} | {characteristic} -> TARGET ROW {destination['row']} -> ({destination['x']}, {destination['y']})")
+
+        new_symbol_id, metadata = safe_delete_and_place(prj, pin_view_id, live["symbol_id"], block_geometry["sheet_id"], destination["x"], destination["y"], LEFT_FLIP, scaling)
+
+        trace.append({
+            "phase": "final",
+            "move": move_index + 1,
+            "pin": pin_name,
+            "source_characteristic": characteristic,
+            "returned_symbol_id": new_symbol_id,
+            "returned_characteristic": metadata["characteristic"],
+            "returned_type": metadata["symbol_type_name"],
+            "target_row": destination["row"],
+            "destination_x": destination["x"],
+            "destination_y": destination["y"],
+        })
+
+    return target_map
+
+
+def verify_final_target(prj, sht, block_geometry, target_order, target_map):
+
+    state = scan_connector_state(prj, sht, block_geometry)
+
+    verify_state_matches_map(state, target_map, "FINAL TARGET")
+
+    actual_order = order_from_state(state)
+
+    if actual_order != tuple(target_order):
+        raise RuntimeError(f"Final pin order mismatch. Actual={actual_order} expected={tuple(target_order)}.")
+
+    top_pin = target_order[0]
+
+    if state[top_pin]["characteristic"] not in ("END_TOP", "END_SPLIT"):
+        raise RuntimeError(f"Final top pin {top_pin} is not exposed. Characteristic={state[top_pin]['characteristic']}.")
+
+    return state
+
+
+def checkpoint_data(next_case_index, current_order, total_cases):
+
+    return {
+        "next_case_index": int(next_case_index),
+        "current_order": list(current_order),
+        "total_cases": int(total_cases),
+        "connector": TARGET_CONNECTOR_NAME,
+        "pins": list(TEST_PIN_NAMES),
+        "timestamp": time.strftime("%Y-%m-%d %H:%M:%S"),
+    }
+
+
+def failure_data(case_index, source_index, target_index, source_order, target_order, phase, current_pin, error_text, trace, current_state):
+
+    return {
+        "case_index": case_index,
+        "source_permutation_index": source_index,
+        "target_permutation_index": target_index,
+        "source_order": list(source_order),
+        "target_order": list(target_order),
+        "phase": phase,
+        "current_pin": current_pin,
+        "error": error_text,
+        "traceback": traceback.format_exc(),
+        "trace": trace,
+        "current_state": current_state,
+        "timestamp": time.strftime("%Y-%m-%d %H:%M:%S"),
+    }
+
+
+# ================================================
+# CONNECT TO E3
+# ================================================
 
 pythoncom.CoInitialize()
 
@@ -1692,222 +2131,339 @@ dev = prj.CreateDeviceObject()
 sym = prj.CreateSymbolObject()
 pin = prj.CreatePinObject()
 attr = prj.CreateAttributeObject()
-
-#====================================================================================================================================
-# more setup
-#====================================================================================================================================
-
-app.PutMessage("\n Starting Block Pin Ordering Script")
-
 sht = prj.CreateSheetObject()
-sheet_info = prj.GetAllSheetIds(None)
-sheet_count = sheet_info[0]
-sheet_ids = sheet_info[1]
-sheet_ids = [x for x in sheet_ids if x is not None]
 
-SHEET_ID_DICT = {}
-
-for id in sheet_ids:
-
-    sht.SetId(id)
-
-    name = sht.GetName()
-
-    SHEET_ID_DICT[name] = id
-
-    if sht.GetName() == "1":
-        sheet_1_id = id
-
-sheet1 = sht.SetId(sheet_1_id)
-
-main_device_id = find_device_id(prj, dev, MAIN_DEVICE_NAME)
-
-if main_device_id is None:
-    raise Exception(f"Could not find main device {MAIN_DEVICE_NAME}")
-
-verify_detached_symbol_load(prj)
+app.PutMessage("\nStarting SCP-J1 Targeted 9-Pin Permutation Stress Test")
 
 
-# generate pin location maps, get block dimensions and find the block centers
+# ================================================
+# TEST SETUP
+# ================================================
 
-CONNECTOR_WORK_INFO = []
+try:
 
-section("GENERATE PIN MAPS AND BLOCK GEOMETRY")
+    section("SCP-J1 TARGETED 9-PIN PERMUTATION STRESS TEST")
 
-for connector_excel_record in CONNECTOR_PIN_INFO:
+    total_cases = len(TARGET_CASES)
 
-    connector_name = connector_excel_record["connector name"]
+    log(f"TOTAL PHYSICAL TEST CASES: {total_cases}")
+    log("TEST DESIGN:")
+    log("    This is a targeted adversarial suite, not a 9! exhaustive run.")
+    log("    Each case first peels the current source order into one canonical center stack.")
+    log("    It then peels that center stack into the case's target permutation.")
+    log("    The target becomes the source for the next case.")
+    log("    This means each nasty pattern is exercised as a target build and again as a source peel on the following case.")
 
-    if CONNECTOR_FILTER is not None and connector_name != CONNECTOR_FILTER:
-        continue
+    main_device_id, connector_device_id, block_geometry = get_connector_and_block(prj, dev)
 
-    connector_device_id = find_device_id(prj, dev, connector_name)
+    geometry = derive_fixed_test_geometry(prj, dev, pin, sht, connector_device_id, block_geometry)
 
-    if connector_device_id is None:
-        raise Exception(f"Could not find connector {connector_name}")
-
-    block_geometry = get_connector_block_geometry(prj, dev, connector_device_id, main_device_id)
-
-    initial_snapshot = snapshot_connector(prj, dev, pin, sht, connector_device_id, connector_name, block_geometry)
-    sorted_pin_records = get_sorted_live_pin_records(initial_snapshot)
-
-    validate_excel_against_e3(connector_excel_record, sorted_pin_records)
-
-    pin_geometry = derive_pin_geometry(block_geometry, sorted_pin_records, connector_excel_record)
-    final_plan = build_final_plan(connector_excel_record, pin_geometry)
-    already_matches = connector_already_matches_final_plan(sorted_pin_records, final_plan)
-
-    if already_matches:
-        staging_map = {}
-    else:
-        staging_map = build_staging_map(final_plan, pin_geometry)
-
-    work_record = {
-        "connector_excel_record": connector_excel_record,
-        "connector_name": connector_name,
-        "connector_device_id": connector_device_id,
-        "initial_snapshot": initial_snapshot,
-        "sorted_pin_records": sorted_pin_records,
-        "block_geometry": block_geometry,
-        "pin_geometry": pin_geometry,
-        "staging_map": staging_map,
-        "final_plan": final_plan,
-        "staged_records": [],
-        "final_schedule": [],
-        "skip_reorder": already_matches,
-    }
-
-    CONNECTOR_WORK_INFO.append(work_record)
+    canonical_order = tuple(TEST_PIN_NAMES)
 
     log()
-    log(f"CONNECTOR: {connector_name}")
     log(f"CONNECTOR DEVICE ID: {connector_device_id}")
-    log(f"CONNECTOR VIEW NUMBER: {block_geometry['connector_view_number']}")
-    log(f"MAIN VIEW ID: {block_geometry['main_view_id']}")
     log(f"BLOCK SYMBOL ID: {block_geometry['block_symbol_id']}")
-    log(f"BLOCK LEFT: {block_geometry['block_left']}")
-    log(f"BLOCK RIGHT: {block_geometry['block_right']}")
-    log(f"BLOCK BOTTOM: {block_geometry['block_bottom']}")
-    log(f"BLOCK TOP: {block_geometry['block_top']}")
-    log(f"BLOCK WIDTH: {block_geometry['block_width']}")
-    log(f"BLOCK HEIGHT: {block_geometry['block_height']}")
-    log(f"BLOCK CENTER X: {block_geometry['block_center_x']}")
-    log(f"BLOCK CENTER Y: {block_geometry['block_center_y']}")
-    log(f"LEFT PIN X: {pin_geometry['left_x']}")
-    log(f"RIGHT PIN X: {pin_geometry['right_x']}")
-    log(f"PIN PITCH: {pin_geometry['pin_pitch']}")
-    log(f"FINAL TOP Y: {pin_geometry['final_top_y']}")
+    log(f"BLOCK LEFT/RIGHT: {block_geometry['block_left']} / {block_geometry['block_right']}")
+    log(f"BLOCK BOTTOM/TOP: {block_geometry['block_bottom']} / {block_geometry['block_top']}")
+    log(f"PIN PITCH: {geometry['pin_pitch']}")
+    log(f"FINAL LEFT X: {geometry['final_left_x']}")
+    log(f"FINAL TOP Y: {geometry['final_top_y']}")
+    log(f"CENTER STACK X: {geometry['center_x']}")
+    log(f"CENTER STACK Y RANGE: {geometry['center_top_y']} -> {geometry['center_bottom_y']}")
+    log(f"CURRENT ORDER: {geometry['current_order']}")
 
-    log("INITIAL LIVE PIN RESOLUTION:")
+    expected_current_order = canonical_order
 
-    for pin_record in initial_snapshot:
+    log()
+    log("REQUIRED START STATE:")
+    log(f"    SCP-J1 ALL LEFT in order {canonical_order}")
 
-        for view_record in pin_record["views"]:
-            log(f"    PIN {pin_record['pin_name']} | VIEW {view_record['pin_view_id']} | LIVE {view_record['live_symbol_id']} | SOURCE {view_record['resolution_source']} | LOCATION {view_record['location']}")
+    current_state = scan_connector_state(prj, sht, block_geometry)
+    verify_all_test_pins_present(current_state)
+    actual_current_order = order_from_state(current_state)
 
-    if already_matches:
+    if actual_current_order != expected_current_order:
+        raise RuntimeError(f"Current SCP-J1 order does not match the required starting state. Actual={actual_current_order}. Expected={expected_current_order}.")
 
-        log("ORDER CHECK:")
-        log("    CURRENT PIN LOCATIONS ALREADY MATCH EXCEL.")
-        log("    THIS CONNECTOR WILL BE SKIPPED.")
+    for pin_name in TEST_PIN_NAMES:
+
+        x = float(current_state[pin_name]["x"])
+
+        if abs(x - geometry["final_left_x"]) > SYMBOL_SCAN_COORDINATE_TOLERANCE:
+            raise RuntimeError(f"Pin {pin_name} is not on the required all-left test X. Actual X={x}, required X={geometry['final_left_x']}. Reset SCP-J1 to all-left before starting this test.")
+
+    if DRY_RUN:
+
+        section("DRY RUN")
+
+        log("NO E3 SYMBOLS WERE MOVED.")
+        log()
+        log(f"THE SUITE WILL RUN {total_cases} PHYSICAL CASES:")
+        log()
+
+        source_order = canonical_order
+
+        for case_index, case in enumerate(TARGET_CASES, start=1):
+
+            target_order = tuple(case["order"])
+
+            log(f"CASE {case_index}: {case['name']}")
+            log(f"    SOURCE: {source_order}")
+            log(f"    TARGET: {target_order}")
+            log(f"    WHY: {case['purpose']}")
+            log()
+
+            source_order = target_order
+
+        log("Set DRY_RUN = False to run these cases physically in E3.")
+        log("At roughly one minute per case, this should be about ten minutes instead of days.")
 
     else:
 
-        log("CENTER STACK MAP:")
-        log("    Temporary center lanes are assigned from the FINAL Excel side/order.")
-        log("    LEFT-target pins build the CENTER LEFT stack in final left order.")
-        log("    RIGHT-target pins build the CENTER RIGHT stack in final right order.")
-        log("    Pins may be peeled from the original connector in any current physical order.")
+        section("PHYSICAL TARGETED STRESS TEST")
 
-        for pin_name, stage in staging_map.items():
-            log(f"    PIN {pin_name} -> {stage['lane']} ROW {stage['row']} -> ({stage['x']}, {stage['y']})")
+        verify_detached_symbol_load(prj)
 
-    log("FINAL PLAN:")
+        source_order = canonical_order
+        suite_start = time.time()
 
-    for final_item in final_plan:
-        log(f"    PIN {final_item['pin_name']} -> {final_item['side']} ROW {final_item['row']} | FLIP {final_item['flip']} -> ({final_item['x']}, {final_item['y']})")
+        for case_index, case in enumerate(TARGET_CASES, start=1):
+
+            target_order = tuple(case["order"])
+            case_start = time.time()
+            stage_pass = False
+            final_pass = False
+            phase = "precheck"
+            current_pin = None
+            trace = []
+
+            log()
+            log("=" * 120)
+            log(f"CASE {case_index}/{total_cases}: {case['name']}")
+            log("=" * 120)
+            log(f"PURPOSE: {case['purpose']}")
+            log(f"SOURCE: {source_order}")
+            log(f"TARGET: {target_order}")
+
+            try:
+
+                phase = "source verification"
+
+                source_state = scan_connector_state(prj, sht, block_geometry)
+                verify_all_test_pins_present(source_state)
+
+                actual_source_order = order_from_state(source_state)
+
+                if actual_source_order != source_order:
+                    raise RuntimeError(f"Source order mismatch before case. Actual={actual_source_order}. Expected={source_order}.")
+
+                source_target_map = expected_final_map(source_order, geometry)
+                verify_state_matches_map(source_state, source_target_map, "SOURCE")
+
+                phase = "stage source permutation into canonical center stack"
+
+                for move_index, current_pin in enumerate(source_order, start=1):
+
+                    live = current_pin_live_record(prj, sht, block_geometry, current_pin)
+
+                    characteristic = live["characteristic"]
+
+                    if characteristic not in ("END_TOP", "END_SPLIT"):
+                        raise RuntimeError(f"Source pin {current_pin} is not exposed. Characteristic={characteristic}.")
+
+                    pin_view_id = get_pin_view_id(dev, pin, connector_device_id, current_pin)
+
+                    try:
+                        scaling = float(live["scaling"])
+                    except Exception:
+                        scaling = 1.0
+
+                    rotation = live["rotation"]
+
+                    if not isinstance(rotation, str) or rotation == "":
+                        rotation = LEFT_FLIP
+
+                    destination = geometry["canonical_stage_map"][current_pin]
+
+                    new_symbol_id, metadata = safe_delete_and_place(prj, pin_view_id, live["symbol_id"], block_geometry["sheet_id"], destination["x"], destination["y"], rotation, scaling)
+
+                    trace.append({
+                        "phase": "stage",
+                        "move": move_index,
+                        "pin": current_pin,
+                        "source_characteristic": characteristic,
+                        "returned_symbol_id": new_symbol_id,
+                        "returned_characteristic": metadata["characteristic"],
+                        "returned_type": metadata["symbol_type_name"],
+                        "destination_row": destination["row"],
+                    })
+
+                    if VERBOSE_PIN_LOG:
+                        log(f"    STAGE {move_index}/9 | PIN {current_pin} -> CENTER ROW {destination['row']} | RETURN {metadata['characteristic']}")
+
+                phase = "verify canonical center geometry"
+
+                center_state = scan_connector_state(prj, sht, block_geometry)
+                verify_state_matches_map(center_state, geometry["canonical_stage_map"], "CENTER")
+                stage_pass = True
+
+                log("CENTER STACK VERIFY: PASS")
+
+                phase = "extract canonical center into target permutation"
+
+                target_map = expected_final_map(target_order, geometry)
+
+                for move_index, current_pin in enumerate(TEST_PIN_NAMES, start=1):
+
+                    live = current_pin_live_record(prj, sht, block_geometry, current_pin)
+
+                    characteristic = live["characteristic"]
+
+                    if characteristic not in ("END_TOP", "END_SPLIT"):
+                        raise RuntimeError(f"Canonical extraction pin {current_pin} is not exposed. Characteristic={characteristic}.")
+
+                    expected_center = geometry["canonical_stage_map"][current_pin]
+
+                    if abs(float(live["location"]["x"]) - float(expected_center["x"])) > SYMBOL_SCAN_COORDINATE_TOLERANCE:
+                        raise RuntimeError(f"Canonical extraction pin {current_pin} is not at expected center X.")
+
+                    if abs(float(live["location"]["y"]) - float(expected_center["y"])) > SYMBOL_SCAN_COORDINATE_TOLERANCE:
+                        raise RuntimeError(f"Canonical extraction pin {current_pin} is not at expected center Y.")
+
+                    pin_view_id = get_pin_view_id(dev, pin, connector_device_id, current_pin)
+
+                    try:
+                        scaling = float(live["scaling"])
+                    except Exception:
+                        scaling = 1.0
+
+                    destination = target_map[current_pin]
+
+                    new_symbol_id, metadata = safe_delete_and_place(prj, pin_view_id, live["symbol_id"], block_geometry["sheet_id"], destination["x"], destination["y"], LEFT_FLIP, scaling)
+
+                    trace.append({
+                        "phase": "final",
+                        "move": move_index,
+                        "pin": current_pin,
+                        "source_characteristic": characteristic,
+                        "returned_symbol_id": new_symbol_id,
+                        "returned_characteristic": metadata["characteristic"],
+                        "returned_type": metadata["symbol_type_name"],
+                        "target_row": destination["row"],
+                    })
+
+                    if VERBOSE_PIN_LOG:
+                        log(f"    FINAL {move_index}/9 | PIN {current_pin} -> TARGET ROW {destination['row']} | RETURN {metadata['characteristic']}")
+
+                phase = "final target verification"
+
+                final_state = scan_connector_state(prj, sht, block_geometry)
+                verify_state_matches_map(final_state, target_map, "FINAL")
+
+                actual_target_order = order_from_state(final_state)
+
+                if actual_target_order != target_order:
+                    raise RuntimeError(f"Final order mismatch. Actual={actual_target_order}. Expected={target_order}.")
+
+                top_pin = target_order[0]
+
+                if final_state[top_pin]["characteristic"] not in ("END_TOP", "END_SPLIT"):
+                    raise RuntimeError(f"Final top pin {top_pin} is not exposed. Characteristic={final_state[top_pin]['characteristic']}.")
+
+                final_pass = True
+
+                elapsed = time.time() - case_start
+
+                append_result_row({
+                    "case_index": case_index,
+                    "source_permutation_index": "",
+                    "target_permutation_index": case["name"],
+                    "source_order": " ".join(source_order),
+                    "target_order": " ".join(target_order),
+                    "status": "PASS",
+                    "seconds": round(elapsed, 3),
+                    "stage_pass": stage_pass,
+                    "final_pass": final_pass,
+                    "error": "",
+                })
+
+                log(f"CASE RESULT: PASS | {elapsed:.1f} sec")
+
+                source_order = target_order
+
+            except Exception as exc:
+
+                elapsed = time.time() - case_start
+
+                try:
+                    diagnostic_state = scan_connector_state(prj, sht, block_geometry)
+                except Exception:
+                    diagnostic_state = {}
+
+                append_result_row({
+                    "case_index": case_index,
+                    "source_permutation_index": "",
+                    "target_permutation_index": case["name"],
+                    "source_order": " ".join(source_order),
+                    "target_order": " ".join(target_order),
+                    "status": "FAIL",
+                    "seconds": round(elapsed, 3),
+                    "stage_pass": stage_pass,
+                    "final_pass": final_pass,
+                    "error": str(exc),
+                })
+
+                failure_payload = {
+                    "case_index": case_index,
+                    "case_name": case["name"],
+                    "purpose": case["purpose"],
+                    "source_order": list(source_order),
+                    "target_order": list(target_order),
+                    "phase": phase,
+                    "current_pin": current_pin,
+                    "error": str(exc),
+                    "traceback": traceback.format_exc(),
+                    "trace": trace,
+                    "current_state": diagnostic_state,
+                    "timestamp": time.strftime("%Y-%m-%d %H:%M:%S"),
+                }
+
+                write_json(FAILURE_PATH, failure_payload)
+
+                log()
+                log("TARGETED PERMUTATION TEST FAILURE")
+                log(f"CASE: {case_index}/{total_cases} {case['name']}")
+                log(f"PURPOSE: {case['purpose']}")
+                log(f"PHASE: {phase}")
+                log(f"PIN: {current_pin}")
+                log(f"ERROR: {exc}")
+                log(f"FAILURE FILE: {FAILURE_PATH}")
+
+                raise
+
+        suite_elapsed = time.time() - suite_start
+
+        section("TARGETED STRESS SUITE PASSED")
+
+        log(f"ALL {total_cases} TARGETED SCP-J1 CASES PASSED.")
+        log(f"TOTAL SUITE TIME: {suite_elapsed / 60.0:.1f} minutes")
+        log("SCP-J1 was returned to canonical all-left order 1,2,3,4,5,6,7,8,9.")
 
 
-# place pins into two snapped center stacks
-# Center-stack membership and row are based on FINAL Excel side/order, not current connector order.
-# This prevents the center-to-final scheduler from deadlocking on reordered connectors.
-# If the connector already matches Excel exactly, it is skipped entirely.
+except Exception as exc:
 
-if not DRY_RUN:
+    section("TEST STOPPED")
 
-    section("BUILD TWO SNAPPED CENTER STACKS")
-
-    for work_record in CONNECTOR_WORK_INFO:
-
-        log()
-
-        if work_record["skip_reorder"]:
-            log(f"SKIPPING STAGING {work_record['connector_name']} - CURRENT ORDER ALREADY MATCHES EXCEL")
-            continue
-
-        log(f"STAGING {work_record['connector_name']}")
-
-        staged_records = peel_all_pins_to_staging(prj, dev, pin, sht, work_record["connector_device_id"], work_record["connector_name"], work_record["block_geometry"], work_record["sorted_pin_records"], work_record["staging_map"], work_record["pin_geometry"])
-
-        work_record["staged_records"] = staged_records
-
-else:
-
-    section("DRY RUN")
-
-    log("No pins were moved.")
-    log("Block geometry, two snapped center-stack locations, final locations, and final flips were generated.")
+    log(str(exc))
+    log(traceback.format_exc())
 
 
-# based on pin maps and block geom generated -> start populating pins based on excel parsed data
-
-if not DRY_RUN:
-
-    section("POPULATE PINS FROM EXCEL ORDER")
-
-    for work_record in CONNECTOR_WORK_INFO:
-
-        log()
-
-        if work_record["skip_reorder"]:
-            log(f"SKIPPING ORDERING {work_record['connector_name']} - CURRENT ORDER ALREADY MATCHES EXCEL")
-            continue
-
-        log(f"ORDERING {work_record['connector_name']}")
-
-        final_schedule = build_center_to_final_schedule(work_record["staged_records"], work_record["final_plan"])
-        work_record["final_schedule"] = final_schedule
-
-        log("CENTER -> FINAL SCHEDULE:")
-
-        for schedule_item in final_schedule:
-            log(f"    PIN {schedule_item['pin_name']} -> {schedule_item['side']} ROW {schedule_item['row']} | FLIP {schedule_item['flip']}")
-
-        move_center_stacks_to_final(prj, sht, work_record["connector_name"], work_record["staged_records"], final_schedule)
-
-        time.sleep(0.40)
-
-        resolve_and_format_final_pins(prj, sht, work_record["connector_name"], work_record["staged_records"])
-
-        log(f"{work_record['connector_name']} COMPLETE")
-
-
-#=========================================
-# RESET BEFORE MAIN BLOCK FORMATTING
-#=========================================
+# ================================================
+# RESET
+# ================================================
 
 try:
     save_log()
-except Exception:
-    pass
-
-try:
-    cur.close()
-except Exception:
-    pass
-
-try:
-    conn.close()
 except Exception:
     pass
 
