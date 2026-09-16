@@ -1,430 +1,150 @@
+from openpyxl import load_workbook
+import time
+import pyodbc
+import win32com.client as win32
 
-====================================================================================================
-E3 PEEL FIRST THREE -> STAGGERED MIDDLE STAGE -> REORDER LEFT/RIGHT
-====================================================================================================
-PROCESS:
-1) Record every connector pin and original location.
-2) Identify the first three pins from the top.
-3) Peel them one at a time using the proven stable pin-view-ID workflow.
-4) Place each peeled pin in a staggered middle staging area so it cannot reconnect to the original stack or another staged pin.
-5) Re-place those three out of order into left/right test positions.
-6) Use the original connector X for the right side; do not place outside the block.
-7) Wait until ALL final placements are complete.
-8) Resolve any symbols E3 replaced during stack-building by scanning live sheet symbols for pin text + final coordinates.
-9) Apply the text tweaks only after the final live symbol for each pin is known.
+# ================================================
+# HELPER FXN
+# ================================================
+def ask_save_path(default_full_path=""):
+    import os
+    import tkinter as tk
+    from tkinter import filedialog
 
-DRY_RUN = True
+    default_folder = os.path.dirname(default_full_path)
 
-====================================================================================================
-CONNECTING TO E3
-====================================================================================================
-APPLICATION: <win32com.gen_py.E3.series 2025.2543 Type Library.IApplicationInterface instance at 0x1726325642240>
-PROJECT: <win32com.gen_py.E3.series 2025.2543 Type Library.IJobInterface instance at 0x1726325643584>
+    # Create Tk root
+    root = tk.Tk()
+    root.withdraw()
+    root.attributes("-topmost", True)
+    root.update()
 
-====================================================================================================
-FIND CONNECTOR SCP-J1
-====================================================================================================
-DEVICE 72258: Wires
-DEVICE 64611: SCP-J1
-FOUND CONNECTOR ID: 64611
+    try:
+        # Let user PICK an existing Excel file
+        selected_path = filedialog.askopenfilename(
+            initialdir=default_folder,
+            filetypes=[("Excel Files", "*.xlsm"), ("All Files", "*.*")]
+        )
+    except Exception:
+        return None
 
-====================================================================================================
-VERIFY END_SPLIT SYMBOL
-====================================================================================================
-Load RETURN: 148869
-
-====================================================================================================
-INITIAL CONNECTOR SNAPSHOT
-====================================================================================================
-PIN 1 | LOGICAL PIN ID 64615 | VIEW IDS [70079]
-    VIEW 70079 | LIVE SYMBOL 144159 | LOCATION [204828.0, 7.699999999999999, 29.9, 7.0] | NODE IDS [144126] | TYPE MilSymbolReceptacle¶END_TOP | CHARACTERISTIC END_TOP | BOUNDS [144140, 144139]
-PIN 2 | LOGICAL PIN ID 64614 | VIEW IDS [70077]
-    VIEW 70077 | LIVE SYMBOL 144136 | LOCATION [204828.0, 7.7, 29.650000000000002, 7.0] | NODE IDS [144125] | TYPE MilSymbolReceptacle¶CONNECTOR_PIN | CHARACTERISTIC CONNECTOR_PIN | BOUNDS [144140, 144139, 144149, 144150]
-PIN 3 | LOGICAL PIN ID 64613 | VIEW IDS [70075]
-    VIEW 70075 | LIVE SYMBOL 144135 | LOCATION [204828.0, 7.7, 29.400000000000002, 7.0] | NODE IDS [144120] | TYPE MilSymbolReceptacle¶CONNECTOR_PIN | CHARACTERISTIC CONNECTOR_PIN | BOUNDS [144153, 144154, 144149, 144150]
-PIN 4 | LOGICAL PIN ID 64612 | VIEW IDS [70073]
-    VIEW 70073 | LIVE SYMBOL 144132 | LOCATION [204828.0, 7.7, 29.150000000000002, 7.0] | NODE IDS [144119] | TYPE MilSymbolReceptacle¶CONNECTOR_PIN | CHARACTERISTIC CONNECTOR_PIN | BOUNDS [144118, 144117, 144153, 144154]
-PIN 5 | LOGICAL PIN ID 64619 | VIEW IDS [70067]
-    VIEW 70067 | LIVE SYMBOL 145922 | LOCATION [204828.0, 7.7, 28.900000000000002, 7.0] | NODE IDS [147661] | TYPE MilSymbolReceptacle¶CONNECTOR_PIN | CHARACTERISTIC CONNECTOR_PIN | BOUNDS [144124, 144123, 144118, 144117]
-PIN 6 | LOGICAL PIN ID 64618 | VIEW IDS [70061]
-    VIEW 70061 | LIVE SYMBOL 146059 | LOCATION [204828.0, 7.7, 28.650000000000002, 7.0] | NODE IDS [147660] | TYPE MilSymbolReceptacle¶CONNECTOR_PIN | CHARACTERISTIC CONNECTOR_PIN | BOUNDS [144124, 144123, 144147, 144148]
-PIN 7 | LOGICAL PIN ID 64617 | VIEW IDS [70055]
-    VIEW 70055 | LIVE SYMBOL 204784 | LOCATION [204828.0, 7.7, 28.400000000000002, 7.0] | NODE IDS [146064] | TYPE MilSymbolReceptacle¶CONNECTOR_PIN | CHARACTERISTIC CONNECTOR_PIN | BOUNDS [144138, 144137, 144147, 144148]
-PIN 8 | LOGICAL PIN ID 64616 | VIEW IDS [70049]
-    VIEW 70049 | LIVE SYMBOL 146079 | LOCATION [204828.0, 7.7, 28.150000000000002, 7.0] | NODE IDS [146237] | TYPE MilSymbolReceptacle¶CONNECTOR_PIN | CHARACTERISTIC CONNECTOR_PIN | BOUNDS [144142, 144141, 144138, 144137]
-PIN 9 | LOGICAL PIN ID 64534 | VIEW IDS [70043]
-    VIEW 70043 | LIVE SYMBOL 144131 | LOCATION [204828.0, 7.7, 27.900000000000002, 7.0] | NODE IDS [144167] | TYPE MilSymbolReceptacle¶END_BOTTOM | CHARACTERISTIC END_BOTTOM | BOUNDS [144142, 144141]
-
-====================================================================================================
-FIRST THREE PINS FROM TOP
-====================================================================================================
-1: PIN 1 | VIEW 70079 | LOCATION (7.699999999999999, 29.9) | TYPE MilSymbolReceptacle¶END_TOP | CHARACTERISTIC END_TOP
-2: PIN 2 | VIEW 70077 | LOCATION (7.7, 29.650000000000002) | TYPE MilSymbolReceptacle¶CONNECTOR_PIN | CHARACTERISTIC CONNECTOR_PIN
-3: PIN 3 | VIEW 70075 | LOCATION (7.7, 29.400000000000002) | TYPE MilSymbolReceptacle¶CONNECTOR_PIN | CHARACTERISTIC CONNECTOR_PIN
-ESTIMATED NOMINAL PIN PITCH: 0.25
-CURRENT FIRST GAP: 0.24999999999999645
-NOMINAL ORIGINAL TOP Y: 29.9
-
-====================================================================================================
-COMPUTED TEST COORDINATES
-====================================================================================================
-ORIGINAL CONNECTOR X: 7.699999999999999
-STAGING X START: 6.8999999999999995
-STAGING X STEP: -0.35
-STAGING Y START: 30.9
-STAGING Y SPACING: 0.3
-LEFT FINAL X: 5.499999999999999
-RIGHT FINAL X: 7.699999999999999
-RIGHT FINAL X intentionally reuses the original connector X instead of going outside the block.
-FINAL TOP Y: 30.25
-FINAL Y SPACING: 0.25
-
-====================================================================================================
-DRY RUN PLAN
-====================================================================================================
-PEEL PIN 1 -> STAGE (6.8999999999999995, 30.9)
-PEEL PIN 2 -> STAGE (6.55, 30.599999999999998)
-PEEL PIN 3 -> STAGE (6.199999999999999, 30.299999999999997)
-
-OUT-OF-ORDER FINAL PLAN:
-PIN 3 -> LEFT ROW 0 -> (5.499999999999999, 30.25)
-PIN 1 -> RIGHT ROW 0 -> (7.699999999999999, 30.25)
-PIN 2 -> LEFT ROW 1 -> (5.499999999999999, 30.0)
-
-No E3 objects were changed.
-Set DRY_RUN = False to run the proof-of-process.
+    # Cancel or X
+    if not selected_path:
+        root.destroy()
+        return None
+    root.destroy()
+    # Return ONLY the file name (not full path)
+    return os.path.abspath(selected_path)
 
 
+# ================================================
+# PARSE EXCEL
+# ================================================
+BLOCK_OFFSET = 4
+# output_path = ask_save_path()
+output_path = 'C:/Users/conner.hughes/Downloads/Block_Pin_Ordering_Template.xlsm'
+wb = load_workbook(output_path, data_only=True)
+ws = wb.active
+
+NUMBER_OF_CONNECTORS = ws["C5"].value
+
+CONNECTOR_MODEL_CHECK = ws["B2"].value
+if CONNECTOR_MODEL_CHECK != "Pass":
+    raise Exception("Connector model check is failing, fix it")
+DUPLICATE_PIN_CHECK = ws["C2"].value
+if DUPLICATE_PIN_CHECK != "Pass":
+    raise Exception("Duplicate pin check is failing, fix it")
+
+CONNECTOR_PIN_INFO = []
+for i in range(NUMBER_OF_CONNECTORS):
+    left_pin_col = 9 + (i * BLOCK_OFFSET)
+    right_pin_col = left_pin_col + 1
+
+    number_of_pins = ws.cell(row=5, column=right_pin_col).value
+    connector_name = ws.cell(row=6, column=right_pin_col).value
+
+    if number_of_pins is None:
+        number_of_pins = 0
+    number_of_pins = int(number_of_pins)
+    temp = [{'connector name': connector_name, 'number of pins': number_of_pins, 'left pins': [], 'right pins': []}]
+    end_row = 8 + number_of_pins - 1
+    left = []
+    right = []
+    for r in range(8, end_row + 1):
+        left_pin = ws.cell(row=r, column=left_pin_col).value
+        right_pin = ws.cell(row=r, column=right_pin_col).value
+        if left_pin is not None:
+            left.append(left_pin)
+        if right_pin is not None:
+            right.append(right_pin)
+    temp[0]['left pins'].extend(left)
+    temp[0]['right pins'].extend(right) 
+    CONNECTOR_PIN_INFO.append(temp)
+
+wb.close()
+
+print(CONNECTOR_PIN_INFO)
+
+# ================================================
+# CONNECT TO DB
+# ================================================
+CONNECTION_STRING = (
+    "DRIVER={SQL Server};"
+    "SERVER=sql-zuken-prd;"
+    "DATABASE=Zuken_E3Library;"
+    "Trusted_Connection=yes;"
+)
+
+conn = pyodbc.connect(CONNECTION_STRING, autocommit=True)
+cur = conn.cursor()
+
+# set objects
+#====================================================================================================================================
+app = win32.gencache.EnsureDispatch('CT.Application')
+prj = app.CreateJobObject()
+text = prj.CreateTextObject()
+comp = prj.CreateComponentObject()
+dev = prj.CreateDeviceObject()
+sym = prj.CreateSymbolObject()
+pin = prj.CreatePinObject()
+attr = prj.CreateAttributeObject()
+#====================================================================================================================================
+# more setup
+#====================================================================================================================================
+app.PutMessage("\n Starting Block Making Scrpit")
+
+sht = prj.CreateSheetObject()
+sheet_info = prj.GetAllSheetIds(None)
+sheet_count = sheet_info[0]
+sheet_ids = sheet_info[1]
+sheet_ids = [x for x in sheet_ids if x is not None]
+
+SHEET_ID_DICT = {}
+for id in sheet_ids:
+    sht.SetId(id)
+    name = sht.GetName()
+    SHEET_ID_DICT[name] = id
+    if sht.GetName() == "1":
+        sheet_1_id = id
+
+sheet1 = sht.SetId(sheet_1_id)
+
+# generate pin location maps, get block dimensions and find the block centers 
+
+# place all pins peel order on block centers, maybe later add increase block height if not tall enought
+
+# based on pin maps and block geom generated -> start populating pins based on excel parsed data
 
 
-
-
-
-
-
-
-
-
-
-
-====================================================================================================
-E3 PEEL FIRST THREE -> STAGGERED MIDDLE STAGE -> REORDER LEFT/RIGHT
-====================================================================================================
-PROCESS:
-1) Record every connector pin and original location.
-2) Identify the first three pins from the top.
-3) Peel them one at a time using the proven stable pin-view-ID workflow.
-4) Place each peeled pin in a staggered middle staging area so it cannot reconnect to the original stack or another staged pin.
-5) Re-place those three out of order into left/right test positions.
-6) Use the original connector X for the right side; do not place outside the block.
-7) Wait until ALL final placements are complete.
-8) Resolve any symbols E3 replaced during stack-building by scanning live sheet symbols for pin text + final coordinates.
-9) Apply the text tweaks only after the final live symbol for each pin is known.
-
-DRY_RUN = False
-
-====================================================================================================
-CONNECTING TO E3
-====================================================================================================
-APPLICATION: <win32com.gen_py.E3.series 2025.2543 Type Library.IApplicationInterface instance at 0x2670535693312>
-PROJECT: <win32com.gen_py.E3.series 2025.2543 Type Library.IJobInterface instance at 0x2670535694656>
-
-====================================================================================================
-FIND CONNECTOR SCP-J1
-====================================================================================================
-DEVICE 72258: Wires
-DEVICE 64611: SCP-J1
-FOUND CONNECTOR ID: 64611
-
-====================================================================================================
-VERIFY END_SPLIT SYMBOL
-====================================================================================================
-Load RETURN: 148869
-
-====================================================================================================
-INITIAL CONNECTOR SNAPSHOT
-====================================================================================================
-PIN 1 | LOGICAL PIN ID 64615 | VIEW IDS [70079]
-    VIEW 70079 | LIVE SYMBOL 144159 | LOCATION [204828.0, 7.699999999999999, 29.9, 7.0] | NODE IDS [144126] | TYPE MilSymbolReceptacle¶END_TOP | CHARACTERISTIC END_TOP | BOUNDS [144140, 144139]
-PIN 2 | LOGICAL PIN ID 64614 | VIEW IDS [70077]
-    VIEW 70077 | LIVE SYMBOL 144136 | LOCATION [204828.0, 7.7, 29.650000000000002, 7.0] | NODE IDS [144125] | TYPE MilSymbolReceptacle¶CONNECTOR_PIN | CHARACTERISTIC CONNECTOR_PIN | BOUNDS [144140, 144139, 144149, 144150]
-PIN 3 | LOGICAL PIN ID 64613 | VIEW IDS [70075]
-    VIEW 70075 | LIVE SYMBOL 144135 | LOCATION [204828.0, 7.7, 29.400000000000002, 7.0] | NODE IDS [144120] | TYPE MilSymbolReceptacle¶CONNECTOR_PIN | CHARACTERISTIC CONNECTOR_PIN | BOUNDS [144153, 144154, 144149, 144150]
-PIN 4 | LOGICAL PIN ID 64612 | VIEW IDS [70073]
-    VIEW 70073 | LIVE SYMBOL 144132 | LOCATION [204828.0, 7.7, 29.150000000000002, 7.0] | NODE IDS [144119] | TYPE MilSymbolReceptacle¶CONNECTOR_PIN | CHARACTERISTIC CONNECTOR_PIN | BOUNDS [144118, 144117, 144153, 144154]
-PIN 5 | LOGICAL PIN ID 64619 | VIEW IDS [70067]
-    VIEW 70067 | LIVE SYMBOL 145922 | LOCATION [204828.0, 7.7, 28.900000000000002, 7.0] | NODE IDS [147661] | TYPE MilSymbolReceptacle¶CONNECTOR_PIN | CHARACTERISTIC CONNECTOR_PIN | BOUNDS [144124, 144123, 144118, 144117]
-PIN 6 | LOGICAL PIN ID 64618 | VIEW IDS [70061]
-    VIEW 70061 | LIVE SYMBOL 146059 | LOCATION [204828.0, 7.7, 28.650000000000002, 7.0] | NODE IDS [147660] | TYPE MilSymbolReceptacle¶CONNECTOR_PIN | CHARACTERISTIC CONNECTOR_PIN | BOUNDS [144124, 144123, 144147, 144148]
-PIN 7 | LOGICAL PIN ID 64617 | VIEW IDS [70055]
-    VIEW 70055 | LIVE SYMBOL 204784 | LOCATION [204828.0, 7.7, 28.400000000000002, 7.0] | NODE IDS [146064] | TYPE MilSymbolReceptacle¶CONNECTOR_PIN | CHARACTERISTIC CONNECTOR_PIN | BOUNDS [144138, 144137, 144147, 144148]
-PIN 8 | LOGICAL PIN ID 64616 | VIEW IDS [70049]
-    VIEW 70049 | LIVE SYMBOL 146079 | LOCATION [204828.0, 7.7, 28.150000000000002, 7.0] | NODE IDS [146237] | TYPE MilSymbolReceptacle¶CONNECTOR_PIN | CHARACTERISTIC CONNECTOR_PIN | BOUNDS [144142, 144141, 144138, 144137]
-PIN 9 | LOGICAL PIN ID 64534 | VIEW IDS [70043]
-    VIEW 70043 | LIVE SYMBOL 144131 | LOCATION [204828.0, 7.7, 27.900000000000002, 7.0] | NODE IDS [144167] | TYPE MilSymbolReceptacle¶END_BOTTOM | CHARACTERISTIC END_BOTTOM | BOUNDS [144142, 144141]
-
-====================================================================================================
-FIRST THREE PINS FROM TOP
-====================================================================================================
-1: PIN 1 | VIEW 70079 | LOCATION (7.699999999999999, 29.9) | TYPE MilSymbolReceptacle¶END_TOP | CHARACTERISTIC END_TOP
-2: PIN 2 | VIEW 70077 | LOCATION (7.7, 29.650000000000002) | TYPE MilSymbolReceptacle¶CONNECTOR_PIN | CHARACTERISTIC CONNECTOR_PIN
-3: PIN 3 | VIEW 70075 | LOCATION (7.7, 29.400000000000002) | TYPE MilSymbolReceptacle¶CONNECTOR_PIN | CHARACTERISTIC CONNECTOR_PIN
-ESTIMATED NOMINAL PIN PITCH: 0.25
-CURRENT FIRST GAP: 0.24999999999999645
-NOMINAL ORIGINAL TOP Y: 29.9
-
-====================================================================================================
-COMPUTED TEST COORDINATES
-====================================================================================================
-ORIGINAL CONNECTOR X: 7.699999999999999
-STAGING X START: 6.8999999999999995
-STAGING X STEP: -0.35
-STAGING Y START: 30.9
-STAGING Y SPACING: 0.3
-LEFT FINAL X: 5.499999999999999
-RIGHT FINAL X: 7.699999999999999
-RIGHT FINAL X intentionally reuses the original connector X instead of going outside the block.
-FINAL TOP Y: 30.25
-FINAL Y SPACING: 0.25
-
-====================================================================================================
-PEEL PIN 1 TO STAGING
-====================================================================================================
-PIN NAME: 1
-LOGICAL PIN ID: 64615
-STABLE PIN-VIEW ID: 70079
-CURRENT LIVE SYMBOL ID: 144159
-CURRENT TYPE: MilSymbolReceptacle¶END_TOP
-CURRENT CHARACTERISTIC: END_TOP
-CURRENT LOCATION: [204828.0, 7.699999999999999, 29.9, 7.0]
-STAGING LOCATION: (6.8999999999999995, 30.9)
-NEW STAGED SYMBOL ID: 144247
-NEW TYPE: MilSymbolReceptacle¶END_SPLIT
-NEW CHARACTERISTIC: END_SPLIT
-NEW SYMBOL LOCATION: [204828.0, 6.8999999999999995, 30.9, 7.0]
-NEW BOUNDS: []
-STAGING VERIFIED: END_SPLIT + NO BOUNDS
-
-====================================================================================================
-PEEL PIN 2 TO STAGING
-====================================================================================================
-PIN NAME: 2
-LOGICAL PIN ID: 64614
-STABLE PIN-VIEW ID: 70077
-CURRENT LIVE SYMBOL ID: 144479
-CURRENT TYPE: MilSymbolReceptacle¶END_TOP
-CURRENT CHARACTERISTIC: END_TOP
-CURRENT LOCATION: [204828.0, 7.7, 29.650000000000002, 7.0]
-STAGING LOCATION: (6.55, 30.599999999999998)
-NEW STAGED SYMBOL ID: 145008
-NEW TYPE: MilSymbolReceptacle¶END_SPLIT
-NEW CHARACTERISTIC: END_SPLIT
-NEW SYMBOL LOCATION: [204828.0, 6.55, 30.599999999999998, 7.0]
-NEW BOUNDS: []
-STAGING VERIFIED: END_SPLIT + NO BOUNDS
-
-====================================================================================================
-PEEL PIN 3 TO STAGING
-====================================================================================================
-PIN NAME: 3
-LOGICAL PIN ID: 64613
-STABLE PIN-VIEW ID: 70075
-CURRENT LIVE SYMBOL ID: 144933
-CURRENT TYPE: MilSymbolReceptacle¶END_TOP
-CURRENT CHARACTERISTIC: END_TOP
-CURRENT LOCATION: [204828.0, 7.7, 29.400000000000002, 7.0]
-STAGING LOCATION: (6.199999999999999, 30.299999999999997)
-NEW STAGED SYMBOL ID: 147521
-NEW TYPE: MilSymbolReceptacle¶END_SPLIT
-NEW CHARACTERISTIC: END_SPLIT
-NEW SYMBOL LOCATION: [204828.0, 6.199999999999999, 30.299999999999997, 7.0]
-NEW BOUNDS: []
-STAGING VERIFIED: END_SPLIT + NO BOUNDS
-
-====================================================================================================
-CONNECTOR AFTER FIRST THREE ARE STAGED
-====================================================================================================
-PIN 1 | LOGICAL PIN ID 64615 | VIEW IDS [70079]
-    VIEW 70079 | LIVE SYMBOL None | LOCATION None | NODE IDS [144245] | TYPE None | CHARACTERISTIC None | BOUNDS []
-PIN 2 | LOGICAL PIN ID 64614 | VIEW IDS [70077]
-    VIEW 70077 | LIVE SYMBOL None | LOCATION None | NODE IDS [145009] | TYPE None | CHARACTERISTIC None | BOUNDS []
-PIN 3 | LOGICAL PIN ID 64613 | VIEW IDS [70075]
-    VIEW 70075 | LIVE SYMBOL None | LOCATION None | NODE IDS [147522] | TYPE None | CHARACTERISTIC None | BOUNDS []
-PIN 4 | LOGICAL PIN ID 64612 | VIEW IDS [70073]
-    VIEW 70073 | LIVE SYMBOL 146344 | LOCATION [204828.0, 7.7, 29.150000000000002, 7.0] | NODE IDS [146345] | TYPE MilSymbolReceptacle¶END_TOP | CHARACTERISTIC END_TOP | BOUNDS [204819, 146937]
-PIN 5 | LOGICAL PIN ID 64619 | VIEW IDS [70067]
-    VIEW 70067 | LIVE SYMBOL 145922 | LOCATION [204828.0, 7.7, 28.900000000000002, 7.0] | NODE IDS [147661] | TYPE MilSymbolReceptacle¶CONNECTOR_PIN | CHARACTERISTIC CONNECTOR_PIN | BOUNDS [146727, 147511, 204819, 146937]
-PIN 6 | LOGICAL PIN ID 64618 | VIEW IDS [70061]
-    VIEW 70061 | LIVE SYMBOL 146059 | LOCATION [204828.0, 7.7, 28.650000000000002, 7.0] | NODE IDS [147660] | TYPE MilSymbolReceptacle¶CONNECTOR_PIN | CHARACTERISTIC CONNECTOR_PIN | BOUNDS [146727, 147511, 147525, 147527]
-PIN 7 | LOGICAL PIN ID 64617 | VIEW IDS [70055]
-    VIEW 70055 | LIVE SYMBOL 204784 | LOCATION [204828.0, 7.7, 28.400000000000002, 7.0] | NODE IDS [146064] | TYPE MilSymbolReceptacle¶CONNECTOR_PIN | CHARACTERISTIC CONNECTOR_PIN | BOUNDS [147525, 147527, 146846, 147000]
-PIN 8 | LOGICAL PIN ID 64616 | VIEW IDS [70049]
-    VIEW 70049 | LIVE SYMBOL 146079 | LOCATION [204828.0, 7.7, 28.150000000000002, 7.0] | NODE IDS [146237] | TYPE MilSymbolReceptacle¶CONNECTOR_PIN | CHARACTERISTIC CONNECTOR_PIN | BOUNDS [146708, 146819, 146846, 147000]
-PIN 9 | LOGICAL PIN ID 64534 | VIEW IDS [70043]
-    VIEW 70043 | LIVE SYMBOL 145387 | LOCATION [204828.0, 7.7, 27.900000000000002, 7.0] | NODE IDS [145336] | TYPE MilSymbolReceptacle¶SPLIT_BOTTOM | CHARACTERISTIC SPLIT_BOTTOM | BOUNDS [146708, 146819]
-
-====================================================================================================
-OUT-OF-ORDER FINAL PLAN
-====================================================================================================
-PIN 3 -> LEFT ROW 0 -> (5.499999999999999, 30.25)
-PIN 1 -> RIGHT ROW 0 -> (7.699999999999999, 30.25)
-PIN 2 -> LEFT ROW 1 -> (5.499999999999999, 30.0)
-
-====================================================================================================
-FINAL PLACE PIN 3 -> LEFT ROW 0
-====================================================================================================
-STABLE PIN-VIEW ID: 70075
-CURRENT STAGED SYMBOL ID: 147521
-FINAL X: 5.499999999999999
-FINAL Y: 30.25
-FINAL SYMBOL ID: 146674
-FINAL TYPE: MilSymbolReceptacle¶END_SPLIT
-FINAL CHARACTERISTIC: END_SPLIT
-FINAL LOCATION: [204828.0, 5.499999999999999, 30.25, 7.0]
-FINAL BOUNDS: []
-
-====================================================================================================
-FINAL PLACE PIN 1 -> RIGHT ROW 0
-====================================================================================================
-STABLE PIN-VIEW ID: 70079
-CURRENT STAGED SYMBOL ID: 144247
-FINAL X: 7.699999999999999
-FINAL Y: 30.25
-FINAL SYMBOL ID: 147538
-FINAL TYPE: MilSymbolReceptacle¶END_TOP
-FINAL CHARACTERISTIC: END_TOP
-FINAL LOCATION: [204828.0, 7.699999999999999, 30.25, 7.0]
-FINAL BOUNDS: [147284, 146206]
-
-====================================================================================================
-FINAL PLACE PIN 2 -> LEFT ROW 1
-====================================================================================================
-STABLE PIN-VIEW ID: 70077
-CURRENT STAGED SYMBOL ID: 145008
-FINAL X: 5.499999999999999
-FINAL Y: 30.0
-FINAL SYMBOL ID: 145372
-FINAL TYPE: MilSymbolReceptacle¶SPLIT_BOTTOM
-FINAL CHARACTERISTIC: SPLIT_BOTTOM
-FINAL LOCATION: [204828.0, 5.499999999999999, 30.0, 7.0]
-FINAL BOUNDS: [145771, 145772]
-
-====================================================================================================
-DISCOVER LIVE SYMBOL CANDIDATES
-====================================================================================================
-prj.GetSymbolIds: [66218, 61179, 68773, 69271, 70419, 145922, 146059, 204784, 146079, 62426, 62728, 147117, 67098, 70169, 70675, 71681, 72197, 145387, 147538, 147234, 146000, 145372]
-sheet.GetSymbolIds: [66218, 61179, 68773, 69271, 70419, 145922, 146059, 204784, 146079, 62426, 62728, 147117, 67098, 70169, 70675, 71681, 72197, 145387, 147538, 147234, 146000, 145372]
-dev.GetSymbolIds: [61179]
-TOTAL UNIQUE CANDIDATE SYMBOL IDS: 22
-
-====================================================================================================
-FINAL TEXT TWEAK PASS AFTER ALL PLACEMENTS
-====================================================================================================
-
-PIN 1 | SIDE RIGHT | ROW 0
-STABLE PIN-VIEW ID: 70079
-LAST RETURNED SYMBOL ID: 147538
-RESOLVED CURRENT SYMBOL ID: 147538
-RESOLUTION SOURCE: last returned live symbol ID
-FINAL TYPE BEFORE TEXT: MilSymbolReceptacle¶END_TOP
-FINAL CHARACTERISTIC BEFORE TEXT: END_TOP
-FINAL BOUNDS BEFORE TEXT: [147284, 146206]
-
-====================================================================================================
-TEXT TWEAKS FOR SYMBOL 147538
-====================================================================================================
-SetBlockHatchColour(58): -1
-TEXT 147473 | TYPE 213 | VALUE '1/9'
-    LEFT ALONE
-TEXT 146997 | TYPE 203 | VALUE '1'
-    SetVisibility(1)=1 | SetStyle(1)=1
-TEXT 147051 | TYPE 5 | VALUE 'Generic_D-Sub_9P_Plug'
-    SetVisibility(0)=1
-TEXT 147256 | TYPE 12 | VALUE 'SCP-J1#1'
-    LEFT ALONE FOR TOP SPLIT
-TEXT 147067 | TYPE 617 | VALUE 'TEST_1'
-    SetVisibility(1)=1 | SetColour(0)=1 | SetAlignment(3)=0 | SetStyle(1)=1 | SetHeight(0.2)=1
-
-PIN 2 | SIDE LEFT | ROW 1
-STABLE PIN-VIEW ID: 70077
-LAST RETURNED SYMBOL ID: 145372
-RESOLVED CURRENT SYMBOL ID: 145372
-RESOLUTION SOURCE: last returned live symbol ID
-FINAL TYPE BEFORE TEXT: MilSymbolReceptacle¶SPLIT_BOTTOM
-FINAL CHARACTERISTIC BEFORE TEXT: SPLIT_BOTTOM
-FINAL BOUNDS BEFORE TEXT: [145771, 145772]
-
-====================================================================================================
-TEXT TWEAKS FOR SYMBOL 145372
-====================================================================================================
-SetBlockHatchColour(58): -1
-TEXT 145368 | TYPE 213 | VALUE '2/9'
-    LEFT ALONE
-TEXT 145365 | TYPE 203 | VALUE '2'
-    SetVisibility(1)=1 | SetStyle(1)=1
-TEXT 145370 | TYPE 5 | VALUE 'Generic_D-Sub_9P_Plug'
-    SetVisibility(0)=1
-TEXT 145367 | TYPE 12 | VALUE 'SCP-J1#1'
-    SetVisibility(0)=1
-TEXT 145364 | TYPE 617 | VALUE 'SPARE'
-    SetVisibility(1)=1 | SetColour(0)=1 | SetAlignment(3)=0 | SetStyle(1)=1 | SetHeight(0.2)=1
-
-PIN 3 | SIDE LEFT | ROW 0
-STABLE PIN-VIEW ID: 70075
-LAST RETURNED SYMBOL ID: 146674
-RESOLVED CURRENT SYMBOL ID: 146000
-RESOLUTION SOURCE: sheet/device symbol scan by pin text + location
-SYMBOL SCAN MATCHES:
-    SCORE 240 | SYMBOL 146000 | PIN 3 | LOCATION [204828.0, 5.499999999999999, 30.25, 7.0] | TYPE MilSymbolReceptacle¶END_TOP | CHARACTERISTIC END_TOP | DEVICE SCP-J1#1
-    SCORE 110 | SYMBOL 147117 | PIN 3 | LOCATION [204828.0, 7.7, 23.900000000000002, 7.0] | TYPE MilSymbolReceptacle¶CONNECTOR_PIN | CHARACTERISTIC CONNECTOR_PIN | DEVICE SCP-J2#2
-FINAL TYPE BEFORE TEXT: MilSymbolReceptacle¶END_TOP
-FINAL CHARACTERISTIC BEFORE TEXT: END_TOP
-FINAL BOUNDS BEFORE TEXT: [145771, 145772]
-
-====================================================================================================
-TEXT TWEAKS FOR SYMBOL 146000
-====================================================================================================
-SetBlockHatchColour(58): -1
-TEXT 146018 | TYPE 213 | VALUE '3/9'
-    LEFT ALONE
-TEXT 146004 | TYPE 203 | VALUE '3'
-    SetVisibility(1)=1 | SetStyle(1)=1
-TEXT 146023 | TYPE 5 | VALUE 'Generic_D-Sub_9P_Plug'
-    SetVisibility(0)=1
-TEXT 145785 | TYPE 12 | VALUE 'SCP-J1#1'
-    LEFT ALONE FOR TOP SPLIT
-TEXT 145721 | TYPE 617 | VALUE 'T3'
-    SetVisibility(1)=1 | SetColour(0)=1 | SetAlignment(3)=0 | SetStyle(1)=1 | SetHeight(0.2)=1
-
-====================================================================================================
-FINAL CONNECTOR SNAPSHOT
-====================================================================================================
-PIN 1 | LOGICAL PIN ID 64615 | VIEW IDS [70079]
-    VIEW 70079 | LIVE SYMBOL None | LOCATION None | NODE IDS [204840] | TYPE None | CHARACTERISTIC None | BOUNDS []
-PIN 2 | LOGICAL PIN ID 64614 | VIEW IDS [70077]
-    VIEW 70077 | LIVE SYMBOL None | LOCATION None | NODE IDS [145369] | TYPE None | CHARACTERISTIC None | BOUNDS []
-PIN 3 | LOGICAL PIN ID 64613 | VIEW IDS [70075]
-    VIEW 70075 | LIVE SYMBOL None | LOCATION None | NODE IDS [146021] | TYPE None | CHARACTERISTIC None | BOUNDS []
-PIN 4 | LOGICAL PIN ID 64612 | VIEW IDS [70073]
-    VIEW 70073 | LIVE SYMBOL 147234 | LOCATION [204828.0, 7.7, 29.150000000000002, 7.0] | NODE IDS [147112] | TYPE MilSymbolReceptacle¶CONNECTOR_PIN | CHARACTERISTIC CONNECTOR_PIN | BOUNDS [145930, 146211, 147284, 146206]
-PIN 5 | LOGICAL PIN ID 64619 | VIEW IDS [70067]
-    VIEW 70067 | LIVE SYMBOL 145922 | LOCATION [204828.0, 7.7, 28.900000000000002, 7.0] | NODE IDS [147661] | TYPE MilSymbolReceptacle¶CONNECTOR_PIN | CHARACTERISTIC CONNECTOR_PIN | BOUNDS [69309, 146218, 145930, 146211]
-PIN 6 | LOGICAL PIN ID 64618 | VIEW IDS [70061]
-    VIEW 70061 | LIVE SYMBOL 146059 | LOCATION [204828.0, 7.7, 28.650000000000002, 7.0] | NODE IDS [147660] | TYPE MilSymbolReceptacle¶CONNECTOR_PIN | CHARACTERISTIC CONNECTOR_PIN | BOUNDS [69309, 146218, 147171, 146210]
-PIN 7 | LOGICAL PIN ID 64617 | VIEW IDS [70055]
-    VIEW 70055 | LIVE SYMBOL 204784 | LOCATION [204828.0, 7.7, 28.400000000000002, 7.0] | NODE IDS [146064] | TYPE MilSymbolReceptacle¶CONNECTOR_PIN | CHARACTERISTIC CONNECTOR_PIN | BOUNDS [147171, 146210, 145918, 146207]
-PIN 8 | LOGICAL PIN ID 64616 | VIEW IDS [70049]
-    VIEW 70049 | LIVE SYMBOL 146079 | LOCATION [204828.0, 7.7, 28.150000000000002, 7.0] | NODE IDS [146237] | TYPE MilSymbolReceptacle¶CONNECTOR_PIN | CHARACTERISTIC CONNECTOR_PIN | BOUNDS [145934, 146219, 145918, 146207]
-PIN 9 | LOGICAL PIN ID 64534 | VIEW IDS [70043]
-    VIEW 70043 | LIVE SYMBOL 145387 | LOCATION [204828.0, 7.7, 27.900000000000002, 7.0] | NODE IDS [145336] | TYPE MilSymbolReceptacle¶SPLIT_BOTTOM | CHARACTERISTIC SPLIT_BOTTOM | BOUNDS [145934, 146219]
-
-====================================================================================================
-FINAL SUMMARY
-====================================================================================================
-PEELED / FINAL PINS:
-PIN 1 | STABLE VIEW 70079 | FINAL SYMBOL 147538 | SIDE RIGHT | ROW 0 | TARGET (7.699999999999999, 30.25)
-PIN 2 | STABLE VIEW 70077 | FINAL SYMBOL 145372 | SIDE LEFT | ROW 1 | TARGET (5.499999999999999, 30.0)
-PIN 3 | STABLE VIEW 70075 | FINAL SYMBOL 146674 | SIDE LEFT | ROW 0 | TARGET (5.499999999999999, 30.25)
-
-OUT-OF-ORDER TEST COMPLETE.
-The JSON output contains the original connector locations, staging records, final plan, final symbol IDs, and text-tweak results.
+#=========================================
+# RESET BEFORE MAIN BLOCK FORMATTING
+#=========================================
+del attr
+del text
+del sym
+del pin
+del comp
+del dev
+del sht
+del prj
+del app
