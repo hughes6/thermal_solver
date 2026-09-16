@@ -1,150 +1,605 @@
+from openpyxl import load_workbook
+import inspect
+import os
+import time
+import pyodbc
+import pythoncom
+import win32com.client as win32
 
-========================================================================================================================
-E3 BLOCK LOCATION / SIZE TEST
-========================================================================================================================
-TARGET_DEVICE_NAME = ''
+
+# ================================================
+# USER SETTINGS
+# ================================================
+
+TARGET_DEVICE_NAME = "TEST_NAME_100000"
+
+# Leave None unless you already know the exact CABBLOCK symbol item ID.
 TARGET_SYMBOL_ID = None
-SHEET COUNT = 2
-SHEET MAP = {'1': 204828, '2': 147977}
 
-========================================================================================================================
-RELEVANT METHODS ON e3Device
-========================================================================================================================
-AssignFunctionalUnitsDynamic(name=<PyOleEmpty object at 0x0000029582DEE8A0>, assignment=<PyOleEmpty object at 0x0000029582DEE8A0>, location=<PyOleEmpty object at 0x0000029582DEE8A0>, type=<PyOleEmpty object at 0x0000029582DEE8A0>, ids=<PyOleEmpty object at 0x0000029582DEE8A0>)
-Create2DView(modi=<PyOleEmpty object at 0x0000029582DEE8A0>, name=<PyOleEmpty object at 0x0000029582DEE8A0>, symbol=<PyOleEmpty object at 0x0000029582DEE8A0>, position=<PyOleEmpty object at 0x0000029582DEE8A0>, before=<PyOleEmpty object at 0x0000029582DEE8A0>)
-Create2DViewEx(modi=<PyOleEmpty object at 0x0000029582DEE8A0>, name=<PyOleEmpty object at 0x0000029582DEE8A0>, symbol=<PyOleEmpty object at 0x0000029582DEE8A0>, position=<PyOleEmpty object at 0x0000029582DEE8A0>, before=<PyOleEmpty object at 0x0000029582DEE8A0>, shtId=<PyOleEmpty object at 0x0000029582DEE8A0>, xmin=<PyOleEmpty object at 0x0000029582DEE8A0>, ymin=<PyOleEmpty object at 0x0000029582DEE8A0>, xmax=<PyOleEmpty object at 0x0000029582DEE8A0>, ymax=<PyOleEmpty object at 0x0000029582DEE8A0>, scale=<PyOleEmpty object at 0x0000029582DEE8A0>)
-Create2DViewOfSlots(modi=<PyOleEmpty object at 0x0000029582DEE8A0>, name=<PyOleEmpty object at 0x0000029582DEE8A0>, symbol=<PyOleEmpty object at 0x0000029582DEE8A0>, slotslist=<PyOleEmpty object at 0x0000029582DEE8A0>, position=<PyOleEmpty object at 0x0000029582DEE8A0>, before=<PyOleEmpty object at 0x0000029582DEE8A0>, shtId=<PyOleEmpty object at 0x0000029582DEE8A0>, xmin=<PyOleEmpty object at 0x0000029582DEE8A0>, ymin=<PyOleEmpty object at 0x0000029582DEE8A0>, xmax=<PyOleEmpty object at 0x0000029582DEE8A0>, ymax=<PyOleEmpty object at 0x0000029582DEE8A0>, scale=<PyOleEmpty object at 0x0000029582DEE8A0>)
-CreateView(From=<PyOleEmpty object at 0x0000029582DEE8A0>, level=<PyOleEmpty object at 0x0000029582DEE8A0>, blockid=<PyOleEmpty object at 0x0000029582DEE8A0>, databaseDeviceView='')
-GetDynamicModelSize(x=<PyOleMissing object at 0x0000029582DEFB40>, y=<PyOleMissing object at 0x0000029582DEFB40>, z=<PyOleMissing object at 0x0000029582DEFB40>)
-GetFunctionalBlockSymbolIDs(ids=<PyOleEmpty object at 0x0000029582DEE8A0>)
-GetJustificationArea(z=<PyOleMissing object at 0x0000029582DEFB40>)
-GetLocation()
-GetLocationEx(flags=<PyOleEmpty object at 0x0000029582DEE8A0>)
-GetLocationLockChangeable()
-GetModelCharacteristic()
-GetModelName()
-GetPanelLocation(x=<PyOleMissing object at 0x0000029582DEFB40>, y=<PyOleMissing object at 0x0000029582DEFB40>, z=<PyOleMissing object at 0x0000029582DEFB40>, rot=<PyOleMissing object at 0x0000029582DEFB40>, pivot=<PyOleEmpty object at 0x0000029582DEE8A0>)
-GetPanelLocationXYZEulerAngles(x=<PyOleMissing object at 0x0000029582DEFB40>, y=<PyOleMissing object at 0x0000029582DEFB40>, z=<PyOleMissing object at 0x0000029582DEFB40>, xrot=<PyOleMissing object at 0x0000029582DEFB40>, yrot=<PyOleMissing object at 0x0000029582DEFB40>, zrot=<PyOleMissing object at 0x0000029582DEFB40>)
-GetPanelPositionLock()
-GetSchematicTypes(types=<PyOleEmpty object at 0x0000029582DEE8A0>)
-GetSymbolCount(get_mode=0)
-GetSymbolIds(ids=<PyOleEmpty object at 0x0000029582DEE8A0>, get_mode=0)
-GetTableSymbolId()
-GetValidModelCharacteristics(characteristics=<PyOleEmpty object at 0x0000029582DEE8A0>)
-GetViewCount()
-GetViewIds(ids=<PyOleEmpty object at 0x0000029582DEE8A0>)
-GetViewNumber()
-Has2DView()
-IsDynamicModel()
-IsLocationLockChangeable()
-IsPinTerminalSymbolsUsed()
-IsPlacedInPanel()
-IsView()
-PlaceModelViewAsGraphic(sheetid=<PyOleEmpty object at 0x0000029582DEE8A0>, x=<PyOleEmpty object at 0x0000029582DEE8A0>, y=<PyOleEmpty object at 0x0000029582DEE8A0>, rotation=<PyOleEmpty object at 0x0000029582DEE8A0>, modelview=<PyOleEmpty object at 0x0000029582DEE8A0>, flags=0)
-PlaceOnAreaSlot(slotid=<PyOleEmpty object at 0x0000029582DEE8A0>, x=<PyOleEmpty object at 0x0000029582DEE8A0>, y=<PyOleEmpty object at 0x0000029582DEE8A0>, rotation=0.0, pivot=0, combined=0, collisionids=<PyOleEmpty object at 0x0000029582DEE8A0>)
-SetDynamicModelSize(x=<PyOleEmpty object at 0x0000029582DEE8A0>, y=<PyOleEmpty object at 0x0000029582DEE8A0>, z=<PyOleEmpty object at 0x0000029582DEE8A0>)
-SetJustificationArea(z=<PyOleEmpty object at 0x0000029582DEE8A0>, flags=0)
-SetLocation(name=<PyOleEmpty object at 0x0000029582DEE8A0>)
-SetLocationLockChangeable(lockchangeable=<PyOleEmpty object at 0x0000029582DEE8A0>)
-SetModelCharacteristic(characteristic=<PyOleEmpty object at 0x0000029582DEE8A0>)
-SetPanelLocation(flags=<PyOleEmpty object at 0x0000029582DEE8A0>, shti=<PyOleEmpty object at 0x0000029582DEE8A0>, x=<PyOleEmpty object at 0x0000029582DEE8A0>, y=<PyOleEmpty object at 0x0000029582DEE8A0>, z=<PyOleEmpty object at 0x0000029582DEE8A0>, rot=<PyOleEmpty object at 0x0000029582DEE8A0>, use_start_z=0, place_combined=0, pivot=0)
-SetPanelLocationEx(flags=<PyOleEmpty object at 0x0000029582DEE8A0>, shti=<PyOleEmpty object at 0x0000029582DEE8A0>, x=<PyOleEmpty object at 0x0000029582DEE8A0>, y=<PyOleEmpty object at 0x0000029582DEE8A0>, z=<PyOleEmpty object at 0x0000029582DEE8A0>, rot=<PyOleEmpty object at 0x0000029582DEE8A0>, use_start_z=0, place_combined=0, pivot=0, shift_key=0)
-SetPanelLocationXYZEulerAngles(flags=<PyOleEmpty object at 0x0000029582DEE8A0>, shti=<PyOleEmpty object at 0x0000029582DEE8A0>, x=<PyOleEmpty object at 0x0000029582DEE8A0>, y=<PyOleEmpty object at 0x0000029582DEE8A0>, z=<PyOleEmpty object at 0x0000029582DEE8A0>, xrot=<PyOleEmpty object at 0x0000029582DEE8A0>, yrot=<PyOleEmpty object at 0x0000029582DEE8A0>, zrot=<PyOleEmpty object at 0x0000029582DEE8A0>, use_start_z=0, place_combined=0, shift_key=0)
-SetPanelPositionLock(onoff=<PyOleEmpty object at 0x0000029582DEE8A0>)
-SetPinTerminalSymbolsUsed(use=<PyOleEmpty object at 0x0000029582DEE8A0>)
-SetViewNumber(id=<PyOleEmpty object at 0x0000029582DEE8A0>)
-__sizeof__()
+OUTPUT_FOLDER = os.path.dirname(os.path.abspath(__file__))
 
-========================================================================================================================
-RELEVANT METHODS ON e3Symbol
-========================================================================================================================
-GetArea(xmin=<PyOleEmpty object at 0x0000029582DEE8A0>, ymin=<PyOleEmpty object at 0x0000029582DEE8A0>, xmax=<PyOleEmpty object at 0x0000029582DEE8A0>, ymax=<PyOleEmpty object at 0x0000029582DEE8A0>)
-GetBoundIds(ids=<PyOleEmpty object at 0x0000029582DEE8A0>)
-GetDBTextSize()
-GetDynamicChildrenIds(ids=<PyOleEmpty object at 0x0000029582DEE8A0>)
-GetDynamicParentId()
-GetPlacedArea(xmin=<PyOleEmpty object at 0x0000029582DEE8A0>, ymin=<PyOleEmpty object at 0x0000029582DEE8A0>, xmax=<PyOleEmpty object at 0x0000029582DEE8A0>, ymax=<PyOleEmpty object at 0x0000029582DEE8A0>)
-GetPlacedPolygon(npnts=<PyOleEmpty object at 0x0000029582DEE8A0>, xarr=<PyOleEmpty object at 0x0000029582DEE8A0>, yarr=<PyOleEmpty object at 0x0000029582DEE8A0>)
-GetSchemaLocation(x=<PyOleEmpty object at 0x0000029582DEE8A0>, y=<PyOleEmpty object at 0x0000029582DEE8A0>, grid=<PyOleEmpty object at 0x0000029582DEE8A0>, column_value=<PyOleEmpty object at 0x0000029582DEE8A0>, row_value=<PyOleEmpty object at 0x0000029582DEE8A0>)
-GetSchemaLocationShared(shtId=<PyOleEmpty object at 0x0000029582DEE8A0>, x=<PyOleEmpty object at 0x0000029582DEE8A0>, y=<PyOleEmpty object at 0x0000029582DEE8A0>, grid=<PyOleEmpty object at 0x0000029582DEE8A0>, column_value=<PyOleEmpty object at 0x0000029582DEE8A0>, row_value=<PyOleEmpty object at 0x0000029582DEE8A0>)
-GetSchematicTypes(types=<PyOleEmpty object at 0x0000029582DEE8A0>)
-GetSymbolCount()
-GetSymbolExtend(xarr=<PyOleEmpty object at 0x0000029582DEE8A0>, yarr=<PyOleEmpty object at 0x0000029582DEE8A0>)
-GetSymbolIds(ids=<PyOleEmpty object at 0x0000029582DEE8A0>)
-GetSymbolType()
-GetSymbolTypeId()
-GetSymbolTypeName()
-IsDynamic()
-IsDynamicFixed()
-IsPinView()
-ModifyBlockSize(border=<PyOleEmpty object at 0x0000029582DEE8A0>, delta=<PyOleEmpty object at 0x0000029582DEE8A0>, flags=<PyOleEmpty object at 0x0000029582DEE8A0>)
-PlaceDynamic(shti=<PyOleEmpty object at 0x0000029582DEE8A0>, x=<PyOleEmpty object at 0x0000029582DEE8A0>, y=<PyOleEmpty object at 0x0000029582DEE8A0>, height=<PyOleEmpty object at 0x0000029582DEE8A0>, width=<PyOleEmpty object at 0x0000029582DEE8A0>, texttemplate=<PyOleEmpty object at 0x0000029582DEE8A0>, fitsymbol=<PyOleEmpty object at 0x0000029582DEE8A0>)
-PlacePinView(pinid=<PyOleEmpty object at 0x0000029582DEE8A0>, shti=<PyOleEmpty object at 0x0000029582DEE8A0>, symname=<PyOleEmpty object at 0x0000029582DEE8A0>, version=<PyOleEmpty object at 0x0000029582DEE8A0>, x=<PyOleEmpty object at 0x0000029582DEE8A0>, y=<PyOleEmpty object at 0x0000029582DEE8A0>, rot=<PyOleEmpty object at 0x0000029582DEE8A0>, scale=<PyOleEmpty object at 0x0000029582DEE8A0>, maintaintextsize=<PyOleEmpty object at 0x0000029582DEE8A0>)
-SetDBTextSize(txtsiz=<PyOleEmpty object at 0x0000029582DEE8A0>)
-SetDeviceLocation(name=<PyOleEmpty object at 0x0000029582DEE8A0>)
-__sizeof__()
 
-========================================================================================================================
-KEY METHOD SIGNATURES
-========================================================================================================================
-GetDynamicModelSize:
-    signature: (x=<PyOleMissing object at 0x0000029582DEFB40>, y=<PyOleMissing object at 0x0000029582DEFB40>, z=<PyOleMissing object at 0x0000029582DEFB40>)
-    doc: None
-GetSchemaLocation: METHOD NOT PRESENT
-GetSymbolIds:
-    signature: (ids=<PyOleEmpty object at 0x0000029582DEE8A0>, get_mode=0)
-    doc: method GetSymbolIds
-GetViewIds:
-    signature: (ids=<PyOleEmpty object at 0x0000029582DEE8A0>)
-    doc: method GetViewIds
-GetArea: METHOD NOT PRESENT
-GetPlacedArea: METHOD NOT PRESENT
-GetPlacedPolygon: METHOD NOT PRESENT
-GetSchemaLocation:
-    signature: (x=<PyOleEmpty object at 0x0000029582DEE8A0>, y=<PyOleEmpty object at 0x0000029582DEE8A0>, grid=<PyOleEmpty object at 0x0000029582DEE8A0>, column_value=<PyOleEmpty object at 0x0000029582DEE8A0>, row_value=<PyOleEmpty object at 0x0000029582DEE8A0>)
-    doc: method GetSchemaLocation
-GetArea:
-    signature: (xmin=<PyOleEmpty object at 0x0000029582DEE8A0>, ymin=<PyOleEmpty object at 0x0000029582DEE8A0>, xmax=<PyOleEmpty object at 0x0000029582DEE8A0>, ymax=<PyOleEmpty object at 0x0000029582DEE8A0>)
-    doc: method GetArea
-GetPlacedArea:
-    signature: (xmin=<PyOleEmpty object at 0x0000029582DEE8A0>, ymin=<PyOleEmpty object at 0x0000029582DEE8A0>, xmax=<PyOleEmpty object at 0x0000029582DEE8A0>, ymax=<PyOleEmpty object at 0x0000029582DEE8A0>)
-    doc: method GetPlacedArea
-GetPlacedPolygon:
-    signature: (npnts=<PyOleEmpty object at 0x0000029582DEE8A0>, xarr=<PyOleEmpty object at 0x0000029582DEE8A0>, yarr=<PyOleEmpty object at 0x0000029582DEE8A0>)
-    doc: None
-GetDynamicParentId:
-    signature: ()
-    doc: method GetDynamicParentId
-GetDynamicChildrenIds:
-    signature: (ids=<PyOleEmpty object at 0x0000029582DEE8A0>)
-    doc: method GetDynamicChildrenIds
-GetBlockId: METHOD NOT PRESENT
-GetSheetId: METHOD NOT PRESENT
+# ================================================
+# HELPER FXN
+# ================================================
 
-========================================================================================================================
-DEVICE ENUMERATION
-========================================================================================================================
-    method(None) RAW: (4, (None, 72258, 64611, 67783, 137415))
-    method(None) PARSED IDS: [72258, 64611, 67783, 137415]
-TOTAL DEVICE IDS: 4
-DEVICE 72258 | NAME 'Wires' | CODE ''
-DEVICE 64611 | NAME 'SCP-J1' | CODE ''
-DEVICE 67783 | NAME 'SCP-J2' | CODE ''
-DEVICE 137415 | NAME 'TEST_NAME_100000' | CODE ''
+COM_MISSING = -2147352572
 
-========================================================================================================================
-NO TARGET DEVICE NAME SET
-========================================================================================================================
-Set TARGET_DEVICE_NAME at the top of this file to the MAIN BLOCK device name.
-The device list above is intentionally printed so you can identify the correct one.
+LOG_LINES = []
 
-========================================================================================================================
-TEST COMPLETE
-========================================================================================================================
-Send me the generated e3_block_location_size_test_output.txt.
-The most important lines will be:
-1) e3Device.GetDynamicModelSize signature + raw return
-2) e3Symbol.GetSchemaLocation signature + raw return
-3) e3Symbol.GetArea / GetPlacedArea raw returns
-4) device GetSymbolIds / GetViewIds results
-5) the exact symbol candidate that corresponds to the CABBLOCK
+
+def log(message=""):
+
+    text_value = str(message)
+
+    print(text_value)
+
+    LOG_LINES.append(text_value)
+
+
+def section(title):
+
+    log()
+    log("=" * 120)
+    log(title)
+    log("=" * 120)
+
+
+def save_log():
+
+    output_path = os.path.join(OUTPUT_FOLDER, "e3_block_location_size_test_v2_output.txt")
+
+    with open(output_path, "w", encoding="utf-8") as file:
+        file.write("\n".join(LOG_LINES))
+
+    print()
+    print("=" * 120)
+    print("OUTPUT WRITTEN")
+    print("=" * 120)
+    print(output_path)
+
+
+def is_missing_value(value):
+
+    if value is None:
+        return True
+
+    try:
+        return int(value) == COM_MISSING
+    except Exception:
+        return False
+
+
+def clean_id_list(values):
+
+    cleaned = []
+
+    if values is None:
+        return cleaned
+
+    if not isinstance(values, (tuple, list)):
+        values = [values]
+
+    for value in values:
+
+        if is_missing_value(value):
+            continue
+
+        try:
+            value = int(value)
+        except Exception:
+            continue
+
+        if value > 0:
+            cleaned.append(value)
+
+    return cleaned
+
+
+def parse_count_array_result(result):
+
+    if result is None:
+        return []
+
+    if isinstance(result, (tuple, list)):
+
+        items = list(result)
+
+        if len(items) >= 2 and isinstance(items[1], (tuple, list)):
+
+            try:
+                count = int(items[0])
+            except Exception:
+                count = None
+
+            values = clean_id_list(items[1])
+
+            if count is not None and len(values) > count:
+                values = values[-count:]
+
+            return values
+
+        return clean_id_list(items)
+
+    return clean_id_list(result)
+
+
+def call_id_array(method):
+
+    try:
+        raw = method(None)
+
+        log(f"RAW: {raw}")
+
+        return parse_count_array_result(raw)
+
+    except Exception as exc:
+        log(f"method(None) ERROR: {exc}")
+
+    try:
+        raw = method()
+
+        log(f"RAW: {raw}")
+
+        return parse_count_array_result(raw)
+
+    except Exception as exc:
+        log(f"method() ERROR: {exc}")
+
+    return []
+
+
+def normalize_name(value):
+
+    if value is None:
+        return ""
+
+    return str(value).strip()
+
+
+def show_method_signature(obj, method_name):
+
+    if not hasattr(obj, method_name):
+
+        log(f"{method_name}: METHOD NOT PRESENT")
+
+        return
+
+    method = getattr(obj, method_name)
+
+    try:
+        signature = inspect.signature(method)
+    except Exception as exc:
+        signature = f"<signature error: {exc}>"
+
+    try:
+        doc = method.__doc__
+    except Exception:
+        doc = None
+
+    log(f"{method_name}:")
+    log(f"    signature: {signature}")
+    log(f"    doc: {doc}")
+
+
+def call_method_variants(obj, method_name, variants):
+
+    section(f"{method_name} TEST")
+
+    if not hasattr(obj, method_name):
+
+        log("METHOD NOT PRESENT")
+
+        return
+
+    method = getattr(obj, method_name)
+
+    show_method_signature(obj, method_name)
+
+    for label, args in variants:
+
+        try:
+            result = method(*args)
+
+            log(f"{label}")
+            log(f"    RETURN: {result}")
+
+        except Exception as exc:
+
+            log(f"{label}")
+            log(f"    ERROR: {exc}")
+
+
+# ================================================
+# PARSE EXCEL
+# ================================================
+
+# Not needed for this isolated geometry test.
+# Kept here so the file matches the structure of the main project.
+
+
+# ================================================
+# CONNECT TO DB
+# ================================================
+
+# Not needed for this isolated geometry test.
+# Kept here so the file matches the structure of the main project.
+
+
+# ================================================
+# SET OBJECTS
+# ================================================
+
+pythoncom.CoInitialize()
+
+app = win32.gencache.EnsureDispatch("CT.Application")
+prj = app.CreateJobObject()
+text = prj.CreateTextObject()
+comp = prj.CreateComponentObject()
+dev = prj.CreateDeviceObject()
+sym = prj.CreateSymbolObject()
+pin = prj.CreatePinObject()
+attr = prj.CreateAttributeObject()
+sht = prj.CreateSheetObject()
+
+
+# ================================================
+# MORE SETUP
+# ================================================
+
+app.PutMessage("\nStarting Block Location / Size Test V2")
+
+sheet_info = prj.GetAllSheetIds(None)
+sheet_count = sheet_info[0]
+sheet_ids = sheet_info[1]
+sheet_ids = [value for value in sheet_ids if value is not None]
+
+SHEET_ID_DICT = {}
+
+for sheet_id in sheet_ids:
+
+    sht.SetId(sheet_id)
+
+    name = sht.GetName()
+
+    SHEET_ID_DICT[name] = sheet_id
+
+
+# ================================================
+# FIND MAIN BLOCK DEVICE
+# ================================================
+
+try:
+
+    section("FIND MAIN BLOCK DEVICE")
+
+    device_info = prj.GetAllDeviceIds(None)
+    device_ids = parse_count_array_result(device_info)
+
+    target_device_id = None
+
+    for device_id in device_ids:
+
+        dev.SetId(device_id)
+
+        device_name = normalize_name(dev.GetName())
+
+        log(f"DEVICE {device_id} | NAME {repr(device_name)}")
+
+        if device_name == TARGET_DEVICE_NAME:
+            target_device_id = device_id
+
+    if target_device_id is None:
+        raise RuntimeError(f"Could not find target main block device {TARGET_DEVICE_NAME}.")
+
+    log()
+    log(f"TARGET DEVICE NAME: {TARGET_DEVICE_NAME}")
+    log(f"TARGET DEVICE ID: {target_device_id}")
+
+    dev.SetId(target_device_id)
+
+
+    # ================================================
+    # TEST DEVICE SIZE
+    # ================================================
+
+    call_method_variants(
+        dev,
+        "GetDynamicModelSize",
+        [
+            ("GetDynamicModelSize()", ()),
+            ("GetDynamicModelSize(None, None, None)", (None, None, None)),
+        ],
+    )
+
+
+    # ================================================
+    # TEST OTHER DEVICE GEOMETRY METHODS
+    # ================================================
+
+    call_method_variants(
+        dev,
+        "GetPanelLocation",
+        [
+            ("GetPanelLocation()", ()),
+            ("GetPanelLocation(None, None, None, None)", (None, None, None, None)),
+            ("GetPanelLocation(None, None, None, None, None)", (None, None, None, None, None)),
+        ],
+    )
+
+    call_method_variants(
+        dev,
+        "GetLocation",
+        [
+            ("GetLocation()", ()),
+        ],
+    )
+
+    call_method_variants(
+        dev,
+        "GetLocationEx",
+        [
+            ("GetLocationEx(0)", (0,)),
+            ("GetLocationEx(1)", (1,)),
+        ],
+    )
+
+
+    # ================================================
+    # GET DEVICE SYMBOL IDS
+    # ================================================
+
+    section("DEVICE SYMBOL IDS")
+
+    symbol_candidates = []
+
+    if hasattr(dev, "GetSymbolIds"):
+
+        show_method_signature(dev, "GetSymbolIds")
+
+        for get_mode in (0, 1, 2, 3):
+
+            try:
+                raw = dev.GetSymbolIds(None, get_mode)
+                ids = parse_count_array_result(raw)
+
+                log(f"GetSymbolIds(None, {get_mode}) RAW: {raw}")
+                log(f"GetSymbolIds(None, {get_mode}) IDS: {ids}")
+
+                for symbol_id in ids:
+
+                    if symbol_id not in symbol_candidates:
+                        symbol_candidates.append(symbol_id)
+
+            except Exception as exc:
+                log(f"GetSymbolIds(None, {get_mode}) ERROR: {exc}")
+
+    else:
+        log("GetSymbolIds METHOD NOT PRESENT")
+
+
+    # ================================================
+    # GET DEVICE VIEW IDS
+    # ================================================
+
+    section("DEVICE VIEW IDS")
+
+    if hasattr(dev, "GetViewIds"):
+
+        show_method_signature(dev, "GetViewIds")
+
+        try:
+            raw = dev.GetViewIds(None)
+            ids = parse_count_array_result(raw)
+
+            log(f"GetViewIds(None) RAW: {raw}")
+            log(f"GetViewIds(None) IDS: {ids}")
+
+            for symbol_id in ids:
+
+                if symbol_id not in symbol_candidates:
+                    symbol_candidates.append(symbol_id)
+
+        except Exception as exc:
+            log(f"GetViewIds(None) ERROR: {exc}")
+
+    else:
+        log("GetViewIds METHOD NOT PRESENT")
+
+
+    # ================================================
+    # ADD OPTIONAL KNOWN SYMBOL ID
+    # ================================================
+
+    if TARGET_SYMBOL_ID is not None:
+
+        if int(TARGET_SYMBOL_ID) not in symbol_candidates:
+            symbol_candidates.append(int(TARGET_SYMBOL_ID))
+
+
+    # ================================================
+    # TEST SYMBOL LOCATION / EXTENTS
+    # ================================================
+
+    section("SYMBOL CANDIDATES")
+
+    log(f"CANDIDATES: {symbol_candidates}")
+
+    for symbol_id in symbol_candidates:
+
+        section(f"SYMBOL CANDIDATE {symbol_id}")
+
+        try:
+            set_result = sym.SetId(symbol_id)
+        except Exception as exc:
+            log(f"sym.SetId({symbol_id}) ERROR: {exc}")
+            continue
+
+        log(f"sym.SetId({symbol_id}) RETURN: {set_result}")
+
+        if set_result is None:
+            continue
+
+        try:
+            resolved_symbol_id = sym.GetId()
+        except Exception:
+            resolved_symbol_id = None
+
+        log(f"sym.GetId(): {resolved_symbol_id}")
+
+        for method_name in (
+            "GetName",
+            "GetCode",
+            "GetSymbolTypeName",
+            "GetCharacteristic",
+            "GetRotation",
+            "GetScaling",
+            "GetDynamicParentId",
+            "IsDynamic",
+            "IsDynamicFixed",
+            "IsPinView",
+        ):
+
+            if not hasattr(sym, method_name):
+                continue
+
+            try:
+                result = getattr(sym, method_name)()
+                log(f"{method_name}(): {result}")
+            except Exception as exc:
+                log(f"{method_name} ERROR: {exc}")
+
+
+        # ================================================
+        # SYMBOL SCHEMA LOCATION
+        # ================================================
+
+        call_method_variants(
+            sym,
+            "GetSchemaLocation",
+            [
+                ("GetSchemaLocation()", ()),
+                ("GetSchemaLocation(None, None, None)", (None, None, None)),
+                ("GetSchemaLocation(None, None, None, None, None)", (None, None, None, None, None)),
+            ],
+        )
+
+
+        # ================================================
+        # SYMBOL LOCAL AREA
+        # ================================================
+
+        call_method_variants(
+            sym,
+            "GetArea",
+            [
+                ("GetArea()", ()),
+                ("GetArea(None, None, None, None)", (None, None, None, None)),
+            ],
+        )
+
+
+        # ================================================
+        # SYMBOL PLACED AREA
+        # ================================================
+
+        call_method_variants(
+            sym,
+            "GetPlacedArea",
+            [
+                ("GetPlacedArea()", ()),
+                ("GetPlacedArea(None, None, None, None)", (None, None, None, None)),
+            ],
+        )
+
+
+        # ================================================
+        # SYMBOL PLACED POLYGON
+        # ================================================
+
+        call_method_variants(
+            sym,
+            "GetPlacedPolygon",
+            [
+                ("GetPlacedPolygon()", ()),
+                ("GetPlacedPolygon(None, None, None)", (None, None, None)),
+            ],
+        )
+
+
+        # ================================================
+        # SYMBOL DYNAMIC CHILDREN
+        # ================================================
+
+        if hasattr(sym, "GetDynamicChildrenIds"):
+
+            section("GetDynamicChildrenIds")
+
+            try:
+                raw = sym.GetDynamicChildrenIds(None)
+                ids = parse_count_array_result(raw)
+
+                log(f"RAW: {raw}")
+                log(f"IDS: {ids}")
+
+            except Exception as exc:
+                log(f"ERROR: {exc}")
+
+
+    # ================================================
+    # SUMMARY
+    # ================================================
+
+    section("WHAT TO SEND BACK")
+
+    log("Send me this output file.")
+    log()
+    log("The critical values are:")
+    log("1) TARGET DEVICE GetDynamicModelSize() return")
+    log("2) Device GetSymbolIds / GetViewIds")
+    log("3) Which symbol candidate is CABBLOCK")
+    log("4) That symbol's GetSchemaLocation()")
+    log("5) That symbol's GetPlacedArea()")
+    log()
+    log("Once those are known, the main orderer can calculate:")
+    log("block_left")
+    log("block_right")
+    log("block_top")
+    log("block_bottom")
+    log("block_center_x")
+    log("block_center_y")
+    log("block_width")
+    log("block_height")
+
+
+except Exception as exc:
+
+    section("FATAL ERROR")
+
+    log(str(exc))
+
+    import traceback
+
+    log(traceback.format_exc())
+
+
+# =========================================
+# RESET BEFORE MAIN BLOCK FORMATTING
+# =========================================
+
+try:
+    save_log()
+except Exception as exc:
+    print(f"Could not save log: {exc}")
+
+del attr
+del text
+del sym
+del pin
+del comp
+del dev
+del sht
+del prj
+del app
+
+pythoncom.CoUninitialize()
