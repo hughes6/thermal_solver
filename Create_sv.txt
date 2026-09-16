@@ -1,1682 +1,286 @@
-from openpyxl import load_workbook
-import json
-import math
-import os
-import time
-import traceback
-import pyodbc
-import pythoncom
-import win32com.client as win32
-
-
-# ================================================
-# USER SETTINGS
-# ================================================
-
-BLOCK_OFFSET = 4
-
-output_path = "C:/Users/conner.hughes/Downloads/Block_Pin_Ordering_Template.xlsm"
-
-MAIN_DEVICE_NAME = "TEST_NAME_100000"
-
-DRY_RUN = True
-
-# Set to "SCP-J1" for the first real run if you only want to modify one connector.
-# Leave as None to process every connector in Excel.
-CONNECTOR_FILTER = None
-
-PIN_EDGE_INSET = 0.30
-
-STAGING_LANE_OFFSET = 0.35
-STAGING_EDGE_CLEARANCE = 0.15
-STAGING_TOP_BOTTOM_CLEARANCE = 0.20
-
-LEFT_FLIP = "0"
-RIGHT_FLIP = "/1"
-
-BLOCK_BOTTOM_CLEARANCE = 0.30
-
-DETACHED_SYMBOL_NAME = "MilSymbolReceptacle¶END_SPLIT"
-DETACHED_SYMBOL_VERSION = "1"
-MAINTAIN_TEXT_SIZE = 1
-
-SYMBOL_SCAN_COORDINATE_TOLERANCE = 0.06
-
-COM_MISSING = -2147352572
-
-LOG_LINES = []
-
-
-# ================================================
-# HELPER FXN
-# ================================================
-
-def ask_save_path(default_full_path=""):
-
-    import tkinter as tk
-    from tkinter import filedialog
-
-    default_folder = os.path.dirname(default_full_path)
-
-    root = tk.Tk()
-    root.withdraw()
-    root.attributes("-topmost", True)
-    root.update()
-
-    try:
-        selected_path = filedialog.askopenfilename(initialdir=default_folder, filetypes=[("Excel Files", "*.xlsm"), ("All Files", "*.*")])
-    except Exception:
-        root.destroy()
-        return None
-
-    if not selected_path:
-        root.destroy()
-        return None
-
-    root.destroy()
-
-    return os.path.abspath(selected_path)
-
-
-def log(message=""):
-
-    value = str(message)
-
-    print(value)
-
-    LOG_LINES.append(value)
-
-
-def section(title):
-
-    log()
-    log("=" * 120)
-    log(title)
-    log("=" * 120)
-
-
-def save_log():
-
-    script_folder = os.path.dirname(os.path.abspath(__file__))
-    output_file = os.path.join(script_folder, "block_pin_orderer_output.txt")
-
-    with open(output_file, "w", encoding="utf-8") as file:
-        file.write("\n".join(LOG_LINES))
-
-    print()
-    print(output_file)
-
-
-def is_missing_value(value):
-
-    if value is None:
-        return True
-
-    try:
-        return int(value) == COM_MISSING
-    except Exception:
-        return False
-
-
-def clean_id_list(values):
-
-    cleaned = []
-
-    if values is None:
-        return cleaned
-
-    if not isinstance(values, (tuple, list)):
-        values = [values]
-
-    for value in values:
-
-        if is_missing_value(value):
-            continue
-
-        try:
-            value = int(value)
-        except Exception:
-            continue
-
-        if value > 0:
-            cleaned.append(value)
-
-    return cleaned
-
-
-def parse_count_array_result(result):
-
-    if result is None:
-        return []
-
-    if isinstance(result, (tuple, list)):
-
-        items = list(result)
-
-        if len(items) >= 2 and isinstance(items[1], (tuple, list)):
-
-            try:
-                count = int(items[0])
-            except Exception:
-                count = None
-
-            values = clean_id_list(items[1])
-
-            if count is not None and len(values) > count:
-                values = values[-count:]
-
-            return values
-
-        return clean_id_list(items)
-
-    return clean_id_list(result)
-
-
-def call_id_array(method):
-
-    try:
-        result = method(None)
-        values = parse_count_array_result(result)
-
-        if values:
-            return values
-
-    except Exception:
-        pass
-
-    try:
-        result = method()
-        values = parse_count_array_result(result)
-
-        if values:
-            return values
-
-    except Exception:
-        pass
-
-    return []
-
-
-def call_noarg(obj, method_name):
-
-    if not hasattr(obj, method_name):
-        return None
-
-    try:
-        return getattr(obj, method_name)()
-    except Exception:
-        return None
-
-
-def normalize_pin_value(value):
-
-    if value is None:
-        return None
-
-    if isinstance(value, bool):
-        return str(value)
-
-    if isinstance(value, int):
-        return str(value)
-
-    if isinstance(value, float):
-
-        if math.isfinite(value) and value.is_integer():
-            return str(int(value))
-
-        return str(value).strip()
-
-    return str(value).strip()
-
-
-def median(values):
-
-    if not values:
-        return None
-
-    ordered = sorted(values)
-    middle = len(ordered) // 2
-
-    if len(ordered) % 2 == 0:
-        return (ordered[middle - 1] + ordered[middle]) / 2.0
-
-    return ordered[middle]
-
-
-def get_device_ids(prj):
-
-    return call_id_array(prj.GetAllDeviceIds)
-
-
-def get_pin_ids(dev):
-
-    return call_id_array(dev.GetPinIds)
-
-
-def get_view_ids(pin):
-
-    return call_id_array(pin.GetViewIds)
-
-
-def get_node_ids(pin):
-
-    return call_id_array(pin.GetNodeIds)
-
-
-def get_bound_ids(sym):
-
-    return call_id_array(sym.GetBoundIds)
-
-
-def get_text_ids(sym):
-
-    return call_id_array(sym.GetTextIds)
-
-
-def find_device_id(prj, dev, target_name):
-
-    for device_id in get_device_ids(prj):
-
-        dev.SetId(device_id)
-
-        try:
-            device_name = str(dev.GetName()).strip()
-        except Exception:
-            device_name = ""
-
-        if device_name == target_name:
-            return device_id
-
-    return None
-
-
-def get_device_view_ids(dev, device_id):
-
-    dev.SetId(device_id)
-
-    try:
-        result = dev.GetViewIds(None)
-    except Exception:
-        return []
-
-    return parse_count_array_result(result)
-
-
-def get_device_symbol_ids(dev, device_id):
-
-    dev.SetId(device_id)
-
-    try:
-        result = dev.GetSymbolIds(None, 0)
-    except Exception:
-        return []
-
-    return parse_count_array_result(result)
-
-
-def get_view_number(dev, view_id):
-
-    dev.SetId(view_id)
-
-    try:
-        return int(dev.GetViewNumber())
-    except Exception:
-        return None
-
-
-def get_symbol_schema_location(sym):
-
-    try:
-        result = sym.GetSchemaLocation(None, None, None, None, None)
-    except Exception:
-        return None
-
-    if not isinstance(result, (tuple, list)):
-        return None
-
-    if len(result) < 3:
-        return None
-
-    try:
-        sheet_id = int(result[0])
-        x = float(result[1])
-        y = float(result[2])
-    except Exception:
-        return None
-
-    return {
-        "sheet_id": sheet_id,
-        "x": x,
-        "y": y,
-        "raw": result,
-    }
-
-
-def get_symbol_placed_area(sym):
-
-    try:
-        result = sym.GetPlacedArea(None, None, None, None)
-    except Exception:
-        return None
-
-    if not isinstance(result, (tuple, list)):
-        return None
-
-    if len(result) < 5:
-        return None
-
-    try:
-        success = int(result[0])
-        left = float(result[1])
-        bottom = float(result[2])
-        right = float(result[3])
-        top = float(result[4])
-    except Exception:
-        return None
-
-    if success <= 0:
-        return None
-
-    return {
-        "left": left,
-        "bottom": bottom,
-        "right": right,
-        "top": top,
-        "width": right - left,
-        "height": top - bottom,
-        "center_x": (left + right) / 2.0,
-        "center_y": (bottom + top) / 2.0,
-        "raw": result,
-    }
-
-
-def get_pin_schema_location(pin, pin_view_id):
-
-    pin.SetId(pin_view_id)
-
-    try:
-        result = pin.GetSchemaLocation(None, None, None, None, None)
-    except Exception:
-        return None
-
-    if not isinstance(result, (tuple, list)):
-        return None
-
-    numeric_values = []
-
-    for value in result:
-
-        if is_missing_value(value):
-            continue
-
-        try:
-            numeric_values.append(float(value))
-        except Exception:
-            pass
-
-    if len(numeric_values) < 3:
-        return None
-
-    return numeric_values
-
-
-def resolve_live_symbol_from_pin_view(prj, pin_view_id):
-
-    local_sym = prj.CreateSymbolObject()
-
-    try:
-        live_symbol_id = local_sym.SetId(pin_view_id)
-    except Exception:
-        live_symbol_id = 0
-
-    try:
-        live_symbol_id = int(live_symbol_id)
-    except Exception:
-        live_symbol_id = 0
-
-    if live_symbol_id <= 0:
-        return None
-
-    return {
-        "symbol_object": local_sym,
-        "live_symbol_id": live_symbol_id,
-    }
-
-
-def inspect_live_symbol_by_id(prj, symbol_id):
-
-    local_sym = prj.CreateSymbolObject()
-
-    try:
-        set_result = local_sym.SetId(symbol_id)
-    except Exception:
-        return None
-
-    try:
-        set_result = int(set_result)
-    except Exception:
-        set_result = 0
-
-    if set_result <= 0:
-        return None
-
-    return {
-        "symbol_id": call_noarg(local_sym, "GetId"),
-        "symbol_type_name": call_noarg(local_sym, "GetSymbolTypeName"),
-        "characteristic": call_noarg(local_sym, "GetCharacteristic"),
-        "rotation": call_noarg(local_sym, "GetRotation"),
-        "scaling": call_noarg(local_sym, "GetScaling"),
-        "schema_location": get_symbol_schema_location(local_sym),
-        "bound_ids": get_bound_ids(local_sym),
-        "text_ids": get_text_ids(local_sym),
-    }
-
-
-def snapshot_connector(prj, dev, pin, connector_device_id):
-
-    snapshot = []
-
-    dev.SetId(connector_device_id)
-
-    for logical_pin_id in get_pin_ids(dev):
-
-        pin.SetId(logical_pin_id)
-
-        pin_name = normalize_pin_value(pin.GetName())
-        pin_view_ids = get_view_ids(pin)
-
-        record = {
-            "pin_name": pin_name,
-            "logical_pin_id": logical_pin_id,
-            "view_ids": pin_view_ids,
-            "views": [],
-        }
-
-        for pin_view_id in pin_view_ids:
-
-            location = get_pin_schema_location(pin, pin_view_id)
-            node_ids = get_node_ids(pin)
-            live = resolve_live_symbol_from_pin_view(prj, pin_view_id)
-
-            view_record = {
-                "pin_view_id": pin_view_id,
-                "location": location,
-                "node_ids": node_ids,
-                "live_symbol_id": None,
-                "symbol_type_name": None,
-                "characteristic": None,
-                "rotation": None,
-                "scaling": None,
-                "bound_ids": [],
-            }
-
-            if live is not None:
-
-                live_sym = live["symbol_object"]
-
-                view_record["live_symbol_id"] = live["live_symbol_id"]
-                view_record["symbol_type_name"] = call_noarg(live_sym, "GetSymbolTypeName")
-                view_record["characteristic"] = call_noarg(live_sym, "GetCharacteristic")
-                view_record["rotation"] = call_noarg(live_sym, "GetRotation")
-                view_record["scaling"] = call_noarg(live_sym, "GetScaling")
-                view_record["bound_ids"] = get_bound_ids(live_sym)
-
-            record["views"].append(view_record)
-
-        snapshot.append(record)
-
-    return snapshot
-
-
-def get_sorted_live_pin_records(snapshot):
-
-    records = []
-
-    for pin_record in snapshot:
-
-        if len(pin_record["views"]) != 1:
-            raise RuntimeError(f"Pin {pin_record['pin_name']} does not have exactly one pin view.")
-
-        view = pin_record["views"][0]
-
-        if view["live_symbol_id"] is None:
-            raise RuntimeError(f"Pin {pin_record['pin_name']} does not have a live symbol.")
-
-        location = view["location"]
-
-        if location is None or len(location) < 3:
-            raise RuntimeError(f"Pin {pin_record['pin_name']} does not have a valid schema location.")
-
-        records.append({
-            "pin_name": pin_record["pin_name"],
-            "logical_pin_id": pin_record["logical_pin_id"],
-            "pin_view_id": view["pin_view_id"],
-            "live_symbol_id": view["live_symbol_id"],
-            "sheet_id": int(location[0]),
-            "x": float(location[1]),
-            "y": float(location[2]),
-            "symbol_type_name": view["symbol_type_name"],
-            "characteristic": view["characteristic"],
-            "rotation": view["rotation"],
-            "scaling": view["scaling"],
-        })
-
-    records.sort(key=lambda item: item["y"], reverse=True)
-
-    return records
-
-
-def get_connector_block_geometry(prj, dev, connector_device_id, main_device_id):
-
-    connector_view_ids = get_device_view_ids(dev, connector_device_id)
-
-    if not connector_view_ids:
-        raise RuntimeError("Connector has no device view IDs.")
-
-    connector_view_numbers = []
-
-    for connector_view_id in connector_view_ids:
-
-        view_number = get_view_number(dev, connector_view_id)
-
-        if view_number is not None and view_number not in connector_view_numbers:
-            connector_view_numbers.append(view_number)
-
-    if len(connector_view_numbers) != 1:
-        raise RuntimeError(f"Expected one connector view number, found {connector_view_numbers}.")
-
-    connector_view_number = connector_view_numbers[0]
-
-    main_view_ids = get_device_view_ids(dev, main_device_id)
-
-    matching_main_view_id = None
-
-    for main_view_id in main_view_ids:
-
-        main_view_number = get_view_number(dev, main_view_id)
-
-        if main_view_number == connector_view_number:
-            matching_main_view_id = main_view_id
-            break
-
-    if matching_main_view_id is None:
-        raise RuntimeError(f"Could not find main-device view number {connector_view_number}.")
-
-    main_view_symbol_ids = get_device_symbol_ids(dev, matching_main_view_id)
-
-    block_symbol_id = None
-    block_symbol_type = None
-    block_location = None
-    block_area = None
-
-    for symbol_id in main_view_symbol_ids:
-
-        local_sym = prj.CreateSymbolObject()
-
-        try:
-            set_result = local_sym.SetId(symbol_id)
-        except Exception:
-            continue
-
-        if not set_result:
-            continue
-
-        try:
-            symbol_type_name = str(local_sym.GetSymbolTypeName())
-        except Exception:
-            symbol_type_name = ""
-
-        if "CABBLOCK" not in symbol_type_name.upper():
-            continue
-
-        block_symbol_id = symbol_id
-        block_symbol_type = symbol_type_name
-        block_location = get_symbol_schema_location(local_sym)
-        block_area = get_symbol_placed_area(local_sym)
-        break
-
-    if block_symbol_id is None:
-        raise RuntimeError(f"Main-device view {connector_view_number} has no CABBLOCK symbol.")
-
-    if block_area is None:
-        raise RuntimeError(f"CABBLOCK symbol {block_symbol_id} did not return a valid placed area.")
-
-    return {
-        "connector_view_number": connector_view_number,
-        "connector_view_ids": connector_view_ids,
-        "main_view_id": matching_main_view_id,
-        "block_symbol_id": block_symbol_id,
-        "block_symbol_type": block_symbol_type,
-        "block_schema_location": block_location,
-        "block_left": block_area["left"],
-        "block_right": block_area["right"],
-        "block_bottom": block_area["bottom"],
-        "block_top": block_area["top"],
-        "block_width": block_area["width"],
-        "block_height": block_area["height"],
-        "block_center_x": block_area["center_x"],
-        "block_center_y": block_area["center_y"],
-        "sheet_id": block_location["sheet_id"] if block_location is not None else None,
-    }
-
-
-def derive_pin_geometry(block_geometry, sorted_pin_records, connector_excel_record):
-
-    y_differences = []
-
-    for index in range(len(sorted_pin_records) - 1):
-
-        difference = abs(sorted_pin_records[index]["y"] - sorted_pin_records[index + 1]["y"])
-
-        if difference > 0.000001:
-            y_differences.append(difference)
-
-    pin_pitch = median(y_differences)
-
-    if pin_pitch is None:
-        pin_pitch = 0.25
-
-    original_top_y = sorted_pin_records[0]["y"]
-
-    left_x = block_geometry["block_left"] + PIN_EDGE_INSET
-    right_x = block_geometry["block_right"] - PIN_EDGE_INSET
-
-    left_count = len(connector_excel_record["left pins"])
-    right_count = len(connector_excel_record["right pins"])
-    max_side_count = max(left_count, right_count)
-
-    if max_side_count > 0:
-        required_bottom_y = original_top_y - ((max_side_count - 1) * pin_pitch)
-    else:
-        required_bottom_y = original_top_y
-
-    minimum_allowed_y = block_geometry["block_bottom"] + BLOCK_BOTTOM_CLEARANCE
-
-    if required_bottom_y < minimum_allowed_y:
-        raise RuntimeError(f"Block is not tall enough for the requested pin order. Required bottom Y is {required_bottom_y}, allowed bottom Y is {minimum_allowed_y}. Automatic block resizing is not implemented yet.")
-
-    if original_top_y > block_geometry["block_top"]:
-        raise RuntimeError(f"Existing top pin Y {original_top_y} is above block top {block_geometry['block_top']}.")
-
-    return {
-        "pin_pitch": pin_pitch,
-        "original_top_y": original_top_y,
-        "final_top_y": original_top_y,
-        "left_x": left_x,
-        "right_x": right_x,
-        "staging_center_x": block_geometry["block_center_x"],
-        "staging_center_y": block_geometry["block_center_y"],
-        "block_left": block_geometry["block_left"],
-        "block_right": block_geometry["block_right"],
-        "block_bottom": block_geometry["block_bottom"],
-        "block_top": block_geometry["block_top"],
-        "sheet_id": block_geometry["sheet_id"],
-    }
-
-
-def build_staging_map(pin_records, pin_geometry):
-
-    staging_map = {}
-
-    if not pin_records:
-        return staging_map
-
-    row_count = math.ceil(len(pin_records) / 2)
-    staging_pitch = pin_geometry["pin_pitch"]
-
-    if row_count <= 1:
-        first_row_y = pin_geometry["staging_center_y"]
-    else:
-        total_height = (row_count - 1) * staging_pitch
-        first_row_y = pin_geometry["staging_center_y"] + (total_height / 2.0)
-
-    minimum_stage_y = first_row_y - ((row_count - 1) * staging_pitch)
-    maximum_stage_y = first_row_y
-
-    left_lane_x = pin_geometry["staging_center_x"] - STAGING_LANE_OFFSET
-    right_lane_x = pin_geometry["staging_center_x"] + STAGING_LANE_OFFSET
-
-    allowed_left_x = pin_geometry["block_left"] + STAGING_EDGE_CLEARANCE
-    allowed_right_x = pin_geometry["block_right"] - STAGING_EDGE_CLEARANCE
-    allowed_bottom_y = pin_geometry["block_bottom"] + STAGING_TOP_BOTTOM_CLEARANCE
-    allowed_top_y = pin_geometry["block_top"] - STAGING_TOP_BOTTOM_CLEARANCE
-
-    if left_lane_x < allowed_left_x:
-        raise RuntimeError(f"Center-left staging lane X {left_lane_x} is outside the usable block area.")
-
-    if right_lane_x > allowed_right_x:
-        raise RuntimeError(f"Center-right staging lane X {right_lane_x} is outside the usable block area.")
-
-    if minimum_stage_y < allowed_bottom_y or maximum_stage_y > allowed_top_y:
-        raise RuntimeError(f"Two snapped center stacks do not fit vertically inside the block. Staging Y range is {minimum_stage_y} to {maximum_stage_y}. Allowed range is {allowed_bottom_y} to {allowed_top_y}.")
-
-    for index, pin_record in enumerate(pin_records):
-
-        lane_index = index % 2
-        row_index = index // 2
-
-        if lane_index == 0:
-            x = left_lane_x
-            lane_name = "CENTER LEFT"
-        else:
-            x = right_lane_x
-            lane_name = "CENTER RIGHT"
-
-        y = first_row_y - (row_index * staging_pitch)
-
-        x = round(x, 6)
-        y = round(y, 6)
-
-        staging_map[pin_record["pin_name"]] = {
-            "x": x,
-            "y": y,
-            "index": index,
-            "lane_index": lane_index,
-            "lane": lane_name,
-            "row": row_index,
-        }
-
-    return staging_map
-
-
-def validate_excel_against_e3(connector_excel_record, sorted_pin_records):
-
-    excel_pins = connector_excel_record["left pins"] + connector_excel_record["right pins"]
-    e3_pins = [record["pin_name"] for record in sorted_pin_records]
-
-    if len(e3_pins) != connector_excel_record["number of pins"]:
-        raise RuntimeError(f"{connector_excel_record['connector name']}: E3 has {len(e3_pins)} pins but Excel expects {connector_excel_record['number of pins']}.")
-
-    if set(excel_pins) != set(e3_pins):
-
-        missing_from_excel = sorted(set(e3_pins) - set(excel_pins))
-        missing_from_e3 = sorted(set(excel_pins) - set(e3_pins))
-
-        raise RuntimeError(f"{connector_excel_record['connector name']}: Excel/E3 mismatch. Missing from Excel: {missing_from_excel}. Missing from E3: {missing_from_e3}.")
-
-
-def verify_detached_symbol_load(prj):
-
-    probe = prj.CreateSymbolObject()
-
-    result = probe.Load(DETACHED_SYMBOL_NAME, 1)
-
-    if result == 0:
-        raise RuntimeError(f"Could not load {DETACHED_SYMBOL_NAME}.")
-
-
-def delete_live_symbol(prj, live_symbol_id):
-
-    local_sym = prj.CreateSymbolObject()
-
-    set_result = local_sym.SetId(live_symbol_id)
-
-    try:
-        set_result = int(set_result)
-    except Exception:
-        set_result = 0
-
-    if set_result <= 0:
-        raise RuntimeError(f"Could not resolve live symbol ID {live_symbol_id}.")
-
-    return local_sym.Delete()
-
-
-def verify_ghost(prj, pin_view_id):
-
-    local_sym = prj.CreateSymbolObject()
-
-    try:
-        set_result = local_sym.SetId(pin_view_id)
-    except Exception:
-        set_result = 0
-
-    try:
-        set_result = int(set_result)
-    except Exception:
-        set_result = 0
-
-    return set_result == 0
-
-
-def place_ghost_pin_view(prj, pin_view_id, sheet_id, x, y, rotation, scaling):
-
-    placement = prj.CreateSymbolObject()
-
-    new_symbol_id = placement.PlacePinView(pin_view_id, sheet_id, DETACHED_SYMBOL_NAME, DETACHED_SYMBOL_VERSION, x, y, rotation, scaling, MAINTAIN_TEXT_SIZE)
-
-    try:
-        new_symbol_id = int(new_symbol_id)
-    except Exception:
-        new_symbol_id = 0
-
-    if new_symbol_id <= 0:
-        raise RuntimeError(f"PlacePinView failed for pin-view ID {pin_view_id} at ({x}, {y}).")
-
-    return new_symbol_id
-
-
-def move_pin_by_delete_recreate(prj, pin_view_id, current_live_symbol_id, sheet_id, x, y, rotation, scaling):
-
-    delete_live_symbol(prj, current_live_symbol_id)
-
-    time.sleep(0.15)
-
-    if not verify_ghost(prj, pin_view_id):
-        raise RuntimeError(f"Pin-view ID {pin_view_id} did not become a ghost after delete.")
-
-    new_symbol_id = place_ghost_pin_view(prj, pin_view_id, sheet_id, x, y, rotation, scaling)
-
-    time.sleep(0.15)
-
-    metadata = inspect_live_symbol_by_id(prj, new_symbol_id)
-
-    if metadata is None:
-        raise RuntimeError(f"Returned symbol ID {new_symbol_id} could not be resolved.")
-
-    return new_symbol_id, metadata
-
-
-def find_logical_pin(dev, pin, connector_device_id, pin_name):
-
-    target_name = normalize_pin_value(pin_name)
-
-    dev.SetId(connector_device_id)
-
-    for logical_pin_id in get_pin_ids(dev):
-
-        pin.SetId(logical_pin_id)
-
-        current_name = normalize_pin_value(pin.GetName())
-
-        if current_name == target_name:
-            return {
-                "pin_name": current_name,
-                "logical_pin_id": logical_pin_id,
-                "view_ids": get_view_ids(pin),
-            }
-
-    return None
-
-
-def peel_all_pins_to_staging(prj, dev, pin, connector_device_id, sorted_pin_records, staging_map, pin_geometry):
-
-    staged_records = []
-
-    allowed_characteristics = {
-        "END_TOP",
-        "END_BOTTOM",
-        "SPLIT_BOTTOM",
-        "END_SPLIT",
-    }
-
-    allowed_staged_characteristics = {
-        "END_SPLIT",
-        "END_TOP",
-        "CONNECTOR_PIN",
-        "SPLIT_BOTTOM",
-        "END_BOTTOM",
-    }
-
-    for index, original_record in enumerate(sorted_pin_records):
-
-        pin_name = original_record["pin_name"]
-
-        logical_pin = find_logical_pin(dev, pin, connector_device_id, pin_name)
-
-        if logical_pin is None:
-            raise RuntimeError(f"Could not find logical pin {pin_name}.")
-
-        if len(logical_pin["view_ids"]) != 1:
-            raise RuntimeError(f"Pin {pin_name} does not have exactly one stable pin-view ID.")
-
-        pin_view_id = logical_pin["view_ids"][0]
-        live = resolve_live_symbol_from_pin_view(prj, pin_view_id)
-
-        if live is None:
-            raise RuntimeError(f"Pin {pin_name} has no live symbol when its peel turn arrived.")
-
-        live_symbol_id = live["live_symbol_id"]
-        live_sym = live["symbol_object"]
-
-        characteristic = call_noarg(live_sym, "GetCharacteristic")
-        rotation = call_noarg(live_sym, "GetRotation")
-        scaling = call_noarg(live_sym, "GetScaling")
-
-        if characteristic not in allowed_characteristics:
-            raise RuntimeError(f"Pin {pin_name} is not peelable. Current characteristic is {characteristic}.")
-
-        if not isinstance(rotation, str) or rotation == "":
-            rotation = "y"
-
-        try:
-            scaling = float(scaling)
-        except Exception:
-            scaling = 1.0
-
-        stage = staging_map[pin_name]
-
-        log(f"STAGE {index + 1}/{len(sorted_pin_records)} | PIN {pin_name} | {characteristic} -> {stage['lane']} ROW {stage['row']} -> ({stage['x']}, {stage['y']})")
-
-        new_symbol_id, metadata = move_pin_by_delete_recreate(prj, pin_view_id, live_symbol_id, pin_geometry["sheet_id"], stage["x"], stage["y"], rotation, scaling)
-
-        if metadata["characteristic"] not in allowed_staged_characteristics:
-            raise RuntimeError(f"Pin {pin_name} returned unexpected staged characteristic {metadata['characteristic']}.")
-
-        staged_records.append({
-            "pin_name": pin_name,
-            "logical_pin_id": original_record["logical_pin_id"],
-            "pin_view_id": pin_view_id,
-            "last_returned_stage_symbol_id": new_symbol_id,
-            "rotation": rotation,
-            "scaling": scaling,
-            "sheet_id": pin_geometry["sheet_id"],
-            "stage_x": stage["x"],
-            "stage_y": stage["y"],
-            "stage_lane_index": stage["lane_index"],
-            "stage_lane": stage["lane"],
-            "stage_row": stage["row"],
-            "stage_metadata_immediate": metadata,
-        })
-
-        log(f"    RETURNED SYMBOL {new_symbol_id} | TYPE {metadata['symbol_type_name']} | CHARACTERISTIC {metadata['characteristic']} | BOUNDS {metadata['bound_ids']}")
-
-    return staged_records
-
-
-def build_final_plan(connector_excel_record, pin_geometry):
-
-    final_plan = []
-
-    for row_index, pin_name in enumerate(connector_excel_record["left pins"]):
-
-        final_plan.append({
-            "pin_name": pin_name,
-            "side": "LEFT",
-            "row": row_index,
-            "x": pin_geometry["left_x"],
-            "y": pin_geometry["final_top_y"] - (row_index * pin_geometry["pin_pitch"]),
-            "flip": LEFT_FLIP,
-        })
-
-    for row_index, pin_name in enumerate(connector_excel_record["right pins"]):
-
-        final_plan.append({
-            "pin_name": pin_name,
-            "side": "RIGHT",
-            "row": row_index,
-            "x": pin_geometry["right_x"],
-            "y": pin_geometry["final_top_y"] - (row_index * pin_geometry["pin_pitch"]),
-            "flip": RIGHT_FLIP,
-        })
-
-    return final_plan
-
-
-def find_staged_record(staged_records, pin_name):
-
-    for record in staged_records:
-
-        if record["pin_name"] == pin_name:
-            return record
-
-    raise RuntimeError(f"Could not find staged record for pin {pin_name}.")
-
-
-def resolve_symbol_at_location(prj, sht, sheet_id, connector_name, pin_name, x, y):
-
-    candidate_ids = collect_live_symbol_candidates(prj, sht, sheet_id)
-    matches = []
-
-    for candidate_id in candidate_ids:
-
-        identity = read_symbol_identity(prj, candidate_id)
-
-        if identity is None:
-            continue
-
-        if identity["pin_number"] != pin_name:
-            continue
-
-        if not coordinates_close(identity["location"], x, y):
-            continue
-
-        score = 200
-
-        if isinstance(identity["device_text"], str) and connector_name in identity["device_text"]:
-            score += 30
-
-        if identity["symbol_type_name"] in ("MilSymbolReceptacle¶END_TOP", "MilSymbolReceptacle¶END_SPLIT", "MilSymbolReceptacle¶SPLIT_BOTTOM", "MilSymbolReceptacle¶CONNECTOR_PIN", "MilSymbolReceptacle¶END_BOTTOM"):
-            score += 10
-
-        matches.append({
-            "score": score,
-            "identity": identity,
-        })
-
-    matches.sort(key=lambda item: item["score"], reverse=True)
-
-    if not matches:
-        return None
-
-    return matches[0]["identity"]
-
-
-def build_center_to_final_schedule(staged_records, final_plan):
-
-    lane_sequences = {
-        0: [],
-        1: [],
-    }
-
-    for record in staged_records:
-        lane_sequences[record["stage_lane_index"]].append(record)
-
-    lane_sequences[0].sort(key=lambda item: item["stage_row"])
-    lane_sequences[1].sort(key=lambda item: item["stage_row"])
-
-    left_plan = [item for item in final_plan if item["side"] == "LEFT"]
-    right_plan = [item for item in final_plan if item["side"] == "RIGHT"]
-
-    left_plan.sort(key=lambda item: item["row"])
-    right_plan.sort(key=lambda item: item["row"])
-
-    lane_pointer = {
-        0: 0,
-        1: 0,
-    }
-
-    side_pointer = {
-        "LEFT": 0,
-        "RIGHT": 0,
-    }
-
-    schedule = []
-
-    while len(schedule) < len(final_plan):
-
-        candidate_items = []
-
-        if side_pointer["LEFT"] < len(left_plan):
-            candidate_items.append(left_plan[side_pointer["LEFT"]])
-
-        if side_pointer["RIGHT"] < len(right_plan):
-            candidate_items.append(right_plan[side_pointer["RIGHT"]])
-
-        selected = None
-        selected_lane = None
-
-        for candidate in candidate_items:
-
-            staged_record = find_staged_record(staged_records, candidate["pin_name"])
-            lane_index = staged_record["stage_lane_index"]
-            pointer = lane_pointer[lane_index]
-            lane_sequence = lane_sequences[lane_index]
-
-            if pointer >= len(lane_sequence):
-                continue
-
-            exposed_pin = lane_sequence[pointer]["pin_name"]
-
-            if exposed_pin == candidate["pin_name"]:
-                selected = candidate
-                selected_lane = lane_index
-                break
-
-        if selected is None:
-
-            left_next = None
-            right_next = None
-            center_left_top = None
-            center_right_top = None
-
-            if side_pointer["LEFT"] < len(left_plan):
-                left_next = left_plan[side_pointer["LEFT"]]["pin_name"]
-
-            if side_pointer["RIGHT"] < len(right_plan):
-                right_next = right_plan[side_pointer["RIGHT"]]["pin_name"]
-
-            if lane_pointer[0] < len(lane_sequences[0]):
-                center_left_top = lane_sequences[0][lane_pointer[0]]["pin_name"]
-
-            if lane_pointer[1] < len(lane_sequences[1]):
-                center_right_top = lane_sequences[1][lane_pointer[1]]["pin_name"]
-
-            raise RuntimeError(f"Two-center-stack schedule is blocked. Next LEFT pin is {left_next}. Next RIGHT pin is {right_next}. Exposed center-stack pins are {center_left_top} and {center_right_top}. This ordering needs a different temporary lane assignment or more than two temporary lanes.")
-
-        schedule.append(selected)
-
-        lane_pointer[selected_lane] += 1
-        side_pointer[selected["side"]] += 1
-
-    return schedule
-
-
-def move_center_stacks_to_final(prj, sht, connector_name, staged_records, final_schedule):
-
-    for index, final_item in enumerate(final_schedule):
-
-        staged_record = find_staged_record(staged_records, final_item["pin_name"])
-
-        log(f"FINAL {index + 1}/{len(final_schedule)} | PIN {final_item['pin_name']} | FROM {staged_record['stage_lane']} ROW {staged_record['stage_row']} -> {final_item['side']} ROW {final_item['row']} | FLIP {final_item['flip']} -> ({final_item['x']}, {final_item['y']})")
-
-        identity = resolve_symbol_at_location(prj, sht, staged_record["sheet_id"], connector_name, staged_record["pin_name"], staged_record["stage_x"], staged_record["stage_y"])
-
-        if identity is None:
-            raise RuntimeError(f"Could not rediscover live center-stack symbol for pin {staged_record['pin_name']} at ({staged_record['stage_x']}, {staged_record['stage_y']}).")
-
-        current_live_symbol_id = identity["symbol_id"]
-
-        log(f"    CURRENT CENTER SYMBOL: {current_live_symbol_id} | TYPE {identity['symbol_type_name']} | CHARACTERISTIC {identity['characteristic']}")
-
-        delete_live_symbol(prj, current_live_symbol_id)
-
-        time.sleep(0.15)
-
-        if not verify_ghost(prj, staged_record["pin_view_id"]):
-            raise RuntimeError(f"Pin {staged_record['pin_name']} did not become ghost/unplaced after deleting it from the center stack.")
-
-        new_symbol_id = place_ghost_pin_view(prj, staged_record["pin_view_id"], staged_record["sheet_id"], final_item["x"], final_item["y"], final_item["flip"], staged_record["scaling"])
-
-        time.sleep(0.15)
-
-        metadata = inspect_live_symbol_by_id(prj, new_symbol_id)
-
-        if metadata is None:
-            raise RuntimeError(f"Could not inspect final returned symbol {new_symbol_id} for pin {staged_record['pin_name']}.")
-
-        staged_record["final_returned_symbol_id"] = new_symbol_id
-        staged_record["final_side"] = final_item["side"]
-        staged_record["final_row"] = final_item["row"]
-        staged_record["final_x"] = final_item["x"]
-        staged_record["final_y"] = final_item["y"]
-        staged_record["final_flip"] = final_item["flip"]
-        staged_record["final_metadata_immediate"] = metadata
-
-        log(f"    FINAL RETURNED SYMBOL: {new_symbol_id} | TYPE {metadata['symbol_type_name']} | CHARACTERISTIC {metadata['characteristic']} | BOUNDS {metadata['bound_ids']}")
-
-        time.sleep(0.20)
-
-
-def collect_live_symbol_candidates(prj, sht, sheet_id):
-
-    candidate_ids = set()
-
-    if hasattr(prj, "GetSymbolIds"):
-
-        try:
-            for symbol_id in call_id_array(prj.GetSymbolIds):
-                candidate_ids.add(symbol_id)
-        except Exception:
-            pass
-
-    sht.SetId(sheet_id)
-
-    if hasattr(sht, "GetSymbolIds"):
-
-        try:
-            for symbol_id in call_id_array(sht.GetSymbolIds):
-                candidate_ids.add(symbol_id)
-        except Exception:
-            pass
-
-    return sorted(candidate_ids)
-
-
-def read_symbol_identity(prj, symbol_id):
-
-    local_sym = prj.CreateSymbolObject()
-    local_text = prj.CreateTextObject()
-
-    try:
-        set_result = local_sym.SetId(symbol_id)
-    except Exception:
-        return None
-
-    if not set_result:
-        return None
-
-    pin_number = None
-    device_text = None
-
-    for text_id in get_text_ids(local_sym):
-
-        try:
-            local_text.SetId(text_id)
-            text_type = local_text.GetType()
-            text_value = str(local_text.GetText())
-        except Exception:
-            continue
-
-        if text_type == 203:
-            pin_number = normalize_pin_value(text_value)
-
-        if text_type == 12:
-            device_text = text_value
-
-    return {
-        "symbol_id": int(local_sym.GetId()),
-        "pin_number": pin_number,
-        "device_text": device_text,
-        "location": get_symbol_schema_location(local_sym),
-        "symbol_type_name": call_noarg(local_sym, "GetSymbolTypeName"),
-        "characteristic": call_noarg(local_sym, "GetCharacteristic"),
-    }
-
-
-def coordinates_close(location, x, y):
-
-    if location is None:
-        return False
-
-    try:
-        current_x = float(location["x"])
-        current_y = float(location["y"])
-    except Exception:
-        return False
-
-    return abs(current_x - float(x)) <= SYMBOL_SCAN_COORDINATE_TOLERANCE and abs(current_y - float(y)) <= SYMBOL_SCAN_COORDINATE_TOLERANCE
-
-
-def resolve_final_symbol(prj, candidate_ids, connector_name, staged_record):
-
-    matches = []
-
-    for candidate_id in candidate_ids:
-
-        identity = read_symbol_identity(prj, candidate_id)
-
-        if identity is None:
-            continue
-
-        if identity["pin_number"] != staged_record["pin_name"]:
-            continue
-
-        score = 100
-
-        if coordinates_close(identity["location"], staged_record["final_x"], staged_record["final_y"]):
-            score += 100
-
-        if isinstance(identity["device_text"], str) and connector_name in identity["device_text"]:
-            score += 30
-
-        if identity["symbol_type_name"] in ("MilSymbolReceptacle¶END_TOP", "MilSymbolReceptacle¶END_SPLIT", "MilSymbolReceptacle¶SPLIT_BOTTOM", "MilSymbolReceptacle¶CONNECTOR_PIN"):
-            score += 10
-
-        matches.append({
-            "score": score,
-            "identity": identity,
-        })
-
-    matches.sort(key=lambda item: item["score"], reverse=True)
-
-    if not matches:
-        return None
-
-    if matches[0]["score"] < 230:
-        return None
-
-    return matches[0]["identity"]
-
-
-def apply_text_tweaks(prj, symbol_id, is_top_of_side):
-
-    local_sym = prj.CreateSymbolObject()
-    local_text = prj.CreateTextObject()
-
-    set_result = local_sym.SetId(symbol_id)
-
-    if not set_result:
-        raise RuntimeError(f"Could not resolve symbol {symbol_id} for formatting.")
-
-    local_sym.SetBlockHatchColour(58)
-
-    for text_id in get_text_ids(local_sym):
-
-        local_text.SetId(text_id)
-
-        try:
-            text_type = local_text.GetType()
-        except Exception:
-            continue
-
-        if text_type == 5:
-            local_text.SetVisibility(0)
-
-        elif text_type == 12:
-
-            if not is_top_of_side:
-                local_text.SetVisibility(0)
-
-        elif text_type == 617:
-            local_text.SetVisibility(1)
-            local_text.SetColour(0)
-            local_text.SetAlignment(3)
-            local_text.SetStyle(1)
-            local_text.SetHeight(0.2)
-
-        elif text_type == 203:
-            local_text.SetVisibility(1)
-            local_text.SetStyle(1)
-
-
-def resolve_and_format_final_pins(prj, sht, connector_name, staged_records):
-
-    if not staged_records:
-        return
-
-    candidate_ids = collect_live_symbol_candidates(prj, sht, staged_records[0]["sheet_id"])
-
-    for staged_record in staged_records:
-
-        identity = resolve_final_symbol(prj, candidate_ids, connector_name, staged_record)
-
-        if identity is None:
-            raise RuntimeError(f"Could not rediscover final symbol for {connector_name} pin {staged_record['pin_name']}.")
-
-        is_top_of_side = staged_record["final_row"] == 0
-
-        apply_text_tweaks(prj, identity["symbol_id"], is_top_of_side)
-
-        staged_record["final_resolved_symbol_id"] = identity["symbol_id"]
-
-
-# ================================================
-# PARSE EXCEL
-# ================================================
-
-wb = load_workbook(output_path, data_only=True)
-
-if "Selection" in wb.sheetnames:
-    ws = wb["Selection"]
-else:
-    ws = wb.active
-
-NUMBER_OF_CONNECTORS = ws["C5"].value
-
-if NUMBER_OF_CONNECTORS is None:
-    raise Exception("Number of connectors is blank")
-
-NUMBER_OF_CONNECTORS = int(NUMBER_OF_CONNECTORS)
-
-CONNECTOR_MODEL_CHECK = ws["B2"].value
-
-if CONNECTOR_MODEL_CHECK != "Pass":
-    raise Exception("Connector model check is failing, fix it")
-
-DUPLICATE_PIN_CHECK = ws["C2"].value
-
-if DUPLICATE_PIN_CHECK != "Pass":
-    raise Exception("Duplicate pin check is failing, fix it")
-
-CONNECTOR_PIN_INFO = []
-
-for i in range(NUMBER_OF_CONNECTORS):
-
-    left_pin_col = 9 + (i * BLOCK_OFFSET)
-    right_pin_col = left_pin_col + 1
-
-    number_of_pins = ws.cell(row=5, column=right_pin_col).value
-    connector_name = ws.cell(row=6, column=right_pin_col).value
-
-    if number_of_pins is None:
-        number_of_pins = 0
-
-    number_of_pins = int(number_of_pins)
-    connector_name = str(connector_name).strip()
-
-    left = []
-    right = []
-
-    end_row = 8 + number_of_pins - 1
-
-    for r in range(8, end_row + 1):
-
-        left_pin = normalize_pin_value(ws.cell(row=r, column=left_pin_col).value)
-        right_pin = normalize_pin_value(ws.cell(row=r, column=right_pin_col).value)
-
-        if left_pin not in (None, ""):
-            left.append(left_pin)
-
-        if right_pin not in (None, ""):
-            right.append(right_pin)
-
-    if len(left) + len(right) != number_of_pins:
-        raise Exception(f"{connector_name}: Excel contains {len(left) + len(right)} pin entries but pin count is {number_of_pins}")
-
-    CONNECTOR_PIN_INFO.append({
-        "connector name": connector_name,
-        "number of pins": number_of_pins,
-        "left pins": left,
-        "right pins": right,
-    })
-
-wb.close()
-
-print(CONNECTOR_PIN_INFO)
-
-
-# ================================================
-# CONNECT TO DB
-# ================================================
-
-CONNECTION_STRING = (
-    "DRIVER={SQL Server};"
-    "SERVER=sql-zuken-prd;"
-    "DATABASE=Zuken_E3Library;"
-    "Trusted_Connection=yes;"
-)
-
-conn = pyodbc.connect(CONNECTION_STRING, autocommit=True)
-cur = conn.cursor()
-
-
-# set objects
-#====================================================================================================================================
-
-pythoncom.CoInitialize()
-
-app = win32.gencache.EnsureDispatch("CT.Application")
-prj = app.CreateJobObject()
-text = prj.CreateTextObject()
-comp = prj.CreateComponentObject()
-dev = prj.CreateDeviceObject()
-sym = prj.CreateSymbolObject()
-pin = prj.CreatePinObject()
-attr = prj.CreateAttributeObject()
-
-#====================================================================================================================================
-# more setup
-#====================================================================================================================================
-
-app.PutMessage("\n Starting Block Pin Ordering Script")
-
-sht = prj.CreateSheetObject()
-sheet_info = prj.GetAllSheetIds(None)
-sheet_count = sheet_info[0]
-sheet_ids = sheet_info[1]
-sheet_ids = [x for x in sheet_ids if x is not None]
-
-SHEET_ID_DICT = {}
-
-for id in sheet_ids:
-
-    sht.SetId(id)
-
-    name = sht.GetName()
-
-    SHEET_ID_DICT[name] = id
-
-    if sht.GetName() == "1":
-        sheet_1_id = id
-
-sheet1 = sht.SetId(sheet_1_id)
-
-main_device_id = find_device_id(prj, dev, MAIN_DEVICE_NAME)
-
-if main_device_id is None:
-    raise Exception(f"Could not find main device {MAIN_DEVICE_NAME}")
-
-verify_detached_symbol_load(prj)
-
-
-# generate pin location maps, get block dimensions and find the block centers
-
-CONNECTOR_WORK_INFO = []
-
-section("GENERATE PIN MAPS AND BLOCK GEOMETRY")
-
-for connector_excel_record in CONNECTOR_PIN_INFO:
-
-    connector_name = connector_excel_record["connector name"]
-
-    if CONNECTOR_FILTER is not None and connector_name != CONNECTOR_FILTER:
-        continue
-
-    connector_device_id = find_device_id(prj, dev, connector_name)
-
-    if connector_device_id is None:
-        raise Exception(f"Could not find connector {connector_name}")
-
-    initial_snapshot = snapshot_connector(prj, dev, pin, connector_device_id)
-    sorted_pin_records = get_sorted_live_pin_records(initial_snapshot)
-
-    validate_excel_against_e3(connector_excel_record, sorted_pin_records)
-
-    block_geometry = get_connector_block_geometry(prj, dev, connector_device_id, main_device_id)
-    pin_geometry = derive_pin_geometry(block_geometry, sorted_pin_records, connector_excel_record)
-    staging_map = build_staging_map(sorted_pin_records, pin_geometry)
-    final_plan = build_final_plan(connector_excel_record, pin_geometry)
-
-    work_record = {
-        "connector_excel_record": connector_excel_record,
-        "connector_name": connector_name,
-        "connector_device_id": connector_device_id,
-        "initial_snapshot": initial_snapshot,
-        "sorted_pin_records": sorted_pin_records,
-        "block_geometry": block_geometry,
-        "pin_geometry": pin_geometry,
-        "staging_map": staging_map,
-        "final_plan": final_plan,
-        "staged_records": [],
-        "final_schedule": [],
-    }
-
-    CONNECTOR_WORK_INFO.append(work_record)
-
-    log()
-    log(f"CONNECTOR: {connector_name}")
-    log(f"CONNECTOR DEVICE ID: {connector_device_id}")
-    log(f"CONNECTOR VIEW NUMBER: {block_geometry['connector_view_number']}")
-    log(f"MAIN VIEW ID: {block_geometry['main_view_id']}")
-    log(f"BLOCK SYMBOL ID: {block_geometry['block_symbol_id']}")
-    log(f"BLOCK LEFT: {block_geometry['block_left']}")
-    log(f"BLOCK RIGHT: {block_geometry['block_right']}")
-    log(f"BLOCK BOTTOM: {block_geometry['block_bottom']}")
-    log(f"BLOCK TOP: {block_geometry['block_top']}")
-    log(f"BLOCK WIDTH: {block_geometry['block_width']}")
-    log(f"BLOCK HEIGHT: {block_geometry['block_height']}")
-    log(f"BLOCK CENTER X: {block_geometry['block_center_x']}")
-    log(f"BLOCK CENTER Y: {block_geometry['block_center_y']}")
-    log(f"LEFT PIN X: {pin_geometry['left_x']}")
-    log(f"RIGHT PIN X: {pin_geometry['right_x']}")
-    log(f"PIN PITCH: {pin_geometry['pin_pitch']}")
-    log(f"FINAL TOP Y: {pin_geometry['final_top_y']}")
-
-    log("CENTER STACK MAP:")
-    log("    Pins intentionally share X within each center lane.")
-    log("    Row spacing equals connector pin pitch so Zuken should snap each lane into one temporary vertical stack.")
-
-    for pin_name, stage in staging_map.items():
-        log(f"    PIN {pin_name} -> {stage['lane']} ROW {stage['row']} -> ({stage['x']}, {stage['y']})")
-
-    log("FINAL PLAN:")
-
-    for final_item in final_plan:
-        log(f"    PIN {final_item['pin_name']} -> {final_item['side']} ROW {final_item['row']} | FLIP {final_item['flip']} -> ({final_item['x']}, {final_item['y']})")
-
-
-# place all pins in peel order into two snapped center stacks
-# Each temporary lane intentionally uses one exact X coordinate.
-# The Y pitch matches the connector pin pitch so Zuken can rebuild each temporary lane as a connector stack.
-# After both center stacks exist, the script peels their exposed top pins and immediately places them into the final Excel locations.
-
-if not DRY_RUN:
-
-    section("BUILD TWO SNAPPED CENTER STACKS")
-
-    for work_record in CONNECTOR_WORK_INFO:
-
-        log()
-        log(f"STAGING {work_record['connector_name']}")
-
-        staged_records = peel_all_pins_to_staging(prj, dev, pin, work_record["connector_device_id"], work_record["sorted_pin_records"], work_record["staging_map"], work_record["pin_geometry"])
-
-        work_record["staged_records"] = staged_records
-
-else:
-
-    section("DRY RUN")
-
-    log("No pins were moved.")
-    log("Block geometry, two snapped center-stack locations, final locations, and final flips were generated.")
-
-
-# based on pin maps and block geom generated -> start populating pins based on excel parsed data
-
-if not DRY_RUN:
-
-    section("POPULATE PINS FROM EXCEL ORDER")
-
-    for work_record in CONNECTOR_WORK_INFO:
-
-        log()
-        log(f"ORDERING {work_record['connector_name']}")
-
-        final_schedule = build_center_to_final_schedule(work_record["staged_records"], work_record["final_plan"])
-        work_record["final_schedule"] = final_schedule
-
-        log("CENTER -> FINAL SCHEDULE:")
-
-        for schedule_item in final_schedule:
-            log(f"    PIN {schedule_item['pin_name']} -> {schedule_item['side']} ROW {schedule_item['row']} | FLIP {schedule_item['flip']}")
-
-        move_center_stacks_to_final(prj, sht, work_record["connector_name"], work_record["staged_records"], final_schedule)
-
-        time.sleep(0.40)
-
-        resolve_and_format_final_pins(prj, sht, work_record["connector_name"], work_record["staged_records"])
-
-        log(f"{work_record['connector_name']} COMPLETE")
-
-
-#=========================================
-# RESET BEFORE MAIN BLOCK FORMATTING
-#=========================================
-
-try:
-    save_log()
-except Exception:
-    pass
-
-try:
-    cur.close()
-except Exception:
-    pass
-
-try:
-    conn.close()
-except Exception:
-    pass
-
-del attr
-del text
-del sym
-del pin
-del comp
-del dev
-del sht
-del prj
-del app
-
-pythoncom.CoUninitialize()
+dry: 
+
+========================================================================================================================
+GENERATE PIN MAPS AND BLOCK GEOMETRY
+========================================================================================================================
+
+CONNECTOR: SCP-J1
+CONNECTOR DEVICE ID: 64611
+CONNECTOR VIEW NUMBER: 1
+MAIN VIEW ID: 69041
+BLOCK SYMBOL ID: 69271
+BLOCK LEFT: 5.0
+BLOCK RIGHT: 8.0
+BLOCK BOTTOM: 27.4
+BLOCK TOP: 31.899999999999995
+BLOCK WIDTH: 3.0
+BLOCK HEIGHT: 4.4999999999999964
+BLOCK CENTER X: 6.5
+BLOCK CENTER Y: 29.65
+LEFT PIN X: 5.3
+RIGHT PIN X: 7.7
+PIN PITCH: 0.25
+FINAL TOP Y: 29.9
+CENTER STACK MAP:
+    Pins intentionally share X within each center lane.
+    Row spacing equals connector pin pitch so Zuken should snap each lane into one temporary vertical stack.
+    PIN 1 -> CENTER LEFT ROW 0 -> (6.15, 30.15)
+    PIN 2 -> CENTER RIGHT ROW 0 -> (6.85, 30.15)
+    PIN 3 -> CENTER LEFT ROW 1 -> (6.15, 29.9)
+    PIN 4 -> CENTER RIGHT ROW 1 -> (6.85, 29.9)
+    PIN 5 -> CENTER LEFT ROW 2 -> (6.15, 29.65)
+    PIN 6 -> CENTER RIGHT ROW 2 -> (6.85, 29.65)
+    PIN 7 -> CENTER LEFT ROW 3 -> (6.15, 29.4)
+    PIN 8 -> CENTER RIGHT ROW 3 -> (6.85, 29.4)
+    PIN 9 -> CENTER LEFT ROW 4 -> (6.15, 29.15)
+FINAL PLAN:
+    PIN 1 -> LEFT ROW 0 | FLIP 0 -> (5.3, 29.9)
+    PIN 2 -> LEFT ROW 1 | FLIP 0 -> (5.3, 29.65)
+    PIN 3 -> LEFT ROW 2 | FLIP 0 -> (5.3, 29.4)
+    PIN 4 -> LEFT ROW 3 | FLIP 0 -> (5.3, 29.15)
+    PIN 5 -> LEFT ROW 4 | FLIP 0 -> (5.3, 28.9)
+    PIN 6 -> LEFT ROW 5 | FLIP 0 -> (5.3, 28.65)
+    PIN 7 -> LEFT ROW 6 | FLIP 0 -> (5.3, 28.4)
+    PIN 8 -> LEFT ROW 7 | FLIP 0 -> (5.3, 28.15)
+    PIN 9 -> LEFT ROW 8 | FLIP 0 -> (5.3, 27.9)
+
+========================================================================================================================
+DRY RUN
+========================================================================================================================
+No pins were moved.
+Block geometry, two snapped center-stack locations, final locations, and final flips were generated.
+
+
+
+
+
+
+
+
+not dry: 
+========================================================================================================================
+GENERATE PIN MAPS AND BLOCK GEOMETRY
+========================================================================================================================
+
+CONNECTOR: SCP-J1
+CONNECTOR DEVICE ID: 64611
+CONNECTOR VIEW NUMBER: 1
+MAIN VIEW ID: 69041
+BLOCK SYMBOL ID: 69271
+BLOCK LEFT: 5.0
+BLOCK RIGHT: 8.0
+BLOCK BOTTOM: 27.4
+BLOCK TOP: 31.899999999999995
+BLOCK WIDTH: 3.0
+BLOCK HEIGHT: 4.4999999999999964
+BLOCK CENTER X: 6.5
+BLOCK CENTER Y: 29.65
+LEFT PIN X: 5.3
+RIGHT PIN X: 7.7
+PIN PITCH: 0.25
+FINAL TOP Y: 29.9
+CENTER STACK MAP:
+    Pins intentionally share X within each center lane.
+    Row spacing equals connector pin pitch so Zuken should snap each lane into one temporary vertical stack.
+    PIN 1 -> CENTER LEFT ROW 0 -> (6.15, 30.15)
+    PIN 2 -> CENTER RIGHT ROW 0 -> (6.85, 30.15)
+    PIN 3 -> CENTER LEFT ROW 1 -> (6.15, 29.9)
+    PIN 4 -> CENTER RIGHT ROW 1 -> (6.85, 29.9)
+    PIN 5 -> CENTER LEFT ROW 2 -> (6.15, 29.65)
+    PIN 6 -> CENTER RIGHT ROW 2 -> (6.85, 29.65)
+    PIN 7 -> CENTER LEFT ROW 3 -> (6.15, 29.4)
+    PIN 8 -> CENTER RIGHT ROW 3 -> (6.85, 29.4)
+    PIN 9 -> CENTER LEFT ROW 4 -> (6.15, 29.15)
+FINAL PLAN:
+    PIN 1 -> LEFT ROW 0 | FLIP 0 -> (5.3, 29.9)
+    PIN 2 -> LEFT ROW 1 | FLIP 0 -> (5.3, 29.65)
+    PIN 3 -> LEFT ROW 2 | FLIP 0 -> (5.3, 29.4)
+    PIN 4 -> LEFT ROW 3 | FLIP 0 -> (5.3, 29.15)
+    PIN 5 -> LEFT ROW 4 | FLIP 0 -> (5.3, 28.9)
+    PIN 6 -> LEFT ROW 5 | FLIP 0 -> (5.3, 28.65)
+    PIN 7 -> LEFT ROW 6 | FLIP 0 -> (5.3, 28.4)
+    PIN 8 -> LEFT ROW 7 | FLIP 0 -> (5.3, 28.15)
+    PIN 9 -> LEFT ROW 8 | FLIP 0 -> (5.3, 27.9)
+
+========================================================================================================================
+BUILD TWO SNAPPED CENTER STACKS
+========================================================================================================================
+
+STAGING SCP-J1
+STAGE 1/9 | PIN 1 | END_TOP -> CENTER LEFT ROW 0 -> (6.15, 30.15)
+    RETURNED SYMBOL 138802 | TYPE MilSymbolReceptacle¶END_SPLIT | CHARACTERISTIC END_SPLIT | BOUNDS []
+STAGE 2/9 | PIN 2 | END_TOP -> CENTER RIGHT ROW 0 -> (6.85, 30.15)
+    RETURNED SYMBOL 147448 | TYPE MilSymbolReceptacle¶END_SPLIT | CHARACTERISTIC END_SPLIT | BOUNDS []
+STAGE 3/9 | PIN 3 | END_TOP -> CENTER LEFT ROW 1 -> (6.15, 29.9)
+    RETURNED SYMBOL 138035 | TYPE MilSymbolReceptacle¶SPLIT_BOTTOM | CHARACTERISTIC SPLIT_BOTTOM | BOUNDS [140773, 141780]
+STAGE 4/9 | PIN 4 | END_TOP -> CENTER RIGHT ROW 1 -> (6.85, 29.9)
+    RETURNED SYMBOL 139744 | TYPE MilSymbolReceptacle¶SPLIT_BOTTOM | CHARACTERISTIC SPLIT_BOTTOM | BOUNDS [137582, 137434]
+STAGE 5/9 | PIN 5 | END_TOP -> CENTER LEFT ROW 2 -> (6.15, 29.65)
+    RETURNED SYMBOL 140216 | TYPE MilSymbolReceptacle¶SPLIT_BOTTOM | CHARACTERISTIC SPLIT_BOTTOM | BOUNDS [140178, 140175]
+STAGE 6/9 | PIN 6 | END_TOP -> CENTER RIGHT ROW 2 -> (6.85, 29.65)
+    RETURNED SYMBOL 141696 | TYPE MilSymbolReceptacle¶SPLIT_BOTTOM | CHARACTERISTIC SPLIT_BOTTOM | BOUNDS [140789, 140784]
+STAGE 7/9 | PIN 7 | END_TOP -> CENTER LEFT ROW 3 -> (6.15, 29.4)
+    RETURNED SYMBOL 141641 | TYPE MilSymbolReceptacle¶SPLIT_BOTTOM | CHARACTERISTIC SPLIT_BOTTOM | BOUNDS [141353, 141348]
+STAGE 8/9 | PIN 8 | END_TOP -> CENTER RIGHT ROW 3 -> (6.85, 29.4)
+    RETURNED SYMBOL 142444 | TYPE MilSymbolReceptacle¶SPLIT_BOTTOM | CHARACTERISTIC SPLIT_BOTTOM | BOUNDS [142026, 142033]
+STAGE 9/9 | PIN 9 | END_SPLIT -> CENTER LEFT ROW 4 -> (6.15, 29.15)
+    RETURNED SYMBOL 142564 | TYPE MilSymbolReceptacle¶SPLIT_BOTTOM | CHARACTERISTIC SPLIT_BOTTOM | BOUNDS [145845, 145817]
+
+========================================================================================================================
+POPULATE PINS FROM EXCEL ORDER
+========================================================================================================================
+
+ORDERING SCP-J1
+CENTER -> FINAL SCHEDULE:
+    PIN 1 -> LEFT ROW 0 | FLIP 0
+    PIN 2 -> LEFT ROW 1 | FLIP 0
+    PIN 3 -> LEFT ROW 2 | FLIP 0
+    PIN 4 -> LEFT ROW 3 | FLIP 0
+    PIN 5 -> LEFT ROW 4 | FLIP 0
+    PIN 6 -> LEFT ROW 5 | FLIP 0
+    PIN 7 -> LEFT ROW 6 | FLIP 0
+    PIN 8 -> LEFT ROW 7 | FLIP 0
+    PIN 9 -> LEFT ROW 8 | FLIP 0
+FINAL 1/9 | PIN 1 | FROM CENTER LEFT ROW 0 -> LEFT ROW 0 | FLIP 0 -> (5.3, 29.9)
+    CURRENT CENTER SYMBOL: 138061 | TYPE MilSymbolReceptacle¶END_TOP | CHARACTERISTIC END_TOP
+    FINAL RETURNED SYMBOL: 142825 | TYPE MilSymbolReceptacle¶END_SPLIT | CHARACTERISTIC END_SPLIT | BOUNDS []
+FINAL 2/9 | PIN 2 | FROM CENTER RIGHT ROW 0 -> LEFT ROW 1 | FLIP 0 -> (5.3, 29.65)
+    CURRENT CENTER SYMBOL: 138000 | TYPE MilSymbolReceptacle¶END_TOP | CHARACTERISTIC END_TOP
+    FINAL RETURNED SYMBOL: 143475 | TYPE MilSymbolReceptacle¶SPLIT_BOTTOM | CHARACTERISTIC SPLIT_BOTTOM | BOUNDS [143519, 143520]
+FINAL 3/9 | PIN 3 | FROM CENTER LEFT ROW 1 -> LEFT ROW 2 | FLIP 0 -> (5.3, 29.4)
+    CURRENT CENTER SYMBOL: 142684 | TYPE MilSymbolReceptacle¶END_TOP | CHARACTERISTIC END_TOP
+    FINAL RETURNED SYMBOL: 144074 | TYPE MilSymbolReceptacle¶SPLIT_BOTTOM | CHARACTERISTIC SPLIT_BOTTOM | BOUNDS [144154, 144104]
+FINAL 4/9 | PIN 4 | FROM CENTER RIGHT ROW 1 -> LEFT ROW 3 | FLIP 0 -> (5.3, 29.15)
+    CURRENT CENTER SYMBOL: 143078 | TYPE MilSymbolReceptacle¶END_TOP | CHARACTERISTIC END_TOP
+    FINAL RETURNED SYMBOL: 144876 | TYPE MilSymbolReceptacle¶SPLIT_BOTTOM | CHARACTERISTIC SPLIT_BOTTOM | BOUNDS [144790, 144793]
+FINAL 5/9 | PIN 5 | FROM CENTER LEFT ROW 2 -> LEFT ROW 4 | FLIP 0 -> (5.3, 28.9)
+    CURRENT CENTER SYMBOL: 143694 | TYPE MilSymbolReceptacle¶END_TOP | CHARACTERISTIC END_TOP
+    FINAL RETURNED SYMBOL: 145324 | TYPE MilSymbolReceptacle¶SPLIT_BOTTOM | CHARACTERISTIC SPLIT_BOTTOM | BOUNDS [145360, 145363]
+FINAL 6/9 | PIN 6 | FROM CENTER RIGHT ROW 2 -> LEFT ROW 5 | FLIP 0 -> (5.3, 28.65)
+    CURRENT CENTER SYMBOL: 144718 | TYPE MilSymbolReceptacle¶END_TOP | CHARACTERISTIC END_TOP
+    FINAL RETURNED SYMBOL: 146127 | TYPE MilSymbolReceptacle¶SPLIT_BOTTOM | CHARACTERISTIC SPLIT_BOTTOM | BOUNDS [146050, 146055]
+FINAL 7/9 | PIN 7 | FROM CENTER LEFT ROW 3 -> LEFT ROW 6 | FLIP 0 -> (5.3, 28.4)
+    CURRENT CENTER SYMBOL: 144951 | TYPE MilSymbolReceptacle¶END_TOP | CHARACTERISTIC END_TOP
+    FINAL RETURNED SYMBOL: 146573 | TYPE MilSymbolReceptacle¶SPLIT_BOTTOM | CHARACTERISTIC SPLIT_BOTTOM | BOUNDS [146698, 146666]
+FINAL 8/9 | PIN 8 | FROM CENTER RIGHT ROW 3 -> LEFT ROW 7 | FLIP 0 -> (5.3, 28.15)
+    CURRENT CENTER SYMBOL: 145653 | TYPE MilSymbolReceptacle¶END_SPLIT | CHARACTERISTIC END_SPLIT
+    FINAL RETURNED SYMBOL: 147602 | TYPE MilSymbolReceptacle¶SPLIT_BOTTOM | CHARACTERISTIC SPLIT_BOTTOM | BOUNDS [147122, 147126]
+FINAL 9/9 | PIN 9 | FROM CENTER LEFT ROW 4 -> LEFT ROW 8 | FLIP 0 -> (5.3, 27.9)
+    CURRENT CENTER SYMBOL: 146197 | TYPE MilSymbolReceptacle¶END_SPLIT | CHARACTERISTIC END_SPLIT
+    FINAL RETURNED SYMBOL: 137322 | TYPE MilSymbolReceptacle¶END_BOTTOM | CHARACTERISTIC END_BOTTOM | BOUNDS [137285, 137284]
+SCP-J1 COMPLETE
+
+
+
+
+========================================================================================================================
+GENERATE PIN MAPS AND BLOCK GEOMETRY
+========================================================================================================================
+
+CONNECTOR: SCP-J1
+CONNECTOR DEVICE ID: 64611
+CONNECTOR VIEW NUMBER: 1
+MAIN VIEW ID: 69041
+BLOCK SYMBOL ID: 69271
+BLOCK LEFT: 5.0
+BLOCK RIGHT: 8.0
+BLOCK BOTTOM: 27.4
+BLOCK TOP: 31.899999999999995
+BLOCK WIDTH: 3.0
+BLOCK HEIGHT: 4.4999999999999964
+BLOCK CENTER X: 6.5
+BLOCK CENTER Y: 29.65
+LEFT PIN X: 5.3
+RIGHT PIN X: 7.7
+PIN PITCH: 0.25
+FINAL TOP Y: 29.9
+CENTER STACK MAP:
+    Pins intentionally share X within each center lane.
+    Row spacing equals connector pin pitch so Zuken should snap each lane into one temporary vertical stack.
+    PIN 1 -> CENTER LEFT ROW 0 -> (6.15, 30.15)
+    PIN 2 -> CENTER RIGHT ROW 0 -> (6.85, 30.15)
+    PIN 3 -> CENTER LEFT ROW 1 -> (6.15, 29.9)
+    PIN 4 -> CENTER RIGHT ROW 1 -> (6.85, 29.9)
+    PIN 5 -> CENTER LEFT ROW 2 -> (6.15, 29.65)
+    PIN 6 -> CENTER RIGHT ROW 2 -> (6.85, 29.65)
+    PIN 7 -> CENTER LEFT ROW 3 -> (6.15, 29.4)
+    PIN 8 -> CENTER RIGHT ROW 3 -> (6.85, 29.4)
+    PIN 9 -> CENTER LEFT ROW 4 -> (6.15, 29.15)
+FINAL PLAN:
+    PIN 1 -> LEFT ROW 0 | FLIP 0 -> (5.3, 29.9)
+    PIN 2 -> LEFT ROW 1 | FLIP 0 -> (5.3, 29.65)
+    PIN 3 -> LEFT ROW 2 | FLIP 0 -> (5.3, 29.4)
+    PIN 4 -> LEFT ROW 3 | FLIP 0 -> (5.3, 29.15)
+    PIN 5 -> LEFT ROW 4 | FLIP 0 -> (5.3, 28.9)
+    PIN 6 -> LEFT ROW 5 | FLIP 0 -> (5.3, 28.65)
+    PIN 7 -> LEFT ROW 6 | FLIP 0 -> (5.3, 28.4)
+    PIN 8 -> LEFT ROW 7 | FLIP 0 -> (5.3, 28.15)
+    PIN 9 -> LEFT ROW 8 | FLIP 0 -> (5.3, 27.9)
+
+========================================================================================================================
+BUILD TWO SNAPPED CENTER STACKS
+========================================================================================================================
+
+STAGING SCP-J1
+STAGE 1/9 | PIN 1 | END_TOP -> CENTER LEFT ROW 0 -> (6.15, 30.15)
+    RETURNED SYMBOL 138802 | TYPE MilSymbolReceptacle¶END_SPLIT | CHARACTERISTIC END_SPLIT | BOUNDS []
+STAGE 2/9 | PIN 2 | END_TOP -> CENTER RIGHT ROW 0 -> (6.85, 30.15)
+    RETURNED SYMBOL 147448 | TYPE MilSymbolReceptacle¶END_SPLIT | CHARACTERISTIC END_SPLIT | BOUNDS []
+STAGE 3/9 | PIN 3 | END_TOP -> CENTER LEFT ROW 1 -> (6.15, 29.9)
+    RETURNED SYMBOL 138035 | TYPE MilSymbolReceptacle¶SPLIT_BOTTOM | CHARACTERISTIC SPLIT_BOTTOM | BOUNDS [140773, 141780]
+STAGE 4/9 | PIN 4 | END_TOP -> CENTER RIGHT ROW 1 -> (6.85, 29.9)
+    RETURNED SYMBOL 139744 | TYPE MilSymbolReceptacle¶SPLIT_BOTTOM | CHARACTERISTIC SPLIT_BOTTOM | BOUNDS [137582, 137434]
+STAGE 5/9 | PIN 5 | END_TOP -> CENTER LEFT ROW 2 -> (6.15, 29.65)
+    RETURNED SYMBOL 140216 | TYPE MilSymbolReceptacle¶SPLIT_BOTTOM | CHARACTERISTIC SPLIT_BOTTOM | BOUNDS [140178, 140175]
+STAGE 6/9 | PIN 6 | END_TOP -> CENTER RIGHT ROW 2 -> (6.85, 29.65)
+    RETURNED SYMBOL 141696 | TYPE MilSymbolReceptacle¶SPLIT_BOTTOM | CHARACTERISTIC SPLIT_BOTTOM | BOUNDS [140789, 140784]
+STAGE 7/9 | PIN 7 | END_TOP -> CENTER LEFT ROW 3 -> (6.15, 29.4)
+    RETURNED SYMBOL 141641 | TYPE MilSymbolReceptacle¶SPLIT_BOTTOM | CHARACTERISTIC SPLIT_BOTTOM | BOUNDS [141353, 141348]
+STAGE 8/9 | PIN 8 | END_TOP -> CENTER RIGHT ROW 3 -> (6.85, 29.4)
+    RETURNED SYMBOL 142444 | TYPE MilSymbolReceptacle¶SPLIT_BOTTOM | CHARACTERISTIC SPLIT_BOTTOM | BOUNDS [142026, 142033]
+STAGE 9/9 | PIN 9 | END_SPLIT -> CENTER LEFT ROW 4 -> (6.15, 29.15)
+    RETURNED SYMBOL 142564 | TYPE MilSymbolReceptacle¶SPLIT_BOTTOM | CHARACTERISTIC SPLIT_BOTTOM | BOUNDS [145845, 145817]
+
+========================================================================================================================
+POPULATE PINS FROM EXCEL ORDER
+========================================================================================================================
+
+ORDERING SCP-J1
+CENTER -> FINAL SCHEDULE:
+    PIN 1 -> LEFT ROW 0 | FLIP 0
+    PIN 2 -> LEFT ROW 1 | FLIP 0
+    PIN 3 -> LEFT ROW 2 | FLIP 0
+    PIN 4 -> LEFT ROW 3 | FLIP 0
+    PIN 5 -> LEFT ROW 4 | FLIP 0
+    PIN 6 -> LEFT ROW 5 | FLIP 0
+    PIN 7 -> LEFT ROW 6 | FLIP 0
+    PIN 8 -> LEFT ROW 7 | FLIP 0
+    PIN 9 -> LEFT ROW 8 | FLIP 0
+FINAL 1/9 | PIN 1 | FROM CENTER LEFT ROW 0 -> LEFT ROW 0 | FLIP 0 -> (5.3, 29.9)
+    CURRENT CENTER SYMBOL: 138061 | TYPE MilSymbolReceptacle¶END_TOP | CHARACTERISTIC END_TOP
+    FINAL RETURNED SYMBOL: 142825 | TYPE MilSymbolReceptacle¶END_SPLIT | CHARACTERISTIC END_SPLIT | BOUNDS []
+FINAL 2/9 | PIN 2 | FROM CENTER RIGHT ROW 0 -> LEFT ROW 1 | FLIP 0 -> (5.3, 29.65)
+    CURRENT CENTER SYMBOL: 138000 | TYPE MilSymbolReceptacle¶END_TOP | CHARACTERISTIC END_TOP
+    FINAL RETURNED SYMBOL: 143475 | TYPE MilSymbolReceptacle¶SPLIT_BOTTOM | CHARACTERISTIC SPLIT_BOTTOM | BOUNDS [143519, 143520]
+FINAL 3/9 | PIN 3 | FROM CENTER LEFT ROW 1 -> LEFT ROW 2 | FLIP 0 -> (5.3, 29.4)
+    CURRENT CENTER SYMBOL: 142684 | TYPE MilSymbolReceptacle¶END_TOP | CHARACTERISTIC END_TOP
+    FINAL RETURNED SYMBOL: 144074 | TYPE MilSymbolReceptacle¶SPLIT_BOTTOM | CHARACTERISTIC SPLIT_BOTTOM | BOUNDS [144154, 144104]
+FINAL 4/9 | PIN 4 | FROM CENTER RIGHT ROW 1 -> LEFT ROW 3 | FLIP 0 -> (5.3, 29.15)
+    CURRENT CENTER SYMBOL: 143078 | TYPE MilSymbolReceptacle¶END_TOP | CHARACTERISTIC END_TOP
+    FINAL RETURNED SYMBOL: 144876 | TYPE MilSymbolReceptacle¶SPLIT_BOTTOM | CHARACTERISTIC SPLIT_BOTTOM | BOUNDS [144790, 144793]
+FINAL 5/9 | PIN 5 | FROM CENTER LEFT ROW 2 -> LEFT ROW 4 | FLIP 0 -> (5.3, 28.9)
+    CURRENT CENTER SYMBOL: 143694 | TYPE MilSymbolReceptacle¶END_TOP | CHARACTERISTIC END_TOP
+    FINAL RETURNED SYMBOL: 145324 | TYPE MilSymbolReceptacle¶SPLIT_BOTTOM | CHARACTERISTIC SPLIT_BOTTOM | BOUNDS [145360, 145363]
+FINAL 6/9 | PIN 6 | FROM CENTER RIGHT ROW 2 -> LEFT ROW 5 | FLIP 0 -> (5.3, 28.65)
+    CURRENT CENTER SYMBOL: 144718 | TYPE MilSymbolReceptacle¶END_TOP | CHARACTERISTIC END_TOP
+    FINAL RETURNED SYMBOL: 146127 | TYPE MilSymbolReceptacle¶SPLIT_BOTTOM | CHARACTERISTIC SPLIT_BOTTOM | BOUNDS [146050, 146055]
+FINAL 7/9 | PIN 7 | FROM CENTER LEFT ROW 3 -> LEFT ROW 6 | FLIP 0 -> (5.3, 28.4)
+    CURRENT CENTER SYMBOL: 144951 | TYPE MilSymbolReceptacle¶END_TOP | CHARACTERISTIC END_TOP
+    FINAL RETURNED SYMBOL: 146573 | TYPE MilSymbolReceptacle¶SPLIT_BOTTOM | CHARACTERISTIC SPLIT_BOTTOM | BOUNDS [146698, 146666]
+FINAL 8/9 | PIN 8 | FROM CENTER RIGHT ROW 3 -> LEFT ROW 7 | FLIP 0 -> (5.3, 28.15)
+    CURRENT CENTER SYMBOL: 145653 | TYPE MilSymbolReceptacle¶END_SPLIT | CHARACTERISTIC END_SPLIT
+    FINAL RETURNED SYMBOL: 147602 | TYPE MilSymbolReceptacle¶SPLIT_BOTTOM | CHARACTERISTIC SPLIT_BOTTOM | BOUNDS [147122, 147126]
+FINAL 9/9 | PIN 9 | FROM CENTER LEFT ROW 4 -> LEFT ROW 8 | FLIP 0 -> (5.3, 27.9)
+    CURRENT CENTER SYMBOL: 146197 | TYPE MilSymbolReceptacle¶END_SPLIT | CHARACTERISTIC END_SPLIT
+    FINAL RETURNED SYMBOL: 137322 | TYPE MilSymbolReceptacle¶END_BOTTOM | CHARACTERISTIC END_BOTTOM | BOUNDS [137285, 137284]
+SCP-J1 COMPLETE
