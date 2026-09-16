@@ -5,10 +5,14 @@ Private Const CONNECTOR_COUNT_CELL As String = "C5"
 Private Const CONNECTOR_NAME_FIRST_ROW As Long = 7
 
 Private Const TEMPLATE_FIRST_COLUMN As Long = 8
-Private Const BLOCK_WIDTH As Long = 5
+
+' The actual block is 4 columns wide.
+' Old version stepped 5 columns, which left one blank cell between blocks.
+Private Const BLOCK_WIDTH As Long = 4
+Private Const BLOCK_STEP As Long = 4
 
 Private Const BLOCK_TOP_ROW As Long = 5
-Private Const TEMPLATE_BOTTOM_ROW As Long = 10
+Private Const HEADER_BOTTOM_ROW As Long = 7
 
 Private Const DATA_FIRST_ROW As Long = 8
 Private Const RULES_LAST_ROW As Long = 307
@@ -36,8 +40,7 @@ Private Sub Worksheet_Change(ByVal Target As Range)
     If connectorCount < 0 Then connectorCount = 0
     If connectorCount > MAX_BLOCKS Then connectorCount = MAX_BLOCKS
 
-    BuildMissingBlocks connectorCount
-    UpdateActiveBlocks connectorCount
+    RefreshAllActiveBlocks connectorCount
     ShowOnlyActiveBlocks connectorCount
 
 CleanExit:
@@ -56,101 +59,65 @@ CleanFail:
 End Sub
 
 
-Private Sub BuildMissingBlocks(ByVal connectorCount As Long)
-
-    Dim blockNumber As Long
-
-    For blockNumber = 2 To connectorCount
-
-        If Not BlockAlreadyExists(blockNumber) Then
-            CreateBlock blockNumber
-        End If
-
-    Next blockNumber
-
-End Sub
-
-
-Private Function BlockAlreadyExists(ByVal blockNumber As Long) As Boolean
-
-    Dim startColumn As Long
-    Dim checkRange As Range
-
-    startColumn = GetBlockStartColumn(blockNumber)
-
-    Set checkRange = Me.Range(Me.Cells(BLOCK_TOP_ROW, startColumn), Me.Cells(TEMPLATE_BOTTOM_ROW, startColumn + BLOCK_WIDTH - 1))
-
-    BlockAlreadyExists = Application.WorksheetFunction.CountA(checkRange) > 0
-
-End Function
-
-
-Private Sub CreateBlock(ByVal blockNumber As Long)
-
-    Dim sourceHeader As Range
-    Dim destinationHeader As Range
-
-    Dim sourceFull As Range
-    Dim destinationFull As Range
-
-    Dim destinationInputs As Range
-    Dim constantsToClear As Range
-
-    Dim destinationStartColumn As Long
-    Dim columnOffset As Long
-
-    destinationStartColumn = GetBlockStartColumn(blockNumber)
-
-    Set sourceHeader = Me.Range(Me.Cells(BLOCK_TOP_ROW, TEMPLATE_FIRST_COLUMN), Me.Cells(TEMPLATE_BOTTOM_ROW, TEMPLATE_FIRST_COLUMN + BLOCK_WIDTH - 1))
-    Set destinationHeader = Me.Range(Me.Cells(BLOCK_TOP_ROW, destinationStartColumn), Me.Cells(TEMPLATE_BOTTOM_ROW, destinationStartColumn + BLOCK_WIDTH - 1))
-
-    Set sourceFull = Me.Range(Me.Cells(BLOCK_TOP_ROW, TEMPLATE_FIRST_COLUMN), Me.Cells(RULES_LAST_ROW, TEMPLATE_FIRST_COLUMN + BLOCK_WIDTH - 1))
-    Set destinationFull = Me.Range(Me.Cells(BLOCK_TOP_ROW, destinationStartColumn), Me.Cells(RULES_LAST_ROW, destinationStartColumn + BLOCK_WIDTH - 1))
-
-    sourceFull.Copy
-    destinationFull.PasteSpecial Paste:=xlPasteFormats
-
-    sourceFull.Copy
-    destinationFull.PasteSpecial Paste:=xlPasteValidation
-
-    sourceHeader.Copy
-    destinationHeader.PasteSpecial Paste:=xlPasteAll
-
-    For columnOffset = 0 To BLOCK_WIDTH - 1
-        Me.Columns(destinationStartColumn + columnOffset).ColumnWidth = Me.Columns(TEMPLATE_FIRST_COLUMN + columnOffset).ColumnWidth
-    Next columnOffset
-
-    Set destinationInputs = Me.Range(Me.Cells(DATA_FIRST_ROW, destinationStartColumn + 1), Me.Cells(RULES_LAST_ROW, destinationStartColumn + 2))
-
-    Set constantsToClear = Nothing
-
-    On Error Resume Next
-    Set constantsToClear = destinationInputs.SpecialCells(xlCellTypeConstants)
-    On Error GoTo CleanFail
-
-    If Not constantsToClear Is Nothing Then
-        constantsToClear.ClearContents
-    End If
-
-    Application.CutCopyMode = False
-
-    Exit Sub
-
-CleanFail:
-    Application.CutCopyMode = False
-    Err.Raise Err.Number, Err.Source, Err.Description
-
-End Sub
-
-
-Private Sub UpdateActiveBlocks(ByVal connectorCount As Long)
+Private Sub RefreshAllActiveBlocks(ByVal connectorCount As Long)
 
     Dim blockNumber As Long
 
     For blockNumber = 1 To connectorCount
+
+        If blockNumber > 1 Then
+            RefreshBlockStructure blockNumber
+        End If
+
         UpdateConnectorName blockNumber
         UpdateHelperSpill blockNumber
+
     Next blockNumber
+
+End Sub
+
+
+Private Sub RefreshBlockStructure(ByVal blockNumber As Long)
+
+    Dim destinationStartColumn As Long
+    Dim columnOffset As Long
+
+    Dim sourceHeader As Range
+    Dim destinationHeader As Range
+
+    Dim sourceData As Range
+    Dim destinationData As Range
+
+    destinationStartColumn = GetBlockStartColumn(blockNumber)
+
+    Set sourceHeader = Me.Range(Me.Cells(BLOCK_TOP_ROW, TEMPLATE_FIRST_COLUMN), Me.Cells(HEADER_BOTTOM_ROW, TEMPLATE_FIRST_COLUMN + BLOCK_WIDTH - 1))
+    Set destinationHeader = Me.Range(Me.Cells(BLOCK_TOP_ROW, destinationStartColumn), Me.Cells(HEADER_BOTTOM_ROW, destinationStartColumn + BLOCK_WIDTH - 1))
+
+    Set sourceData = Me.Range(Me.Cells(DATA_FIRST_ROW, TEMPLATE_FIRST_COLUMN), Me.Cells(RULES_LAST_ROW, TEMPLATE_FIRST_COLUMN + BLOCK_WIDTH - 1))
+    Set destinationData = Me.Range(Me.Cells(DATA_FIRST_ROW, destinationStartColumn), Me.Cells(RULES_LAST_ROW, destinationStartColumn + BLOCK_WIDTH - 1))
+
+    ' Refresh the header every time so every block gets the current template structure.
+    sourceHeader.Copy
+    destinationHeader.PasteSpecial Paste:=xlPasteAll
+
+    ' Remove old/stale conditional-format rules before copying the template formats.
+    destinationData.FormatConditions.Delete
+
+    ' Copy formatting/rules only.
+    ' This does NOT overwrite the user's Left Pins / Right Pins values.
+    sourceData.Copy
+    destinationData.PasteSpecial Paste:=xlPasteFormats
+
+    ' Copy validation separately.
+    sourceData.Copy
+    destinationData.PasteSpecial Paste:=xlPasteValidation
+
+    ' Match the template column widths.
+    For columnOffset = 0 To BLOCK_WIDTH - 1
+        Me.Columns(destinationStartColumn + columnOffset).ColumnWidth = Me.Columns(TEMPLATE_FIRST_COLUMN + columnOffset).ColumnWidth
+    Next columnOffset
+
+    Application.CutCopyMode = False
 
 End Sub
 
@@ -164,6 +131,7 @@ Private Sub UpdateConnectorName(ByVal blockNumber As Long)
     startColumn = GetBlockStartColumn(blockNumber)
     connectorSourceRow = CONNECTOR_NAME_FIRST_ROW + blockNumber - 1
 
+    ' J6 for block 1, N6 for block 2, R6 for block 3, etc.
     Set connectorNameCell = Me.Cells(6, startColumn + 2)
 
     connectorNameCell.Formula = "=$B$" & connectorSourceRow
@@ -242,7 +210,7 @@ End Function
 
 Private Function GetBlockStartColumn(ByVal blockNumber As Long) As Long
 
-    GetBlockStartColumn = TEMPLATE_FIRST_COLUMN + ((blockNumber - 1) * BLOCK_WIDTH)
+    GetBlockStartColumn = TEMPLATE_FIRST_COLUMN + ((blockNumber - 1) * BLOCK_STEP)
 
 End Function
 
@@ -252,3 +220,40 @@ Private Function ColumnLetter(ByVal columnNumber As Long) As String
     ColumnLetter = Split(Me.Cells(1, columnNumber).Address(False, False), "1")(0)
 
 End Function
+
+
+Public Sub RefreshPinOrderBlocks()
+
+    On Error GoTo CleanFail
+
+    Application.EnableEvents = False
+    Application.ScreenUpdating = False
+
+    Dim connectorCount As Long
+
+    If IsNumeric(Me.Range(CONNECTOR_COUNT_CELL).Value) Then
+        connectorCount = CLng(Me.Range(CONNECTOR_COUNT_CELL).Value)
+    Else
+        connectorCount = 0
+    End If
+
+    If connectorCount < 0 Then connectorCount = 0
+    If connectorCount > MAX_BLOCKS Then connectorCount = MAX_BLOCKS
+
+    RefreshAllActiveBlocks connectorCount
+    ShowOnlyActiveBlocks connectorCount
+
+CleanExit:
+    Application.CutCopyMode = False
+    Application.ScreenUpdating = True
+    Application.EnableEvents = True
+    Exit Sub
+
+CleanFail:
+    MsgBox "Block refresh failed." & vbCrLf & vbCrLf & _
+           "Error " & Err.Number & vbCrLf & _
+           Err.Description, vbCritical, "Selection Sheet Macro Error"
+
+    Resume CleanExit
+
+End Sub
