@@ -1,555 +1,234 @@
-from openpyxl import load_workbook
-import inspect
-import os
-import time
-import pyodbc
-import pythoncom
-import win32com.client as win32
 
-
-# ================================================
-# USER SETTINGS
-# ================================================
-
-TARGET_DEVICE_NAME = "TEST_NAME_100000"
-
-OUTPUT_FOLDER = os.path.dirname(os.path.abspath(__file__))
-
-
-# ================================================
-# HELPER FXN
-# ================================================
-
-COM_MISSING = -2147352572
-
-LOG_LINES = []
-
-
-def log(message=""):
-
-    text_value = str(message)
-
-    print(text_value)
-
-    LOG_LINES.append(text_value)
-
-
-def section(title):
-
-    log()
-    log("=" * 120)
-    log(title)
-    log("=" * 120)
-
-
-def save_log():
-
-    output_path = os.path.join(OUTPUT_FOLDER, "e3_block_view_symbol_test_output.txt")
-
-    with open(output_path, "w", encoding="utf-8") as file:
-        file.write("\n".join(LOG_LINES))
-
-    print()
-    print("=" * 120)
-    print("OUTPUT WRITTEN")
-    print("=" * 120)
-    print(output_path)
-
-
-def is_missing_value(value):
-
-    if value is None:
-        return True
-
-    try:
-        return int(value) == COM_MISSING
-    except Exception:
-        return False
-
-
-def clean_id_list(values):
-
-    cleaned = []
-
-    if values is None:
-        return cleaned
-
-    if not isinstance(values, (tuple, list)):
-        values = [values]
-
-    for value in values:
-
-        if is_missing_value(value):
-            continue
-
-        try:
-            value = int(value)
-        except Exception:
-            continue
-
-        if value > 0:
-            cleaned.append(value)
-
-    return cleaned
-
-
-def parse_count_array_result(result):
-
-    if result is None:
-        return []
-
-    if isinstance(result, (tuple, list)):
-
-        items = list(result)
-
-        if len(items) >= 2 and isinstance(items[1], (tuple, list)):
-
-            try:
-                count = int(items[0])
-            except Exception:
-                count = None
-
-            values = clean_id_list(items[1])
-
-            if count is not None and len(values) > count:
-                values = values[-count:]
-
-            return values
-
-        return clean_id_list(items)
-
-    return clean_id_list(result)
-
-
-def get_ids(method, *args):
-
-    try:
-        raw = method(*args)
-    except Exception as exc:
-        log(f"ERROR: {exc}")
-        return []
-
-    log(f"RAW: {raw}")
-
-    ids = parse_count_array_result(raw)
-
-    log(f"IDS: {ids}")
-
-    return ids
-
-
-def normalize_name(value):
-
-    if value is None:
-        return ""
-
-    return str(value).strip()
-
-
-def get_schema_location(sym):
-
-    try:
-        return sym.GetSchemaLocation(None, None, None, None, None)
-    except Exception as exc:
-        return f"ERROR: {exc}"
-
-
-def get_area(sym):
-
-    try:
-        return sym.GetArea(None, None, None, None)
-    except Exception as exc:
-        return f"ERROR: {exc}"
-
-
-def get_placed_area(sym):
-
-    try:
-        return sym.GetPlacedArea(None, None, None, None)
-    except Exception as exc:
-        return f"ERROR: {exc}"
-
-
-def get_placed_polygon(sym):
-
-    try:
-        return sym.GetPlacedPolygon(None, None, None)
-    except Exception as exc:
-        return f"ERROR: {exc}"
-
-
-def print_symbol_info(sym, symbol_id):
-
-    section(f"SYMBOL {symbol_id}")
-
-    try:
-        set_result = sym.SetId(symbol_id)
-    except Exception as exc:
-        log(f"sym.SetId ERROR: {exc}")
-        return
-
-    log(f"sym.SetId({symbol_id}) RETURN: {set_result}")
-
-    if not set_result:
-        return
-
-    for method_name in (
-        "GetId",
-        "GetName",
-        "GetCode",
-        "GetSymbolTypeName",
-        "GetCharacteristic",
-        "GetRotation",
-        "GetScaling",
-        "GetDynamicParentId",
-        "IsDynamic",
-        "IsDynamicFixed",
-        "IsPinView",
-    ):
-
-        if not hasattr(sym, method_name):
-            continue
-
-        try:
-            result = getattr(sym, method_name)()
-            log(f"{method_name}(): {result}")
-        except Exception as exc:
-            log(f"{method_name} ERROR: {exc}")
-
-    log(f"GetSchemaLocation: {get_schema_location(sym)}")
-    log(f"GetArea: {get_area(sym)}")
-    log(f"GetPlacedArea: {get_placed_area(sym)}")
-    log(f"GetPlacedPolygon: {get_placed_polygon(sym)}")
-
-    if hasattr(sym, "GetDynamicChildrenIds"):
-
-        try:
-            raw = sym.GetDynamicChildrenIds(None)
-            ids = parse_count_array_result(raw)
-
-            log(f"GetDynamicChildrenIds RAW: {raw}")
-            log(f"GetDynamicChildrenIds IDS: {ids}")
-
-        except Exception as exc:
-            log(f"GetDynamicChildrenIds ERROR: {exc}")
-
-
-# ================================================
-# PARSE EXCEL
-# ================================================
-
-# Not needed for this read-only test.
-# Kept to match the structure of the main code.
-
-
-# ================================================
-# CONNECT TO DB
-# ================================================
-
-# Not needed for this read-only test.
-# Kept to match the structure of the main code.
-
-
-# ================================================
-# SET OBJECTS
-# ================================================
-
-pythoncom.CoInitialize()
-
-app = win32.gencache.EnsureDispatch("CT.Application")
-prj = app.CreateJobObject()
-text = prj.CreateTextObject()
-comp = prj.CreateComponentObject()
-dev = prj.CreateDeviceObject()
-sym = prj.CreateSymbolObject()
-pin = prj.CreatePinObject()
-attr = prj.CreateAttributeObject()
-sht = prj.CreateSheetObject()
-
-
-# ================================================
-# MORE SETUP
-# ================================================
-
-app.PutMessage("\nStarting Block View -> Symbol Test")
-
-sheet_info = prj.GetAllSheetIds(None)
-sheet_count = sheet_info[0]
-sheet_ids = sheet_info[1]
-sheet_ids = [value for value in sheet_ids if value is not None]
-
-SHEET_ID_DICT = {}
-
-for sheet_id in sheet_ids:
-
-    sht.SetId(sheet_id)
-
-    sheet_name = sht.GetName()
-
-    SHEET_ID_DICT[sheet_name] = sheet_id
-
-
-# ================================================
-# FIND MAIN BLOCK DEVICE
-# ================================================
-
-try:
-
-    section("FIND MAIN BLOCK DEVICE")
-
-    raw_device_info = prj.GetAllDeviceIds(None)
-    device_ids = parse_count_array_result(raw_device_info)
-
-    target_device_id = None
-
-    for device_id in device_ids:
-
-        dev.SetId(device_id)
-
-        device_name = normalize_name(dev.GetName())
-
-        log(f"DEVICE {device_id} | NAME {repr(device_name)}")
-
-        if device_name == TARGET_DEVICE_NAME:
-            target_device_id = device_id
-
-    if target_device_id is None:
-        raise RuntimeError(f"Could not find {TARGET_DEVICE_NAME}.")
-
-    log()
-    log(f"TARGET DEVICE ID: {target_device_id}")
-    log(f"TARGET DEVICE NAME: {TARGET_DEVICE_NAME}")
-
-
-    # ================================================
-    # LOGICAL DEVICE
-    # ================================================
-
-    section("LOGICAL DEVICE")
-
-    dev.SetId(target_device_id)
-
-    log(f"dev.SetId({target_device_id})")
-    log(f"GetName(): {dev.GetName()}")
-
-    try:
-        log(f"GetViewNumber(): {dev.GetViewNumber()}")
-    except Exception as exc:
-        log(f"GetViewNumber ERROR: {exc}")
-
-    try:
-        log(f"IsView(): {dev.IsView()}")
-    except Exception as exc:
-        log(f"IsView ERROR: {exc}")
-
-    logical_symbol_ids = []
-
-    for get_mode in (0, 1, 2, 3):
-
-        section(f"LOGICAL DEVICE GetSymbolIds MODE {get_mode}")
-
-        try:
-            raw = dev.GetSymbolIds(None, get_mode)
-            ids = parse_count_array_result(raw)
-
-            log(f"RAW: {raw}")
-            log(f"IDS: {ids}")
-
-            for symbol_id in ids:
-
-                if symbol_id not in logical_symbol_ids:
-                    logical_symbol_ids.append(symbol_id)
-
-        except Exception as exc:
-            log(f"ERROR: {exc}")
-
-    section("LOGICAL DEVICE GetViewIds")
-
-    raw = dev.GetViewIds(None)
-    view_ids = parse_count_array_result(raw)
-
-    log(f"RAW: {raw}")
-    log(f"VIEW IDS: {view_ids}")
-
-
-    # ================================================
-    # PROBE LOGICAL DEVICE SYMBOLS
-    # ================================================
-
-    section("LOGICAL DEVICE SYMBOL DETAILS")
-
-    for symbol_id in logical_symbol_ids:
-        print_symbol_info(sym, symbol_id)
-
-
-    # ================================================
-    # PROBE EACH DEVICE VIEW
-    # ================================================
-
-    for view_id in view_ids:
-
-        section(f"DEVICE VIEW {view_id}")
-
-        try:
-            set_result = dev.SetId(view_id)
-        except Exception as exc:
-            log(f"dev.SetId({view_id}) ERROR: {exc}")
-            continue
-
-        log(f"dev.SetId({view_id}) RETURN: {set_result}")
-
-        for method_name in (
-            "GetId",
-            "GetName",
-            "GetCode",
-            "GetViewNumber",
-            "IsView",
-            "GetLocation",
-        ):
-
-            if not hasattr(dev, method_name):
-                continue
-
-            try:
-                result = getattr(dev, method_name)()
-                log(f"{method_name}(): {result}")
-            except Exception as exc:
-                log(f"{method_name} ERROR: {exc}")
-
-        view_symbol_ids = []
-
-        for get_mode in (0, 1, 2, 3):
-
-            section(f"VIEW {view_id} GetSymbolIds MODE {get_mode}")
-
-            try:
-                raw = dev.GetSymbolIds(None, get_mode)
-                ids = parse_count_array_result(raw)
-
-                log(f"RAW: {raw}")
-                log(f"IDS: {ids}")
-
-                for symbol_id in ids:
-
-                    if symbol_id not in view_symbol_ids:
-                        view_symbol_ids.append(symbol_id)
-
-            except Exception as exc:
-                log(f"ERROR: {exc}")
-
-        section(f"VIEW {view_id} SYMBOL DETAILS")
-
-        for symbol_id in view_symbol_ids:
-            print_symbol_info(sym, symbol_id)
-
-
-    # ================================================
-    # SHEET-LEVEL CABBLOCK SEARCH
-    # ================================================
-
-    section("SHEET-LEVEL CABBLOCK SEARCH")
-
-    for sheet_name, sheet_id in SHEET_ID_DICT.items():
-
-        sht.SetId(sheet_id)
-
-        log()
-        log(f"SHEET {sheet_name} | ID {sheet_id}")
-
-        if not hasattr(sht, "GetSymbolIds"):
-            log("sht.GetSymbolIds NOT PRESENT")
-            continue
-
-        try:
-            raw = sht.GetSymbolIds(None)
-            sheet_symbol_ids = parse_count_array_result(raw)
-
-            log(f"GetSymbolIds RAW: {raw}")
-            log(f"SYMBOL COUNT: {len(sheet_symbol_ids)}")
-
-        except Exception as exc:
-            log(f"GetSymbolIds ERROR: {exc}")
-            continue
-
-        for symbol_id in sheet_symbol_ids:
-
-            try:
-                set_result = sym.SetId(symbol_id)
-            except Exception:
-                continue
-
-            if not set_result:
-                continue
-
-            try:
-                symbol_type_name = normalize_name(sym.GetSymbolTypeName())
-            except Exception:
-                symbol_type_name = ""
-
-            if "CABBLOCK" not in symbol_type_name.upper():
-                continue
-
-            try:
-                name = sym.GetName()
-            except Exception:
-                name = ""
-
-            try:
-                code = sym.GetCode()
-            except Exception:
-                code = ""
-
-            log(f"CABBLOCK SYMBOL {symbol_id} | NAME {name} | CODE {code} | TYPE {symbol_type_name}")
-            log(f"    LOCATION: {get_schema_location(sym)}")
-            log(f"    AREA: {get_area(sym)}")
-            log(f"    PLACED AREA: {get_placed_area(sym)}")
-            log(f"    POLYGON: {get_placed_polygon(sym)}")
-
-
-    # ================================================
-    # SUMMARY
-    # ================================================
-
-    section("TEST COMPLETE")
-
-    log("Send me this output.")
-    log()
-    log("We are looking for the CABBLOCK whose placed area contains the connector pin coordinates.")
-    log("For SCP-J1 the existing connector pin X is about 7.7.")
-    log("So the correct block should have a placed-area X range that reaches roughly that region.")
-    log()
-    log("The previous CABBLOCK candidate 66218 had placed area X = 1.0 to 4.0,")
-    log("so I do NOT want to wire that geometry into the production orderer until we identify the actual view/block.")
-
-
-except Exception as exc:
-
-    section("FATAL ERROR")
-
-    log(str(exc))
-
-    import traceback
-
-    log(traceback.format_exc())
-
-
-# =========================================
-# RESET BEFORE MAIN BLOCK FORMATTING
-# =========================================
-
-try:
-    save_log()
-except Exception as exc:
-    print(f"Could not save log: {exc}")
-
-del attr
-del text
-del sym
-del pin
-del comp
-del dev
-del sht
-del prj
-del app
-
-pythoncom.CoUninitialize()
+========================================================================================================================
+FIND MAIN BLOCK DEVICE
+========================================================================================================================
+DEVICE 72258 | NAME 'Wires'
+DEVICE 64611 | NAME 'SCP-J1'
+DEVICE 67783 | NAME 'SCP-J2'
+DEVICE 137415 | NAME 'TEST_NAME_100000'
+
+TARGET DEVICE ID: 137415
+TARGET DEVICE NAME: TEST_NAME_100000
+
+========================================================================================================================
+LOGICAL DEVICE
+========================================================================================================================
+dev.SetId(137415)
+GetName(): TEST_NAME_100000
+GetViewNumber(): 0
+IsView(): 0
+
+========================================================================================================================
+LOGICAL DEVICE GetSymbolIds MODE 0
+========================================================================================================================
+RAW: (1, (None, 66218))
+IDS: [66218]
+
+========================================================================================================================
+LOGICAL DEVICE GetSymbolIds MODE 1
+========================================================================================================================
+RAW: (1, (None, 66218))
+IDS: [66218]
+
+========================================================================================================================
+LOGICAL DEVICE GetSymbolIds MODE 2
+========================================================================================================================
+RAW: (0, (None,))
+IDS: []
+
+========================================================================================================================
+LOGICAL DEVICE GetSymbolIds MODE 3
+========================================================================================================================
+RAW: (1, (None, 66218))
+IDS: [66218]
+
+========================================================================================================================
+LOGICAL DEVICE GetViewIds
+========================================================================================================================
+RAW: (2, (None, 69041, 70161))
+VIEW IDS: [69041, 70161]
+
+========================================================================================================================
+LOGICAL DEVICE SYMBOL DETAILS
+========================================================================================================================
+
+========================================================================================================================
+SYMBOL 66218
+========================================================================================================================
+sym.SetId(66218) RETURN: 66218
+GetId(): 66218
+GetName(): 1
+GetCode(): 8
+GetSymbolTypeName(): CABBLOCK#0-3a-0-8cc4
+GetCharacteristic(): 
+GetRotation(): 0.000000
+GetScaling(): 1.0
+GetDynamicParentId(): 0
+IsDynamic(): 0
+IsDynamicFixed(): 0
+IsPinView(): 0
+GetSchemaLocation: (204828, 1.0, 28.65, '/1.F8', '8', 'F')
+GetArea: (1, 0.0, 0.0, 3.0, 3.2499999999999982)
+GetPlacedArea: (1, 1.0, 28.65, 4.0, 31.899999999999995)
+GetPlacedPolygon: (1, 5, (None, 1.0, 4.0, 4.0, 1.0, 1.0), (None, 28.65, 28.65, 31.899999999999995, 31.899999999999995, 28.65))
+GetDynamicChildrenIds RAW: (0, (None,))
+GetDynamicChildrenIds IDS: []
+
+========================================================================================================================
+DEVICE VIEW 69041
+========================================================================================================================
+dev.SetId(69041) RETURN: 69041
+GetId(): 69041
+GetName(): TEST_NAME_100000
+GetViewNumber(): 1
+IsView(): 1
+GetLocation(): BxRxUx
+
+========================================================================================================================
+VIEW 69041 GetSymbolIds MODE 0
+========================================================================================================================
+RAW: (1, (None, 69271))
+IDS: [69271]
+
+========================================================================================================================
+VIEW 69041 GetSymbolIds MODE 1
+========================================================================================================================
+RAW: (1, (None, 69271))
+IDS: [69271]
+
+========================================================================================================================
+VIEW 69041 GetSymbolIds MODE 2
+========================================================================================================================
+RAW: (0, (None,))
+IDS: []
+
+========================================================================================================================
+VIEW 69041 GetSymbolIds MODE 3
+========================================================================================================================
+RAW: (1, (None, 69271))
+IDS: [69271]
+
+========================================================================================================================
+VIEW 69041 SYMBOL DETAILS
+========================================================================================================================
+
+========================================================================================================================
+SYMBOL 69271
+========================================================================================================================
+sym.SetId(69271) RETURN: 69271
+GetId(): 69271
+GetName(): 2
+GetCode(): 8
+GetSymbolTypeName(): CABBLOCK#0-3a-0-8daf
+GetCharacteristic(): 
+GetRotation(): 0.000000
+GetScaling(): 1.0
+GetDynamicParentId(): 0
+IsDynamic(): 0
+IsDynamicFixed(): 0
+IsPinView(): 0
+GetSchemaLocation: (204828, 5.0, 27.4, '/1.E8', '8', 'E')
+GetArea: (1, 0.0, 0.0, 2.9999999999999996, 4.499999999999998)
+GetPlacedArea: (1, 5.0, 27.4, 8.0, 31.899999999999995)
+GetPlacedPolygon: (1, 5, (None, 5.0, 8.0, 8.0, 5.0, 5.0), (None, 27.4, 27.4, 31.899999999999995, 31.899999999999995, 27.4))
+GetDynamicChildrenIds RAW: (0, (None,))
+GetDynamicChildrenIds IDS: []
+
+========================================================================================================================
+DEVICE VIEW 70161
+========================================================================================================================
+dev.SetId(70161) RETURN: 70161
+GetId(): 70161
+GetName(): TEST_NAME_100000
+GetViewNumber(): 2
+IsView(): 1
+GetLocation(): BxRxUx
+
+========================================================================================================================
+VIEW 70161 GetSymbolIds MODE 0
+========================================================================================================================
+RAW: (1, (None, 70419))
+IDS: [70419]
+
+========================================================================================================================
+VIEW 70161 GetSymbolIds MODE 1
+========================================================================================================================
+RAW: (1, (None, 70419))
+IDS: [70419]
+
+========================================================================================================================
+VIEW 70161 GetSymbolIds MODE 2
+========================================================================================================================
+RAW: (0, (None,))
+IDS: []
+
+========================================================================================================================
+VIEW 70161 GetSymbolIds MODE 3
+========================================================================================================================
+RAW: (1, (None, 70419))
+IDS: [70419]
+
+========================================================================================================================
+VIEW 70161 SYMBOL DETAILS
+========================================================================================================================
+
+========================================================================================================================
+SYMBOL 70419
+========================================================================================================================
+sym.SetId(70419) RETURN: 70419
+GetId(): 70419
+GetName(): 3
+GetCode(): 8
+GetSymbolTypeName(): CABBLOCK#0-3a-0-8dd4
+GetCharacteristic(): 
+GetRotation(): 0.000000
+GetScaling(): 1.0
+GetDynamicParentId(): 0
+IsDynamic(): 0
+IsDynamicFixed(): 0
+IsPinView(): 0
+GetSchemaLocation: (204828, 5.0, 22.15, '/1.E8', '8', 'E')
+GetArea: (1, 0.0, 0.0, 2.9999999999999996, 4.249999999999998)
+GetPlacedArea: (1, 5.0, 22.15, 8.0, 26.399999999999995)
+GetPlacedPolygon: (1, 5, (None, 5.0, 8.0, 8.0, 5.0, 5.0), (None, 22.15, 22.15, 26.399999999999995, 26.399999999999995, 22.15))
+GetDynamicChildrenIds RAW: (0, (None,))
+GetDynamicChildrenIds IDS: []
+
+========================================================================================================================
+SHEET-LEVEL CABBLOCK SEARCH
+========================================================================================================================
+
+SHEET 1 | ID 204828
+GetSymbolIds RAW: (22, (None, 66218, 61179, 68773, 69271, 70419, 143999, 143976, 143975, 143986, 145922, 146059, 204784, 146079, 143985, 62426, 62728, 147117, 67098, 70169, 70675, 71681, 72197))
+SYMBOL COUNT: 22
+CABBLOCK SYMBOL 66218 | NAME 1 | CODE 8 | TYPE CABBLOCK#0-3a-0-8cc4
+    LOCATION: (204828, 1.0, 28.65, '/1.F8', '8', 'F')
+    AREA: (1, 0.0, 0.0, 3.0, 3.2499999999999982)
+    PLACED AREA: (1, 1.0, 28.65, 4.0, 31.899999999999995)
+    POLYGON: (1, 5, (None, 1.0, 4.0, 4.0, 1.0, 1.0), (None, 28.65, 28.65, 31.899999999999995, 31.899999999999995, 28.65))
+CABBLOCK SYMBOL 69271 | NAME 2 | CODE 8 | TYPE CABBLOCK#0-3a-0-8daf
+    LOCATION: (204828, 5.0, 27.4, '/1.E8', '8', 'E')
+    AREA: (1, 0.0, 0.0, 2.9999999999999996, 4.499999999999998)
+    PLACED AREA: (1, 5.0, 27.4, 8.0, 31.899999999999995)
+    POLYGON: (1, 5, (None, 5.0, 8.0, 8.0, 5.0, 5.0), (None, 27.4, 27.4, 31.899999999999995, 31.899999999999995, 27.4))
+CABBLOCK SYMBOL 70419 | NAME 3 | CODE 8 | TYPE CABBLOCK#0-3a-0-8dd4
+    LOCATION: (204828, 5.0, 22.15, '/1.E8', '8', 'E')
+    AREA: (1, 0.0, 0.0, 2.9999999999999996, 4.249999999999998)
+    PLACED AREA: (1, 5.0, 22.15, 8.0, 26.399999999999995)
+    POLYGON: (1, 5, (None, 5.0, 8.0, 8.0, 5.0, 5.0), (None, 22.15, 22.15, 26.399999999999995, 26.399999999999995, 22.15))
+
+SHEET 2 | ID 147977
+GetSymbolIds RAW: (0, (None,))
+SYMBOL COUNT: 0
+
+========================================================================================================================
+TEST COMPLETE
+========================================================================================================================
+Send me this output.
+
+We are looking for the CABBLOCK whose placed area contains the connector pin coordinates.
+For SCP-J1 the existing connector pin X is about 7.7.
+So the correct block should have a placed-area X range that reaches roughly that region.
+
+The previous CABBLOCK candidate 66218 had placed area X = 1.0 to 4.0,
+so I do NOT want to wire that geometry into the production orderer until we identify the actual view/block.
