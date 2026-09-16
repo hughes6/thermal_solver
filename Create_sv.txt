@@ -1,261 +1,366 @@
+import time
+import traceback
 
-====================================================================================================
-E3 PlacePinView GHOST-ID TEST
-====================================================================================================
-Previous tests proved:
-1) PlacePinView(logical_pin_id, ...) returns 0.
-2) sym.Delete() converts the placed pin view into a retained ghost/unplaced view.
-
-This test answers one narrow question:
-Does PlacePinView expect the retained PIN-VIEW ID instead of the logical pin ID?
-
-DRY_RUN = True
-CONNECTOR = SCP-J1
-TARGET PIN = 1
-TARGET = (5.5, 30.25)
-
-====================================================================================================
-CONNECTING TO E3
-====================================================================================================
-APPLICATION: <win32com.gen_py.E3.series 2025.2543 Type Library.IApplicationInterface instance at 0x2088808649392>
-PROJECT: <win32com.gen_py.E3.series 2025.2543 Type Library.IJobInterface instance at 0x2088808650736>
-
-====================================================================================================
-FIND CONNECTOR SCP-J1
-====================================================================================================
-DEVICE 72258: Wires
-DEVICE 64611: SCP-J1
-FOUND CONNECTOR ID: 64611
-
-====================================================================================================
-VERIFY END_SPLIT SYMBOL LOAD
-====================================================================================================
-probe.Load('MilSymbolReceptacle¶END_SPLIT', 1) RETURN: 148869
-END_SPLIT loaded successfully into the temporary symbol object.
-
-====================================================================================================
-TARGET BEFORE TEST
-====================================================================================================
-LOGICAL PIN ID: 64615
-GetViewIds(): [70079]
-VIEW ID: 70079
-    PIN SetId RETURN: 70079
-    SYMBOL SetId RETURN: 146785
-    SYMBOL GetId: 146785
-    LIVE: True
-    LOCATION: [204828.0, 7.699999999999999, 29.9, 7.0]
-    NODE IDS: [146763]
-    BOUNDS: [146772, 146773]
-    TYPE: MilSymbolReceptacle¶END_TOP
-    CHARACTERISTIC: END_TOP
-    ROTATION: y
-    SCALING: 1.0
-
-====================================================================================================
-DRY RUN PLAN
-====================================================================================================
-Would delete live view 70079 first.
-Then would re-read GetViewIds().
-Then would call PlacePinView using the retained ghost view ID as the FIRST parameter.
+import pythoncom
+import win32com.client
 
 
+# ============================================================
+# CONFIG
+# ============================================================
+
+CONNECTOR_NAME = "SCP-J1"
+TARGET_PIN_NAME = "1"
+
+TARGET_X = 5.5
+TARGET_Y = 30.25
+
+DETACHED_SYMBOL_NAME = "MilSymbolReceptacle¶END_SPLIT"
+DETACHED_SYMBOL_VERSION = "1"
+
+ROTATION = "y"
+SCALE = 1.0
+MAINTAIN_TEXT_SIZE = 1
+
+COM_MISSING = -2147352572
 
 
+# ============================================================
+# HELPERS
+# ============================================================
+
+def is_missing_value(value):
+
+    if value is None:
+        return True
+
+    try:
+        return int(value) == COM_MISSING
+    except Exception:
+        return False
 
 
+def clean_id_list(values):
+
+    cleaned = []
+
+    if values is None:
+        return cleaned
+
+    if not isinstance(values, (tuple, list)):
+        values = [values]
+
+    for value in values:
+
+        if is_missing_value(value):
+            continue
+
+        try:
+            value = int(value)
+        except Exception:
+            continue
+
+        if value > 0:
+            cleaned.append(value)
+
+    return cleaned
 
 
+def parse_count_array_result(result):
 
-====================================================================================================
-E3 PlacePinView GHOST-ID TEST
-====================================================================================================
-Previous tests proved:
-1) PlacePinView(logical_pin_id, ...) returns 0.
-2) sym.Delete() converts the placed pin view into a retained ghost/unplaced view.
+    if result is None:
+        return []
 
-This test answers one narrow question:
-Does PlacePinView expect the retained PIN-VIEW ID instead of the logical pin ID?
+    if isinstance(result, (tuple, list)):
 
-DRY_RUN = False
-CONNECTOR = SCP-J1
-TARGET PIN = 1
-TARGET = (5.5, 30.25)
+        items = list(result)
 
-====================================================================================================
-CONNECTING TO E3
-====================================================================================================
-APPLICATION: <win32com.gen_py.E3.series 2025.2543 Type Library.IApplicationInterface instance at 0x1597717533360>
-PROJECT: <win32com.gen_py.E3.series 2025.2543 Type Library.IJobInterface instance at 0x1597717534704>
+        if len(items) >= 2 and isinstance(items[1], (tuple, list)):
 
-====================================================================================================
-FIND CONNECTOR SCP-J1
-====================================================================================================
-DEVICE 72258: Wires
-DEVICE 64611: SCP-J1
-FOUND CONNECTOR ID: 64611
+            try:
+                count = int(items[0])
+            except Exception:
+                count = None
 
-====================================================================================================
-VERIFY END_SPLIT SYMBOL LOAD
-====================================================================================================
-probe.Load('MilSymbolReceptacle¶END_SPLIT', 1) RETURN: 148869
-END_SPLIT loaded successfully into the temporary symbol object.
+            values = clean_id_list(items[1])
 
-====================================================================================================
-TARGET BEFORE TEST
-====================================================================================================
-LOGICAL PIN ID: 64615
-GetViewIds(): [70079]
-VIEW ID: 70079
-    PIN SetId RETURN: 70079
-    SYMBOL SetId RETURN: 146785
-    SYMBOL GetId: 146785
-    LIVE: True
-    LOCATION: [204828.0, 7.699999999999999, 29.9, 7.0]
-    NODE IDS: [146763]
-    BOUNDS: [146772, 146773]
-    TYPE: MilSymbolReceptacle¶END_TOP
-    CHARACTERISTIC: END_TOP
-    ROTATION: y
-    SCALING: 1.0
+            if count is not None and len(values) > count:
+                values = values[-count:]
 
-====================================================================================================
-DELETE LIVE VIEW 70079
-====================================================================================================
-sym.SetId(70079) RETURN: 146785
-sym.GetId(): 146785
-sym.Delete RETURN: 0
-sym.Delete ELAPSED: 0.017654 SEC
+            return values
 
-====================================================================================================
-TARGET AFTER DELETE
-====================================================================================================
-LOGICAL PIN ID: 64615
-GetViewIds(): [70079]
-VIEW ID: 70079
-    PIN SetId RETURN: 70079
-    SYMBOL SetId RETURN: 0
-    SYMBOL GetId: 0
-    LIVE: False
-    LOCATION: None
-    NODE IDS: []
-    BOUNDS: []
-    TYPE: 
-    CHARACTERISTIC: 
-    ROTATION: 0
-    SCALING: 1.0
+        return clean_id_list(items)
 
-====================================================================================================
-CONNECTOR AFTER DELETE
-====================================================================================================
-PIN 1 | LOGICAL PIN ID 64615 | VIEW IDS [70079]
-    VIEW 70079 | LIVE False | SYMBOL ID 0 | LOCATION None | NODE IDS [] | BOUNDS [] | TYPE  | CHARACTERISTIC 
-PIN 2 | LOGICAL PIN ID 64614 | VIEW IDS [70077]
-    VIEW 70077 | LIVE True | SYMBOL ID 148785 | LOCATION [204828.0, 7.7, 29.650000000000002, 7.0] | NODE IDS [206162] | BOUNDS [147085, 147030] | TYPE MilSymbolReceptacle¶END_TOP | CHARACTERISTIC END_TOP
-PIN 3 | LOGICAL PIN ID 64613 | VIEW IDS [70075]
-    VIEW 70075 | LIVE True | SYMBOL ID 146239 | LOCATION [204828.0, 7.7, 29.400000000000002, 7.0] | NODE IDS [147144] | BOUNDS [147073, 147026, 147085, 147030] | TYPE MilSymbolReceptacle¶CONNECTOR_PIN | CHARACTERISTIC CONNECTOR_PIN
-PIN 4 | LOGICAL PIN ID 64612 | VIEW IDS [70073]
-    VIEW 70073 | LIVE True | SYMBOL ID 146765 | LOCATION [204828.0, 7.7, 29.150000000000002, 7.0] | NODE IDS [146024] | BOUNDS [147142, 147118, 147073, 147026] | TYPE MilSymbolReceptacle¶CONNECTOR_PIN | CHARACTERISTIC CONNECTOR_PIN
-PIN 5 | LOGICAL PIN ID 64619 | VIEW IDS [70067]
-    VIEW 70067 | LIVE True | SYMBOL ID 145922 | LOCATION [204828.0, 7.7, 28.900000000000002, 7.0] | NODE IDS [147661] | BOUNDS [148796, 147434, 147142, 147118] | TYPE MilSymbolReceptacle¶CONNECTOR_PIN | CHARACTERISTIC CONNECTOR_PIN
-PIN 6 | LOGICAL PIN ID 64618 | VIEW IDS [70061]
-    VIEW 70061 | LIVE True | SYMBOL ID 146059 | LOCATION [204828.0, 7.7, 28.650000000000002, 7.0] | NODE IDS [147660] | BOUNDS [148796, 147434, 147014, 147532] | TYPE MilSymbolReceptacle¶CONNECTOR_PIN | CHARACTERISTIC CONNECTOR_PIN
-PIN 7 | LOGICAL PIN ID 64617 | VIEW IDS [70055]
-    VIEW 70055 | LIVE True | SYMBOL ID 204784 | LOCATION [204828.0, 7.7, 28.400000000000002, 7.0] | NODE IDS [146064] | BOUNDS [147014, 147532, 146885, 146991] | TYPE MilSymbolReceptacle¶CONNECTOR_PIN | CHARACTERISTIC CONNECTOR_PIN
-PIN 8 | LOGICAL PIN ID 64616 | VIEW IDS [70049]
-    VIEW 70049 | LIVE True | SYMBOL ID 146079 | LOCATION [204828.0, 7.7, 28.150000000000002, 7.0] | NODE IDS [146237] | BOUNDS [147599, 147022, 146885, 146991] | TYPE MilSymbolReceptacle¶CONNECTOR_PIN | CHARACTERISTIC CONNECTOR_PIN
-PIN 9 | LOGICAL PIN ID 64534 | VIEW IDS [70043]
-    VIEW 70043 | LIVE True | SYMBOL ID 147052 | LOCATION [204828.0, 7.7, 27.900000000000002, 7.0] | NODE IDS [146983] | BOUNDS [147599, 147022] | TYPE MilSymbolReceptacle¶SPLIT_BOTTOM | CHARACTERISTIC SPLIT_BOTTOM
+    return clean_id_list(result)
 
-====================================================================================================
-GHOST VIEW CONFIRMED
-====================================================================================================
-LOGICAL PIN ID: 64615
-GHOST VIEW ID: 70079
-The ghost view remains valid through pin.SetId(), but has no backing symbol.
 
-Previous failed call:
-PlacePinView(64615, ...)
+def call_id_array(method):
 
-New candidate call:
-PlacePinView(70079, ...)
+    try:
+        result = method(None)
 
-====================================================================================================
-CONNECTOR BEFORE GHOST-ID PLACE
-====================================================================================================
-PIN 1 | LOGICAL PIN ID 64615 | VIEW IDS [70079]
-    VIEW 70079 | LIVE False | SYMBOL ID 0 | LOCATION None | NODE IDS [] | BOUNDS [] | TYPE  | CHARACTERISTIC 
-PIN 2 | LOGICAL PIN ID 64614 | VIEW IDS [70077]
-    VIEW 70077 | LIVE True | SYMBOL ID 148785 | LOCATION [204828.0, 7.7, 29.650000000000002, 7.0] | NODE IDS [206162] | BOUNDS [147085, 147030] | TYPE MilSymbolReceptacle¶END_TOP | CHARACTERISTIC END_TOP
-PIN 3 | LOGICAL PIN ID 64613 | VIEW IDS [70075]
-    VIEW 70075 | LIVE True | SYMBOL ID 146239 | LOCATION [204828.0, 7.7, 29.400000000000002, 7.0] | NODE IDS [147144] | BOUNDS [147073, 147026, 147085, 147030] | TYPE MilSymbolReceptacle¶CONNECTOR_PIN | CHARACTERISTIC CONNECTOR_PIN
-PIN 4 | LOGICAL PIN ID 64612 | VIEW IDS [70073]
-    VIEW 70073 | LIVE True | SYMBOL ID 146765 | LOCATION [204828.0, 7.7, 29.150000000000002, 7.0] | NODE IDS [146024] | BOUNDS [147142, 147118, 147073, 147026] | TYPE MilSymbolReceptacle¶CONNECTOR_PIN | CHARACTERISTIC CONNECTOR_PIN
-PIN 5 | LOGICAL PIN ID 64619 | VIEW IDS [70067]
-    VIEW 70067 | LIVE True | SYMBOL ID 145922 | LOCATION [204828.0, 7.7, 28.900000000000002, 7.0] | NODE IDS [147661] | BOUNDS [148796, 147434, 147142, 147118] | TYPE MilSymbolReceptacle¶CONNECTOR_PIN | CHARACTERISTIC CONNECTOR_PIN
-PIN 6 | LOGICAL PIN ID 64618 | VIEW IDS [70061]
-    VIEW 70061 | LIVE True | SYMBOL ID 146059 | LOCATION [204828.0, 7.7, 28.650000000000002, 7.0] | NODE IDS [147660] | BOUNDS [148796, 147434, 147014, 147532] | TYPE MilSymbolReceptacle¶CONNECTOR_PIN | CHARACTERISTIC CONNECTOR_PIN
-PIN 7 | LOGICAL PIN ID 64617 | VIEW IDS [70055]
-    VIEW 70055 | LIVE True | SYMBOL ID 204784 | LOCATION [204828.0, 7.7, 28.400000000000002, 7.0] | NODE IDS [146064] | BOUNDS [147014, 147532, 146885, 146991] | TYPE MilSymbolReceptacle¶CONNECTOR_PIN | CHARACTERISTIC CONNECTOR_PIN
-PIN 8 | LOGICAL PIN ID 64616 | VIEW IDS [70049]
-    VIEW 70049 | LIVE True | SYMBOL ID 146079 | LOCATION [204828.0, 7.7, 28.150000000000002, 7.0] | NODE IDS [146237] | BOUNDS [147599, 147022, 146885, 146991] | TYPE MilSymbolReceptacle¶CONNECTOR_PIN | CHARACTERISTIC CONNECTOR_PIN
-PIN 9 | LOGICAL PIN ID 64534 | VIEW IDS [70043]
-    VIEW 70043 | LIVE True | SYMBOL ID 147052 | LOCATION [204828.0, 7.7, 27.900000000000002, 7.0] | NODE IDS [146983] | BOUNDS [147599, 147022] | TYPE MilSymbolReceptacle¶SPLIT_BOTTOM | CHARACTERISTIC SPLIT_BOTTOM
+        values = parse_count_array_result(result)
 
-====================================================================================================
-PlacePinView USING GHOST VIEW ID
-====================================================================================================
-THIS TEST CHANGES ONLY THE FIRST PARAMETER.
-Previous failed call used the logical pin ID.
-This call uses the retained ghost pin-view ID.
+        if values:
+            return values
 
-CALL: placement.PlacePinView(70079, 204828, 'MilSymbolReceptacle¶END_SPLIT', '1', 5.5, 30.25, 'y', 1.0, 1)
-PlacePinView RETURN: 147261
-PlacePinView ELAPSED: 0.027955 SEC
+    except Exception:
+        pass
 
-====================================================================================================
-TARGET AFTER GHOST-ID PlacePinView
-====================================================================================================
-PlacePinView RETURN: 147261
-LOGICAL PIN ID: 64615
-GetViewIds(): [70079]
-VIEW ID: 70079
-    PIN SetId RETURN: 70079
-    SYMBOL SetId RETURN: 0
-    SYMBOL GetId: 0
-    LIVE: False
-    LOCATION: None
-    NODE IDS: [146856]
-    BOUNDS: []
-    TYPE: 
-    CHARACTERISTIC: 
-    ROTATION: 0
-    SCALING: 1.0
+    try:
+        result = method()
 
-====================================================================================================
-FINAL CONNECTOR STATE
-====================================================================================================
-PIN 1 | LOGICAL PIN ID 64615 | VIEW IDS [70079]
-    VIEW 70079 | LIVE False | SYMBOL ID 0 | LOCATION None | NODE IDS [146856] | BOUNDS [] | TYPE  | CHARACTERISTIC 
-PIN 2 | LOGICAL PIN ID 64614 | VIEW IDS [70077]
-    VIEW 70077 | LIVE True | SYMBOL ID 148785 | LOCATION [204828.0, 7.7, 29.650000000000002, 7.0] | NODE IDS [206162] | BOUNDS [147085, 147030] | TYPE MilSymbolReceptacle¶END_TOP | CHARACTERISTIC END_TOP
-PIN 3 | LOGICAL PIN ID 64613 | VIEW IDS [70075]
-    VIEW 70075 | LIVE True | SYMBOL ID 146239 | LOCATION [204828.0, 7.7, 29.400000000000002, 7.0] | NODE IDS [147144] | BOUNDS [147073, 147026, 147085, 147030] | TYPE MilSymbolReceptacle¶CONNECTOR_PIN | CHARACTERISTIC CONNECTOR_PIN
-PIN 4 | LOGICAL PIN ID 64612 | VIEW IDS [70073]
-    VIEW 70073 | LIVE True | SYMBOL ID 146765 | LOCATION [204828.0, 7.7, 29.150000000000002, 7.0] | NODE IDS [146024] | BOUNDS [147142, 147118, 147073, 147026] | TYPE MilSymbolReceptacle¶CONNECTOR_PIN | CHARACTERISTIC CONNECTOR_PIN
-PIN 5 | LOGICAL PIN ID 64619 | VIEW IDS [70067]
-    VIEW 70067 | LIVE True | SYMBOL ID 145922 | LOCATION [204828.0, 7.7, 28.900000000000002, 7.0] | NODE IDS [147661] | BOUNDS [148796, 147434, 147142, 147118] | TYPE MilSymbolReceptacle¶CONNECTOR_PIN | CHARACTERISTIC CONNECTOR_PIN
-PIN 6 | LOGICAL PIN ID 64618 | VIEW IDS [70061]
-    VIEW 70061 | LIVE True | SYMBOL ID 146059 | LOCATION [204828.0, 7.7, 28.650000000000002, 7.0] | NODE IDS [147660] | BOUNDS [148796, 147434, 147014, 147532] | TYPE MilSymbolReceptacle¶CONNECTOR_PIN | CHARACTERISTIC CONNECTOR_PIN
-PIN 7 | LOGICAL PIN ID 64617 | VIEW IDS [70055]
-    VIEW 70055 | LIVE True | SYMBOL ID 204784 | LOCATION [204828.0, 7.7, 28.400000000000002, 7.0] | NODE IDS [146064] | BOUNDS [147014, 147532, 146885, 146991] | TYPE MilSymbolReceptacle¶CONNECTOR_PIN | CHARACTERISTIC CONNECTOR_PIN
-PIN 8 | LOGICAL PIN ID 64616 | VIEW IDS [70049]
-    VIEW 70049 | LIVE True | SYMBOL ID 146079 | LOCATION [204828.0, 7.7, 28.150000000000002, 7.0] | NODE IDS [146237] | BOUNDS [147599, 147022, 146885, 146991] | TYPE MilSymbolReceptacle¶CONNECTOR_PIN | CHARACTERISTIC CONNECTOR_PIN
-PIN 9 | LOGICAL PIN ID 64534 | VIEW IDS [70043]
-    VIEW 70043 | LIVE True | SYMBOL ID 147052 | LOCATION [204828.0, 7.7, 27.900000000000002, 7.0] | NODE IDS [146983] | BOUNDS [147599, 147022] | TYPE MilSymbolReceptacle¶SPLIT_BOTTOM | CHARACTERISTIC SPLIT_BOTTOM
+        values = parse_count_array_result(result)
 
-====================================================================================================
-RESULT
-====================================================================================================
-No live view exists after the ghost-ID PlacePinView call.
-That rules out both logical-pin ID and retained pin-view ID for PlacePinView in this workflow.
-The next candidate will be PlacePins(pinarray, ...) rather than another PlacePinView variation.
+        if values:
+            return values
+
+    except Exception:
+        pass
+
+    return []
+
+
+# ============================================================
+# E3 DISCOVERY
+# ============================================================
+
+def find_connector(prj, dev, connector_name):
+
+    for device_id in call_id_array(prj.GetAllDeviceIds):
+
+        dev.SetId(device_id)
+
+        try:
+            name = str(dev.GetName())
+        except Exception:
+            name = ""
+
+        if name == connector_name:
+            return device_id
+
+    raise RuntimeError(f"Could not find connector {connector_name}.")
+
+
+def find_logical_pin(dev, pin, connector_device_id, pin_name):
+
+    dev.SetId(connector_device_id)
+
+    for logical_pin_id in call_id_array(dev.GetPinIds):
+
+        pin.SetId(logical_pin_id)
+
+        try:
+            current_name = str(pin.GetName())
+        except Exception:
+            current_name = ""
+
+        if current_name == str(pin_name):
+
+            return {
+                "logical_pin_id": logical_pin_id,
+                "view_ids": call_id_array(pin.GetViewIds),
+            }
+
+    raise RuntimeError(f"Could not find pin {pin_name}.")
+
+
+def get_pin_schema_location(pin, view_id):
+
+    pin.SetId(view_id)
+
+    attempts = [
+        lambda: pin.GetSchemaLocation(None, None, None, None, None),
+        lambda: pin.GetSchemaLocation(None, None, None),
+        lambda: pin.GetSchemaLocation(),
+    ]
+
+    for attempt in attempts:
+
+        try:
+            result = attempt()
+        except Exception:
+            continue
+
+        if not isinstance(result, (tuple, list)):
+            continue
+
+        numeric = []
+
+        for value in result:
+
+            if is_missing_value(value):
+                continue
+
+            try:
+                numeric.append(float(value))
+            except Exception:
+                pass
+
+        if len(numeric) >= 3:
+            return numeric
+
+    return None
+
+
+# ============================================================
+# PROVEN MOVE OPERATION
+# ============================================================
+
+def move_endpoint_pin(prj, dev, pin, connector_device_id, pin_name, target_x, target_y):
+
+    pin_record = find_logical_pin(dev, pin, connector_device_id, pin_name)
+
+    if len(pin_record["view_ids"]) != 1:
+        raise RuntimeError(f"Pin {pin_name} must have exactly one view. Found {pin_record['view_ids']}.")
+
+    pin_view_id = pin_record["view_ids"][0]
+
+    location = get_pin_schema_location(pin, pin_view_id)
+
+    if location is None:
+        raise RuntimeError(f"Pin {pin_name} does not currently have a live placed view.")
+
+    sheet_id = int(location[0])
+
+    current_symbol = prj.CreateSymbolObject()
+
+    current_symbol_id = current_symbol.SetId(pin_view_id)
+
+    if current_symbol_id <= 0:
+        raise RuntimeError(f"Could not resolve live symbol for pin-view ID {pin_view_id}.")
+
+    characteristic = current_symbol.GetCharacteristic()
+
+    if characteristic not in ("END_TOP", "END_BOTTOM", "SPLIT_BOTTOM"):
+        raise RuntimeError(f"Pin {pin_name} is not currently an endpoint. Characteristic is {characteristic}.")
+
+    rotation = current_symbol.GetRotation()
+    scaling = current_symbol.GetScaling()
+
+    if not isinstance(rotation, str) or rotation == "":
+        rotation = ROTATION
+
+    try:
+        scaling = float(scaling)
+    except Exception:
+        scaling = SCALE
+
+    print()
+    print(f"PIN NAME: {pin_name}")
+    print(f"LOGICAL PIN ID: {pin_record['logical_pin_id']}")
+    print(f"STABLE PIN-VIEW ID: {pin_view_id}")
+    print(f"CURRENT LIVE SYMBOL ID: {current_symbol_id}")
+    print(f"CURRENT CHARACTERISTIC: {characteristic}")
+    print(f"CURRENT LOCATION: {location}")
+
+    delete_result = current_symbol.Delete()
+
+    print(f"DELETE RETURN: {delete_result}")
+
+    time.sleep(0.2)
+
+    ghost_pin_record = find_logical_pin(dev, pin, connector_device_id, pin_name)
+
+    if pin_view_id not in ghost_pin_record["view_ids"]:
+        raise RuntimeError(f"Stable pin-view ID {pin_view_id} disappeared after delete.")
+
+    ghost_check = prj.CreateSymbolObject()
+
+    ghost_symbol_id = ghost_check.SetId(pin_view_id)
+
+    print(f"GHOST sym.SetId({pin_view_id}) RETURN: {ghost_symbol_id}")
+
+    if ghost_symbol_id != 0:
+        raise RuntimeError(f"Pin-view ID {pin_view_id} still resolves to a live symbol after delete.")
+
+    placement = prj.CreateSymbolObject()
+
+    new_symbol_id = placement.PlacePinView(pin_view_id, sheet_id, DETACHED_SYMBOL_NAME, DETACHED_SYMBOL_VERSION, target_x, target_y, rotation, scaling, MAINTAIN_TEXT_SIZE)
+
+    print(f"PlacePinView RETURN / NEW SYMBOL ID: {new_symbol_id}")
+
+    if new_symbol_id <= 0:
+        raise RuntimeError("PlacePinView failed.")
+
+    time.sleep(0.2)
+
+    placed_symbol = prj.CreateSymbolObject()
+
+    placed_set_result = placed_symbol.SetId(new_symbol_id)
+
+    print(f"NEW SYMBOL SetId RETURN: {placed_set_result}")
+
+    if placed_set_result <= 0:
+        raise RuntimeError(f"Could not resolve new symbol ID {new_symbol_id}.")
+
+    try:
+        new_type = placed_symbol.GetSymbolTypeName()
+    except Exception:
+        new_type = ""
+
+    try:
+        new_characteristic = placed_symbol.GetCharacteristic()
+    except Exception:
+        new_characteristic = ""
+
+    print(f"NEW SYMBOL TYPE: {new_type}")
+    print(f"NEW CHARACTERISTIC: {new_characteristic}")
+
+    return {
+        "logical_pin_id": pin_record["logical_pin_id"],
+        "pin_view_id": pin_view_id,
+        "old_symbol_id": current_symbol_id,
+        "new_symbol_id": new_symbol_id,
+        "sheet_id": sheet_id,
+        "target_x": target_x,
+        "target_y": target_y,
+        "symbol_type": new_type,
+        "characteristic": new_characteristic,
+    }
+
+
+# ============================================================
+# MAIN
+# ============================================================
+
+def main():
+
+    pythoncom.CoInitialize()
+
+    app = win32com.client.Dispatch("CT.Application")
+
+    prj = app.CreateJobObject()
+    dev = prj.CreateDeviceObject()
+    pin = prj.CreatePinObject()
+
+    connector_device_id = find_connector(prj, dev, CONNECTOR_NAME)
+
+    result = move_endpoint_pin(prj, dev, pin, connector_device_id, TARGET_PIN_NAME, TARGET_X, TARGET_Y)
+
+    print()
+    print("=" * 100)
+    print("MOVE COMPLETE")
+    print("=" * 100)
+
+    for key, value in result.items():
+        print(f"{key}: {value}")
+
+
+if __name__ == "__main__":
+
+    try:
+        main()
+
+    except Exception as exc:
+        print()
+        print("ERROR")
+        print(exc)
+        print(traceback.format_exc())
+
+    finally:
+
+        try:
+            pythoncom.CoUninitialize()
+        except Exception:
+            pass
