@@ -1,180 +1,784 @@
-dry_run = true
+]import json
+import time
+import traceback
+from datetime import datetime
+from pathlib import Path
 
-====================================================================================================
-E3 PlacePinView EXACT-METADATA TEST
-====================================================================================================
-This version does NOT hard-code END_SPLIT or rotation 0.
-It reads the exact symbol type, rotation, and scaling from the existing placed view.
+import pythoncom
+import win32com.client
+
+
+# ============================================================
+# USER SETTINGS
+# ============================================================
+
+CONNECTOR_NAME = "SCP-J1"
+TARGET_PIN_NAME = "1"
+
+TEST_X = 5.5
+TEST_Y = 30.25
+
 DRY_RUN = True
 
-====================================================================================================
-CONNECTING TO E3
-====================================================================================================
-APPLICATION: <win32com.gen_py.E3.series 2025.2543 Type Library.IApplicationInterface instance at 0x2482685596336>
-PROJECT: <win32com.gen_py.E3.series 2025.2543 Type Library.IJobInterface instance at 0x2482685597680>
+OUTPUT_DIRECTORY = Path(__file__).resolve().parent
 
-====================================================================================================
-FIND CONNECTOR SCP-J1
-====================================================================================================
-DEVICE IDS: [72258, 64611, 67783, 137415]
-DEVICE 72258: Wires
-DEVICE 64611: SCP-J1
-FOUND CONNECTOR ID: 64611
-
-====================================================================================================
-EXISTING VIEW METADATA
-====================================================================================================
-view_id: 70079
-schema_location: [204828.0, 7.699999999999999, 29.9, 7.0]
-bound_ids: [147262, 147264]
-symbol_type_name: MilSymbolReceptacle¶END_TOP
-characteristic: END_TOP
-rotation: y
-scaling: 1.0
-name: J1
-code: 10
-
-====================================================================================================
-CONNECTOR TABLE
-====================================================================================================
-PIN 1 | PIN ID 64615 | [{'view_id': 70079, 'schema_location': [204828.0, 7.699999999999999, 29.9, 7.0], 'symbol_type_name': 'MilSymbolReceptacle¶END_TOP', 'rotation': 'y', 'bound_ids': [147262, 147264]}]
-PIN 2 | PIN ID 64614 | [{'view_id': 70077, 'schema_location': [204828.0, 7.7, 29.650000000000002, 7.0], 'symbol_type_name': 'MilSymbolReceptacle¶CONNECTOR_PIN', 'rotation': 'y', 'bound_ids': [147262, 147264, 147249, 147245]}]
-PIN 3 | PIN ID 64613 | [{'view_id': 70075, 'schema_location': [204828.0, 7.7, 29.400000000000002, 7.0], 'symbol_type_name': 'MilSymbolReceptacle¶CONNECTOR_PIN', 'rotation': 'y', 'bound_ids': [147261, 147260, 147249, 147245]}]
-PIN 4 | PIN ID 64612 | [{'view_id': 70073, 'schema_location': [204828.0, 7.7, 29.150000000000002, 7.0], 'symbol_type_name': 'MilSymbolReceptacle¶CONNECTOR_PIN', 'rotation': 'y', 'bound_ids': [147208, 147207, 147261, 147260]}]
-PIN 5 | PIN ID 64619 | [{'view_id': 70067, 'schema_location': [204828.0, 7.7, 28.900000000000002, 7.0], 'symbol_type_name': 'MilSymbolReceptacle¶CONNECTOR_PIN', 'rotation': 'y', 'bound_ids': [147405, 147406, 147208, 147207]}]
-PIN 6 | PIN ID 64618 | [{'view_id': 70061, 'schema_location': [204828.0, 7.7, 28.650000000000002, 7.0], 'symbol_type_name': 'MilSymbolReceptacle¶CONNECTOR_PIN', 'rotation': 'y', 'bound_ids': [147405, 147406, 147209, 147210]}]
-PIN 7 | PIN ID 64617 | [{'view_id': 70055, 'schema_location': [204828.0, 7.7, 28.400000000000002, 7.0], 'symbol_type_name': 'MilSymbolReceptacle¶CONNECTOR_PIN', 'rotation': 'y', 'bound_ids': [147244, 147243, 147209, 147210]}]
-PIN 8 | PIN ID 64616 | [{'view_id': 70049, 'schema_location': [204828.0, 7.7, 28.150000000000002, 7.0], 'symbol_type_name': 'MilSymbolReceptacle¶CONNECTOR_PIN', 'rotation': 'y', 'bound_ids': [147197, 147198, 147244, 147243]}]
-PIN 9 | PIN ID 64534 | [{'view_id': 70043, 'schema_location': [204828.0, 7.7, 27.900000000000002, 7.0], 'symbol_type_name': 'MilSymbolReceptacle¶END_BOTTOM', 'rotation': 'y', 'bound_ids': [147197, 147198]}]
-
-====================================================================================================
-EXACT CALL THAT WILL BE USED
-====================================================================================================
-LOGICAL PIN ID: 64615
-SHEET ID: 204828
-SYMBOL NAME: 'MilSymbolReceptacle¶END_TOP'
-VERSION: '1'
-TARGET X: 5.5
-TARGET Y: 30.25
-ROTATION: 'y'
-SCALE: 1.0
-MAINTAIN TEXT SIZE: 1
-CALL: sym.PlacePinView(64615, 204828, 'MilSymbolReceptacle¶END_TOP', '1', 5.5, 30.25, 'y', 1.0, 1)
-
-====================================================================================================
-DRY RUN COMPLETE
-====================================================================================================
-No PlacePinView call was made.
-If the exact call above looks correct, set DRY_RUN = False.
+COM_MISSING = -2147352572
 
 
+# ============================================================
+# LOGGING
+# ============================================================
+
+LOG_LINES = []
+
+AUDIT = {
+    "started": None,
+    "finished": None,
+    "connector_name": CONNECTOR_NAME,
+    "target_pin_name": TARGET_PIN_NAME,
+    "events": [],
+}
 
 
+def log(message=""):
+
+    text = str(message)
+
+    print(text)
+
+    LOG_LINES.append(text)
 
 
+def section(title):
+
+    log()
+    log("=" * 100)
+    log(title)
+    log("=" * 100)
 
 
-dry_ruyn = false
+def add_event(event_type, data):
 
-====================================================================================================
-E3 PlacePinView EXACT-METADATA TEST
-====================================================================================================
-This version does NOT hard-code END_SPLIT or rotation 0.
-It reads the exact symbol type, rotation, and scaling from the existing placed view.
-DRY_RUN = False
+    AUDIT["events"].append({
+        "time": datetime.now().isoformat(timespec="milliseconds"),
+        "type": event_type,
+        "data": data,
+    })
 
-====================================================================================================
-CONNECTING TO E3
-====================================================================================================
-APPLICATION: <win32com.gen_py.E3.series 2025.2543 Type Library.IApplicationInterface instance at 0x3135813292720>
-PROJECT: <win32com.gen_py.E3.series 2025.2543 Type Library.IJobInterface instance at 0x3135813294064>
 
-====================================================================================================
-FIND CONNECTOR SCP-J1
-====================================================================================================
-DEVICE IDS: [72258, 64611, 67783, 137415]
-DEVICE 72258: Wires
-DEVICE 64611: SCP-J1
-FOUND CONNECTOR ID: 64611
+def save_results():
 
-====================================================================================================
-EXISTING VIEW METADATA
-====================================================================================================
-view_id: 70079
-schema_location: [204828.0, 7.699999999999999, 29.9, 7.0]
-bound_ids: [147262, 147264]
-symbol_type_name: MilSymbolReceptacle¶END_TOP
-characteristic: END_TOP
-rotation: y
-scaling: 1.0
-name: J1
-code: 10
+    AUDIT["finished"] = datetime.now().isoformat(timespec="milliseconds")
 
-====================================================================================================
-CONNECTOR TABLE
-====================================================================================================
-PIN 1 | PIN ID 64615 | [{'view_id': 70079, 'schema_location': [204828.0, 7.699999999999999, 29.9, 7.0], 'symbol_type_name': 'MilSymbolReceptacle¶END_TOP', 'rotation': 'y', 'bound_ids': [147262, 147264]}]
-PIN 2 | PIN ID 64614 | [{'view_id': 70077, 'schema_location': [204828.0, 7.7, 29.650000000000002, 7.0], 'symbol_type_name': 'MilSymbolReceptacle¶CONNECTOR_PIN', 'rotation': 'y', 'bound_ids': [147262, 147264, 147249, 147245]}]
-PIN 3 | PIN ID 64613 | [{'view_id': 70075, 'schema_location': [204828.0, 7.7, 29.400000000000002, 7.0], 'symbol_type_name': 'MilSymbolReceptacle¶CONNECTOR_PIN', 'rotation': 'y', 'bound_ids': [147261, 147260, 147249, 147245]}]
-PIN 4 | PIN ID 64612 | [{'view_id': 70073, 'schema_location': [204828.0, 7.7, 29.150000000000002, 7.0], 'symbol_type_name': 'MilSymbolReceptacle¶CONNECTOR_PIN', 'rotation': 'y', 'bound_ids': [147208, 147207, 147261, 147260]}]
-PIN 5 | PIN ID 64619 | [{'view_id': 70067, 'schema_location': [204828.0, 7.7, 28.900000000000002, 7.0], 'symbol_type_name': 'MilSymbolReceptacle¶CONNECTOR_PIN', 'rotation': 'y', 'bound_ids': [147405, 147406, 147208, 147207]}]
-PIN 6 | PIN ID 64618 | [{'view_id': 70061, 'schema_location': [204828.0, 7.7, 28.650000000000002, 7.0], 'symbol_type_name': 'MilSymbolReceptacle¶CONNECTOR_PIN', 'rotation': 'y', 'bound_ids': [147405, 147406, 147209, 147210]}]
-PIN 7 | PIN ID 64617 | [{'view_id': 70055, 'schema_location': [204828.0, 7.7, 28.400000000000002, 7.0], 'symbol_type_name': 'MilSymbolReceptacle¶CONNECTOR_PIN', 'rotation': 'y', 'bound_ids': [147244, 147243, 147209, 147210]}]
-PIN 8 | PIN ID 64616 | [{'view_id': 70049, 'schema_location': [204828.0, 7.7, 28.150000000000002, 7.0], 'symbol_type_name': 'MilSymbolReceptacle¶CONNECTOR_PIN', 'rotation': 'y', 'bound_ids': [147197, 147198, 147244, 147243]}]
-PIN 9 | PIN ID 64534 | [{'view_id': 70043, 'schema_location': [204828.0, 7.7, 27.900000000000002, 7.0], 'symbol_type_name': 'MilSymbolReceptacle¶END_BOTTOM', 'rotation': 'y', 'bound_ids': [147197, 147198]}]
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
 
-====================================================================================================
-EXACT CALL THAT WILL BE USED
-====================================================================================================
-LOGICAL PIN ID: 64615
-SHEET ID: 204828
-SYMBOL NAME: 'MilSymbolReceptacle¶END_TOP'
-VERSION: '1'
-TARGET X: 5.5
-TARGET Y: 30.25
-ROTATION: 'y'
-SCALE: 1.0
-MAINTAIN TEXT SIZE: 1
-CALL: sym.PlacePinView(64615, 204828, 'MilSymbolReceptacle¶END_TOP', '1', 5.5, 30.25, 'y', 1.0, 1)
+    txt_path = OUTPUT_DIRECTORY / f"e3_pin_node_audit_{timestamp}.txt"
+    json_path = OUTPUT_DIRECTORY / f"e3_pin_node_audit_{timestamp}.json"
 
-====================================================================================================
-WARNING
-====================================================================================================
-This may create an additional placed view.
-The existing view will not be deleted by this script.
-PlacePinView RETURN: 0
-PlacePinView ELAPSED: 0.011389 SEC
+    txt_path.write_text("\n".join(LOG_LINES), encoding="utf-8")
+    json_path.write_text(json.dumps(AUDIT, indent=2, default=str), encoding="utf-8")
 
-====================================================================================================
-VIEW ID COMPARISON
-====================================================================================================
-BEFORE VIEW IDS: [70079]
-AFTER VIEW IDS: [70079]
-ADDED VIEW IDS: []
-REMOVED VIEW IDS: []
+    print()
+    print("=" * 100)
+    print("AUDIT FILES WRITTEN")
+    print("=" * 100)
+    print(txt_path)
+    print(json_path)
 
-====================================================================================================
-AFTER VIEW 70079
-====================================================================================================
-view_id: 70079
-schema_location: [204828.0, 7.699999999999999, 29.9, 7.0]
-bound_ids: [147262, 147264]
-symbol_type_name: MilSymbolReceptacle¶END_TOP
-characteristic: END_TOP
-rotation: y
-scaling: 1.0
-name: J1
-code: 10
 
-====================================================================================================
-CONNECTOR TABLE
-====================================================================================================
-PIN 1 | PIN ID 64615 | [{'view_id': 70079, 'schema_location': [204828.0, 7.699999999999999, 29.9, 7.0], 'symbol_type_name': 'MilSymbolReceptacle¶END_TOP', 'rotation': 'y', 'bound_ids': [147262, 147264]}]
-PIN 2 | PIN ID 64614 | [{'view_id': 70077, 'schema_location': [204828.0, 7.7, 29.650000000000002, 7.0], 'symbol_type_name': 'MilSymbolReceptacle¶CONNECTOR_PIN', 'rotation': 'y', 'bound_ids': [147262, 147264, 147249, 147245]}]
-PIN 3 | PIN ID 64613 | [{'view_id': 70075, 'schema_location': [204828.0, 7.7, 29.400000000000002, 7.0], 'symbol_type_name': 'MilSymbolReceptacle¶CONNECTOR_PIN', 'rotation': 'y', 'bound_ids': [147261, 147260, 147249, 147245]}]
-PIN 4 | PIN ID 64612 | [{'view_id': 70073, 'schema_location': [204828.0, 7.7, 29.150000000000002, 7.0], 'symbol_type_name': 'MilSymbolReceptacle¶CONNECTOR_PIN', 'rotation': 'y', 'bound_ids': [147208, 147207, 147261, 147260]}]
-PIN 5 | PIN ID 64619 | [{'view_id': 70067, 'schema_location': [204828.0, 7.7, 28.900000000000002, 7.0], 'symbol_type_name': 'MilSymbolReceptacle¶CONNECTOR_PIN', 'rotation': 'y', 'bound_ids': [147405, 147406, 147208, 147207]}]
-PIN 6 | PIN ID 64618 | [{'view_id': 70061, 'schema_location': [204828.0, 7.7, 28.650000000000002, 7.0], 'symbol_type_name': 'MilSymbolReceptacle¶CONNECTOR_PIN', 'rotation': 'y', 'bound_ids': [147405, 147406, 147209, 147210]}]
-PIN 7 | PIN ID 64617 | [{'view_id': 70055, 'schema_location': [204828.0, 7.7, 28.400000000000002, 7.0], 'symbol_type_name': 'MilSymbolReceptacle¶CONNECTOR_PIN', 'rotation': 'y', 'bound_ids': [147244, 147243, 147209, 147210]}]
-PIN 8 | PIN ID 64616 | [{'view_id': 70049, 'schema_location': [204828.0, 7.7, 28.150000000000002, 7.0], 'symbol_type_name': 'MilSymbolReceptacle¶CONNECTOR_PIN', 'rotation': 'y', 'bound_ids': [147197, 147198, 147244, 147243]}]
-PIN 9 | PIN ID 64534 | [{'view_id': 70043, 'schema_location': [204828.0, 7.7, 27.900000000000002, 7.0], 'symbol_type_name': 'MilSymbolReceptacle¶END_BOTTOM', 'rotation': 'y', 'bound_ids': [147197, 147198]}]
+# ============================================================
+# BASIC HELPERS
+# ============================================================
+
+def safe_string(value):
+
+    try:
+        return str(value)
+    except Exception:
+        return repr(value)
+
+
+def is_missing_value(value):
+
+    if value is None:
+        return True
+
+    try:
+        return int(value) == COM_MISSING
+    except Exception:
+        return False
+
+
+def clean_id_list(values):
+
+    cleaned = []
+
+    if values is None:
+        return cleaned
+
+    if not isinstance(values, (tuple, list)):
+        values = [values]
+
+    for value in values:
+
+        if is_missing_value(value):
+            continue
+
+        try:
+            value = int(value)
+        except Exception:
+            continue
+
+        if value > 0:
+            cleaned.append(value)
+
+    return cleaned
+
+
+def parse_count_array_result(result):
+
+    if result is None:
+        return []
+
+    if isinstance(result, (tuple, list)):
+
+        items = list(result)
+
+        if len(items) >= 2 and isinstance(items[1], (tuple, list)):
+
+            try:
+                count = int(items[0])
+            except Exception:
+                count = None
+
+            values = clean_id_list(items[1])
+
+            if count is not None and len(values) > count:
+                values = values[-count:]
+
+            return values
+
+        return clean_id_list(items)
+
+    return clean_id_list(result)
+
+
+def call_id_array(method):
+
+    attempts = []
+
+    try:
+        result = method(None)
+
+        values = parse_count_array_result(result)
+
+        attempts.append({
+            "call": "method(None)",
+            "raw": safe_string(result),
+            "values": values,
+        })
+
+        if values:
+            return values, attempts
+
+    except Exception as exc:
+        attempts.append({
+            "call": "method(None)",
+            "error": safe_string(exc),
+        })
+
+    try:
+        result = method()
+
+        values = parse_count_array_result(result)
+
+        attempts.append({
+            "call": "method()",
+            "raw": safe_string(result),
+            "values": values,
+        })
+
+        if values:
+            return values, attempts
+
+    except Exception as exc:
+        attempts.append({
+            "call": "method()",
+            "error": safe_string(exc),
+        })
+
+    return [], attempts
+
+
+def call_noarg(obj, method_name):
+
+    if not hasattr(obj, method_name):
+        return None
+
+    try:
+        return getattr(obj, method_name)()
+    except Exception:
+        return None
+
+
+# ============================================================
+# E3 CONNECTION
+# ============================================================
+
+def connect_to_e3():
+
+    section("CONNECTING TO E3")
+
+    pythoncom.CoInitialize()
+
+    app = win32com.client.Dispatch("CT.Application")
+
+    prj = app.CreateJobObject()
+    dev = prj.CreateDeviceObject()
+    pin = prj.CreatePinObject()
+    sym = prj.CreateSymbolObject()
+
+    log(f"APPLICATION: {app}")
+    log(f"PROJECT: {prj}")
+
+    return app, prj, dev, pin, sym
+
+
+# ============================================================
+# CONNECTOR / PIN DISCOVERY
+# ============================================================
+
+def get_device_ids(prj):
+
+    ids, attempts = call_id_array(prj.GetAllDeviceIds)
+
+    return ids
+
+
+def get_pin_ids(dev):
+
+    ids, attempts = call_id_array(dev.GetPinIds)
+
+    return ids
+
+
+def get_view_ids(pin):
+
+    ids, attempts = call_id_array(pin.GetViewIds)
+
+    return ids
+
+
+def get_bound_ids(sym):
+
+    ids, attempts = call_id_array(sym.GetBoundIds)
+
+    return ids
+
+
+def get_pin_name(pin):
+
+    try:
+        return str(pin.GetName())
+    except Exception:
+        return ""
+
+
+def find_connector(prj, dev):
+
+    section(f"FIND CONNECTOR {CONNECTOR_NAME}")
+
+    for device_id in get_device_ids(prj):
+
+        try:
+            dev.SetId(device_id)
+        except Exception:
+            continue
+
+        try:
+            name = str(dev.GetName())
+        except Exception:
+            name = ""
+
+        log(f"DEVICE {device_id}: {name}")
+
+        if name == CONNECTOR_NAME:
+            log(f"FOUND CONNECTOR ID: {device_id}")
+            return device_id
+
+    raise RuntimeError(f"Could not find connector {CONNECTOR_NAME}.")
+
+
+def find_pin(dev, pin, connector_device_id, pin_name):
+
+    dev.SetId(connector_device_id)
+
+    for pin_id in get_pin_ids(dev):
+
+        pin.SetId(pin_id)
+
+        if get_pin_name(pin) == str(pin_name):
+
+            return {
+                "pin_id": pin_id,
+                "pin_name": str(pin_name),
+                "view_ids": get_view_ids(pin),
+            }
+
+    return None
+
+
+# ============================================================
+# PIN / VIEW SNAPSHOT
+# ============================================================
+
+def get_schema_location(pin):
+
+    attempts = [
+        lambda: pin.GetSchemaLocation(None, None, None, None, None),
+        lambda: pin.GetSchemaLocation(None, None, None),
+        lambda: pin.GetSchemaLocation(),
+    ]
+
+    for attempt in attempts:
+
+        try:
+            result = attempt()
+        except Exception:
+            continue
+
+        if not isinstance(result, (tuple, list)):
+            continue
+
+        numeric = []
+
+        for value in result:
+
+            if is_missing_value(value):
+                continue
+
+            try:
+                numeric.append(float(value))
+            except Exception:
+                pass
+
+        if len(numeric) >= 3:
+            return numeric
+
+    return None
+
+
+def get_node_ids(pin):
+
+    ids, attempts = call_id_array(pin.GetNodeIds)
+
+    return ids, attempts
+
+
+def get_connected_node_ids(pin):
+
+    if not hasattr(pin, "GetConnectedNodeIds"):
+        return [], [{
+            "call": "GetConnectedNodeIds",
+            "error": "method not available",
+        }]
+
+    ids, attempts = call_id_array(pin.GetConnectedNodeIds)
+
+    return ids, attempts
+
+
+def snapshot_pin_object(pin, object_id, object_role):
+
+    record = {
+        "object_role": object_role,
+        "object_id": object_id,
+        "set_id_result": None,
+        "name": None,
+        "schema_location": None,
+        "node_ids": [],
+        "connected_node_ids": [],
+        "node_attempts": [],
+        "connected_node_attempts": [],
+        "get_node_type": None,
+        "get_connection_type": None,
+        "get_physical_connection_type": None,
+    }
+
+    try:
+        record["set_id_result"] = pin.SetId(object_id)
+    except Exception as exc:
+        record["set_id_error"] = safe_string(exc)
+        return record
+
+    record["name"] = get_pin_name(pin)
+    record["schema_location"] = get_schema_location(pin)
+
+    node_ids, node_attempts = get_node_ids(pin)
+    connected_node_ids, connected_node_attempts = get_connected_node_ids(pin)
+
+    record["node_ids"] = node_ids
+    record["connected_node_ids"] = connected_node_ids
+    record["node_attempts"] = node_attempts
+    record["connected_node_attempts"] = connected_node_attempts
+    record["get_node_type"] = call_noarg(pin, "GetNodeType")
+    record["get_connection_type"] = call_noarg(pin, "GetConnectionType")
+    record["get_physical_connection_type"] = call_noarg(pin, "GetPhysicalConnectionType")
+
+    return record
+
+
+def snapshot_target(dev, pin, sym, connector_device_id):
+
+    pin_record = find_pin(dev, pin, connector_device_id, TARGET_PIN_NAME)
+
+    if pin_record is None:
+        raise RuntimeError(f"Could not find pin {TARGET_PIN_NAME}.")
+
+    snapshot = {
+        "time": datetime.now().isoformat(timespec="milliseconds"),
+        "logical_pin_id": pin_record["pin_id"],
+        "pin_name": pin_record["pin_name"],
+        "logical_pin": snapshot_pin_object(pin, pin_record["pin_id"], "logical_pin"),
+        "views": [],
+    }
+
+    for view_id in pin_record["view_ids"]:
+
+        view_record = snapshot_pin_object(pin, view_id, "pin_view")
+
+        try:
+            sym.SetId(view_id)
+            view_record["bound_ids"] = get_bound_ids(sym)
+            view_record["symbol_type_name"] = call_noarg(sym, "GetSymbolTypeName")
+            view_record["characteristic"] = call_noarg(sym, "GetCharacteristic")
+            view_record["rotation"] = call_noarg(sym, "GetRotation")
+        except Exception as exc:
+            view_record["symbol_error"] = safe_string(exc)
+
+        snapshot["views"].append(view_record)
+
+    return snapshot
+
+
+def print_pin_object_record(record):
+
+    log(f"{record['object_role'].upper()} OBJECT ID: {record['object_id']}")
+    log(f"    SetId RETURN: {record.get('set_id_result')}")
+    log(f"    NAME: {record.get('name')}")
+    log(f"    SCHEMA LOCATION: {record.get('schema_location')}")
+    log(f"    NODE IDS: {record.get('node_ids')}")
+    log(f"    CONNECTED NODE IDS: {record.get('connected_node_ids')}")
+    log(f"    GetNodeType: {record.get('get_node_type')}")
+    log(f"    GetConnectionType: {record.get('get_connection_type')}")
+    log(f"    GetPhysicalConnectionType: {record.get('get_physical_connection_type')}")
+
+    if "bound_ids" in record:
+        log(f"    BOUND IDS: {record.get('bound_ids')}")
+        log(f"    SYMBOL TYPE: {record.get('symbol_type_name')}")
+        log(f"    CHARACTERISTIC: {record.get('characteristic')}")
+        log(f"    ROTATION: {record.get('rotation')}")
+
+
+def print_snapshot(snapshot, title):
+
+    section(title)
+
+    log(f"PIN NAME: {snapshot['pin_name']}")
+    log(f"LOGICAL PIN ID: {snapshot['logical_pin_id']}")
+    log()
+
+    print_pin_object_record(snapshot["logical_pin"])
+
+    for view_record in snapshot["views"]:
+        log()
+        print_pin_object_record(view_record)
+
+
+# ============================================================
+# SNAPSHOT COMPARISON
+# ============================================================
+
+def compare_records(before, after, label):
+
+    section(label)
+
+    fields = [
+        "schema_location",
+        "node_ids",
+        "connected_node_ids",
+        "get_node_type",
+        "get_connection_type",
+        "get_physical_connection_type",
+        "bound_ids",
+        "symbol_type_name",
+        "characteristic",
+        "rotation",
+    ]
+
+    changes = 0
+
+    for field in fields:
+
+        before_value = before.get(field)
+        after_value = after.get(field)
+
+        if safe_string(before_value) != safe_string(after_value):
+
+            log(f"{field}:")
+            log(f"    BEFORE: {before_value}")
+            log(f"    AFTER:  {after_value}")
+
+            changes += 1
+
+    if changes == 0:
+        log("NO DIFFERENCES DETECTED")
+
+    return changes
+
+
+def compare_snapshots(before, after, title):
+
+    section(title)
+
+    compare_records(before["logical_pin"], after["logical_pin"], "LOGICAL PIN DIFFERENCES")
+
+    before_views = {record["object_id"]: record for record in before["views"]}
+    after_views = {record["object_id"]: record for record in after["views"]}
+
+    all_view_ids = sorted(set(before_views.keys()) | set(after_views.keys()))
+
+    for view_id in all_view_ids:
+
+        if view_id not in before_views:
+            log(f"VIEW {view_id}: ADDED")
+            continue
+
+        if view_id not in after_views:
+            log(f"VIEW {view_id}: REMOVED")
+            continue
+
+        compare_records(before_views[view_id], after_views[view_id], f"VIEW {view_id} DIFFERENCES")
+
+
+# ============================================================
+# CONTROLLED PlaceNode TEST
+# ============================================================
+
+def run_place_node(pin, object_id, role, sheet_id):
+
+    section(f"PlaceNode TEST ON {role.upper()} OBJECT {object_id}")
+
+    log(f"TARGET SHEET: {sheet_id}")
+    log(f"TARGET X: {TEST_X}")
+    log(f"TARGET Y: {TEST_Y}")
+
+    pin.SetId(object_id)
+
+    confirmation = input(f"Type PLACENODE {object_id} to call PlaceNode on this object: ").strip()
+
+    if confirmation != f"PLACENODE {object_id}":
+        log("PlaceNode test cancelled.")
+        return None
+
+    started = time.perf_counter()
+
+    try:
+        result = pin.PlaceNode(sheet_id, TEST_X, TEST_Y)
+    except Exception as exc:
+        elapsed = time.perf_counter() - started
+
+        log(f"PlaceNode EXCEPTION AFTER {elapsed:.6f} SEC: {exc}")
+        log(traceback.format_exc())
+
+        return None
+
+    elapsed = time.perf_counter() - started
+
+    log(f"PlaceNode RETURN: {result}")
+    log(f"PlaceNode ELAPSED: {elapsed:.6f} SEC")
+
+    return result
+
+
+# ============================================================
+# MENU TESTS
+# ============================================================
+
+def test_snapshot(dev, pin, sym, connector_device_id):
+
+    snapshot = snapshot_target(dev, pin, sym, connector_device_id)
+
+    print_snapshot(snapshot, "CURRENT NODE SNAPSHOT")
+
+    add_event("snapshot", snapshot)
+
+
+def test_manual_compare(dev, pin, sym, connector_device_id):
+
+    before = snapshot_target(dev, pin, sym, connector_device_id)
+
+    print_snapshot(before, "BEFORE MANUAL MOVE")
+
+    input("Manually move the TOP pin in E3, then press ENTER here: ")
+
+    after = snapshot_target(dev, pin, sym, connector_device_id)
+
+    print_snapshot(after, "AFTER MANUAL MOVE")
+
+    compare_snapshots(before, after, "MANUAL MOVE NODE / BOUND DIFFERENCE")
+
+    add_event("manual_before", before)
+    add_event("manual_after", after)
+
+
+def test_place_node(dev, pin, sym, connector_device_id, use_view):
+
+    before = snapshot_target(dev, pin, sym, connector_device_id)
+
+    print_snapshot(before, "BEFORE PlaceNode")
+
+    logical_record = before["logical_pin"]
+
+    if use_view:
+
+        if not before["views"]:
+            log("No pin view exists.")
+            return
+
+        target_record = before["views"][0]
+
+    else:
+
+        target_record = logical_record
+
+    schema_location = target_record.get("schema_location")
+
+    if schema_location is None or len(schema_location) < 1:
+
+        if before["views"]:
+            schema_location = before["views"][0].get("schema_location")
+
+    if schema_location is None or len(schema_location) < 1:
+        raise RuntimeError("Could not determine sheet ID.")
+
+    sheet_id = int(schema_location[0])
+
+    if DRY_RUN:
+
+        section("DRY RUN")
+
+        log(f"Would call pin.PlaceNode({sheet_id}, {TEST_X}, {TEST_Y})")
+        log(f"with pin.SetId({target_record['object_id']})")
+        log(f"ROLE: {target_record['object_role']}")
+        log("No PlaceNode call made.")
+
+        return
+
+    result = run_place_node(pin, target_record["object_id"], target_record["object_role"], sheet_id)
+
+    if result is None:
+        return
+
+    time.sleep(0.5)
+
+    after = snapshot_target(dev, pin, sym, connector_device_id)
+
+    print_snapshot(after, "AFTER PlaceNode")
+
+    compare_snapshots(before, after, "PlaceNode NODE / BOUND DIFFERENCE")
+
+    add_event("placenode_before", before)
+    add_event("placenode_after", after)
+
+
+# ============================================================
+# MENU
+# ============================================================
+
+def print_menu():
+
+    section("MENU")
+
+    log("1 - Current node snapshot")
+    log("2 - Manual TOP move -> compare nodes/bounds before and after")
+    log("3 - Controlled PlaceNode on LOGICAL pin")
+    log("4 - Controlled PlaceNode on PIN VIEW")
+    log("q - Save and quit")
+
+
+# ============================================================
+# MAIN
+# ============================================================
+
+def main():
+
+    AUDIT["started"] = datetime.now().isoformat(timespec="milliseconds")
+
+    section("E3 PIN NODE AUDIT / PlaceNode TEST")
+
+    log(f"CONNECTOR_NAME = {CONNECTOR_NAME}")
+    log(f"TARGET_PIN_NAME = {TARGET_PIN_NAME}")
+    log(f"TEST TARGET = ({TEST_X}, {TEST_Y})")
+    log(f"DRY_RUN = {DRY_RUN}")
+    log()
+    log("Recommended first run:")
+    log("1) Choose option 1.")
+    log("2) Choose option 2 and manually move only the top pin.")
+    log("3) Send the resulting log before enabling PlaceNode.")
+
+    app, prj, dev, pin, sym = connect_to_e3()
+
+    connector_device_id = find_connector(prj, dev)
+
+    while True:
+
+        print_menu()
+
+        choice = input("Select test: ").strip().lower()
+
+        if choice == "1":
+            test_snapshot(dev, pin, sym, connector_device_id)
+
+        elif choice == "2":
+            test_manual_compare(dev, pin, sym, connector_device_id)
+
+        elif choice == "3":
+            test_place_node(dev, pin, sym, connector_device_id, use_view=False)
+
+        elif choice == "4":
+            test_place_node(dev, pin, sym, connector_device_id, use_view=True)
+
+        elif choice == "q":
+            break
+
+        else:
+            log("INVALID SELECTION")
+
+
+if __name__ == "__main__":
+
+    try:
+        main()
+
+    except KeyboardInterrupt:
+        log()
+        log("STOPPED BY USER")
+
+    except Exception as exc:
+        log()
+        log("FATAL ERROR")
+        log(safe_string(exc))
+        log(traceback.format_exc())
+
+    finally:
+
+        try:
+            save_results()
+        except Exception as exc:
+            print(f"COULD NOT SAVE RESULTS: {exc}")
+
+        try:
+            pythoncom.CoUninitialize()
+        except Exception:
+            pass
