@@ -1,212 +1,494 @@
-dry run = true
+import time
+import traceback
+from datetime import datetime
+from pathlib import Path
 
-====================================================================================================
-E3 PlacePinView CONTROLLED TEST
-====================================================================================================
-This script tests the exact PlacePinView signature discovered from the generated E3 COM wrapper.
-It does NOT delete the existing view.
-If E3 allows it, this may create an additional view for the same logical pin.
+import pythoncom
+import win32com.client
+
+
+CONNECTOR_NAME = "SCP-J1"
+TARGET_PIN_NAME = "1"
+
+TARGET_X = 5.5
+TARGET_Y = 30.25
+
+SYMBOL_VERSION = "1"
+MAINTAIN_TEXT_SIZE = 1
 
 DRY_RUN = True
-CONNECTOR = SCP-J1
-PIN = 1
-SYMBOL_NAME = MilSymbolReceptacle¶END_SPLIT
-SYMBOL_VERSION = 1
-TARGET = (5.5, 30.25)
 
-====================================================================================================
-CONNECTING TO E3
-====================================================================================================
-APPLICATION: <win32com.gen_py.E3.series 2025.2543 Type Library.IApplicationInterface instance at 0x2669274715136>
-PROJECT: <win32com.gen_py.E3.series 2025.2543 Type Library.IJobInterface instance at 0x2669274716480>
+OUTPUT_DIRECTORY = Path(__file__).resolve().parent
 
-====================================================================================================
-FIND CONNECTOR SCP-J1
-====================================================================================================
-DEVICE IDS: [72258, 64611, 67783, 137415]
-DEVICE 72258: Wires
-DEVICE 64611: SCP-J1
-FOUND CONNECTOR ID: 64611
+COM_MISSING = -2147352572
 
-====================================================================================================
-BEFORE PlacePinView
-====================================================================================================
-LOGICAL PIN ID: 64615
-PIN NAME: 1
-VIEW IDS: [70079]
-VIEW ID: 70079
-    SCHEMA LOCATION: [204828.0, 7.699999999999999, 29.9, 7.0]
-    BOUND IDS: [147262, 147264]
-    IsPinView: 0
-    IsConnected: 0
-    GetCharacteristic: END_TOP
-    GetCode: 10
-    GetName: J1
-    GetSymbolTypeName: MilSymbolReceptacle¶END_TOP
-    GetTypeName: Connector
-    GetScaling: 1.0
-    GetRotation: y
-
-====================================================================================================
-CONNECTOR VIEW TABLE
-====================================================================================================
-PIN 1 | PIN ID 64615 | VIEWS [{'view_id': 70079, 'schema_location': [204828.0, 7.699999999999999, 29.9, 7.0], 'bounds': [147262, 147264]}]
-PIN 2 | PIN ID 64614 | VIEWS [{'view_id': 70077, 'schema_location': [204828.0, 7.7, 29.650000000000002, 7.0], 'bounds': [147262, 147264, 147249, 147245]}]
-PIN 3 | PIN ID 64613 | VIEWS [{'view_id': 70075, 'schema_location': [204828.0, 7.7, 29.400000000000002, 7.0], 'bounds': [147261, 147260, 147249, 147245]}]
-PIN 4 | PIN ID 64612 | VIEWS [{'view_id': 70073, 'schema_location': [204828.0, 7.7, 29.150000000000002, 7.0], 'bounds': [147208, 147207, 147261, 147260]}]
-PIN 5 | PIN ID 64619 | VIEWS [{'view_id': 70067, 'schema_location': [204828.0, 7.7, 28.900000000000002, 7.0], 'bounds': [147405, 147406, 147208, 147207]}]
-PIN 6 | PIN ID 64618 | VIEWS [{'view_id': 70061, 'schema_location': [204828.0, 7.7, 28.650000000000002, 7.0], 'bounds': [147405, 147406, 147209, 147210]}]
-PIN 7 | PIN ID 64617 | VIEWS [{'view_id': 70055, 'schema_location': [204828.0, 7.7, 28.400000000000002, 7.0], 'bounds': [147244, 147243, 147209, 147210]}]
-PIN 8 | PIN ID 64616 | VIEWS [{'view_id': 70049, 'schema_location': [204828.0, 7.7, 28.150000000000002, 7.0], 'bounds': [147197, 147198, 147244, 147243]}]
-PIN 9 | PIN ID 64534 | VIEWS [{'view_id': 70043, 'schema_location': [204828.0, 7.7, 27.900000000000002, 7.0], 'bounds': [147197, 147198]}]
-
-====================================================================================================
-DRY RUN COMPLETE
-====================================================================================================
-No PlacePinView call was made.
-Review the existing pin-view metadata above.
-If the symbol name/version settings are correct, set DRY_RUN = False.
+LOG_LINES = []
 
 
+def log(message=""):
+
+    text = str(message)
+
+    print(text)
+
+    LOG_LINES.append(text)
 
 
+def section(title):
+
+    log()
+    log("=" * 100)
+    log(title)
+    log("=" * 100)
 
 
+def save_log():
+
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+
+    path = OUTPUT_DIRECTORY / f"e3_place_pin_view_exact_metadata_{timestamp}.txt"
+
+    path.write_text("\n".join(LOG_LINES), encoding="utf-8")
+
+    print()
+    print(f"LOG WRITTEN: {path}")
 
 
+def safe_string(value):
 
-dry run = false
+    try:
+        return str(value)
+    except Exception:
+        return repr(value)
 
-====================================================================================================
-E3 PlacePinView CONTROLLED TEST
-====================================================================================================
-This script tests the exact PlacePinView signature discovered from the generated E3 COM wrapper.
-It does NOT delete the existing view.
-If E3 allows it, this may create an additional view for the same logical pin.
 
-DRY_RUN = False
-CONNECTOR = SCP-J1
-PIN = 1
-SYMBOL_NAME = MilSymbolReceptacle¶END_SPLIT
-SYMBOL_VERSION = 1
-TARGET = (5.5, 30.25)
+def is_missing_value(value):
 
-====================================================================================================
-CONNECTING TO E3
-====================================================================================================
-APPLICATION: <win32com.gen_py.E3.series 2025.2543 Type Library.IApplicationInterface instance at 0x2067527406592>
-PROJECT: <win32com.gen_py.E3.series 2025.2543 Type Library.IJobInterface instance at 0x2067527407936>
+    if value is None:
+        return True
 
-====================================================================================================
-FIND CONNECTOR SCP-J1
-====================================================================================================
-DEVICE IDS: [72258, 64611, 67783, 137415]
-DEVICE 72258: Wires
-DEVICE 64611: SCP-J1
-FOUND CONNECTOR ID: 64611
+    try:
+        return int(value) == COM_MISSING
+    except Exception:
+        return False
 
-====================================================================================================
-BEFORE PlacePinView
-====================================================================================================
-LOGICAL PIN ID: 64615
-PIN NAME: 1
-VIEW IDS: [70079]
-VIEW ID: 70079
-    SCHEMA LOCATION: [204828.0, 7.699999999999999, 29.9, 7.0]
-    BOUND IDS: [147262, 147264]
-    IsPinView: 0
-    IsConnected: 0
-    GetCharacteristic: END_TOP
-    GetCode: 10
-    GetName: J1
-    GetSymbolTypeName: MilSymbolReceptacle¶END_TOP
-    GetTypeName: Connector
-    GetScaling: 1.0
-    GetRotation: y
 
-====================================================================================================
-CONNECTOR VIEW TABLE
-====================================================================================================
-PIN 1 | PIN ID 64615 | VIEWS [{'view_id': 70079, 'schema_location': [204828.0, 7.699999999999999, 29.9, 7.0], 'bounds': [147262, 147264]}]
-PIN 2 | PIN ID 64614 | VIEWS [{'view_id': 70077, 'schema_location': [204828.0, 7.7, 29.650000000000002, 7.0], 'bounds': [147262, 147264, 147249, 147245]}]
-PIN 3 | PIN ID 64613 | VIEWS [{'view_id': 70075, 'schema_location': [204828.0, 7.7, 29.400000000000002, 7.0], 'bounds': [147261, 147260, 147249, 147245]}]
-PIN 4 | PIN ID 64612 | VIEWS [{'view_id': 70073, 'schema_location': [204828.0, 7.7, 29.150000000000002, 7.0], 'bounds': [147208, 147207, 147261, 147260]}]
-PIN 5 | PIN ID 64619 | VIEWS [{'view_id': 70067, 'schema_location': [204828.0, 7.7, 28.900000000000002, 7.0], 'bounds': [147405, 147406, 147208, 147207]}]
-PIN 6 | PIN ID 64618 | VIEWS [{'view_id': 70061, 'schema_location': [204828.0, 7.7, 28.650000000000002, 7.0], 'bounds': [147405, 147406, 147209, 147210]}]
-PIN 7 | PIN ID 64617 | VIEWS [{'view_id': 70055, 'schema_location': [204828.0, 7.7, 28.400000000000002, 7.0], 'bounds': [147244, 147243, 147209, 147210]}]
-PIN 8 | PIN ID 64616 | VIEWS [{'view_id': 70049, 'schema_location': [204828.0, 7.7, 28.150000000000002, 7.0], 'bounds': [147197, 147198, 147244, 147243]}]
-PIN 9 | PIN ID 64534 | VIEWS [{'view_id': 70043, 'schema_location': [204828.0, 7.7, 27.900000000000002, 7.0], 'bounds': [147197, 147198]}]
+def clean_id_list(values):
 
-====================================================================================================
-PLACE PIN VIEW WARNING
-====================================================================================================
-The next call may create an ADDITIONAL placed view for the same logical pin.
-The existing pin view will NOT be deleted by this script.
-Use this only in the disposable/test project.
+    cleaned = []
 
-Exact call to be tested:
-sym.PlacePinView(64615, SHEET_ID, 'MilSymbolReceptacle¶END_SPLIT', '1', 5.5, 30.25, '0', 1.0, 1)
+    if values is None:
+        return cleaned
 
-====================================================================================================
-CALLING PlacePinView
-====================================================================================================
-LOGICAL PIN ID: 64615
-SHEET ID: 204828
-SYMBOL NAME: MilSymbolReceptacle¶END_SPLIT
-VERSION: 1
-X: 5.5
-Y: 30.25
-ROTATION: 0
-SCALE: 1.0
-MAINTAIN TEXT SIZE: 1
-PlacePinView RETURN: 0
-PlacePinView ELAPSED: 0.021315 SEC
+    if not isinstance(values, (tuple, list)):
+        values = [values]
 
-====================================================================================================
-VIEW ID COMPARISON
-====================================================================================================
-BEFORE: [70079]
-AFTER: [70079]
-RETAINED VIEW IDS: [70079]
-ADDED VIEW IDS: []
-REMOVED VIEW IDS: []
+    for value in values:
 
-====================================================================================================
-AFTER PlacePinView
-====================================================================================================
-LOGICAL PIN ID: 64615
-PIN NAME: 1
-VIEW IDS: [70079]
-VIEW ID: 70079
-    SCHEMA LOCATION: [204828.0, 7.699999999999999, 29.9, 7.0]
-    BOUND IDS: [147262, 147264]
-    IsPinView: 0
-    IsConnected: 0
-    GetCharacteristic: END_TOP
-    GetCode: 10
-    GetName: J1
-    GetSymbolTypeName: MilSymbolReceptacle¶END_TOP
-    GetTypeName: Connector
-    GetScaling: 1.0
-    GetRotation: y
+        if is_missing_value(value):
+            continue
 
-====================================================================================================
-CONNECTOR VIEW TABLE
-====================================================================================================
-PIN 1 | PIN ID 64615 | VIEWS [{'view_id': 70079, 'schema_location': [204828.0, 7.699999999999999, 29.9, 7.0], 'bounds': [147262, 147264]}]
-PIN 2 | PIN ID 64614 | VIEWS [{'view_id': 70077, 'schema_location': [204828.0, 7.7, 29.650000000000002, 7.0], 'bounds': [147262, 147264, 147249, 147245]}]
-PIN 3 | PIN ID 64613 | VIEWS [{'view_id': 70075, 'schema_location': [204828.0, 7.7, 29.400000000000002, 7.0], 'bounds': [147261, 147260, 147249, 147245]}]
-PIN 4 | PIN ID 64612 | VIEWS [{'view_id': 70073, 'schema_location': [204828.0, 7.7, 29.150000000000002, 7.0], 'bounds': [147208, 147207, 147261, 147260]}]
-PIN 5 | PIN ID 64619 | VIEWS [{'view_id': 70067, 'schema_location': [204828.0, 7.7, 28.900000000000002, 7.0], 'bounds': [147405, 147406, 147208, 147207]}]
-PIN 6 | PIN ID 64618 | VIEWS [{'view_id': 70061, 'schema_location': [204828.0, 7.7, 28.650000000000002, 7.0], 'bounds': [147405, 147406, 147209, 147210]}]
-PIN 7 | PIN ID 64617 | VIEWS [{'view_id': 70055, 'schema_location': [204828.0, 7.7, 28.400000000000002, 7.0], 'bounds': [147244, 147243, 147209, 147210]}]
-PIN 8 | PIN ID 64616 | VIEWS [{'view_id': 70049, 'schema_location': [204828.0, 7.7, 28.150000000000002, 7.0], 'bounds': [147197, 147198, 147244, 147243]}]
-PIN 9 | PIN ID 64534 | VIEWS [{'view_id': 70043, 'schema_location': [204828.0, 7.7, 27.900000000000002, 7.0], 'bounds': [147197, 147198]}]
+        try:
+            value = int(value)
+        except Exception:
+            continue
 
-====================================================================================================
-RESULT INTERPRETATION
-====================================================================================================
-PlacePinView returned 0.
-E3 rejected the operation or could not place the requested view.
-The same view IDs remain assigned to the logical pin.
-This script intentionally stops here and performs no cleanup.
+        if value > 0:
+            cleaned.append(value)
+
+    return cleaned
+
+
+def parse_count_array_result(result):
+
+    if result is None:
+        return []
+
+    if isinstance(result, (tuple, list)):
+
+        items = list(result)
+
+        if len(items) >= 2 and isinstance(items[1], (tuple, list)):
+
+            try:
+                count = int(items[0])
+            except Exception:
+                count = None
+
+            values = clean_id_list(items[1])
+
+            if count is not None and len(values) > count:
+                values = values[-count:]
+
+            return values
+
+        return clean_id_list(items)
+
+    return clean_id_list(result)
+
+
+def call_id_array(method):
+
+    try:
+        result = method(None)
+
+        values = parse_count_array_result(result)
+
+        if values:
+            return values
+
+    except Exception:
+        pass
+
+    try:
+        result = method()
+
+        values = parse_count_array_result(result)
+
+        if values:
+            return values
+
+    except Exception:
+        pass
+
+    return []
+
+
+def connect_to_e3():
+
+    section("CONNECTING TO E3")
+
+    pythoncom.CoInitialize()
+
+    app = win32com.client.Dispatch("CT.Application")
+
+    prj = app.CreateJobObject()
+    dev = prj.CreateDeviceObject()
+    pin = prj.CreatePinObject()
+    sym = prj.CreateSymbolObject()
+
+    log(f"APPLICATION: {app}")
+    log(f"PROJECT: {prj}")
+
+    return app, prj, dev, pin, sym
+
+
+def find_connector(prj, dev):
+
+    section(f"FIND CONNECTOR {CONNECTOR_NAME}")
+
+    device_ids = call_id_array(prj.GetAllDeviceIds)
+
+    log(f"DEVICE IDS: {device_ids}")
+
+    for device_id in device_ids:
+
+        dev.SetId(device_id)
+
+        try:
+            name = str(dev.GetName())
+        except Exception:
+            name = ""
+
+        log(f"DEVICE {device_id}: {name}")
+
+        if name == CONNECTOR_NAME:
+            log(f"FOUND CONNECTOR ID: {device_id}")
+            return device_id
+
+    raise RuntimeError(f"Could not find connector {CONNECTOR_NAME}.")
+
+
+def get_pin_name(pin):
+
+    try:
+        return str(pin.GetName())
+    except Exception:
+        return ""
+
+
+def find_pin(dev, pin, connector_device_id, pin_name):
+
+    dev.SetId(connector_device_id)
+
+    pin_ids = call_id_array(dev.GetPinIds)
+
+    for pin_id in pin_ids:
+
+        pin.SetId(pin_id)
+
+        if get_pin_name(pin) == str(pin_name):
+
+            return {
+                "pin_id": pin_id,
+                "view_ids": call_id_array(pin.GetViewIds),
+            }
+
+    return None
+
+
+def get_schema_location(pin):
+
+    attempts = [
+        lambda: pin.GetSchemaLocation(None, None, None, None, None),
+        lambda: pin.GetSchemaLocation(None, None, None),
+        lambda: pin.GetSchemaLocation(),
+    ]
+
+    for attempt in attempts:
+
+        try:
+            result = attempt()
+        except Exception:
+            continue
+
+        if not isinstance(result, (tuple, list)):
+            continue
+
+        numeric = []
+
+        for value in result:
+
+            if is_missing_value(value):
+                continue
+
+            try:
+                numeric.append(float(value))
+            except Exception:
+                pass
+
+        if len(numeric) >= 3:
+            return numeric
+
+    return None
+
+
+def read_existing_view_metadata(pin, sym, view_id):
+
+    pin.SetId(view_id)
+
+    schema_location = get_schema_location(pin)
+
+    sym.SetId(view_id)
+
+    metadata = {
+        "view_id": view_id,
+        "schema_location": schema_location,
+        "bound_ids": call_id_array(sym.GetBoundIds),
+        "symbol_type_name": None,
+        "characteristic": None,
+        "rotation": None,
+        "scaling": None,
+        "name": None,
+        "code": None,
+    }
+
+    for method_name, key in [
+        ("GetSymbolTypeName", "symbol_type_name"),
+        ("GetCharacteristic", "characteristic"),
+        ("GetRotation", "rotation"),
+        ("GetScaling", "scaling"),
+        ("GetName", "name"),
+        ("GetCode", "code"),
+    ]:
+
+        if not hasattr(sym, method_name):
+            continue
+
+        try:
+            metadata[key] = getattr(sym, method_name)()
+        except Exception as exc:
+            metadata[key] = f"<error: {exc}>"
+
+    return metadata
+
+
+def print_metadata(metadata, title):
+
+    section(title)
+
+    for key, value in metadata.items():
+        log(f"{key}: {value}")
+
+
+def print_connector_table(dev, pin, sym, connector_device_id):
+
+    section("CONNECTOR TABLE")
+
+    dev.SetId(connector_device_id)
+
+    for pin_id in call_id_array(dev.GetPinIds):
+
+        pin.SetId(pin_id)
+
+        pin_name = get_pin_name(pin)
+
+        view_ids = call_id_array(pin.GetViewIds)
+
+        rows = []
+
+        for view_id in view_ids:
+
+            metadata = read_existing_view_metadata(pin, sym, view_id)
+
+            rows.append({
+                "view_id": view_id,
+                "schema_location": metadata["schema_location"],
+                "symbol_type_name": metadata["symbol_type_name"],
+                "rotation": metadata["rotation"],
+                "bound_ids": metadata["bound_ids"],
+            })
+
+        log(f"PIN {pin_name} | PIN ID {pin_id} | {rows}")
+
+
+def main():
+
+    section("E3 PlacePinView EXACT-METADATA TEST")
+
+    log("This version does NOT hard-code END_SPLIT or rotation 0.")
+    log("It reads the exact symbol type, rotation, and scaling from the existing placed view.")
+    log(f"DRY_RUN = {DRY_RUN}")
+
+    app, prj, dev, pin, sym = connect_to_e3()
+
+    connector_device_id = find_connector(prj, dev)
+
+    pin_record = find_pin(dev, pin, connector_device_id, TARGET_PIN_NAME)
+
+    if pin_record is None:
+        raise RuntimeError(f"Could not find pin {TARGET_PIN_NAME}.")
+
+    if not pin_record["view_ids"]:
+        raise RuntimeError("Target pin has no placed view.")
+
+    before_view_ids = list(pin_record["view_ids"])
+
+    source_view_id = before_view_ids[0]
+
+    before_metadata = read_existing_view_metadata(pin, sym, source_view_id)
+
+    print_metadata(before_metadata, "EXISTING VIEW METADATA")
+
+    print_connector_table(dev, pin, sym, connector_device_id)
+
+    symbol_name = before_metadata["symbol_type_name"]
+    rotation = before_metadata["rotation"]
+    scale = before_metadata["scaling"]
+    schema_location = before_metadata["schema_location"]
+
+    if not isinstance(symbol_name, str) or symbol_name == "":
+        raise RuntimeError("Could not read current symbol type name.")
+
+    if not isinstance(rotation, str) or rotation == "":
+        raise RuntimeError("Could not read current rotation.")
+
+    try:
+        scale = float(scale)
+    except Exception:
+        raise RuntimeError(f"Could not read current scaling: {scale}")
+
+    if schema_location is None or len(schema_location) < 1:
+        raise RuntimeError("Could not determine sheet ID.")
+
+    sheet_id = int(schema_location[0])
+
+    section("EXACT CALL THAT WILL BE USED")
+
+    log(f"LOGICAL PIN ID: {pin_record['pin_id']}")
+    log(f"SHEET ID: {sheet_id}")
+    log(f"SYMBOL NAME: {repr(symbol_name)}")
+    log(f"VERSION: {repr(SYMBOL_VERSION)}")
+    log(f"TARGET X: {TARGET_X}")
+    log(f"TARGET Y: {TARGET_Y}")
+    log(f"ROTATION: {repr(rotation)}")
+    log(f"SCALE: {scale}")
+    log(f"MAINTAIN TEXT SIZE: {MAINTAIN_TEXT_SIZE}")
+    log(f"CALL: sym.PlacePinView({pin_record['pin_id']}, {sheet_id}, {repr(symbol_name)}, {repr(SYMBOL_VERSION)}, {TARGET_X}, {TARGET_Y}, {repr(rotation)}, {scale}, {MAINTAIN_TEXT_SIZE})")
+
+    if DRY_RUN:
+
+        section("DRY RUN COMPLETE")
+
+        log("No PlacePinView call was made.")
+        log("If the exact call above looks correct, set DRY_RUN = False.")
+
+        return
+
+    section("WARNING")
+
+    log("This may create an additional placed view.")
+    log("The existing view will not be deleted by this script.")
+
+    confirmation = input("Type EXACTPLACE to run the call: ").strip()
+
+    if confirmation != "EXACTPLACE":
+        log("TEST CANCELLED")
+        return
+
+    started = time.perf_counter()
+
+    try:
+        result = sym.PlacePinView(pin_record["pin_id"], sheet_id, symbol_name, SYMBOL_VERSION, TARGET_X, TARGET_Y, rotation, scale, MAINTAIN_TEXT_SIZE)
+    except Exception as exc:
+        elapsed = time.perf_counter() - started
+        log(f"PlacePinView EXCEPTION AFTER {elapsed:.6f} SEC: {exc}")
+        log(traceback.format_exc())
+        return
+
+    elapsed = time.perf_counter() - started
+
+    log(f"PlacePinView RETURN: {result}")
+    log(f"PlacePinView ELAPSED: {elapsed:.6f} SEC")
+
+    time.sleep(0.5)
+
+    after_record = find_pin(dev, pin, connector_device_id, TARGET_PIN_NAME)
+
+    if after_record is None:
+        raise RuntimeError("Target logical pin disappeared.")
+
+    after_view_ids = list(after_record["view_ids"])
+
+    section("VIEW ID COMPARISON")
+
+    log(f"BEFORE VIEW IDS: {before_view_ids}")
+    log(f"AFTER VIEW IDS: {after_view_ids}")
+    log(f"ADDED VIEW IDS: {sorted(set(after_view_ids) - set(before_view_ids))}")
+    log(f"REMOVED VIEW IDS: {sorted(set(before_view_ids) - set(after_view_ids))}")
+
+    for view_id in after_view_ids:
+
+        metadata = read_existing_view_metadata(pin, sym, view_id)
+
+        print_metadata(metadata, f"AFTER VIEW {view_id}")
+
+    print_connector_table(dev, pin, sym, connector_device_id)
+
+
+if __name__ == "__main__":
+
+    try:
+        main()
+
+    except KeyboardInterrupt:
+        log()
+        log("STOPPED BY USER")
+
+    except Exception as exc:
+        log()
+        log("FATAL ERROR")
+        log(safe_string(exc))
+        log(traceback.format_exc())
+
+    finally:
+
+        try:
+            save_log()
+        except Exception as exc:
+            print(f"COULD NOT SAVE LOG: {exc}")
+
+        try:
+            pythoncom.CoUninitialize()
+        except Exception:
+            pass
