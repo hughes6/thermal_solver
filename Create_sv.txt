@@ -17,6 +17,9 @@ Private Const TEMPLATE_FIRST_COLUMN As Long = 8
 Private Const BLOCK_WIDTH As Long = 4
 Private Const BLOCK_STEP As Long = 4
 
+Private Const PIN_COUNT_ROW As Long = 5
+Private Const PIN_COUNT_COLUMN_OFFSET As Long = 2
+
 Private Const BLOCK_TOP_ROW As Long = 5
 Private Const HEADER_BOTTOM_ROW As Long = 7
 
@@ -121,6 +124,10 @@ Private Sub RefreshBlockStructure(ByVal blockNumber As Long)
     sourceData.Copy
     destinationData.PasteSpecial Paste:=xlPasteValidation
 
+    ' Any conditional-format rule copied from Block 1 that points to J5
+    ' must point to this block's own Number of Pins cell instead.
+    FixConditionalFormattingPinCountReferences blockNumber
+
     ' Match template column widths.
     For columnOffset = 0 To BLOCK_WIDTH - 1
         Me.Columns(destinationStartColumn + columnOffset).ColumnWidth = Me.Columns(TEMPLATE_FIRST_COLUMN + columnOffset).ColumnWidth
@@ -178,9 +185,149 @@ Private Sub CopyEdgeHelpers(ByVal blockNumber As Long)
     ' Keep the right bracket/bar tight against the pin table.
     destinationRightEdge.HorizontalAlignment = xlLeft
 
+    ' The template helper formulas may use an absolute reference to J5.
+    ' Excel will not shift an absolute reference during Copy/Destination,
+    ' so explicitly translate J5 to this block's own pin-count cell.
+    FixEdgePinCountReferences blockNumber
+
     Application.CutCopyMode = False
 
 End Sub
+
+
+Private Sub FixEdgePinCountReferences(ByVal blockNumber As Long)
+
+    Dim destinationStartColumn As Long
+
+    Dim leftEdge As Range
+    Dim rightEdge As Range
+    Dim currentCell As Range
+
+    Dim currentFormula As String
+    Dim translatedFormula As String
+
+    destinationStartColumn = GetBlockStartColumn(blockNumber)
+
+    Set leftEdge = Me.Range(Me.Cells(DATA_FIRST_ROW, destinationStartColumn), Me.Cells(RULES_LAST_ROW, destinationStartColumn))
+    Set rightEdge = Me.Range(Me.Cells(DATA_FIRST_ROW, destinationStartColumn + BLOCK_WIDTH - 1), Me.Cells(RULES_LAST_ROW, destinationStartColumn + BLOCK_WIDTH - 1))
+
+    For Each currentCell In leftEdge.Cells
+
+        If currentCell.HasFormula Then
+
+            currentFormula = currentCell.Formula2
+            translatedFormula = TranslatePinCountReference(currentFormula, destinationStartColumn)
+
+            If translatedFormula <> currentFormula Then
+                currentCell.Formula2 = translatedFormula
+            End If
+
+        End If
+
+    Next currentCell
+
+    For Each currentCell In rightEdge.Cells
+
+        If currentCell.HasFormula Then
+
+            currentFormula = currentCell.Formula2
+            translatedFormula = TranslatePinCountReference(currentFormula, destinationStartColumn)
+
+            If translatedFormula <> currentFormula Then
+                currentCell.Formula2 = translatedFormula
+            End If
+
+        End If
+
+    Next currentCell
+
+End Sub
+
+
+Private Sub FixConditionalFormattingPinCountReferences(ByVal blockNumber As Long)
+
+    Dim destinationStartColumn As Long
+    Dim destinationBlock As Range
+
+    Dim rule As FormatCondition
+
+    Dim oldFormula1 As String
+    Dim oldFormula2 As String
+
+    Dim newFormula1 As String
+    Dim newFormula2 As String
+
+    destinationStartColumn = GetBlockStartColumn(blockNumber)
+
+    Set destinationBlock = Me.Range(Me.Cells(DATA_FIRST_ROW, destinationStartColumn), Me.Cells(RULES_LAST_ROW, destinationStartColumn + BLOCK_WIDTH - 1))
+
+    For Each rule In destinationBlock.FormatConditions
+
+        oldFormula1 = ""
+        oldFormula2 = ""
+        newFormula1 = ""
+        newFormula2 = ""
+
+        On Error Resume Next
+        oldFormula1 = rule.Formula1
+        oldFormula2 = rule.Formula2
+        On Error GoTo 0
+
+        newFormula1 = TranslatePinCountReference(oldFormula1, destinationStartColumn)
+        newFormula2 = TranslatePinCountReference(oldFormula2, destinationStartColumn)
+
+        If rule.Type = xlExpression Then
+
+            If newFormula1 <> oldFormula1 Then
+                rule.Modify Type:=xlExpression, Formula1:=newFormula1
+            End If
+
+        ElseIf rule.Type = xlCellValue Then
+
+            If newFormula1 <> oldFormula1 Or newFormula2 <> oldFormula2 Then
+                rule.Modify Type:=xlCellValue, Operator:=rule.Operator, Formula1:=newFormula1, Formula2:=newFormula2
+            End If
+
+        End If
+
+    Next rule
+
+End Sub
+
+
+Private Function TranslatePinCountReference(ByVal sourceFormula As String, ByVal destinationStartColumn As Long) As String
+
+    Dim translated As String
+
+    Dim templateColumn As String
+    Dim destinationColumn As String
+
+    translated = sourceFormula
+
+    If Len(translated) = 0 Then
+        TranslatePinCountReference = translated
+        Exit Function
+    End If
+
+    templateColumn = ColumnLetter(TEMPLATE_FIRST_COLUMN + PIN_COUNT_COLUMN_OFFSET)
+    destinationColumn = ColumnLetter(destinationStartColumn + PIN_COUNT_COLUMN_OFFSET)
+
+    ' Most specific forms first.
+    translated = Replace(translated, "$" & templateColumn & "$" & PIN_COUNT_ROW, "$" & destinationColumn & "$" & PIN_COUNT_ROW, 1, -1, vbTextCompare)
+    translated = Replace(translated, templateColumn & "$" & PIN_COUNT_ROW, destinationColumn & "$" & PIN_COUNT_ROW, 1, -1, vbTextCompare)
+    translated = Replace(translated, "$" & templateColumn & PIN_COUNT_ROW, "$" & destinationColumn & PIN_COUNT_ROW, 1, -1, vbTextCompare)
+    translated = Replace(translated, templateColumn & PIN_COUNT_ROW, destinationColumn & PIN_COUNT_ROW, 1, -1, vbTextCompare)
+
+    TranslatePinCountReference = translated
+
+End Function
+
+
+Private Function ColumnLetter(ByVal columnNumber As Long) As String
+
+    ColumnLetter = Split(Me.Cells(1, columnNumber).Address(False, False), "1")(0)
+
+End Function
 
 
 Private Sub UpdateConnectorName(ByVal blockNumber As Long)
