@@ -1,126 +1,150 @@
+from openpyxl import load_workbook
+import time
+import pyodbc
+import win32com.client as win32
 
-========================================================================================================================
-SCP-J1 TARGETED 9-PIN PERMUTATION STRESS TEST
-========================================================================================================================
-TOTAL PHYSICAL TEST CASES: 10
-TEST DESIGN:
-    This is a targeted adversarial suite, not a 9! exhaustive run.
-    Each case first peels the current source order into one canonical center stack.
-    It then peels that center stack into the case's target permutation.
-    The target becomes the source for the next case.
-    This means each nasty pattern is exercised as a target build and again as a source peel on the following case.
+# ================================================
+# HELPER FXN
+# ================================================
+def ask_save_path(default_full_path=""):
+    import os
+    import tkinter as tk
+    from tkinter import filedialog
 
-CONNECTOR DEVICE ID: 64611
-BLOCK SYMBOL ID: 69271
-BLOCK LEFT/RIGHT: 5.0 / 8.0
-BLOCK BOTTOM/TOP: 27.4 / 31.899999999999995
-PIN PITCH: 0.25
-FINAL LEFT X: 5.3
-FINAL TOP Y: 29.9
-CENTER STACK X: 6.5
-CENTER STACK Y RANGE: 30.65 -> 28.65
-CURRENT ORDER: ('1', '2', '3', '4', '5', '6', '7', '8', '9')
+    default_folder = os.path.dirname(default_full_path)
 
-REQUIRED START STATE:
-    SCP-J1 ALL LEFT in order ('1', '2', '3', '4', '5', '6', '7', '8', '9')
+    # Create Tk root
+    root = tk.Tk()
+    root.withdraw()
+    root.attributes("-topmost", True)
+    root.update()
 
-========================================================================================================================
-PHYSICAL TARGETED STRESS TEST
-========================================================================================================================
+    try:
+        # Let user PICK an existing Excel file
+        selected_path = filedialog.askopenfilename(
+            initialdir=default_folder,
+            filetypes=[("Excel Files", "*.xlsm"), ("All Files", "*.*")]
+        )
+    except Exception:
+        return None
 
-========================================================================================================================
-CASE 1/10: REVERSE
-========================================================================================================================
-PURPOSE: Pure bottom-to-top construction. Proves the stack can be built upward.
-SOURCE: ('1', '2', '3', '4', '5', '6', '7', '8', '9')
-TARGET: ('9', '8', '7', '6', '5', '4', '3', '2', '1')
-CENTER STACK VERIFY: PASS
-CASE RESULT: PASS | 27.6 sec
+    # Cancel or X
+    if not selected_path:
+        root.destroy()
+        return None
+    root.destroy()
+    # Return ONLY the file name (not full path)
+    return os.path.abspath(selected_path)
 
-========================================================================================================================
-CASE 2/10: ODDS_THEN_EVENS
-========================================================================================================================
-PURPOSE: Creates large gaps first, then fills/bridges them.
-SOURCE: ('9', '8', '7', '6', '5', '4', '3', '2', '1')
-TARGET: ('1', '3', '5', '7', '9', '2', '4', '6', '8')
-CENTER STACK VERIFY: PASS
-CASE RESULT: PASS | 26.3 sec
 
-========================================================================================================================
-CASE 3/10: EVENS_THEN_ODDS
-========================================================================================================================
-PURPOSE: Opposite parity gap pattern.
-SOURCE: ('1', '3', '5', '7', '9', '2', '4', '6', '8')
-TARGET: ('2', '4', '6', '8', '1', '3', '5', '7', '9')
-CENTER STACK VERIFY: PASS
-CASE RESULT: PASS | 26.1 sec
+# ================================================
+# PARSE EXCEL
+# ================================================
+BLOCK_OFFSET = 4
+# output_path = ask_save_path()
+output_path = 'C:/Users/conner.hughes/Downloads/Block_Pin_Ordering_Template.xlsm'
+wb = load_workbook(output_path, data_only=True)
+ws = wb.active
 
-========================================================================================================================
-CASE 4/10: OUTSIDE_IN
-========================================================================================================================
-PURPOSE: Builds both extremes first, then closes toward the middle.
-SOURCE: ('2', '4', '6', '8', '1', '3', '5', '7', '9')
-TARGET: ('1', '9', '2', '8', '3', '7', '4', '6', '5')
-CENTER STACK VERIFY: PASS
-CASE RESULT: PASS | 26.2 sec
+NUMBER_OF_CONNECTORS = ws["C5"].value
 
-========================================================================================================================
-CASE 5/10: INSIDE_OUT
-========================================================================================================================
-PURPOSE: Starts in the middle and expands upward/downward.
-SOURCE: ('1', '9', '2', '8', '3', '7', '4', '6', '5')
-TARGET: ('5', '4', '6', '3', '7', '2', '8', '1', '9')
-CENTER STACK VERIFY: PASS
-CASE RESULT: PASS | 26.6 sec
+CONNECTOR_MODEL_CHECK = ws["B2"].value
+if CONNECTOR_MODEL_CHECK != "Pass":
+    raise Exception("Connector model check is failing, fix it")
+DUPLICATE_PIN_CHECK = ws["C2"].value
+if DUPLICATE_PIN_CHECK != "Pass":
+    raise Exception("Duplicate pin check is failing, fix it")
 
-========================================================================================================================
-CASE 6/10: ISLANDS_THEN_BRIDGES
-========================================================================================================================
-PURPOSE: Creates multiple disconnected temporary islands, then joins them.
-SOURCE: ('5', '4', '6', '3', '7', '2', '8', '1', '9')
-TARGET: ('1', '5', '9', '3', '7', '2', '4', '6', '8')
-CENTER STACK VERIFY: PASS
-CASE RESULT: PASS | 26.8 sec
+CONNECTOR_PIN_INFO = []
+for i in range(NUMBER_OF_CONNECTORS):
+    left_pin_col = 9 + (i * BLOCK_OFFSET)
+    right_pin_col = left_pin_col + 1
 
-========================================================================================================================
-CASE 7/10: REVERSE_GAP_BRIDGE
-========================================================================================================================
-PURPOSE: Reverse-biased construction with repeated interior bridging.
-SOURCE: ('1', '5', '9', '3', '7', '2', '4', '6', '8')
-TARGET: ('9', '6', '3', '8', '5', '2', '7', '4', '1')
-CENTER STACK VERIFY: PASS
-CASE RESULT: PASS | 26.8 sec
+    number_of_pins = ws.cell(row=5, column=right_pin_col).value
+    connector_name = ws.cell(row=6, column=right_pin_col).value
 
-========================================================================================================================
-CASE 8/10: RANDOM_MIXED_A
-========================================================================================================================
-PURPOSE: Irregular mixed-direction stress case.
-SOURCE: ('9', '6', '3', '8', '5', '2', '7', '4', '1')
-TARGET: ('4', '9', '2', '7', '1', '8', '5', '3', '6')
-CENTER STACK VERIFY: PASS
-CASE RESULT: PASS | 27.2 sec
+    if number_of_pins is None:
+        number_of_pins = 0
+    number_of_pins = int(number_of_pins)
+    temp = [{'connector name': connector_name, 'number of pins': number_of_pins, 'left pins': [], 'right pins': []}]
+    end_row = 8 + number_of_pins - 1
+    left = []
+    right = []
+    for r in range(8, end_row + 1):
+        left_pin = ws.cell(row=r, column=left_pin_col).value
+        right_pin = ws.cell(row=r, column=right_pin_col).value
+        if left_pin is not None:
+            left.append(left_pin)
+        if right_pin is not None:
+            right.append(right_pin)
+    temp[0]['left pins'].extend(left)
+    temp[0]['right pins'].extend(right) 
+    CONNECTOR_PIN_INFO.append(temp)
 
-========================================================================================================================
-CASE 9/10: RANDOM_MIXED_B
-========================================================================================================================
-PURPOSE: Second unrelated irregular stress case.
-SOURCE: ('4', '9', '2', '7', '1', '8', '5', '3', '6')
-TARGET: ('7', '2', '9', '4', '1', '6', '3', '8', '5')
-CENTER STACK VERIFY: PASS
-CASE RESULT: PASS | 28.0 sec
+wb.close()
 
-========================================================================================================================
-CASE 10/10: RETURN_CANONICAL
-========================================================================================================================
-PURPOSE: Returns SCP-J1 to normal order and re-proves straightforward downward construction.
-SOURCE: ('7', '2', '9', '4', '1', '6', '3', '8', '5')
-TARGET: ('1', '2', '3', '4', '5', '6', '7', '8', '9')
-CENTER STACK VERIFY: PASS
-CASE RESULT: PASS | 27.0 sec
+print(CONNECTOR_PIN_INFO)
 
-========================================================================================================================
-TARGETED STRESS SUITE PASSED
-========================================================================================================================
-ALL 10 TARGETED SCP-J1 CASES PASSED.
-TOTAL SUITE TIME: 4.5 minutes
-SCP-J1 was returned to canonical all-left order 1,2,3,4,5,6,7,8,9.
+# ================================================
+# CONNECT TO DB
+# ================================================
+CONNECTION_STRING = (
+    "DRIVER={SQL Server};"
+    "SERVER=sql-zuken-prd;"
+    "DATABASE=Zuken_E3Library;"
+    "Trusted_Connection=yes;"
+)
+
+conn = pyodbc.connect(CONNECTION_STRING, autocommit=True)
+cur = conn.cursor()
+
+# set objects
+#====================================================================================================================================
+app = win32.gencache.EnsureDispatch('CT.Application')
+prj = app.CreateJobObject()
+text = prj.CreateTextObject()
+comp = prj.CreateComponentObject()
+dev = prj.CreateDeviceObject()
+sym = prj.CreateSymbolObject()
+pin = prj.CreatePinObject()
+attr = prj.CreateAttributeObject()
+#====================================================================================================================================
+# more setup
+#====================================================================================================================================
+app.PutMessage("\n Starting Block Making Scrpit")
+
+sht = prj.CreateSheetObject()
+sheet_info = prj.GetAllSheetIds(None)
+sheet_count = sheet_info[0]
+sheet_ids = sheet_info[1]
+sheet_ids = [x for x in sheet_ids if x is not None]
+
+SHEET_ID_DICT = {}
+for id in sheet_ids:
+    sht.SetId(id)
+    name = sht.GetName()
+    SHEET_ID_DICT[name] = id
+    if sht.GetName() == "1":
+        sheet_1_id = id
+
+sheet1 = sht.SetId(sheet_1_id)
+
+# generate pin location maps, get block dimensions and find the block centers 
+
+# place all pins peel order on block centers, maybe later add increase block height if not tall enought
+
+# based on pin maps and block geom generated -> start populating pins based on excel parsed data
+
+
+#=========================================
+# RESET BEFORE MAIN BLOCK FORMATTING
+#=========================================
+del attr
+del text
+del sym
+del pin
+del comp
+del dev
+del sht
+del prj
+del app
