@@ -1,230 +1,29 @@
-import win32com.client as win32
+SCP-J1 BLOCK HATCH COLOUR TEST
+================================================================================
+MAIN DEVICE ID: 137415
+CONNECTOR DEVICE ID: 64611
+CONNECTOR VIEW NUMBER: 1
+MAIN VIEW ID: 69041
+BLOCK SYMBOL ID: 69271
+BLOCK SYMBOL TYPE: CABBLOCK#0-3a-0-8daf
 
-MAIN_DEVICE_NAME = "TEST_NAME_100000"
-CONNECTOR_NAME = "SCP-J1"
-HATCH_COLOUR = 58
+AVAILABLE HATCH/FILL METHODS:
+    GetBlockHatchColour
+    GetBlockHatchDistance
+    GetBlockHatchPattern
+    GetBlockHatchStyle
+    GetBlockHatchWidth
+    SetBlockHatchColour
+    SetBlockHatchDistance
+    SetBlockHatchPattern
+    SetBlockHatchStyle
+    SetBlockHatchWidth
 
-COM_MISSING = -2147352572
+CURRENT BLOCK HATCH COLOUR: -1
+SETTING BLOCK HATCH COLOUR TO: 58
+SetBlockHatchColour RESULT: -1
+NEW BLOCK HATCH COLOUR: -1
 
-
-def is_missing_value(value):
-    if value is None:
-        return True
-    try:
-        return int(value) == COM_MISSING
-    except Exception:
-        return False
-
-
-def clean_id_list(values):
-    cleaned = []
-    if values is None:
-        return cleaned
-    if not isinstance(values, (tuple, list)):
-        values = [values]
-    for value in values:
-        if is_missing_value(value):
-            continue
-        try:
-            value = int(value)
-        except Exception:
-            continue
-        if value > 0:
-            cleaned.append(value)
-    return cleaned
-
-
-def parse_count_array_result(result):
-    if result is None:
-        return []
-    if isinstance(result, (tuple, list)):
-        items = list(result)
-        if len(items) >= 2 and isinstance(items[1], (tuple, list)):
-            try:
-                count = int(items[0])
-            except Exception:
-                count = None
-            values = clean_id_list(items[1])
-            if count is not None and len(values) > count:
-                values = values[-count:]
-            return values
-        return clean_id_list(items)
-    return clean_id_list(result)
-
-
-def call_id_array(method):
-    try:
-        result = method(None)
-        values = parse_count_array_result(result)
-        if values:
-            return values
-    except Exception:
-        pass
-    try:
-        result = method()
-        values = parse_count_array_result(result)
-        if values:
-            return values
-    except Exception:
-        pass
-    return []
-
-
-def find_device_id(prj, dev, target_name):
-    for device_id in call_id_array(prj.GetAllDeviceIds):
-        dev.SetId(device_id)
-        try:
-            device_name = str(dev.GetName()).strip()
-        except Exception:
-            device_name = ""
-        if device_name == target_name:
-            return device_id
-    return None
-
-
-def get_device_view_ids(dev, device_id):
-    dev.SetId(device_id)
-    try:
-        return parse_count_array_result(dev.GetViewIds(None))
-    except Exception:
-        return []
-
-
-def get_device_symbol_ids(dev, device_id):
-    dev.SetId(device_id)
-    try:
-        return parse_count_array_result(dev.GetSymbolIds(None, 0))
-    except Exception:
-        return []
-
-
-def get_view_number(dev, view_id):
-    dev.SetId(view_id)
-    try:
-        return int(dev.GetViewNumber())
-    except Exception:
-        return None
-
-
-def find_connector_block_symbol(prj, dev, connector_device_id, main_device_id):
-    connector_view_ids = get_device_view_ids(dev, connector_device_id)
-    if not connector_view_ids:
-        raise RuntimeError(f"{CONNECTOR_NAME} has no device views.")
-
-    connector_view_numbers = []
-    for connector_view_id in connector_view_ids:
-        view_number = get_view_number(dev, connector_view_id)
-        if view_number is not None and view_number not in connector_view_numbers:
-            connector_view_numbers.append(view_number)
-
-    if len(connector_view_numbers) != 1:
-        raise RuntimeError(f"Expected one connector view number, found {connector_view_numbers}.")
-
-    connector_view_number = connector_view_numbers[0]
-
-    matching_main_view_id = None
-    for main_view_id in get_device_view_ids(dev, main_device_id):
-        if get_view_number(dev, main_view_id) == connector_view_number:
-            matching_main_view_id = main_view_id
-            break
-
-    if matching_main_view_id is None:
-        raise RuntimeError(f"Could not find main-device view number {connector_view_number}.")
-
-    for symbol_id in get_device_symbol_ids(dev, matching_main_view_id):
-        local_sym = prj.CreateSymbolObject()
-        try:
-            set_result = local_sym.SetId(symbol_id)
-        except Exception:
-            continue
-
-        if not set_result:
-            continue
-
-        try:
-            symbol_type_name = str(local_sym.GetSymbolTypeName())
-        except Exception:
-            symbol_type_name = ""
-
-        if "CABBLOCK" in symbol_type_name.upper():
-            return {
-                "connector_view_number": connector_view_number,
-                "main_view_id": matching_main_view_id,
-                "block_symbol_id": symbol_id,
-                "block_symbol_type": symbol_type_name,
-            }
-
-    raise RuntimeError(f"Could not find CABBLOCK for {CONNECTOR_NAME}.")
-
-
-app = win32.gencache.EnsureDispatch("CT.Application")
-prj = app.CreateJobObject()
-dev = prj.CreateDeviceObject()
-sym = prj.CreateSymbolObject()
-
-print()
-print("SCP-J1 BLOCK HATCH COLOUR TEST")
-print("=" * 80)
-
-main_device_id = find_device_id(prj, dev, MAIN_DEVICE_NAME)
-if main_device_id is None:
-    raise RuntimeError(f"Could not find main device {MAIN_DEVICE_NAME}.")
-
-connector_device_id = find_device_id(prj, dev, CONNECTOR_NAME)
-if connector_device_id is None:
-    raise RuntimeError(f"Could not find connector {CONNECTOR_NAME}.")
-
-block_info = find_connector_block_symbol(prj, dev, connector_device_id, main_device_id)
-
-print("MAIN DEVICE ID:", main_device_id)
-print("CONNECTOR DEVICE ID:", connector_device_id)
-print("CONNECTOR VIEW NUMBER:", block_info["connector_view_number"])
-print("MAIN VIEW ID:", block_info["main_view_id"])
-print("BLOCK SYMBOL ID:", block_info["block_symbol_id"])
-print("BLOCK SYMBOL TYPE:", block_info["block_symbol_type"])
-print()
-
-set_result = sym.SetId(block_info["block_symbol_id"])
-if not set_result:
-    raise RuntimeError(f"Could not resolve block symbol {block_info['block_symbol_id']}.")
-
-print("AVAILABLE HATCH/FILL METHODS:")
-for method_name in sorted(dir(sym)):
-    lower_name = method_name.lower()
-    if "hatch" in lower_name or "fill" in lower_name:
-        print("   ", method_name)
-
-print()
-
-if hasattr(sym, "GetBlockHatchColour"):
-    try:
-        print("CURRENT BLOCK HATCH COLOUR:", sym.GetBlockHatchColour())
-    except Exception as error:
-        print("GetBlockHatchColour ERROR:", error)
-else:
-    print("GetBlockHatchColour is not exposed by this COM object.")
-
-if not hasattr(sym, "SetBlockHatchColour"):
-    raise RuntimeError("SetBlockHatchColour is not exposed by this COM object.")
-
-print("SETTING BLOCK HATCH COLOUR TO:", HATCH_COLOUR)
-
-result = sym.SetBlockHatchColour(HATCH_COLOUR)
-
-print("SetBlockHatchColour RESULT:", result)
-
-if hasattr(sym, "GetBlockHatchColour"):
-    try:
-        print("NEW BLOCK HATCH COLOUR:", sym.GetBlockHatchColour())
-    except Exception as error:
-        print("GetBlockHatchColour AFTER SET ERROR:", error)
-
-print()
-print("TEST COMPLETE")
-print("Check SCP-J1 visually in E3.")
-print("If the value changes but the block still looks unchanged, the next test should inspect/set the block hatch pattern or fill pattern.")
-
-del sym
-del dev
-del prj
-del app
+TEST COMPLETE
+Check SCP-J1 visually in E3.
+If the value changes but the block still looks unchanged, the next test should inspect/set the block hatch pattern or fill pattern.
