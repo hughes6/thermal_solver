@@ -1,234 +1,574 @@
+from openpyxl import load_workbook
+import os
+import time
+import pyodbc
+import pythoncom
+import win32com.client as win32
 
-========================================================================================================================
-FIND MAIN BLOCK DEVICE
-========================================================================================================================
-DEVICE 72258 | NAME 'Wires'
-DEVICE 64611 | NAME 'SCP-J1'
-DEVICE 67783 | NAME 'SCP-J2'
-DEVICE 137415 | NAME 'TEST_NAME_100000'
 
-TARGET DEVICE ID: 137415
-TARGET DEVICE NAME: TEST_NAME_100000
+# ================================================
+# USER SETTINGS
+# ================================================
 
-========================================================================================================================
-LOGICAL DEVICE
-========================================================================================================================
-dev.SetId(137415)
-GetName(): TEST_NAME_100000
-GetViewNumber(): 0
-IsView(): 0
+MAIN_DEVICE_NAME = "TEST_NAME_100000"
 
-========================================================================================================================
-LOGICAL DEVICE GetSymbolIds MODE 0
-========================================================================================================================
-RAW: (1, (None, 66218))
-IDS: [66218]
+CONNECTOR_NAMES = [
+    "SCP-J1",
+    "SCP-J2",
+]
 
-========================================================================================================================
-LOGICAL DEVICE GetSymbolIds MODE 1
-========================================================================================================================
-RAW: (1, (None, 66218))
-IDS: [66218]
+OUTPUT_FOLDER = os.path.dirname(os.path.abspath(__file__))
 
-========================================================================================================================
-LOGICAL DEVICE GetSymbolIds MODE 2
-========================================================================================================================
-RAW: (0, (None,))
-IDS: []
 
-========================================================================================================================
-LOGICAL DEVICE GetSymbolIds MODE 3
-========================================================================================================================
-RAW: (1, (None, 66218))
-IDS: [66218]
+# ================================================
+# HELPER FXN
+# ================================================
 
-========================================================================================================================
-LOGICAL DEVICE GetViewIds
-========================================================================================================================
-RAW: (2, (None, 69041, 70161))
-VIEW IDS: [69041, 70161]
+COM_MISSING = -2147352572
 
-========================================================================================================================
-LOGICAL DEVICE SYMBOL DETAILS
-========================================================================================================================
+LOG_LINES = []
 
-========================================================================================================================
-SYMBOL 66218
-========================================================================================================================
-sym.SetId(66218) RETURN: 66218
-GetId(): 66218
-GetName(): 1
-GetCode(): 8
-GetSymbolTypeName(): CABBLOCK#0-3a-0-8cc4
-GetCharacteristic(): 
-GetRotation(): 0.000000
-GetScaling(): 1.0
-GetDynamicParentId(): 0
-IsDynamic(): 0
-IsDynamicFixed(): 0
-IsPinView(): 0
-GetSchemaLocation: (204828, 1.0, 28.65, '/1.F8', '8', 'F')
-GetArea: (1, 0.0, 0.0, 3.0, 3.2499999999999982)
-GetPlacedArea: (1, 1.0, 28.65, 4.0, 31.899999999999995)
-GetPlacedPolygon: (1, 5, (None, 1.0, 4.0, 4.0, 1.0, 1.0), (None, 28.65, 28.65, 31.899999999999995, 31.899999999999995, 28.65))
-GetDynamicChildrenIds RAW: (0, (None,))
-GetDynamicChildrenIds IDS: []
 
-========================================================================================================================
-DEVICE VIEW 69041
-========================================================================================================================
-dev.SetId(69041) RETURN: 69041
-GetId(): 69041
-GetName(): TEST_NAME_100000
-GetViewNumber(): 1
-IsView(): 1
-GetLocation(): BxRxUx
+def log(message=""):
 
-========================================================================================================================
-VIEW 69041 GetSymbolIds MODE 0
-========================================================================================================================
-RAW: (1, (None, 69271))
-IDS: [69271]
+    text_value = str(message)
 
-========================================================================================================================
-VIEW 69041 GetSymbolIds MODE 1
-========================================================================================================================
-RAW: (1, (None, 69271))
-IDS: [69271]
+    print(text_value)
 
-========================================================================================================================
-VIEW 69041 GetSymbolIds MODE 2
-========================================================================================================================
-RAW: (0, (None,))
-IDS: []
+    LOG_LINES.append(text_value)
 
-========================================================================================================================
-VIEW 69041 GetSymbolIds MODE 3
-========================================================================================================================
-RAW: (1, (None, 69271))
-IDS: [69271]
 
-========================================================================================================================
-VIEW 69041 SYMBOL DETAILS
-========================================================================================================================
+def section(title):
 
-========================================================================================================================
-SYMBOL 69271
-========================================================================================================================
-sym.SetId(69271) RETURN: 69271
-GetId(): 69271
-GetName(): 2
-GetCode(): 8
-GetSymbolTypeName(): CABBLOCK#0-3a-0-8daf
-GetCharacteristic(): 
-GetRotation(): 0.000000
-GetScaling(): 1.0
-GetDynamicParentId(): 0
-IsDynamic(): 0
-IsDynamicFixed(): 0
-IsPinView(): 0
-GetSchemaLocation: (204828, 5.0, 27.4, '/1.E8', '8', 'E')
-GetArea: (1, 0.0, 0.0, 2.9999999999999996, 4.499999999999998)
-GetPlacedArea: (1, 5.0, 27.4, 8.0, 31.899999999999995)
-GetPlacedPolygon: (1, 5, (None, 5.0, 8.0, 8.0, 5.0, 5.0), (None, 27.4, 27.4, 31.899999999999995, 31.899999999999995, 27.4))
-GetDynamicChildrenIds RAW: (0, (None,))
-GetDynamicChildrenIds IDS: []
+    log()
+    log("=" * 120)
+    log(title)
+    log("=" * 120)
 
-========================================================================================================================
-DEVICE VIEW 70161
-========================================================================================================================
-dev.SetId(70161) RETURN: 70161
-GetId(): 70161
-GetName(): TEST_NAME_100000
-GetViewNumber(): 2
-IsView(): 1
-GetLocation(): BxRxUx
 
-========================================================================================================================
-VIEW 70161 GetSymbolIds MODE 0
-========================================================================================================================
-RAW: (1, (None, 70419))
-IDS: [70419]
+def save_log():
 
-========================================================================================================================
-VIEW 70161 GetSymbolIds MODE 1
-========================================================================================================================
-RAW: (1, (None, 70419))
-IDS: [70419]
+    output_path = os.path.join(OUTPUT_FOLDER, "e3_connector_block_geometry_map_test_output.txt")
 
-========================================================================================================================
-VIEW 70161 GetSymbolIds MODE 2
-========================================================================================================================
-RAW: (0, (None,))
-IDS: []
+    with open(output_path, "w", encoding="utf-8") as file:
+        file.write("\n".join(LOG_LINES))
 
-========================================================================================================================
-VIEW 70161 GetSymbolIds MODE 3
-========================================================================================================================
-RAW: (1, (None, 70419))
-IDS: [70419]
+    print()
+    print("=" * 120)
+    print("OUTPUT WRITTEN")
+    print("=" * 120)
+    print(output_path)
 
-========================================================================================================================
-VIEW 70161 SYMBOL DETAILS
-========================================================================================================================
 
-========================================================================================================================
-SYMBOL 70419
-========================================================================================================================
-sym.SetId(70419) RETURN: 70419
-GetId(): 70419
-GetName(): 3
-GetCode(): 8
-GetSymbolTypeName(): CABBLOCK#0-3a-0-8dd4
-GetCharacteristic(): 
-GetRotation(): 0.000000
-GetScaling(): 1.0
-GetDynamicParentId(): 0
-IsDynamic(): 0
-IsDynamicFixed(): 0
-IsPinView(): 0
-GetSchemaLocation: (204828, 5.0, 22.15, '/1.E8', '8', 'E')
-GetArea: (1, 0.0, 0.0, 2.9999999999999996, 4.249999999999998)
-GetPlacedArea: (1, 5.0, 22.15, 8.0, 26.399999999999995)
-GetPlacedPolygon: (1, 5, (None, 5.0, 8.0, 8.0, 5.0, 5.0), (None, 22.15, 22.15, 26.399999999999995, 26.399999999999995, 22.15))
-GetDynamicChildrenIds RAW: (0, (None,))
-GetDynamicChildrenIds IDS: []
+def is_missing_value(value):
 
-========================================================================================================================
-SHEET-LEVEL CABBLOCK SEARCH
-========================================================================================================================
+    if value is None:
+        return True
 
-SHEET 1 | ID 204828
-GetSymbolIds RAW: (22, (None, 66218, 61179, 68773, 69271, 70419, 143999, 143976, 143975, 143986, 145922, 146059, 204784, 146079, 143985, 62426, 62728, 147117, 67098, 70169, 70675, 71681, 72197))
-SYMBOL COUNT: 22
-CABBLOCK SYMBOL 66218 | NAME 1 | CODE 8 | TYPE CABBLOCK#0-3a-0-8cc4
-    LOCATION: (204828, 1.0, 28.65, '/1.F8', '8', 'F')
-    AREA: (1, 0.0, 0.0, 3.0, 3.2499999999999982)
-    PLACED AREA: (1, 1.0, 28.65, 4.0, 31.899999999999995)
-    POLYGON: (1, 5, (None, 1.0, 4.0, 4.0, 1.0, 1.0), (None, 28.65, 28.65, 31.899999999999995, 31.899999999999995, 28.65))
-CABBLOCK SYMBOL 69271 | NAME 2 | CODE 8 | TYPE CABBLOCK#0-3a-0-8daf
-    LOCATION: (204828, 5.0, 27.4, '/1.E8', '8', 'E')
-    AREA: (1, 0.0, 0.0, 2.9999999999999996, 4.499999999999998)
-    PLACED AREA: (1, 5.0, 27.4, 8.0, 31.899999999999995)
-    POLYGON: (1, 5, (None, 5.0, 8.0, 8.0, 5.0, 5.0), (None, 27.4, 27.4, 31.899999999999995, 31.899999999999995, 27.4))
-CABBLOCK SYMBOL 70419 | NAME 3 | CODE 8 | TYPE CABBLOCK#0-3a-0-8dd4
-    LOCATION: (204828, 5.0, 22.15, '/1.E8', '8', 'E')
-    AREA: (1, 0.0, 0.0, 2.9999999999999996, 4.249999999999998)
-    PLACED AREA: (1, 5.0, 22.15, 8.0, 26.399999999999995)
-    POLYGON: (1, 5, (None, 5.0, 8.0, 8.0, 5.0, 5.0), (None, 22.15, 22.15, 26.399999999999995, 26.399999999999995, 22.15))
+    try:
+        return int(value) == COM_MISSING
+    except Exception:
+        return False
 
-SHEET 2 | ID 147977
-GetSymbolIds RAW: (0, (None,))
-SYMBOL COUNT: 0
 
-========================================================================================================================
-TEST COMPLETE
-========================================================================================================================
-Send me this output.
+def clean_id_list(values):
 
-We are looking for the CABBLOCK whose placed area contains the connector pin coordinates.
-For SCP-J1 the existing connector pin X is about 7.7.
-So the correct block should have a placed-area X range that reaches roughly that region.
+    cleaned = []
 
-The previous CABBLOCK candidate 66218 had placed area X = 1.0 to 4.0,
-so I do NOT want to wire that geometry into the production orderer until we identify the actual view/block.
+    if values is None:
+        return cleaned
+
+    if not isinstance(values, (tuple, list)):
+        values = [values]
+
+    for value in values:
+
+        if is_missing_value(value):
+            continue
+
+        try:
+            value = int(value)
+        except Exception:
+            continue
+
+        if value > 0:
+            cleaned.append(value)
+
+    return cleaned
+
+
+def parse_count_array_result(result):
+
+    if result is None:
+        return []
+
+    if isinstance(result, (tuple, list)):
+
+        items = list(result)
+
+        if len(items) >= 2 and isinstance(items[1], (tuple, list)):
+
+            try:
+                count = int(items[0])
+            except Exception:
+                count = None
+
+            values = clean_id_list(items[1])
+
+            if count is not None and len(values) > count:
+                values = values[-count:]
+
+            return values
+
+        return clean_id_list(items)
+
+    return clean_id_list(result)
+
+
+def normalize_name(value):
+
+    if value is None:
+        return ""
+
+    return str(value).strip()
+
+
+def find_device_id(prj, dev, target_name):
+
+    raw = prj.GetAllDeviceIds(None)
+    device_ids = parse_count_array_result(raw)
+
+    for device_id in device_ids:
+
+        dev.SetId(device_id)
+
+        try:
+            device_name = normalize_name(dev.GetName())
+        except Exception:
+            device_name = ""
+
+        if device_name == target_name:
+            return device_id
+
+    return None
+
+
+def get_device_view_ids(dev, device_id):
+
+    dev.SetId(device_id)
+
+    try:
+        raw = dev.GetViewIds(None)
+    except Exception:
+        return []
+
+    return parse_count_array_result(raw)
+
+
+def get_device_symbol_ids(dev, device_id):
+
+    dev.SetId(device_id)
+
+    try:
+        raw = dev.GetSymbolIds(None, 0)
+    except Exception:
+        return []
+
+    return parse_count_array_result(raw)
+
+
+def get_view_number(dev, view_id):
+
+    dev.SetId(view_id)
+
+    try:
+        return int(dev.GetViewNumber())
+    except Exception:
+        return None
+
+
+def get_schema_location(sym):
+
+    try:
+        result = sym.GetSchemaLocation(None, None, None, None, None)
+    except Exception:
+        return None
+
+    if not isinstance(result, (tuple, list)):
+        return None
+
+    if len(result) < 3:
+        return None
+
+    try:
+        sheet_id = int(result[0])
+        x = float(result[1])
+        y = float(result[2])
+    except Exception:
+        return None
+
+    return {
+        "sheet_id": sheet_id,
+        "x": x,
+        "y": y,
+        "raw": result,
+    }
+
+
+def get_area(sym):
+
+    try:
+        result = sym.GetArea(None, None, None, None)
+    except Exception:
+        return None
+
+    if not isinstance(result, (tuple, list)):
+        return None
+
+    if len(result) < 5:
+        return None
+
+    try:
+        success = int(result[0])
+        xmin = float(result[1])
+        ymin = float(result[2])
+        xmax = float(result[3])
+        ymax = float(result[4])
+    except Exception:
+        return None
+
+    if success <= 0:
+        return None
+
+    return {
+        "xmin": xmin,
+        "ymin": ymin,
+        "xmax": xmax,
+        "ymax": ymax,
+        "width": xmax - xmin,
+        "height": ymax - ymin,
+        "raw": result,
+    }
+
+
+def get_placed_area(sym):
+
+    try:
+        result = sym.GetPlacedArea(None, None, None, None)
+    except Exception:
+        return None
+
+    if not isinstance(result, (tuple, list)):
+        return None
+
+    if len(result) < 5:
+        return None
+
+    try:
+        success = int(result[0])
+        xmin = float(result[1])
+        ymin = float(result[2])
+        xmax = float(result[3])
+        ymax = float(result[4])
+    except Exception:
+        return None
+
+    if success <= 0:
+        return None
+
+    return {
+        "left": xmin,
+        "bottom": ymin,
+        "right": xmax,
+        "top": ymax,
+        "width": xmax - xmin,
+        "height": ymax - ymin,
+        "center_x": (xmin + xmax) / 2.0,
+        "center_y": (ymin + ymax) / 2.0,
+        "raw": result,
+    }
+
+
+def get_symbol_info(prj, symbol_id):
+
+    sym = prj.CreateSymbolObject()
+
+    try:
+        set_result = sym.SetId(symbol_id)
+    except Exception:
+        return None
+
+    try:
+        set_result = int(set_result)
+    except Exception:
+        set_result = 0
+
+    if set_result <= 0:
+        return None
+
+    try:
+        symbol_type_name = normalize_name(sym.GetSymbolTypeName())
+    except Exception:
+        symbol_type_name = ""
+
+    return {
+        "symbol_id": symbol_id,
+        "name": normalize_name(sym.GetName()) if hasattr(sym, "GetName") else "",
+        "code": sym.GetCode() if hasattr(sym, "GetCode") else None,
+        "symbol_type_name": symbol_type_name,
+        "schema_location": get_schema_location(sym),
+        "area": get_area(sym),
+        "placed_area": get_placed_area(sym),
+    }
+
+
+# ================================================
+# PARSE EXCEL
+# ================================================
+
+# Not needed for this read-only geometry mapping test.
+# Kept here to match the structure of the main script.
+
+
+# ================================================
+# CONNECT TO DB
+# ================================================
+
+# Not needed for this read-only geometry mapping test.
+# Kept here to match the structure of the main script.
+
+
+# ================================================
+# SET OBJECTS
+# ================================================
+
+pythoncom.CoInitialize()
+
+app = win32.gencache.EnsureDispatch("CT.Application")
+prj = app.CreateJobObject()
+text = prj.CreateTextObject()
+comp = prj.CreateComponentObject()
+dev = prj.CreateDeviceObject()
+sym = prj.CreateSymbolObject()
+pin = prj.CreatePinObject()
+attr = prj.CreateAttributeObject()
+sht = prj.CreateSheetObject()
+
+
+# ================================================
+# MORE SETUP
+# ================================================
+
+app.PutMessage("\nStarting Connector -> Block Geometry Mapping Test")
+
+
+# ================================================
+# FIND MAIN DEVICE
+# ================================================
+
+try:
+
+    section("FIND MAIN DEVICE")
+
+    main_device_id = find_device_id(prj, dev, MAIN_DEVICE_NAME)
+
+    if main_device_id is None:
+        raise RuntimeError(f"Could not find main device {MAIN_DEVICE_NAME}.")
+
+    log(f"MAIN DEVICE NAME: {MAIN_DEVICE_NAME}")
+    log(f"MAIN DEVICE ID: {main_device_id}")
+
+
+    # ================================================
+    # MAP MAIN DEVICE VIEWS
+    # ================================================
+
+    section("MAIN DEVICE VIEW MAP")
+
+    main_view_ids = get_device_view_ids(dev, main_device_id)
+
+    log(f"MAIN VIEW IDS: {main_view_ids}")
+
+    main_view_map = {}
+
+    for main_view_id in main_view_ids:
+
+        view_number = get_view_number(dev, main_view_id)
+
+        symbol_ids = get_device_symbol_ids(dev, main_view_id)
+
+        log()
+        log(f"MAIN VIEW ID: {main_view_id}")
+        log(f"VIEW NUMBER: {view_number}")
+        log(f"SYMBOL IDS: {symbol_ids}")
+
+        symbol_records = []
+
+        for symbol_id in symbol_ids:
+
+            symbol_info = get_symbol_info(prj, symbol_id)
+
+            if symbol_info is None:
+                continue
+
+            symbol_records.append(symbol_info)
+
+            log(f"    SYMBOL {symbol_id}")
+            log(f"        TYPE: {symbol_info['symbol_type_name']}")
+            log(f"        SCHEMA LOCATION: {symbol_info['schema_location']}")
+            log(f"        AREA: {symbol_info['area']}")
+            log(f"        PLACED AREA: {symbol_info['placed_area']}")
+
+        main_view_map[view_number] = {
+            "view_id": main_view_id,
+            "view_number": view_number,
+            "symbols": symbol_records,
+        }
+
+
+    # ================================================
+    # MAP EACH CONNECTOR TO ITS BLOCK VIEW
+    # ================================================
+
+    section("CONNECTOR -> BLOCK GEOMETRY")
+
+    for connector_name in CONNECTOR_NAMES:
+
+        connector_device_id = find_device_id(prj, dev, connector_name)
+
+        if connector_device_id is None:
+            log(f"{connector_name}: DEVICE NOT FOUND")
+            continue
+
+        connector_view_ids = get_device_view_ids(dev, connector_device_id)
+
+        log()
+        log("-" * 120)
+        log(f"CONNECTOR: {connector_name}")
+        log(f"DEVICE ID: {connector_device_id}")
+        log(f"VIEW IDS: {connector_view_ids}")
+
+        connector_view_numbers = []
+
+        for connector_view_id in connector_view_ids:
+
+            connector_view_number = get_view_number(dev, connector_view_id)
+
+            connector_view_numbers.append(connector_view_number)
+
+            log(f"    CONNECTOR VIEW ID {connector_view_id} -> VIEW NUMBER {connector_view_number}")
+
+        unique_view_numbers = []
+
+        for view_number in connector_view_numbers:
+
+            if view_number is None:
+                continue
+
+            if view_number not in unique_view_numbers:
+                unique_view_numbers.append(view_number)
+
+        if not unique_view_numbers:
+            log("    NO CONNECTOR VIEW NUMBER FOUND")
+            continue
+
+        if len(unique_view_numbers) > 1:
+            log(f"    WARNING: MULTIPLE CONNECTOR VIEW NUMBERS: {unique_view_numbers}")
+
+        block_view_number = unique_view_numbers[0]
+
+        log(f"    MATCHED MAIN BLOCK VIEW NUMBER: {block_view_number}")
+
+        if block_view_number not in main_view_map:
+            log("    NO MATCHING MAIN DEVICE VIEW")
+            continue
+
+        main_view_record = main_view_map[block_view_number]
+
+        cabblock_symbols = []
+
+        for symbol_record in main_view_record["symbols"]:
+
+            if "CABBLOCK" in symbol_record["symbol_type_name"].upper():
+                cabblock_symbols.append(symbol_record)
+
+        if not cabblock_symbols:
+            log("    MATCHING MAIN VIEW HAS NO CABBLOCK SYMBOL")
+            continue
+
+        if len(cabblock_symbols) > 1:
+            log(f"    WARNING: MATCHING VIEW HAS {len(cabblock_symbols)} CABBLOCK SYMBOLS")
+
+        block = cabblock_symbols[0]
+
+        log(f"    BLOCK SYMBOL ID: {block['symbol_id']}")
+        log(f"    BLOCK TYPE: {block['symbol_type_name']}")
+        log(f"    BLOCK SCHEMA LOCATION: {block['schema_location']}")
+        log(f"    BLOCK LOCAL AREA: {block['area']}")
+        log(f"    BLOCK PLACED AREA: {block['placed_area']}")
+
+        placed_area = block["placed_area"]
+
+        if placed_area is not None:
+
+            log()
+            log("    FINAL GEOMETRY VALUES:")
+            log(f"        block_left = {placed_area['left']}")
+            log(f"        block_right = {placed_area['right']}")
+            log(f"        block_bottom = {placed_area['bottom']}")
+            log(f"        block_top = {placed_area['top']}")
+            log(f"        block_width = {placed_area['width']}")
+            log(f"        block_height = {placed_area['height']}")
+            log(f"        block_center_x = {placed_area['center_x']}")
+            log(f"        block_center_y = {placed_area['center_y']}")
+
+
+    # ================================================
+    # TEST COMPLETE
+    # ================================================
+
+    section("TEST COMPLETE")
+
+    log("If the connector view numbers match the main-device view numbers,")
+    log("this is the mapping we can drop directly into the production pin orderer:")
+    log()
+    log("connector device")
+    log("    -> connector GetViewIds()")
+    log("    -> connector view GetViewNumber()")
+    log("    -> main device view with same GetViewNumber()")
+    log("    -> main view GetSymbolIds()")
+    log("    -> CABBLOCK")
+    log("    -> GetPlacedArea()")
+
+
+except Exception as exc:
+
+    section("FATAL ERROR")
+
+    log(str(exc))
+
+    import traceback
+
+    log(traceback.format_exc())
+
+
+# =========================================
+# RESET BEFORE MAIN BLOCK FORMATTING
+# =========================================
+
+try:
+    save_log()
+except Exception as exc:
+    print(f"Could not save log: {exc}")
+
+del attr
+del text
+del sym
+del pin
+del comp
+del dev
+del sht
+del prj
+del app
+
+pythoncom.CoUninitialize()
