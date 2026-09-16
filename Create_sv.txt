@@ -1,678 +1,102 @@
-import time
-import traceback
-from datetime import datetime
-from pathlib import Path
+dry run: 
 
-import pythoncom
-import win32com.client
-
-
-# ============================================================
-# USER SETTINGS
-# ============================================================
-
-CONNECTOR_NAME = "SCP-J1"
-
-TARGET_PIN_NAME = "1"
-
-FIXED_X = 5.5
-TARGET_Y = 30.25
-
-ROTATION = "0"
-SCALE = 1.0
-MAINTAIN_TEXT_SIZE = 1
+====================================================================================================
+E3 GRAPH-BOUND DETACH TEST
+====================================================================================================
+PURPOSE:
+Verify whether the objects returned by Symbol.GetBoundIds are Graph objects.
+Then optionally delete the bound graph objects from one endpoint pin.
+Then test whether the pin becomes movable with Symbol.Place.
 
 DRY_RUN = True
-
-OUTPUT_DIRECTORY = Path(__file__).resolve().parent
-
-COM_MISSING = -2147352572
-
-
-# ============================================================
-# LOGGING
-# ============================================================
-
-LOG_LINES = []
-
-
-def log(message=""):
-
-    text = str(message)
-
-    print(text)
-
-    LOG_LINES.append(text)
-
-
-def section(title):
-
-    log()
-    log("=" * 100)
-    log(title)
-    log("=" * 100)
-
-
-def save_log():
-
-    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-
-    path = OUTPUT_DIRECTORY / f"e3_graph_detach_test_{timestamp}.txt"
-
-    path.write_text("\n".join(LOG_LINES), encoding="utf-8")
-
-    print()
-    print(f"LOG WRITTEN: {path}")
-
-
-# ============================================================
-# BASIC COM ARRAY HANDLING
-# ============================================================
-
-def safe_string(value):
-
-    try:
-        return str(value)
-    except Exception:
-        return repr(value)
-
-
-def is_missing_value(value):
-
-    if value is None:
-        return True
-
-    try:
-        if int(value) == COM_MISSING:
-            return True
-    except Exception:
-        pass
-
-    return False
-
-
-def clean_id_list(values):
-
-    cleaned = []
-
-    if values is None:
-        return cleaned
-
-    if not isinstance(values, (tuple, list)):
-        values = [values]
-
-    for value in values:
-
-        if is_missing_value(value):
-            continue
-
-        try:
-            value = int(value)
-        except Exception:
-            continue
-
-        if value <= 0:
-            continue
-
-        cleaned.append(value)
-
-    return cleaned
-
-
-def parse_count_array_result(result):
-
-    if result is None:
-        return []
-
-    if isinstance(result, (tuple, list)):
-
-        items = list(result)
-
-        if len(items) >= 2 and isinstance(items[1], (tuple, list)):
-
-            try:
-                count = int(items[0])
-            except Exception:
-                count = None
-
-            values = clean_id_list(items[1])
-
-            if count is not None and len(values) > count:
-                values = values[-count:]
-
-            return values
-
-        return clean_id_list(items)
-
-    return clean_id_list(result)
-
-
-def call_id_array(method):
-
-    try:
-        result = method(None)
-
-        values = parse_count_array_result(result)
-
-        if values:
-            return values
-
-    except Exception:
-        pass
-
-    try:
-        result = method()
-
-        values = parse_count_array_result(result)
-
-        if values:
-            return values
-
-    except Exception:
-        pass
-
-    return []
-
-
-# ============================================================
-# CONNECT TO E3
-# ============================================================
-
-def connect_to_e3():
-
-    section("CONNECTING TO E3")
-
-    pythoncom.CoInitialize()
-
-    app = win32com.client.Dispatch("CT.Application")
-
-    prj = app.CreateJobObject()
-    dev = prj.CreateDeviceObject()
-    pin = prj.CreatePinObject()
-    sym = prj.CreateSymbolObject()
-    graph = prj.CreateGraphObject()
-
-    log(f"APPLICATION: {app}")
-    log(f"PROJECT: {prj}")
-
-    return app, prj, dev, pin, sym, graph
-
-
-# ============================================================
-# FIND CONNECTOR
-# ============================================================
-
-def find_connector(prj, dev):
-
-    section(f"FIND CONNECTOR {CONNECTOR_NAME}")
-
-    device_ids = call_id_array(prj.GetAllDeviceIds)
-
-    log(f"DEVICE IDS: {device_ids}")
-
-    for device_id in device_ids:
-
-        try:
-            dev.SetId(device_id)
-        except Exception:
-            continue
-
-        try:
-            name = str(dev.GetName())
-        except Exception:
-            name = ""
-
-        log(f"DEVICE {device_id}: {name}")
-
-        if name == CONNECTOR_NAME:
-            log(f"FOUND CONNECTOR ID: {device_id}")
-
-            return device_id
-
-    raise RuntimeError(f"Could not find {CONNECTOR_NAME}.")
-
-
-# ============================================================
-# PIN HELPERS
-# ============================================================
-
-def get_pin_ids(dev):
-
-    return call_id_array(dev.GetPinIds)
-
-
-def get_view_ids(pin):
-
-    return call_id_array(pin.GetViewIds)
-
-
-def get_bound_ids(sym):
-
-    return call_id_array(sym.GetBoundIds)
-
-
-def get_pin_name(pin):
-
-    try:
-        return str(pin.GetName())
-    except Exception:
-        return ""
-
-
-def get_schema_location(pin):
-
-    attempts = [
-        lambda: pin.GetSchemaLocation(None, None, None, None, None),
-        lambda: pin.GetSchemaLocation(None, None, None),
-        lambda: pin.GetSchemaLocation(),
-    ]
-
-    for attempt in attempts:
-
-        try:
-            result = attempt()
-        except Exception:
-            continue
-
-        if not isinstance(result, (tuple, list)):
-            continue
-
-        numeric = []
-
-        for item in result:
-
-            if is_missing_value(item):
-                continue
-
-            try:
-                numeric.append(float(item))
-            except Exception:
-                pass
-
-        if len(numeric) >= 3:
-            return numeric
-
-    return None
-
-
-def find_pin(dev, pin, connector_device_id, pin_name):
-
-    dev.SetId(connector_device_id)
-
-    pin_ids = get_pin_ids(dev)
-
-    for pin_id in pin_ids:
-
-        pin.SetId(pin_id)
-
-        name = get_pin_name(pin)
-
-        if name == str(pin_name):
-
-            view_ids = get_view_ids(pin)
-
-            return {
-                "pin_id": pin_id,
-                "pin_name": name,
-                "view_ids": view_ids,
-            }
-
-    return None
-
-
-def inspect_pin(pin, sym, pin_record):
-
-    section(f"PIN {pin_record['pin_name']} CURRENT STATE")
-
-    log(f"LOGICAL PIN ID: {pin_record['pin_id']}")
-    log(f"VIEW IDS: {pin_record['view_ids']}")
-
-    result = []
-
-    for view_id in pin_record["view_ids"]:
-
-        pin.SetId(view_id)
-
-        schema_location = get_schema_location(pin)
-
-        sym.SetId(view_id)
-
-        bound_ids = get_bound_ids(sym)
-
-        log(f"VIEW {view_id}")
-        log(f"    SCHEMA LOCATION: {schema_location}")
-        log(f"    BOUND IDS: {bound_ids}")
-
-        result.append({
-            "view_id": view_id,
-            "schema_location": schema_location,
-            "bound_ids": bound_ids,
-        })
-
-    return result
-
-
-# ============================================================
-# GRAPH INSPECTION
-# ============================================================
-
-def graph_method_doc(graph, method_name):
-
-    if not hasattr(graph, method_name):
-        return None
-
-    try:
-        method = getattr(graph, method_name)
-        return getattr(method, "__doc__", None)
-    except Exception:
-        return None
-
-
-def inspect_graph(graph, graph_id):
-
-    section(f"GRAPH OBJECT {graph_id}")
-
-    set_result = graph.SetId(graph_id)
-
-    current_id = graph.GetId()
-
-    log(f"SetId RETURN: {set_result}")
-    log(f"GetId RETURN: {current_id}")
-
-    if current_id != graph_id:
-        log("NOT A VALID GRAPH OBJECT")
-
-        return False
-
-    try:
-        gid = graph.GetGID()
-    except Exception as exc:
-        gid = f"ERROR: {exc}"
-
-    log(f"GID: {gid}")
-
-    for method_name in ["GetLine", "GetLineColour", "GetLineStyle", "GetLineWidth", "Delete", "Place"]:
-
-        if not hasattr(graph, method_name):
-            continue
-
-        doc = graph_method_doc(graph, method_name)
-
-        log(f"{method_name} DOC: {doc}")
-
-    if hasattr(graph, "GetLine"):
-
-        attempts = [
-            ("GetLine()", lambda: graph.GetLine()),
-            ("GetLine(None,None,None,None)", lambda: graph.GetLine(None, None, None, None)),
-        ]
-
-        for label, attempt in attempts:
-
-            try:
-                result = attempt()
-                log(f"{label} -> {result}")
-            except Exception as exc:
-                log(f"{label} ERROR -> {exc}")
-
-    return True
-
-
-# ============================================================
-# CONNECTOR TABLE
-# ============================================================
-
-def print_connector_bound_table(dev, pin, sym, connector_device_id):
-
-    section("CONNECTOR BOUND TABLE")
-
-    dev.SetId(connector_device_id)
-
-    for pin_id in get_pin_ids(dev):
-
-        pin.SetId(pin_id)
-
-        pin_name = get_pin_name(pin)
-
-        view_ids = get_view_ids(pin)
-
-        all_bounds = []
-
-        for view_id in view_ids:
-
-            sym.SetId(view_id)
-
-            all_bounds.extend(get_bound_ids(sym))
-
-        unique_bounds = []
-
-        for bound_id in all_bounds:
-
-            if bound_id not in unique_bounds:
-                unique_bounds.append(bound_id)
-
-        log(f"PIN {pin_name} | PIN ID {pin_id} | VIEW IDS {view_ids} | BOUNDS {unique_bounds}")
-
-
-# ============================================================
-# DELETE ONE GRAPH
-# ============================================================
-
-def delete_graph(graph, graph_id):
-
-    graph.SetId(graph_id)
-
-    current_id = graph.GetId()
-
-    if current_id != graph_id:
-        raise RuntimeError(f"Graph ID {graph_id} is no longer valid.")
-
-    result = graph.Delete()
-
-    log(f"graph.Delete() FOR {graph_id} RETURNED: {result}")
-
-    return result
-
-
-# ============================================================
-# PLACE PIN
-# ============================================================
-
-def place_view(sym, view_id, sheet_id):
-
-    section("SCRIPTED PLACE TEST")
-
-    log(f"VIEW ID: {view_id}")
-    log(f"SHEET ID: {sheet_id}")
-    log(f"TARGET X: {FIXED_X}")
-    log(f"TARGET Y: {TARGET_Y}")
-
-    sym.SetId(view_id)
-
-    result = sym.Place(sheet_id, FIXED_X, TARGET_Y, ROTATION, SCALE, MAINTAIN_TEXT_SIZE)
-
-    log(f"sym.Place RETURN: {result}")
-
-    return result
-
-
-# ============================================================
-# MAIN CONTROLLED TEST
-# ============================================================
-
-def main():
-
-    section("E3 GRAPH-BOUND DETACH TEST")
-
-    log("PURPOSE:")
-    log("Verify whether the objects returned by Symbol.GetBoundIds are Graph objects.")
-    log("Then optionally delete the bound graph objects from one endpoint pin.")
-    log("Then test whether the pin becomes movable with Symbol.Place.")
-    log()
-    log(f"DRY_RUN = {DRY_RUN}")
-    log(f"TARGET CONNECTOR = {CONNECTOR_NAME}")
-    log(f"TARGET PIN = {TARGET_PIN_NAME}")
-
-    app, prj, dev, pin, sym, graph = connect_to_e3()
-
-    connector_device_id = find_connector(prj, dev)
-
-    print_connector_bound_table(dev, pin, sym, connector_device_id)
-
-    pin_record = find_pin(dev, pin, connector_device_id, TARGET_PIN_NAME)
-
-    if pin_record is None:
-        raise RuntimeError(f"Could not find pin {TARGET_PIN_NAME}.")
-
-    states = inspect_pin(pin, sym, pin_record)
-
-    if not states:
-        raise RuntimeError("Target pin has no placed view.")
-
-    target_state = states[0]
-
-    view_id = target_state["view_id"]
-    bound_ids = target_state["bound_ids"]
-
-    if not bound_ids:
-
-        log("TARGET PIN IS ALREADY UNBOUND")
-
-    else:
-
-        section("VERIFY TARGET BOUNDS ARE GRAPH OBJECTS")
-
-        valid_graph_ids = []
-
-        for bound_id in bound_ids:
-
-            valid = inspect_graph(graph, bound_id)
-
-            if valid:
-                valid_graph_ids.append(bound_id)
-
-        log()
-        log(f"BOUND IDS: {bound_ids}")
-        log(f"VALID GRAPH IDS: {valid_graph_ids}")
-
-        if set(valid_graph_ids) != set(bound_ids):
-            raise RuntimeError("Not every bound ID was verified as a Graph object. No deletion will be attempted.")
-
-        if DRY_RUN:
-
-            section("DRY RUN COMPLETE")
-
-            log("No graph objects were deleted.")
-            log("Set DRY_RUN = False only after reviewing this output.")
-
-            return
-
-        section("DESTRUCTIVE TEST WARNING")
-
-        log("The next operation will delete graphical bound objects from the selected pin.")
-        log("Use this only on a disposable/test project or after saving a recoverable copy.")
-        log("The script deletes ONE graph at a time and re-reads the pin after each deletion.")
-        log()
-
-        confirmation = input("Type DELETE to continue: ").strip()
-
-        if confirmation != "DELETE":
-            log("DELETION CANCELLED")
-
-            return
-
-        for graph_id in list(valid_graph_ids):
-
-            section(f"DELETE GRAPH {graph_id}")
-
-            delete_graph(graph, graph_id)
-
-            time.sleep(0.2)
-
-            refreshed_pin = find_pin(dev, pin, connector_device_id, TARGET_PIN_NAME)
-
-            refreshed_states = inspect_pin(pin, sym, refreshed_pin)
-
-            print_connector_bound_table(dev, pin, sym, connector_device_id)
-
-            if refreshed_states:
-
-                remaining_bounds = refreshed_states[0]["bound_ids"]
-
-                log(f"REMAINING BOUNDS AFTER DELETE: {remaining_bounds}")
-
-                if not remaining_bounds:
-                    log("TARGET PIN IS NOW UNBOUND")
-
-                    break
-
-        refreshed_pin = find_pin(dev, pin, connector_device_id, TARGET_PIN_NAME)
-
-        refreshed_states = inspect_pin(pin, sym, refreshed_pin)
-
-        if not refreshed_states:
-            raise RuntimeError("Target pin view disappeared.")
-
-        final_state = refreshed_states[0]
-
-        if final_state["bound_ids"]:
-            log("TARGET PIN STILL HAS BOUNDS")
-            log("SCRIPT WILL NOT ATTEMPT Place")
-
-            return
-
-        schema_location = final_state["schema_location"]
-
-        if schema_location is None or len(schema_location) < 3:
-            raise RuntimeError("Could not determine schema location/sheet ID.")
-
-        sheet_id = int(schema_location[0])
-
-        log()
-        log("TARGET PIN IS UNBOUND.")
-        log("READY TO TEST sym.Place.")
-
-        place_confirmation = input("Type PLACE to attempt scripted placement: ").strip()
-
-        if place_confirmation != "PLACE":
-            log("PLACE CANCELLED")
-
-            return
-
-        place_view(sym, final_state["view_id"], sheet_id)
-
-        time.sleep(0.5)
-
-        final_pin = find_pin(dev, pin, connector_device_id, TARGET_PIN_NAME)
-
-        inspect_pin(pin, sym, final_pin)
-
-        print_connector_bound_table(dev, pin, sym, connector_device_id)
-
-
-if __name__ == "__main__":
-
-    try:
-        main()
-
-    except KeyboardInterrupt:
-        log()
-        log("STOPPED BY USER")
-
-    except Exception as exc:
-        log()
-        log("FATAL ERROR")
-        log(safe_string(exc))
-        log(traceback.format_exc())
-
-    finally:
-
-        try:
-            save_log()
-        except Exception as exc:
-            print(f"COULD NOT SAVE LOG: {exc}")
-
-        try:
-            pythoncom.CoUninitialize()
-        except Exception:
-            pass
+TARGET CONNECTOR = SCP-J1
+TARGET PIN = 1
+
+====================================================================================================
+CONNECTING TO E3
+====================================================================================================
+APPLICATION: <win32com.gen_py.E3.series 2025.2543 Type Library.IApplicationInterface instance at 0x2322220028592>
+PROJECT: <win32com.gen_py.E3.series 2025.2543 Type Library.IJobInterface instance at 0x2322220029936>
+
+====================================================================================================
+FIND CONNECTOR SCP-J1
+====================================================================================================
+DEVICE IDS: [72258, 64611, 67783, 137415]
+DEVICE 72258: Wires
+DEVICE 64611: SCP-J1
+FOUND CONNECTOR ID: 64611
+
+====================================================================================================
+CONNECTOR BOUND TABLE
+====================================================================================================
+PIN 1 | PIN ID 64615 | VIEW IDS [70079] | BOUNDS [204785, 204782]
+PIN 2 | PIN ID 64614 | VIEW IDS [70077] | BOUNDS [204785, 204782, 204781, 204780]
+PIN 3 | PIN ID 64613 | VIEW IDS [70075] | BOUNDS [204813, 204820, 204781, 204780]
+PIN 4 | PIN ID 64612 | VIEW IDS [70073] | BOUNDS [206164, 204814, 204813, 204820]
+PIN 5 | PIN ID 64619 | VIEW IDS [70067] | BOUNDS [206159, 204877, 206164, 204814]
+PIN 6 | PIN ID 64618 | VIEW IDS [70061] | BOUNDS [206159, 204877, 204878, 206163]
+PIN 7 | PIN ID 64617 | VIEW IDS [70055] | BOUNDS [206157, 206165, 204878, 206163]
+PIN 8 | PIN ID 64616 | VIEW IDS [70049] | BOUNDS [206157, 206165, 206167, 204806]
+PIN 9 | PIN ID 64534 | VIEW IDS [70043] | BOUNDS [206167, 204806]
+
+====================================================================================================
+PIN 1 CURRENT STATE
+====================================================================================================
+LOGICAL PIN ID: 64615
+VIEW IDS: [70079]
+VIEW 70079
+    SCHEMA LOCATION: [204828.0, 7.699999999999999, 29.9, 7.0]
+    BOUND IDS: [204785, 204782]
+
+====================================================================================================
+VERIFY TARGET BOUNDS ARE GRAPH OBJECTS
+====================================================================================================
+
+====================================================================================================
+GRAPH OBJECT 204785
+====================================================================================================
+SetId RETURN: 204785
+GetId RETURN: 204785
+GID: 0-56-0-926a
+GetLine DOC: method GetLine
+GetLineColour DOC: method GetLineColour
+GetLineStyle DOC: method GetLineStyle
+GetLineWidth DOC: method GetLineWidth
+Delete DOC: method Delete
+Place DOC: method Place
+GetLine() -> (1, -2147352572, -2147352572, -2147352572, -2147352572)
+GetLine(None,None,None,None) -> (1, 7.999999999999998, 29.9, 7.999999999999999, 29.650000000000002)
+
+====================================================================================================
+GRAPH OBJECT 204782
+====================================================================================================
+SetId RETURN: 204782
+GetId RETURN: 204782
+GID: 0-56-0-926b
+GetLine DOC: method GetLine
+GetLineColour DOC: method GetLineColour
+GetLineStyle DOC: method GetLineStyle
+GetLineWidth DOC: method GetLineWidth
+Delete DOC: method Delete
+Place DOC: method Place
+GetLine() -> (1, -2147352572, -2147352572, -2147352572, -2147352572)
+GetLine(None,None,None,None) -> (1, 7.699999999999999, 29.9, 7.7, 29.650000000000002)
+
+BOUND IDS: [204785, 204782]
+VALID GRAPH IDS: [204785, 204782]
+
+====================================================================================================
+DRY RUN COMPLETE
+====================================================================================================
+No graph objects were deleted.
+Set DRY_RUN = False only after reviewing this output.
+
+
+
+
+
+
+
+
+delete run: 
+    
