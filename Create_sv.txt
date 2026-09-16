@@ -1,318 +1,744 @@
+import time
+import traceback
+from datetime import datetime
+from pathlib import Path
 
-====================================================================================================
-E3 GHOST PIN-VIEW RECREATE TEST
-====================================================================================================
-This script treats a retained GetViewIds() value as a ghost/unplaced view if:
-1) GetSchemaLocation is unavailable
-2) symbol type / characteristic are blank
+import pythoncom
+import win32com.client
 
-That is the state created by the previous successful sym.Delete test.
+
+# ============================================================
+# USER SETTINGS
+# ============================================================
+
+CONNECTOR_NAME = "SCP-J1"
+TARGET_PIN_NAME = "1"
+
+TARGET_X = 5.5
+TARGET_Y = 30.25
+
+SYMBOL_NAME = "MilSymbolReceptacle¶END_SPLIT"
+SYMBOL_LOAD_VERSION = 1
+SYMBOL_PLACE_VERSION = "1"
+
+ROTATION = "y"
+SCALE = 1.0
+MAINTAIN_TEXT_SIZE = 1
 
 DRY_RUN = True
-CONNECTOR = SCP-J1
-TARGET PIN = 1
-RECREATE SYMBOL = MilSymbolReceptacle¶END_SPLIT
-TARGET = (5.5, 30.25)
 
-====================================================================================================
-CONNECTING TO E3
-====================================================================================================
-APPLICATION: <win32com.gen_py.E3.series 2025.2543 Type Library.IApplicationInterface instance at 0x2218411004592>
-PROJECT: <win32com.gen_py.E3.series 2025.2543 Type Library.IJobInterface instance at 0x2218411005936>
+OUTPUT_DIRECTORY = Path(__file__).resolve().parent
 
-====================================================================================================
-FIND CONNECTOR SCP-J1
-====================================================================================================
-DEVICE 72258: Wires
-DEVICE 64611: SCP-J1
-FOUND CONNECTOR ID: 64611
-
-====================================================================================================
-CURRENT CONNECTOR STATE
-====================================================================================================
-PIN 1 | LOGICAL PIN ID 64615 | VIEW IDS [70079]
-    VIEW 70079 | LIVE True | SYMBOL ID 204878 | LOCATION [204828.0, 7.699999999999999, 29.9, 7.0] | NODE IDS [147358] | BOUNDS [147173, 147177] | TYPE MilSymbolReceptacle¶END_TOP | CHARACTERISTIC END_TOP
-PIN 2 | LOGICAL PIN ID 64614 | VIEW IDS [70077]
-    VIEW 70077 | LIVE True | SYMBOL ID 146891 | LOCATION [204828.0, 7.7, 29.650000000000002, 7.0] | NODE IDS [148305] | BOUNDS [147173, 147177, 147156, 147169] | TYPE MilSymbolReceptacle¶CONNECTOR_PIN | CHARACTERISTIC CONNECTOR_PIN
-PIN 3 | LOGICAL PIN ID 64613 | VIEW IDS [70075]
-    VIEW 70075 | LIVE True | SYMBOL ID 146239 | LOCATION [204828.0, 7.7, 29.400000000000002, 7.0] | NODE IDS [147144] | BOUNDS [147517, 147619, 147156, 147169] | TYPE MilSymbolReceptacle¶CONNECTOR_PIN | CHARACTERISTIC CONNECTOR_PIN
-PIN 4 | LOGICAL PIN ID 64612 | VIEW IDS [70073]
-    VIEW 70073 | LIVE True | SYMBOL ID 146765 | LOCATION [204828.0, 7.7, 29.150000000000002, 7.0] | NODE IDS [146024] | BOUNDS [146892, 147175, 147517, 147619] | TYPE MilSymbolReceptacle¶CONNECTOR_PIN | CHARACTERISTIC CONNECTOR_PIN
-PIN 5 | LOGICAL PIN ID 64619 | VIEW IDS [70067]
-    VIEW 70067 | LIVE True | SYMBOL ID 145922 | LOCATION [204828.0, 7.7, 28.900000000000002, 7.0] | NODE IDS [147661] | BOUNDS [147168, 146880, 146892, 147175] | TYPE MilSymbolReceptacle¶CONNECTOR_PIN | CHARACTERISTIC CONNECTOR_PIN
-PIN 6 | LOGICAL PIN ID 64618 | VIEW IDS [70061]
-    VIEW 70061 | LIVE True | SYMBOL ID 146059 | LOCATION [204828.0, 7.7, 28.650000000000002, 7.0] | NODE IDS [147660] | BOUNDS [147168, 146880, 146879, 148310] | TYPE MilSymbolReceptacle¶CONNECTOR_PIN | CHARACTERISTIC CONNECTOR_PIN
-PIN 7 | LOGICAL PIN ID 64617 | VIEW IDS [70055]
-    VIEW 70055 | LIVE True | SYMBOL ID 204784 | LOCATION [204828.0, 7.7, 28.400000000000002, 7.0] | NODE IDS [146064] | BOUNDS [72057, 147172, 146879, 148310] | TYPE MilSymbolReceptacle¶CONNECTOR_PIN | CHARACTERISTIC CONNECTOR_PIN
-PIN 8 | LOGICAL PIN ID 64616 | VIEW IDS [70049]
-    VIEW 70049 | LIVE True | SYMBOL ID 146079 | LOCATION [204828.0, 7.7, 28.150000000000002, 7.0] | NODE IDS [146237] | BOUNDS [146882, 204877, 72057, 147172] | TYPE MilSymbolReceptacle¶CONNECTOR_PIN | CHARACTERISTIC CONNECTOR_PIN
-PIN 9 | LOGICAL PIN ID 64534 | VIEW IDS [70043]
-    VIEW 70043 | LIVE True | SYMBOL ID 72055 | LOCATION [204828.0, 7.7, 27.900000000000002, 7.0] | NODE IDS [148790] | BOUNDS [146882, 204877] | TYPE MilSymbolReceptacle¶END_BOTTOM | CHARACTERISTIC END_BOTTOM
-
-====================================================================================================
-TARGET PIN VIEW STATE
-====================================================================================================
-LOGICAL PIN ID: 64615
-GetViewIds(): [70079]
-VIEW ID: 70079
-    PIN SetId RETURN: 70079
-    SYMBOL SetId RETURN: 204878
-    SYMBOL GetId: 204878
-    LIVE: True
-    LOCATION: [204828.0, 7.699999999999999, 29.9, 7.0]
-    NODE IDS: [147358]
-    BOUNDS: [147173, 147177]
-    TYPE: MilSymbolReceptacle¶END_TOP
-    CHARACTERISTIC: END_TOP
-    ROTATION: y
-    SCALING: 1.0
-    NAME: J1
-    CODE: 10
-
-LIVE TARGET VIEW IDS: [70079]
-GHOST / UNPLACED VIEW IDS: []
-
-====================================================================================================
-REFERENCE METADATA FOR RECREATE
-====================================================================================================
-REFERENCE VIEW ID: 70077
-SHEET ID: 204828
-ROTATION: y
-SCALING: 1.0
-
-====================================================================================================
-TARGET STILL HAS A LIVE VIEW
-====================================================================================================
-The target pin is still placed.
-Phase 1 must delete that live view before PlacePinView can be tested.
-LIVE VIEW ID: 70079
-DRY RUN: no delete will be performed.
-Would call sym.SetId(70079) then sym.Delete().
-Then the script would verify the view became ghost/unplaced before recreating it.
+COM_MISSING = -2147352572
 
 
+# ============================================================
+# LOGGING
+# ============================================================
+
+LOG_LINES = []
 
 
+def log(message=""):
+
+    text = str(message)
+
+    print(text)
+
+    LOG_LINES.append(text)
 
 
+def section(title):
+
+    log()
+    log("=" * 100)
+    log(title)
+    log("=" * 100)
 
 
+def save_log():
+
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+
+    path = OUTPUT_DIRECTORY / f"e3_placepinview_ghost_id_{timestamp}.txt"
+
+    path.write_text("\n".join(LOG_LINES), encoding="utf-8")
+
+    print()
+    print("=" * 100)
+    print("LOG WRITTEN")
+    print("=" * 100)
+    print(path)
 
 
+# ============================================================
+# BASIC HELPERS
+# ============================================================
+
+def safe_string(value):
+
+    try:
+        return str(value)
+    except Exception:
+        return repr(value)
 
 
+def is_missing_value(value):
+
+    if value is None:
+        return True
+
+    try:
+        return int(value) == COM_MISSING
+    except Exception:
+        return False
 
 
+def clean_id_list(values):
+
+    cleaned = []
+
+    if values is None:
+        return cleaned
+
+    if not isinstance(values, (tuple, list)):
+        values = [values]
+
+    for value in values:
+
+        if is_missing_value(value):
+            continue
+
+        try:
+            value = int(value)
+        except Exception:
+            continue
+
+        if value > 0:
+            cleaned.append(value)
+
+    return cleaned
 
 
+def parse_count_array_result(result):
 
-====================================================================================================
-E3 GHOST PIN-VIEW RECREATE TEST
-====================================================================================================
-This script treats a retained GetViewIds() value as a ghost/unplaced view if:
-1) GetSchemaLocation is unavailable
-2) symbol type / characteristic are blank
+    if result is None:
+        return []
 
-That is the state created by the previous successful sym.Delete test.
+    if isinstance(result, (tuple, list)):
 
-DRY_RUN = False
-CONNECTOR = SCP-J1
-TARGET PIN = 1
-RECREATE SYMBOL = MilSymbolReceptacle¶END_SPLIT
-TARGET = (5.5, 30.25)
+        items = list(result)
 
-====================================================================================================
-CONNECTING TO E3
-====================================================================================================
-APPLICATION: <win32com.gen_py.E3.series 2025.2543 Type Library.IApplicationInterface instance at 0x2040109699760>
-PROJECT: <win32com.gen_py.E3.series 2025.2543 Type Library.IJobInterface instance at 0x2040109701104>
+        if len(items) >= 2 and isinstance(items[1], (tuple, list)):
 
-====================================================================================================
-FIND CONNECTOR SCP-J1
-====================================================================================================
-DEVICE 72258: Wires
-DEVICE 64611: SCP-J1
-FOUND CONNECTOR ID: 64611
+            try:
+                count = int(items[0])
+            except Exception:
+                count = None
 
-====================================================================================================
-CURRENT CONNECTOR STATE
-====================================================================================================
-PIN 1 | LOGICAL PIN ID 64615 | VIEW IDS [70079]
-    VIEW 70079 | LIVE True | SYMBOL ID 204878 | LOCATION [204828.0, 7.699999999999999, 29.9, 7.0] | NODE IDS [147358] | BOUNDS [147173, 147177] | TYPE MilSymbolReceptacle¶END_TOP | CHARACTERISTIC END_TOP
-PIN 2 | LOGICAL PIN ID 64614 | VIEW IDS [70077]
-    VIEW 70077 | LIVE True | SYMBOL ID 146891 | LOCATION [204828.0, 7.7, 29.650000000000002, 7.0] | NODE IDS [148305] | BOUNDS [147173, 147177, 147156, 147169] | TYPE MilSymbolReceptacle¶CONNECTOR_PIN | CHARACTERISTIC CONNECTOR_PIN
-PIN 3 | LOGICAL PIN ID 64613 | VIEW IDS [70075]
-    VIEW 70075 | LIVE True | SYMBOL ID 146239 | LOCATION [204828.0, 7.7, 29.400000000000002, 7.0] | NODE IDS [147144] | BOUNDS [147517, 147619, 147156, 147169] | TYPE MilSymbolReceptacle¶CONNECTOR_PIN | CHARACTERISTIC CONNECTOR_PIN
-PIN 4 | LOGICAL PIN ID 64612 | VIEW IDS [70073]
-    VIEW 70073 | LIVE True | SYMBOL ID 146765 | LOCATION [204828.0, 7.7, 29.150000000000002, 7.0] | NODE IDS [146024] | BOUNDS [146892, 147175, 147517, 147619] | TYPE MilSymbolReceptacle¶CONNECTOR_PIN | CHARACTERISTIC CONNECTOR_PIN
-PIN 5 | LOGICAL PIN ID 64619 | VIEW IDS [70067]
-    VIEW 70067 | LIVE True | SYMBOL ID 145922 | LOCATION [204828.0, 7.7, 28.900000000000002, 7.0] | NODE IDS [147661] | BOUNDS [147168, 146880, 146892, 147175] | TYPE MilSymbolReceptacle¶CONNECTOR_PIN | CHARACTERISTIC CONNECTOR_PIN
-PIN 6 | LOGICAL PIN ID 64618 | VIEW IDS [70061]
-    VIEW 70061 | LIVE True | SYMBOL ID 146059 | LOCATION [204828.0, 7.7, 28.650000000000002, 7.0] | NODE IDS [147660] | BOUNDS [147168, 146880, 146879, 148310] | TYPE MilSymbolReceptacle¶CONNECTOR_PIN | CHARACTERISTIC CONNECTOR_PIN
-PIN 7 | LOGICAL PIN ID 64617 | VIEW IDS [70055]
-    VIEW 70055 | LIVE True | SYMBOL ID 204784 | LOCATION [204828.0, 7.7, 28.400000000000002, 7.0] | NODE IDS [146064] | BOUNDS [72057, 147172, 146879, 148310] | TYPE MilSymbolReceptacle¶CONNECTOR_PIN | CHARACTERISTIC CONNECTOR_PIN
-PIN 8 | LOGICAL PIN ID 64616 | VIEW IDS [70049]
-    VIEW 70049 | LIVE True | SYMBOL ID 146079 | LOCATION [204828.0, 7.7, 28.150000000000002, 7.0] | NODE IDS [146237] | BOUNDS [146882, 204877, 72057, 147172] | TYPE MilSymbolReceptacle¶CONNECTOR_PIN | CHARACTERISTIC CONNECTOR_PIN
-PIN 9 | LOGICAL PIN ID 64534 | VIEW IDS [70043]
-    VIEW 70043 | LIVE True | SYMBOL ID 72055 | LOCATION [204828.0, 7.7, 27.900000000000002, 7.0] | NODE IDS [148790] | BOUNDS [146882, 204877] | TYPE MilSymbolReceptacle¶END_BOTTOM | CHARACTERISTIC END_BOTTOM
+            values = clean_id_list(items[1])
 
-====================================================================================================
-TARGET PIN VIEW STATE
-====================================================================================================
-LOGICAL PIN ID: 64615
-GetViewIds(): [70079]
-VIEW ID: 70079
-    PIN SetId RETURN: 70079
-    SYMBOL SetId RETURN: 204878
-    SYMBOL GetId: 204878
-    LIVE: True
-    LOCATION: [204828.0, 7.699999999999999, 29.9, 7.0]
-    NODE IDS: [147358]
-    BOUNDS: [147173, 147177]
-    TYPE: MilSymbolReceptacle¶END_TOP
-    CHARACTERISTIC: END_TOP
-    ROTATION: y
-    SCALING: 1.0
-    NAME: J1
-    CODE: 10
+            if count is not None and len(values) > count:
+                values = values[-count:]
 
-LIVE TARGET VIEW IDS: [70079]
-GHOST / UNPLACED VIEW IDS: []
+            return values
 
-====================================================================================================
-REFERENCE METADATA FOR RECREATE
-====================================================================================================
-REFERENCE VIEW ID: 70077
-SHEET ID: 204828
-ROTATION: y
-SCALING: 1.0
+        return clean_id_list(items)
 
-====================================================================================================
-TARGET STILL HAS A LIVE VIEW
-====================================================================================================
-The target pin is still placed.
-Phase 1 must delete that live view before PlacePinView can be tested.
-LIVE VIEW ID: 70079
+    return clean_id_list(result)
 
-====================================================================================================
-DELETE LIVE VIEW 70079
-====================================================================================================
-sym.SetId(70079) RETURN: 204878
-sym.GetId() BEFORE DELETE: 204878
-sym.Delete RETURN: 0
-sym.Delete ELAPSED: 0.022144 SEC
 
-====================================================================================================
-TARGET STATE AFTER DELETE
-====================================================================================================
-GetViewIds(): [70079]
-LIVE TARGET VIEW IDS: []
-GHOST / UNPLACED VIEW IDS: [70079]
-VIEW ID: 70079
-    PIN SetId RETURN: 70079
-    SYMBOL SetId RETURN: 0
-    SYMBOL GetId: 0
-    LIVE: False
-    LOCATION: None
-    NODE IDS: []
-    BOUNDS: []
-    TYPE: 
-    CHARACTERISTIC: 
-    ROTATION: 0
-    SCALING: 1.0
-    NAME: 
-    CODE: 0
+def call_id_array(method):
 
-====================================================================================================
-CONNECTOR AFTER DELETE
-====================================================================================================
-PIN 1 | LOGICAL PIN ID 64615 | VIEW IDS [70079]
-    VIEW 70079 | LIVE False | SYMBOL ID 0 | LOCATION None | NODE IDS [] | BOUNDS [] | TYPE  | CHARACTERISTIC 
-PIN 2 | LOGICAL PIN ID 64614 | VIEW IDS [70077]
-    VIEW 70077 | LIVE True | SYMBOL ID 147530 | LOCATION [204828.0, 7.7, 29.650000000000002, 7.0] | NODE IDS [146962] | BOUNDS [147378, 147133] | TYPE MilSymbolReceptacle¶END_TOP | CHARACTERISTIC END_TOP
-PIN 3 | LOGICAL PIN ID 64613 | VIEW IDS [70075]
-    VIEW 70075 | LIVE True | SYMBOL ID 146239 | LOCATION [204828.0, 7.7, 29.400000000000002, 7.0] | NODE IDS [147144] | BOUNDS [147987, 147022, 147378, 147133] | TYPE MilSymbolReceptacle¶CONNECTOR_PIN | CHARACTERISTIC CONNECTOR_PIN
-PIN 4 | LOGICAL PIN ID 64612 | VIEW IDS [70073]
-    VIEW 70073 | LIVE True | SYMBOL ID 146765 | LOCATION [204828.0, 7.7, 29.150000000000002, 7.0] | NODE IDS [146024] | BOUNDS [147021, 151245, 147987, 147022] | TYPE MilSymbolReceptacle¶CONNECTOR_PIN | CHARACTERISTIC CONNECTOR_PIN
-PIN 5 | LOGICAL PIN ID 64619 | VIEW IDS [70067]
-    VIEW 70067 | LIVE True | SYMBOL ID 145922 | LOCATION [204828.0, 7.7, 28.900000000000002, 7.0] | NODE IDS [147661] | BOUNDS [147073, 146965, 147021, 151245] | TYPE MilSymbolReceptacle¶CONNECTOR_PIN | CHARACTERISTIC CONNECTOR_PIN
-PIN 6 | LOGICAL PIN ID 64618 | VIEW IDS [70061]
-    VIEW 70061 | LIVE True | SYMBOL ID 146059 | LOCATION [204828.0, 7.7, 28.650000000000002, 7.0] | NODE IDS [147660] | BOUNDS [147073, 146965, 147631, 146991] | TYPE MilSymbolReceptacle¶CONNECTOR_PIN | CHARACTERISTIC CONNECTOR_PIN
-PIN 7 | LOGICAL PIN ID 64617 | VIEW IDS [70055]
-    VIEW 70055 | LIVE True | SYMBOL ID 204784 | LOCATION [204828.0, 7.7, 28.400000000000002, 7.0] | NODE IDS [146064] | BOUNDS [147631, 146991, 147181, 147184] | TYPE MilSymbolReceptacle¶CONNECTOR_PIN | CHARACTERISTIC CONNECTOR_PIN
-PIN 8 | LOGICAL PIN ID 64616 | VIEW IDS [70049]
-    VIEW 70049 | LIVE True | SYMBOL ID 146079 | LOCATION [204828.0, 7.7, 28.150000000000002, 7.0] | NODE IDS [146237] | BOUNDS [146885, 147193, 147181, 147184] | TYPE MilSymbolReceptacle¶CONNECTOR_PIN | CHARACTERISTIC CONNECTOR_PIN
-PIN 9 | LOGICAL PIN ID 64534 | VIEW IDS [70043]
-    VIEW 70043 | LIVE True | SYMBOL ID 147532 | LOCATION [204828.0, 7.7, 27.900000000000002, 7.0] | NODE IDS [204814] | BOUNDS [146885, 147193] | TYPE MilSymbolReceptacle¶SPLIT_BOTTOM | CHARACTERISTIC SPLIT_BOTTOM
+    try:
+        result = method(None)
 
-====================================================================================================
-TARGET IS NOW UNPLACED / GHOST
-====================================================================================================
-The logical pin exists, but there is no live placed symbol view.
-This is the state in which PlacePinView should be tested.
+        values = parse_count_array_result(result)
 
-EXACT CALL:
-sym.PlacePinView(64615, 204828, 'MilSymbolReceptacle¶END_SPLIT', '1', 5.5, 30.25, 'y', 1.0, 1)
+        if values:
+            return values
 
-====================================================================================================
-CALL PlacePinView ON UNPLACED / GHOST PIN
-====================================================================================================
-LOGICAL PIN ID: 64615
-SHEET ID: 204828
-SYMBOL: MilSymbolReceptacle¶END_SPLIT
-VERSION: 1
-TARGET X: 5.5
-TARGET Y: 30.25
-ROTATION: y
-SCALING: 1.0
-MAINTAIN TEXT SIZE: 1
-PlacePinView RETURN: 0
-PlacePinView ELAPSED: 0.021526 SEC
+    except Exception:
+        pass
 
-====================================================================================================
-TARGET AFTER RECREATE
-====================================================================================================
-PlacePinView RETURN: 0
-GetViewIds(): [70079]
-VIEW ID: 70079
-    PIN SetId RETURN: 70079
-    SYMBOL SetId RETURN: 0
-    SYMBOL GetId: 0
-    LIVE: False
-    LOCATION: None
-    NODE IDS: []
-    BOUNDS: []
-    TYPE: 
-    CHARACTERISTIC: 
-    ROTATION: 0
-    SCALING: 1.0
-    NAME: 
-    CODE: 0
+    try:
+        result = method()
 
-====================================================================================================
-FINAL CONNECTOR STATE
-====================================================================================================
-PIN 1 | LOGICAL PIN ID 64615 | VIEW IDS [70079]
-    VIEW 70079 | LIVE False | SYMBOL ID 0 | LOCATION None | NODE IDS [] | BOUNDS [] | TYPE  | CHARACTERISTIC 
-PIN 2 | LOGICAL PIN ID 64614 | VIEW IDS [70077]
-    VIEW 70077 | LIVE True | SYMBOL ID 147530 | LOCATION [204828.0, 7.7, 29.650000000000002, 7.0] | NODE IDS [146962] | BOUNDS [147378, 147133] | TYPE MilSymbolReceptacle¶END_TOP | CHARACTERISTIC END_TOP
-PIN 3 | LOGICAL PIN ID 64613 | VIEW IDS [70075]
-    VIEW 70075 | LIVE True | SYMBOL ID 146239 | LOCATION [204828.0, 7.7, 29.400000000000002, 7.0] | NODE IDS [147144] | BOUNDS [147987, 147022, 147378, 147133] | TYPE MilSymbolReceptacle¶CONNECTOR_PIN | CHARACTERISTIC CONNECTOR_PIN
-PIN 4 | LOGICAL PIN ID 64612 | VIEW IDS [70073]
-    VIEW 70073 | LIVE True | SYMBOL ID 146765 | LOCATION [204828.0, 7.7, 29.150000000000002, 7.0] | NODE IDS [146024] | BOUNDS [147021, 151245, 147987, 147022] | TYPE MilSymbolReceptacle¶CONNECTOR_PIN | CHARACTERISTIC CONNECTOR_PIN
-PIN 5 | LOGICAL PIN ID 64619 | VIEW IDS [70067]
-    VIEW 70067 | LIVE True | SYMBOL ID 145922 | LOCATION [204828.0, 7.7, 28.900000000000002, 7.0] | NODE IDS [147661] | BOUNDS [147073, 146965, 147021, 151245] | TYPE MilSymbolReceptacle¶CONNECTOR_PIN | CHARACTERISTIC CONNECTOR_PIN
-PIN 6 | LOGICAL PIN ID 64618 | VIEW IDS [70061]
-    VIEW 70061 | LIVE True | SYMBOL ID 146059 | LOCATION [204828.0, 7.7, 28.650000000000002, 7.0] | NODE IDS [147660] | BOUNDS [147073, 146965, 147631, 146991] | TYPE MilSymbolReceptacle¶CONNECTOR_PIN | CHARACTERISTIC CONNECTOR_PIN
-PIN 7 | LOGICAL PIN ID 64617 | VIEW IDS [70055]
-    VIEW 70055 | LIVE True | SYMBOL ID 204784 | LOCATION [204828.0, 7.7, 28.400000000000002, 7.0] | NODE IDS [146064] | BOUNDS [147631, 146991, 147181, 147184] | TYPE MilSymbolReceptacle¶CONNECTOR_PIN | CHARACTERISTIC CONNECTOR_PIN
-PIN 8 | LOGICAL PIN ID 64616 | VIEW IDS [70049]
-    VIEW 70049 | LIVE True | SYMBOL ID 146079 | LOCATION [204828.0, 7.7, 28.150000000000002, 7.0] | NODE IDS [146237] | BOUNDS [146885, 147193, 147181, 147184] | TYPE MilSymbolReceptacle¶CONNECTOR_PIN | CHARACTERISTIC CONNECTOR_PIN
-PIN 9 | LOGICAL PIN ID 64534 | VIEW IDS [70043]
-    VIEW 70043 | LIVE True | SYMBOL ID 147532 | LOCATION [204828.0, 7.7, 27.900000000000002, 7.0] | NODE IDS [204814] | BOUNDS [146885, 147193] | TYPE MilSymbolReceptacle¶SPLIT_BOTTOM | CHARACTERISTIC SPLIT_BOTTOM
+        values = parse_count_array_result(result)
 
-====================================================================================================
-FINAL RESULT
-====================================================================================================
-No live pin view exists after PlacePinView.
-The recreate attempt failed.
+        if values:
+            return values
+
+    except Exception:
+        pass
+
+    return []
+
+
+def call_noarg(obj, method_name):
+
+    if not hasattr(obj, method_name):
+        return None
+
+    try:
+        return getattr(obj, method_name)()
+    except Exception:
+        return None
+
+
+# ============================================================
+# E3 CONNECTION
+# ============================================================
+
+def connect_to_e3():
+
+    section("CONNECTING TO E3")
+
+    pythoncom.CoInitialize()
+
+    app = win32com.client.Dispatch("CT.Application")
+
+    prj = app.CreateJobObject()
+    dev = prj.CreateDeviceObject()
+    pin = prj.CreatePinObject()
+    sym = prj.CreateSymbolObject()
+
+    log(f"APPLICATION: {app}")
+    log(f"PROJECT: {prj}")
+
+    return app, prj, dev, pin, sym
+
+
+# ============================================================
+# CONNECTOR / PIN DISCOVERY
+# ============================================================
+
+def get_device_ids(prj):
+
+    return call_id_array(prj.GetAllDeviceIds)
+
+
+def get_pin_ids(dev):
+
+    return call_id_array(dev.GetPinIds)
+
+
+def get_view_ids(pin):
+
+    return call_id_array(pin.GetViewIds)
+
+
+def get_bound_ids(sym):
+
+    return call_id_array(sym.GetBoundIds)
+
+
+def get_node_ids(pin):
+
+    return call_id_array(pin.GetNodeIds)
+
+
+def get_pin_name(pin):
+
+    try:
+        return str(pin.GetName())
+    except Exception:
+        return ""
+
+
+def find_connector(prj, dev):
+
+    section(f"FIND CONNECTOR {CONNECTOR_NAME}")
+
+    for device_id in get_device_ids(prj):
+
+        dev.SetId(device_id)
+
+        try:
+            name = str(dev.GetName())
+        except Exception:
+            name = ""
+
+        log(f"DEVICE {device_id}: {name}")
+
+        if name == CONNECTOR_NAME:
+            log(f"FOUND CONNECTOR ID: {device_id}")
+            return device_id
+
+    raise RuntimeError(f"Could not find connector {CONNECTOR_NAME}.")
+
+
+def find_pin(dev, pin, connector_device_id, pin_name):
+
+    dev.SetId(connector_device_id)
+
+    for pin_id in get_pin_ids(dev):
+
+        pin.SetId(pin_id)
+
+        if get_pin_name(pin) == str(pin_name):
+
+            return {
+                "logical_pin_id": pin_id,
+                "pin_name": str(pin_name),
+                "view_ids": get_view_ids(pin),
+            }
+
+    return None
+
+
+# ============================================================
+# VIEW INSPECTION
+# ============================================================
+
+def get_schema_location(pin):
+
+    attempts = [
+        lambda: pin.GetSchemaLocation(None, None, None, None, None),
+        lambda: pin.GetSchemaLocation(None, None, None),
+        lambda: pin.GetSchemaLocation(),
+    ]
+
+    for attempt in attempts:
+
+        try:
+            result = attempt()
+        except Exception:
+            continue
+
+        if not isinstance(result, (tuple, list)):
+            continue
+
+        numeric = []
+
+        for value in result:
+
+            if is_missing_value(value):
+                continue
+
+            try:
+                numeric.append(float(value))
+            except Exception:
+                pass
+
+        if len(numeric) >= 3:
+            return numeric
+
+    return None
+
+
+def inspect_view(pin, sym, view_id):
+
+    record = {
+        "view_id": view_id,
+        "pin_set_result": None,
+        "symbol_set_result": None,
+        "symbol_id": None,
+        "location": None,
+        "node_ids": [],
+        "bound_ids": [],
+        "symbol_type": "",
+        "characteristic": "",
+        "rotation": None,
+        "scaling": None,
+        "live": False,
+    }
+
+    try:
+        record["pin_set_result"] = pin.SetId(view_id)
+    except Exception:
+        pass
+
+    record["location"] = get_schema_location(pin)
+    record["node_ids"] = get_node_ids(pin)
+
+    try:
+        record["symbol_set_result"] = sym.SetId(view_id)
+    except Exception:
+        pass
+
+    record["symbol_id"] = call_noarg(sym, "GetId")
+
+    record["bound_ids"] = get_bound_ids(sym)
+
+    symbol_type = call_noarg(sym, "GetSymbolTypeName")
+    characteristic = call_noarg(sym, "GetCharacteristic")
+
+    if isinstance(symbol_type, str):
+        record["symbol_type"] = symbol_type
+
+    if isinstance(characteristic, str):
+        record["characteristic"] = characteristic
+
+    record["rotation"] = call_noarg(sym, "GetRotation")
+    record["scaling"] = call_noarg(sym, "GetScaling")
+
+    has_location = record["location"] is not None
+    has_type = record["symbol_type"] != ""
+    has_characteristic = record["characteristic"] != ""
+
+    record["live"] = has_location and (has_type or has_characteristic)
+
+    return record
+
+
+def print_view(record, prefix=""):
+
+    log(f"{prefix}VIEW ID: {record['view_id']}")
+    log(f"{prefix}    PIN SetId RETURN: {record['pin_set_result']}")
+    log(f"{prefix}    SYMBOL SetId RETURN: {record['symbol_set_result']}")
+    log(f"{prefix}    SYMBOL GetId: {record['symbol_id']}")
+    log(f"{prefix}    LIVE: {record['live']}")
+    log(f"{prefix}    LOCATION: {record['location']}")
+    log(f"{prefix}    NODE IDS: {record['node_ids']}")
+    log(f"{prefix}    BOUNDS: {record['bound_ids']}")
+    log(f"{prefix}    TYPE: {record['symbol_type']}")
+    log(f"{prefix}    CHARACTERISTIC: {record['characteristic']}")
+    log(f"{prefix}    ROTATION: {record['rotation']}")
+    log(f"{prefix}    SCALING: {record['scaling']}")
+
+
+def inspect_target(dev, pin, sym, connector_device_id):
+
+    target = find_pin(dev, pin, connector_device_id, TARGET_PIN_NAME)
+
+    if target is None:
+        raise RuntimeError(f"Could not find logical pin {TARGET_PIN_NAME}.")
+
+    records = []
+
+    for view_id in target["view_ids"]:
+        records.append(inspect_view(pin, sym, view_id))
+
+    return target, records
+
+
+# ============================================================
+# CONNECTOR SNAPSHOT
+# ============================================================
+
+def print_connector(dev, pin, sym, connector_device_id, title):
+
+    section(title)
+
+    dev.SetId(connector_device_id)
+
+    for logical_pin_id in get_pin_ids(dev):
+
+        pin.SetId(logical_pin_id)
+
+        pin_name = get_pin_name(pin)
+        view_ids = get_view_ids(pin)
+
+        log(f"PIN {pin_name} | LOGICAL PIN ID {logical_pin_id} | VIEW IDS {view_ids}")
+
+        for view_id in view_ids:
+
+            record = inspect_view(pin, sym, view_id)
+
+            log(f"    VIEW {view_id} | LIVE {record['live']} | SYMBOL ID {record['symbol_id']} | LOCATION {record['location']} | NODE IDS {record['node_ids']} | BOUNDS {record['bound_ids']} | TYPE {record['symbol_type']} | CHARACTERISTIC {record['characteristic']}")
+
+
+# ============================================================
+# DELETE LIVE VIEW IF NEEDED
+# ============================================================
+
+def delete_live_view(sym, view_id):
+
+    section(f"DELETE LIVE VIEW {view_id}")
+
+    set_result = sym.SetId(view_id)
+    actual_symbol_id = call_noarg(sym, "GetId")
+
+    log(f"sym.SetId({view_id}) RETURN: {set_result}")
+    log(f"sym.GetId(): {actual_symbol_id}")
+
+    started = time.perf_counter()
+
+    result = sym.Delete()
+
+    elapsed = time.perf_counter() - started
+
+    log(f"sym.Delete RETURN: {result}")
+    log(f"sym.Delete ELAPSED: {elapsed:.6f} SEC")
+
+
+# ============================================================
+# SYMBOL LIBRARY PROBE
+# ============================================================
+
+def verify_symbol_load(prj):
+
+    section("VERIFY END_SPLIT SYMBOL LOAD")
+
+    probe = prj.CreateSymbolObject()
+
+    try:
+        result = probe.Load(SYMBOL_NAME, SYMBOL_LOAD_VERSION)
+    except Exception as exc:
+        log(f"Load EXCEPTION: {exc}")
+        return False
+
+    log(f"probe.Load({repr(SYMBOL_NAME)}, {SYMBOL_LOAD_VERSION}) RETURN: {result}")
+
+    if result == 0:
+        log("END_SPLIT did not load.")
+        return False
+
+    log("END_SPLIT loaded successfully into the temporary symbol object.")
+
+    return True
+
+
+# ============================================================
+# GHOST-ID PlacePinView TEST
+# ============================================================
+
+def place_using_ghost_id(prj, ghost_view_id, sheet_id):
+
+    section("PlacePinView USING GHOST VIEW ID")
+
+    placement = prj.CreateSymbolObject()
+
+    log("THIS TEST CHANGES ONLY THE FIRST PARAMETER.")
+    log("Previous failed call used the logical pin ID.")
+    log("This call uses the retained ghost pin-view ID.")
+    log()
+    log(f"CALL: placement.PlacePinView({ghost_view_id}, {sheet_id}, {repr(SYMBOL_NAME)}, {repr(SYMBOL_PLACE_VERSION)}, {TARGET_X}, {TARGET_Y}, {repr(ROTATION)}, {SCALE}, {MAINTAIN_TEXT_SIZE})")
+
+    confirmation = input(f"Type GHOSTPLACE {ghost_view_id} to run this call: ").strip()
+
+    if confirmation != f"GHOSTPLACE {ghost_view_id}":
+        log("GHOST-ID PlacePinView TEST CANCELLED")
+        return None
+
+    started = time.perf_counter()
+
+    try:
+        result = placement.PlacePinView(ghost_view_id, sheet_id, SYMBOL_NAME, SYMBOL_PLACE_VERSION, TARGET_X, TARGET_Y, ROTATION, SCALE, MAINTAIN_TEXT_SIZE)
+    except Exception as exc:
+        elapsed = time.perf_counter() - started
+        log(f"PlacePinView EXCEPTION AFTER {elapsed:.6f} SEC: {exc}")
+        log(traceback.format_exc())
+        return None
+
+    elapsed = time.perf_counter() - started
+
+    log(f"PlacePinView RETURN: {result}")
+    log(f"PlacePinView ELAPSED: {elapsed:.6f} SEC")
+
+    return result
+
+
+# ============================================================
+# MAIN
+# ============================================================
+
+def main():
+
+    section("E3 PlacePinView GHOST-ID TEST")
+
+    log("Previous tests proved:")
+    log("1) PlacePinView(logical_pin_id, ...) returns 0.")
+    log("2) sym.Delete() converts the placed pin view into a retained ghost/unplaced view.")
+    log()
+    log("This test answers one narrow question:")
+    log("Does PlacePinView expect the retained PIN-VIEW ID instead of the logical pin ID?")
+    log()
+    log(f"DRY_RUN = {DRY_RUN}")
+    log(f"CONNECTOR = {CONNECTOR_NAME}")
+    log(f"TARGET PIN = {TARGET_PIN_NAME}")
+    log(f"TARGET = ({TARGET_X}, {TARGET_Y})")
+
+    app, prj, dev, pin, sym = connect_to_e3()
+
+    connector_device_id = find_connector(prj, dev)
+
+    symbol_load_ok = verify_symbol_load(prj)
+
+    if not symbol_load_ok:
+        log("STOPPING: the END_SPLIT library symbol could not be loaded.")
+        return
+
+    target, records = inspect_target(dev, pin, sym, connector_device_id)
+
+    section("TARGET BEFORE TEST")
+
+    log(f"LOGICAL PIN ID: {target['logical_pin_id']}")
+    log(f"GetViewIds(): {target['view_ids']}")
+
+    for record in records:
+        print_view(record)
+
+    live_records = [record for record in records if record["live"]]
+    ghost_records = [record for record in records if not record["live"]]
+
+    if len(live_records) > 1:
+        raise RuntimeError("Target pin has more than one live view. Stopping.")
+
+    if live_records:
+
+        live_record = live_records[0]
+
+        if DRY_RUN:
+
+            section("DRY RUN PLAN")
+
+            log(f"Would delete live view {live_record['view_id']} first.")
+            log("Then would re-read GetViewIds().")
+            log("Then would call PlacePinView using the retained ghost view ID as the FIRST parameter.")
+
+            return
+
+        confirmation = input(f"Type DELETEVIEW {live_record['view_id']} to make the pin ghost/unplaced: ").strip()
+
+        if confirmation != f"DELETEVIEW {live_record['view_id']}":
+            log("DELETE CANCELLED")
+            return
+
+        delete_live_view(sym, live_record["view_id"])
+
+        time.sleep(0.5)
+
+        target, records = inspect_target(dev, pin, sym, connector_device_id)
+
+        live_records = [record for record in records if record["live"]]
+        ghost_records = [record for record in records if not record["live"]]
+
+        section("TARGET AFTER DELETE")
+
+        log(f"LOGICAL PIN ID: {target['logical_pin_id']}")
+        log(f"GetViewIds(): {target['view_ids']}")
+
+        for record in records:
+            print_view(record)
+
+        print_connector(dev, pin, sym, connector_device_id, "CONNECTOR AFTER DELETE")
+
+        if live_records:
+            log("A live target view still exists.")
+            log("STOPPING.")
+            return
+
+    if len(ghost_records) != 1:
+        raise RuntimeError(f"Expected exactly one ghost view, found {[record['view_id'] for record in ghost_records]}.")
+
+    ghost_record = ghost_records[0]
+    ghost_view_id = ghost_record["view_id"]
+
+    section("GHOST VIEW CONFIRMED")
+
+    log(f"LOGICAL PIN ID: {target['logical_pin_id']}")
+    log(f"GHOST VIEW ID: {ghost_view_id}")
+    log("The ghost view remains valid through pin.SetId(), but has no backing symbol.")
+    log()
+    log("Previous failed call:")
+    log(f"PlacePinView({target['logical_pin_id']}, ...)")
+    log()
+    log("New candidate call:")
+    log(f"PlacePinView({ghost_view_id}, ...)")
+
+    if DRY_RUN:
+
+        log()
+        log("DRY RUN COMPLETE.")
+        log("Set DRY_RUN = False to run the ghost-ID candidate.")
+
+        return
+
+    sheet_id = None
+
+    print_connector(dev, pin, sym, connector_device_id, "CONNECTOR BEFORE GHOST-ID PLACE")
+
+    dev.SetId(connector_device_id)
+
+    for logical_pin_id in get_pin_ids(dev):
+
+        if logical_pin_id == target["logical_pin_id"]:
+            continue
+
+        pin.SetId(logical_pin_id)
+
+        for view_id in get_view_ids(pin):
+
+            neighbor = inspect_view(pin, sym, view_id)
+
+            if neighbor["live"] and neighbor["location"] is not None:
+                sheet_id = int(neighbor["location"][0])
+                break
+
+        if sheet_id is not None:
+            break
+
+    if sheet_id is None:
+        raise RuntimeError("Could not determine connector sheet ID from a live neighboring pin.")
+
+    result = place_using_ghost_id(prj, ghost_view_id, sheet_id)
+
+    if result is None:
+        return
+
+    time.sleep(0.5)
+
+    target_after, records_after = inspect_target(dev, pin, sym, connector_device_id)
+
+    section("TARGET AFTER GHOST-ID PlacePinView")
+
+    log(f"PlacePinView RETURN: {result}")
+    log(f"LOGICAL PIN ID: {target_after['logical_pin_id']}")
+    log(f"GetViewIds(): {target_after['view_ids']}")
+
+    for record in records_after:
+        print_view(record)
+
+    print_connector(dev, pin, sym, connector_device_id, "FINAL CONNECTOR STATE")
+
+    live_after = [record for record in records_after if record["live"]]
+
+    section("RESULT")
+
+    if live_after:
+
+        log("SUCCESS: a live target pin view exists after using the ghost view ID.")
+
+        for record in live_after:
+
+            log(f"LIVE VIEW: {record['view_id']}")
+            log(f"LOCATION: {record['location']}")
+            log(f"TYPE: {record['symbol_type']}")
+            log(f"CHARACTERISTIC: {record['characteristic']}")
+            log(f"BOUNDS: {record['bound_ids']}")
+
+        return
+
+    log("No live view exists after the ghost-ID PlacePinView call.")
+    log("That rules out both logical-pin ID and retained pin-view ID for PlacePinView in this workflow.")
+    log("The next candidate will be PlacePins(pinarray, ...) rather than another PlacePinView variation.")
+
+
+if __name__ == "__main__":
+
+    try:
+        main()
+
+    except KeyboardInterrupt:
+        log()
+        log("STOPPED BY USER")
+
+    except Exception as exc:
+        log()
+        log("FATAL ERROR")
+        log(safe_string(exc))
+        log(traceback.format_exc())
+
+    finally:
+
+        try:
+            save_log()
+        except Exception as exc:
+            print(f"COULD NOT SAVE LOG: {exc}")
+
+        try:
+            pythoncom.CoUninitialize()
+        except Exception:
+            pass
