@@ -1,24 +1,124 @@
-TEST_ENTRY = "PUT_CONNECTOR_ENTRY_HERE"
+TEST_ENTRY = "PUT_15P_CONNECTOR_ENTRY_HERE"
+
+print("\n" + "=" * 100)
+print("FULL COMPONENTDATA RECORD")
+print("=" * 100)
 
 cur.execute("""
-SELECT
-    ENTRY,
-    PHYSPIN,
-    PINNAME
-FROM dbo.Pin
+SELECT *
+FROM dbo.ComponentData
 WHERE ENTRY = ?
 """, TEST_ENTRY)
 
+row = cur.fetchone()
+
+if row is None:
+    raise Exception("Connector not found in ComponentData")
+
+columns = [desc[0] for desc in cur.description]
+
+for column_name, value in zip(columns, row):
+    print(f"{column_name}: {value}")
+
+
+print("\n" + "=" * 100)
+print("FOREIGN KEYS INVOLVING COMPONENTDATA / PIN / PHYSPIN")
+print("=" * 100)
+
+cur.execute("""
+SELECT
+    OBJECT_SCHEMA_NAME(fk.parent_object_id) AS ParentSchema,
+    OBJECT_NAME(fk.parent_object_id) AS ParentTable,
+    pc.name AS ParentColumn,
+    OBJECT_SCHEMA_NAME(fk.referenced_object_id) AS ReferencedSchema,
+    OBJECT_NAME(fk.referenced_object_id) AS ReferencedTable,
+    rc.name AS ReferencedColumn
+FROM sys.foreign_keys fk
+JOIN sys.foreign_key_columns fkc
+    ON fk.object_id = fkc.constraint_object_id
+JOIN sys.columns pc
+    ON pc.object_id = fkc.parent_object_id
+    AND pc.column_id = fkc.parent_column_id
+JOIN sys.columns rc
+    ON rc.object_id = fkc.referenced_object_id
+    AND rc.column_id = fkc.referenced_column_id
+WHERE
+    OBJECT_NAME(fk.parent_object_id) IN ('ComponentData', 'Pin', 'PhysPin')
+    OR OBJECT_NAME(fk.referenced_object_id) IN ('ComponentData', 'Pin', 'PhysPin')
+ORDER BY
+    ParentTable,
+    ParentColumn
+""")
+
 rows = cur.fetchall()
 
-for row in rows:
-    print(row)
+if not rows:
+    print("NO DECLARED FOREIGN KEYS FOUND")
+else:
+    for row in rows:
+        print(
+            f"{row.ParentSchema}.{row.ParentTable}.{row.ParentColumn}"
+            f" -> "
+            f"{row.ReferencedSchema}.{row.ReferencedTable}.{row.ReferencedColumn}"
+        )
 
-print("ROWS:", len(rows))
+
+print("\n" + "=" * 100)
+print("COMPONENTDATA COLUMNS THAT LOOK LIKE INTERNAL KEYS")
+print("=" * 100)
+
+cur.execute("""
+SELECT
+    COLUMN_NAME,
+    DATA_TYPE
+FROM INFORMATION_SCHEMA.COLUMNS
+WHERE TABLE_SCHEMA = 'dbo'
+AND TABLE_NAME = 'ComponentData'
+AND (
+    COLUMN_NAME LIKE '%ID%'
+    OR COLUMN_NAME LIKE '%ENTRY%'
+    OR COLUMN_NAME LIKE '%MODEL%'
+    OR COLUMN_NAME LIKE '%COMP%'
+    OR COLUMN_NAME LIKE '%PART%'
+)
+ORDER BY ORDINAL_POSITION
+""")
+
+for column_name, data_type in cur.fetchall():
+    print(column_name, "|", data_type)
 
 
+print("\n" + "=" * 100)
+print("PIN TABLE STRUCTURE")
+print("=" * 100)
+
+cur.execute("""
+SELECT
+    COLUMN_NAME,
+    DATA_TYPE
+FROM INFORMATION_SCHEMA.COLUMNS
+WHERE TABLE_SCHEMA = 'dbo'
+AND TABLE_NAME = 'Pin'
+ORDER BY ORDINAL_POSITION
+""")
+
+for column_name, data_type in cur.fetchall():
+    print(column_name, "|", data_type)
 
 
+print("\n" + "=" * 100)
+print("PHYSPIN TABLE STRUCTURE")
+print("=" * 100)
 
+cur.execute("""
+SELECT
+    COLUMN_NAME,
+    DATA_TYPE
+FROM INFORMATION_SCHEMA.COLUMNS
+WHERE TABLE_SCHEMA = 'dbo'
+AND TABLE_NAME = 'PhysPin'
+ORDER BY ORDINAL_POSITION
+""")
 
-
+for column_name, data_type in cur.fetchall():
+    print(column_name, "|", data_type)
