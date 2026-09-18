@@ -1,175 +1,50 @@
-import pyodbc
-
-CONNECTION_STRING = (
-    "DRIVER={SQL Server};"
-    "SERVER=sql-zuken-prd;"
-    "DATABASE=Zuken_E3Library;"
-    "Trusted_Connection=yes;"
-)
-
-conn = pyodbc.connect(CONNECTION_STRING, autocommit=True)
-cur = conn.cursor()
-
-TEST_ENTRY = "Micro-D 15P"
-
-print("\n" + "=" * 100)
-print("GET CONNECTOR KEYS")
-print("=" * 100)
+print("\n" + "=" * 80)
+print("CONNECTORS + NUMBER OF PINS")
+print("=" * 80)
 
 cur.execute("""
 SELECT
-    ID,
-    ENTRY,
-    LPNTR,
-    MPNTR,
-    SPNTR
-FROM dbo.ComponentData
-WHERE ENTRY = ?
-""", TEST_ENTRY)
-
-row = cur.fetchone()
-
-if row is None:
-    raise Exception("Connector not found")
-
-component_id = row[0]
-component_entry = row[1]
-component_lpntr = row[2]
-component_mpntr = row[3]
-component_spntr = row[4]
-
-search_values = []
-
-for name, value in [
-    ("ID", component_id),
-    ("ENTRY", component_entry),
-    ("LPNTR", component_lpntr),
-    ("MPNTR", component_mpntr),
-    ("SPNTR", component_spntr),
-]:
-    print(name, "=", value)
-
-    if value is not None:
-        search_values.append((name, str(value)))
-
-print("\n" + "=" * 100)
-print("SEARCH ALL STRING / GUID COLUMNS FOR THESE VALUES")
-print("=" * 100)
-
-cur.execute("""
-SELECT
-    TABLE_SCHEMA,
-    TABLE_NAME,
-    COLUMN_NAME,
-    DATA_TYPE
-FROM INFORMATION_SCHEMA.COLUMNS
-WHERE DATA_TYPE IN (
-    'nvarchar',
-    'varchar',
-    'nchar',
-    'char',
-    'uniqueidentifier'
-)
+    c.ENTRY,
+    c.VERSION,
+    c.Description,
+    c.Class,
+    COUNT(cp.component_id) AS NumberOfPins
+FROM dbo.ComponentData c
+LEFT JOIN dbo.component_pins cp
+    ON cp.component_id = c.ID
+WHERE c.ENTRYTYP = 24
+GROUP BY
+    c.ID,
+    c.ENTRY,
+    c.VERSION,
+    c.Description,
+    c.Class
 ORDER BY
-    TABLE_SCHEMA,
-    TABLE_NAME,
-    ORDINAL_POSITION
+    c.ENTRY,
+    c.VERSION
 """)
 
-columns = cur.fetchall()
+t = 0
 
-matches = []
+for entry, version, description, component_class, number_of_pins in cur.fetchall():
 
-for source_name, search_value in search_values:
+    component_class = str(component_class)
 
-    print()
-    print("-" * 100)
-    print("SEARCHING FOR:", source_name, "=", search_value)
-    print("-" * 100)
+    if "SIMS" in component_class or "SCAU" in component_class or "MAU" in component_class or "Coaxial" in component_class:
 
-    for table_schema, table_name, column_name, data_type in columns:
+        print(
+            entry,
+            "| VERSION:",
+            version,
+            "| PINS:",
+            number_of_pins,
+            "|",
+            component_class,
+            "|",
+            description
+        )
 
-        safe_schema = str(table_schema).replace("]", "]]")
-        safe_table = str(table_name).replace("]", "]]")
-        safe_column = str(column_name).replace("]", "]]")
+        t += 1
 
-        sql = f"""
-        SELECT COUNT(*)
-        FROM [{safe_schema}].[{safe_table}]
-        WHERE CONVERT(nvarchar(4000), [{safe_column}]) = ?
-        """
-
-        try:
-            cur.execute(sql, search_value)
-            count = cur.fetchone()[0]
-        except Exception:
-            continue
-
-        if count > 0:
-
-            print(
-                f"{source_name} -> "
-                f"{table_schema}.{table_name}.{column_name} "
-                f"| TYPE {data_type} "
-                f"| MATCHES {count}"
-            )
-
-            matches.append({
-                "source": source_name,
-                "value": search_value,
-                "schema": table_schema,
-                "table": table_name,
-                "column": column_name,
-                "count": count,
-            })
-
-print("\n" + "=" * 100)
-print("MATCHED TABLES")
-print("=" * 100)
-
-seen_tables = []
-
-for match in matches:
-
-    full_table = f"{match['schema']}.{match['table']}"
-
-    if full_table not in seen_tables:
-        seen_tables.append(full_table)
-
-for full_table in seen_tables:
-    print(full_table)
-
-print("\n" + "=" * 100)
-print("PIN TABLE SAMPLE ENTRY VALUES")
-print("=" * 100)
-
-cur.execute("""
-SELECT TOP 30
-    ENTRY,
-    COPY,
-    PHYSPIN,
-    PINNAME
-FROM dbo.Pin
-ORDER BY ENTRY
-""")
-
-for row in cur.fetchall():
-    print(row)
-
-print("\n" + "=" * 100)
-print("PHYSPIN TABLE SAMPLE ENTRY VALUES")
-print("=" * 100)
-
-cur.execute("""
-SELECT TOP 30
-    Entry,
-    PinNumber
-FROM dbo.PhysPin
-ORDER BY Entry, PinNumber
-""")
-
-for row in cur.fetchall():
-    print(row)
-
-cur.close()
-conn.close()
+print()
+print("TOTAL CONNECTORS:", t)
