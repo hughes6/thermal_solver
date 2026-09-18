@@ -1,52 +1,175 @@
-TEST_ID = "98BC1321-47D5-455C-9620-AF43FB05B2F1"
+import pyodbc
+
+CONNECTION_STRING = (
+    "DRIVER={SQL Server};"
+    "SERVER=sql-zuken-prd;"
+    "DATABASE=Zuken_E3Library;"
+    "Trusted_Connection=yes;"
+)
+
+conn = pyodbc.connect(CONNECTION_STRING, autocommit=True)
+cur = conn.cursor()
+
+TEST_ENTRY = "Micro-D 15P"
 
 print("\n" + "=" * 100)
-print("PIN ROWS USING COMPONENTDATA.ID")
+print("GET CONNECTOR KEYS")
 print("=" * 100)
 
 cur.execute("""
 SELECT
+    ID,
+    ENTRY,
+    LPNTR,
+    MPNTR,
+    SPNTR
+FROM dbo.ComponentData
+WHERE ENTRY = ?
+""", TEST_ENTRY)
+
+row = cur.fetchone()
+
+if row is None:
+    raise Exception("Connector not found")
+
+component_id = row[0]
+component_entry = row[1]
+component_lpntr = row[2]
+component_mpntr = row[3]
+component_spntr = row[4]
+
+search_values = []
+
+for name, value in [
+    ("ID", component_id),
+    ("ENTRY", component_entry),
+    ("LPNTR", component_lpntr),
+    ("MPNTR", component_mpntr),
+    ("SPNTR", component_spntr),
+]:
+    print(name, "=", value)
+
+    if value is not None:
+        search_values.append((name, str(value)))
+
+print("\n" + "=" * 100)
+print("SEARCH ALL STRING / GUID COLUMNS FOR THESE VALUES")
+print("=" * 100)
+
+cur.execute("""
+SELECT
+    TABLE_SCHEMA,
+    TABLE_NAME,
+    COLUMN_NAME,
+    DATA_TYPE
+FROM INFORMATION_SCHEMA.COLUMNS
+WHERE DATA_TYPE IN (
+    'nvarchar',
+    'varchar',
+    'nchar',
+    'char',
+    'uniqueidentifier'
+)
+ORDER BY
+    TABLE_SCHEMA,
+    TABLE_NAME,
+    ORDINAL_POSITION
+""")
+
+columns = cur.fetchall()
+
+matches = []
+
+for source_name, search_value in search_values:
+
+    print()
+    print("-" * 100)
+    print("SEARCHING FOR:", source_name, "=", search_value)
+    print("-" * 100)
+
+    for table_schema, table_name, column_name, data_type in columns:
+
+        safe_schema = str(table_schema).replace("]", "]]")
+        safe_table = str(table_name).replace("]", "]]")
+        safe_column = str(column_name).replace("]", "]]")
+
+        sql = f"""
+        SELECT COUNT(*)
+        FROM [{safe_schema}].[{safe_table}]
+        WHERE CONVERT(nvarchar(4000), [{safe_column}]) = ?
+        """
+
+        try:
+            cur.execute(sql, search_value)
+            count = cur.fetchone()[0]
+        except Exception:
+            continue
+
+        if count > 0:
+
+            print(
+                f"{source_name} -> "
+                f"{table_schema}.{table_name}.{column_name} "
+                f"| TYPE {data_type} "
+                f"| MATCHES {count}"
+            )
+
+            matches.append({
+                "source": source_name,
+                "value": search_value,
+                "schema": table_schema,
+                "table": table_name,
+                "column": column_name,
+                "count": count,
+            })
+
+print("\n" + "=" * 100)
+print("MATCHED TABLES")
+print("=" * 100)
+
+seen_tables = []
+
+for match in matches:
+
+    full_table = f"{match['schema']}.{match['table']}"
+
+    if full_table not in seen_tables:
+        seen_tables.append(full_table)
+
+for full_table in seen_tables:
+    print(full_table)
+
+print("\n" + "=" * 100)
+print("PIN TABLE SAMPLE ENTRY VALUES")
+print("=" * 100)
+
+cur.execute("""
+SELECT TOP 30
     ENTRY,
     COPY,
     PHYSPIN,
     PINNAME
 FROM dbo.Pin
-WHERE ENTRY = ?
-ORDER BY PINNAME
-""", TEST_ID)
+ORDER BY ENTRY
+""")
 
-rows = cur.fetchall()
-
-for row in rows:
+for row in cur.fetchall():
     print(row)
 
-print()
-print("PIN ROW COUNT:", len(rows))
-
-
-
-
-
 print("\n" + "=" * 100)
-print("PHYSICAL PIN JOIN")
+print("PHYSPIN TABLE SAMPLE ENTRY VALUES")
 print("=" * 100)
 
 cur.execute("""
-SELECT
-    p.PINNAME,
-    p.PHYSPIN,
-    pp.PinNumber
-FROM dbo.Pin p
-LEFT JOIN dbo.PhysPin pp
-    ON pp.Entry = p.PHYSPIN
-WHERE p.ENTRY = ?
-ORDER BY pp.PinNumber
-""", TEST_ID)
+SELECT TOP 30
+    Entry,
+    PinNumber
+FROM dbo.PhysPin
+ORDER BY Entry, PinNumber
+""")
 
-rows = cur.fetchall()
-
-for row in rows:
+for row in cur.fetchall():
     print(row)
 
-print()
-print("JOIN ROW COUNT:", len(rows))
+cur.close()
+conn.close()
