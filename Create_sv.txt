@@ -53,12 +53,15 @@ Private Sub Worksheet_Change(ByVal Target As Range)
     ShowOnlyActiveBlocks connectorCount
 
 CleanExit:
+
     Application.CutCopyMode = False
     Application.ScreenUpdating = True
     Application.EnableEvents = True
+
     Exit Sub
 
 CleanFail:
+
     MsgBox "Block update failed." & vbCrLf & vbCrLf & _
            "Error " & Err.Number & vbCrLf & _
            Err.Description, vbCritical, "Selection Sheet Macro Error"
@@ -79,6 +82,7 @@ Private Sub RefreshAllActiveBlocks(ByVal connectorCount As Long)
         End If
 
         UpdateConnectorName blockNumber
+        UpdatePinCount blockNumber
 
         If blockNumber > 1 Then
             CopyEdgeHelpers blockNumber
@@ -160,6 +164,7 @@ Private Sub CopyEdgeHelpers(ByVal blockNumber As Long)
     ' formulas exactly as if the user copied the cells manually.
     ' Constants such as "|" are copied too.
     ' ============================================================
+
     Set sourceLeftEdge = Me.Range(Me.Cells(DATA_FIRST_ROW, TEMPLATE_FIRST_COLUMN), Me.Cells(RULES_LAST_ROW, TEMPLATE_FIRST_COLUMN))
     Set destinationLeftEdge = Me.Range(Me.Cells(DATA_FIRST_ROW, destinationStartColumn), Me.Cells(RULES_LAST_ROW, destinationStartColumn))
 
@@ -174,9 +179,9 @@ Private Sub CopyEdgeHelpers(ByVal blockNumber As Long)
     ' Copy the ENTIRE helper/bar column from K to the equivalent
     ' right edge of the repeated block.
     '
-    ' This is the part that was missing before. Copying only K8
-    ' was not enough when the bars/brackets exist down the column.
+    ' This copies all bars/brackets down the column.
     ' ============================================================
+
     Set sourceRightEdge = Me.Range(Me.Cells(DATA_FIRST_ROW, TEMPLATE_FIRST_COLUMN + BLOCK_WIDTH - 1), Me.Cells(RULES_LAST_ROW, TEMPLATE_FIRST_COLUMN + BLOCK_WIDTH - 1))
     Set destinationRightEdge = Me.Range(Me.Cells(DATA_FIRST_ROW, destinationStartColumn + BLOCK_WIDTH - 1), Me.Cells(RULES_LAST_ROW, destinationStartColumn + BLOCK_WIDTH - 1))
 
@@ -185,9 +190,7 @@ Private Sub CopyEdgeHelpers(ByVal blockNumber As Long)
     ' Keep the right bracket/bar tight against the pin table.
     destinationRightEdge.HorizontalAlignment = xlLeft
 
-    ' The template helper formulas may use an absolute reference to J5.
-    ' Excel will not shift an absolute reference during Copy/Destination,
-    ' so explicitly translate J5 to this block's own pin-count cell.
+    ' Translate J5 to this block's own pin-count cell.
     FixEdgePinCountReferences blockNumber
 
     Application.CutCopyMode = False
@@ -345,7 +348,33 @@ Private Sub UpdateConnectorName(ByVal blockNumber As Long)
     ' V6 for block 4
     Set connectorNameCell = Me.Cells(6, startColumn + 2)
 
-    connectorNameCell.Formula = "=$B$" & connectorSourceRow
+    connectorNameCell.MergeArea.Cells(1, 1).Formula = "=$B$" & connectorSourceRow
+
+End Sub
+
+
+Private Sub UpdatePinCount(ByVal blockNumber As Long)
+
+    Dim startColumn As Long
+    Dim pinCountCell As Range
+    Dim connectorSourceRow As Long
+
+    startColumn = GetBlockStartColumn(blockNumber)
+    connectorSourceRow = CONNECTOR_NAME_FIRST_ROW + blockNumber - 1
+
+    ' J5 for block 1 uses connector type C7
+    ' N5 for block 2 uses connector type C8
+    ' R5 for block 3 uses connector type C9
+    ' V5 for block 4 uses connector type C10
+    '
+    ' Library:
+    ' A = Connector Data / Connector Type
+    ' E = Number of Pins
+
+    Set pinCountCell = Me.Cells(PIN_COUNT_ROW, startColumn + PIN_COUNT_COLUMN_OFFSET)
+
+    pinCountCell.MergeArea.Cells(1, 1).Formula = _
+        "=IFERROR(VLOOKUP($C" & connectorSourceRow & ",Library!$A:$E,5,FALSE),"""")"
 
 End Sub
 
@@ -395,12 +424,15 @@ Public Sub RefreshPinOrderBlocks()
     ShowOnlyActiveBlocks connectorCount
 
 CleanExit:
+
     Application.CutCopyMode = False
     Application.ScreenUpdating = True
     Application.EnableEvents = True
+
     Exit Sub
 
 CleanFail:
+
     MsgBox "Block refresh failed." & vbCrLf & vbCrLf & _
            "Error " & Err.Number & vbCrLf & _
            Err.Description, vbCritical, "Selection Sheet Macro Error"
@@ -408,4 +440,3 @@ CleanFail:
     Resume CleanExit
 
 End Sub
-
