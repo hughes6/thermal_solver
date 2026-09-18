@@ -1,98 +1,46 @@
-SCP-J1 BLOCK HATCH PATTERN + COLOUR TEST
-====================================================================================================
-MAIN DEVICE ID: 137415
-CONNECTOR DEVICE ID: 64611
-CONNECTOR VIEW NUMBER: 1
-MAIN VIEW ID: 69041
-BLOCK SYMBOL ID: 69271
-BLOCK SYMBOL TYPE: CABBLOCK#0-3a-0-8daf
+print("\n" + "=" * 80)
+print("CONNECTORS + NUMBER OF PINS")
+print("=" * 80)
 
-GetBlockHatchPattern
-    SIGNATURE: (angle1=<PyOleEmpty object at 0x000002A8897B2A90>, angle2=<PyOleEmpty object at 0x000002A8897B2A90>)
-    DOC: method GetBlockHatchPattern
+cur.execute("""
+SELECT
+    c.ENTRY,
+    c.VERSION,
+    c.Description,
+    c.Class,
+    COUNT(DISTINCT p.PHYSPIN) AS PinCountFromPinTable,
+    COUNT(DISTINCT pp.PinNumber) AS PinCountFromPhysPin
+FROM dbo.ComponentData c
+LEFT JOIN dbo.Pin p
+    ON p.ENTRY = c.ENTRY
+LEFT JOIN dbo.PhysPin pp
+    ON pp.Entry = p.PHYSPIN
+WHERE c.ENTRYTYP = 24
+GROUP BY
+    c.ENTRY,
+    c.VERSION,
+    c.Description,
+    c.Class
+ORDER BY
+    c.ENTRY,
+    c.VERSION
+""")
 
-SetBlockHatchPattern
-    SIGNATURE: (value=<PyOleEmpty object at 0x000002A8897B2A90>, angle1=<PyOleEmpty object at 0x000002A8897B2A90>, angle2=<PyOleEmpty object at 0x000002A8897B2A90>)
-    DOC: method SetBlockHatchPattern
+for entry, version, description, component_class, pin_count, phys_pin_count in cur.fetchall():
 
-GetBlockHatchStyle
-    SIGNATURE: ()
-    DOC: method GetBlockHatchStyle
+    component_class = str(component_class)
 
-SetBlockHatchStyle
-    SIGNATURE: (value=<PyOleEmpty object at 0x000002A8897B2A90>)
-    DOC: method SetBlockHatchStyle
-
-GetBlockHatchWidth
-    SIGNATURE: ()
-    DOC: method GetBlockHatchWidth
-
-SetBlockHatchWidth
-    SIGNATURE: (value=<PyOleEmpty object at 0x000002A8897B2A90>)
-    DOC: method SetBlockHatchWidth
-
-GetBlockHatchDistance
-    SIGNATURE: ()
-    DOC: method GetBlockHatchDistance
-
-SetBlockHatchDistance
-    SIGNATURE: (value=<PyOleEmpty object at 0x000002A8897B2A90>)
-    DOC: method SetBlockHatchDistance
-
-GetBlockHatchColour
-    SIGNATURE: ()
-    DOC: method GetBlockHatchColour
-
-SetBlockHatchColour
-    SIGNATURE: (value=<PyOleEmpty object at 0x000002A8897B2A90>)
-    DOC: method SetBlockHatchColour
-
-BEFORE
-    GetBlockHatchPattern = (0, -2147352572, -2147352572)
-    GetBlockHatchStyle = -1
-    GetBlockHatchWidth = -1.0
-    GetBlockHatchDistance = -1.0
-    GetBlockHatchColour = -1
-
-====================================================================================================
-TRYING TO ENABLE A NON-AUTOMATIC HATCH PATTERN
-====================================================================================================
-
-PATTERN CANDIDATE: 1
-    CALL: SetBlockHatchPattern(1, 45.0, 135.0)
-    RESULT: 0
-    ERROR: None
-    GET AFTER SET: (1, -2147352572, -2147352572)
-    ACCEPTED PATTERN: (1, -2147352572, -2147352572)
-
-USING PATTERN: (1, -2147352572, -2147352572)
-
-SETTING STYLE: 0
-    RESULT: 1
-
-SETTING WIDTH: 0.25
-    RESULT: 0.01
-
-SETTING DISTANCE: 1.0
-    RESULT: 0.09999999999999999
-
-SETTING COLOUR: 58
-    RESULT: -1
-
-AFTER
-    GetBlockHatchPattern = (1, -2147352572, -2147352572)
-    GetBlockHatchStyle = 0
-    GetBlockHatchWidth = 0.25
-    GetBlockHatchDistance = 1.0
-    GetBlockHatchColour = 58
-
-====================================================================================================
-TEST COMPLETE
-====================================================================================================
-Check SCP-J1 visually in E3.
-If GetBlockHatchPattern changes from -1 and a hatch appears, the missing piece was enabling a pattern first.
-If every hatch getter stays -1, the next test should target the Dynamic Symbol project settings:
-    DYNSYM_HATCH_FLAGS
-    DYNSYM_HATCH_DIA
-    DYNSYM_HATCH_LDIST
-    DYNSYM_HATCH_CODE
+    if "SIMS" in component_class or "SCAU" in component_class or "MAU" in component_class or "Coaxial" in component_class:
+        print(
+            entry,
+            "|",
+            version,
+            "| PIN TABLE:",
+            pin_count,
+            "| PHYSPIN:",
+            phys_pin_count,
+            "|",
+            component_class,
+            "|",
+            description
+        )
