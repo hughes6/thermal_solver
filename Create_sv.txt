@@ -1,8 +1,8 @@
 Option Explicit
 
 Private Const BLOCK_WIDTH As Long = 5
-Private Const FIRST_COL As Long = 8          'H
-Private Const CENTER_COL As Long = 10        'J
+Private Const FIRST_COL As Long = 8
+Private Const CENTER_COL As Long = 10
 Private Const MAX_BLOCKS As Long = 40
 Private Const LAST_ROW As Long = 307
 
@@ -20,7 +20,6 @@ Private Sub Worksheet_Change(ByVal Target As Range)
     Dim pinCountCell As Range
     Dim connectorNameCell As Range
 
-    'Only run when C5 changes
     If Target.Address <> "$C$5" Then Exit Sub
 
     On Error GoTo ErrHandler
@@ -34,10 +33,7 @@ Private Sub Worksheet_Change(ByVal Target As Range)
     If n > MAX_BLOCKS Then n = MAX_BLOCKS
 
     Set srcHeader = Me.Range("H5:L10")
-    Set pinCountCell = Me.Cells(5, 10 + ((i - 1) * 4))
-    Set connectorNameCell = Me.Cells(6, 10 + ((i - 1) * 4))
 
-    pinCountCell.Formula2 = "=XLOOKUP(" & connectorNameCell.Address(False, False) & ",$B$7:$B$500,$F$7:$F$500,"""")"
 
     '==================================================
     'FIND HOW MANY BLOCKS HAVE ALREADY BEEN CREATED
@@ -143,21 +139,35 @@ Private Sub Worksheet_Change(ByVal Target As Range)
 
 
     '==================================================
-    'CONNECTOR NAMES
+    'CONNECTOR NAMES + NUMBER OF PINS
     '
     'J6 = B7
     'O6 = B8
     'T6 = B9
     'Y6 = B10
     '
-    'J5/O5/T5/Y5 stay Number of Pins.
+    'Pin count:
+    'J5 looks up J6 in B:F
+    'O5 looks up O6 in B:F
+    'etc.
     '==================================================
 
     For i = 0 To maxCreated - 1
 
-        Me.Cells(6, CENTER_COL + i * BLOCK_WIDTH) _
-            .MergeArea.Cells(1, 1).Formula = _
+        Set connectorNameCell = _
+            Me.Cells(6, CENTER_COL + i * BLOCK_WIDTH)
+
+        connectorNameCell.MergeArea.Cells(1, 1).Formula = _
             "=$B$" & (7 + i)
+
+
+        Set pinCountCell = _
+            Me.Cells(5, CENTER_COL + i * BLOCK_WIDTH)
+
+        pinCountCell.MergeArea.Cells(1, 1).Formula2 = _
+            "=XLOOKUP(" & _
+            connectorNameCell.MergeArea.Cells(1, 1).Address(False, False) & _
+            ",$B$7:$B$500,$F$7:$F$500,"""")"
 
     Next i
 
@@ -261,8 +271,6 @@ Private Sub RebuildBlockRules(ByVal blockIndex As Long)
     '$J$5  -> $O$5
     '$K8   -> $P8
     '$L8   -> $Q8
-    '
-    'The row remains EXACTLY as written.
     '==================================================
 
     For Each fc In destRange.FormatConditions
@@ -318,17 +326,11 @@ Private Function TranslateBlockFormula( _
     Dim sourceLetter As String
     Dim destLetter As String
 
-    'Temporary markers stop replacements from
-    'interfering with each other.
     f = formulaText
 
 
     '==================================================
-    'FIRST PASS:
-    '
-    '$H -> {BLOCKCOL0}
-    '$I -> {BLOCKCOL1}
-    '...
+    'FIRST PASS
     '==================================================
 
     For i = 0 To BLOCK_WIDTH - 1
@@ -344,11 +346,7 @@ Private Function TranslateBlockFormula( _
 
 
     '==================================================
-    'SECOND PASS:
-    '
-    '{BLOCKCOL0} -> $M
-    '{BLOCKCOL1} -> $N
-    'etc.
+    'SECOND PASS
     '==================================================
 
     For i = 0 To BLOCK_WIDTH - 1
@@ -375,4 +373,3 @@ Private Function ColLetter(ByVal colNum As Long) As String
         "$")(1)
 
 End Function
-
