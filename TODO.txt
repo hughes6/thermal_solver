@@ -1,15 +1,5 @@
-source /home/hconner158/OpenFOAM/hconner158-v2606/etc/bashrc
-T=2.7399999999997262
-DT=0.0001089
-END=$(awk -v t="$T" -v dt="$DT" 'BEGIN { printf "%.17g", t+dt }')
+bash -c 'stamp=$(date +%Y%m%d-%H%M%S); for d in processor0/*; do t=${d##*/}; [[ "$t" =~ ^[0-9]+([.][0-9]+)?$ ]] || continue; [[ -f "$d/uniform/time" && ! -f "$d/fluid/p" ]] || continue; echo "Quarantining incomplete time: $t"; for r in 0 1 2 3; do src="processor$r/$t"; [[ -d "$src" ]] && mv -- "$src" "${src}.incomplete-$stamp"; done; done'
 
-foamDictionary system/controlDict -entry startFrom -set latestTime
-foamDictionary system/controlDict -entry stopAt -set endTime
-foamDictionary system/controlDict -entry endTime -set "$END"
-foamDictionary system/controlDict -entry adjustTimeStep -set false
-foamDictionary system/controlDict -entry deltaT -set "$DT"
-foamDictionary system/controlDict -entry maxDeltaT -set "$DT"
-foamDictionary system/controlDict -entry writeControl -set timeStep
-foamDictionary system/controlDict -entry writeInterval -set 1
 
-OMPI_MCA_hwloc_base_use_hwthreads_as_cpus=1 mpirun -np 4 semiFrozenChtMultiRegionFoam -case "$PWD" -parallel
+
+bash -c 'T=2.7399999999997262; END=2.740108899999726; foamDictionary system/controlDict -entry startFrom -set latestTime; foamDictionary system/controlDict -entry stopAt -set endTime; foamDictionary system/controlDict -entry endTime -set "$END"; foamDictionary system/controlDict -entry adjustTimeStep -set false; foamDictionary system/controlDict -entry deltaT -set 0.0001089; foamDictionary system/controlDict -entry maxDeltaT -set 0.0001089; foamDictionary system/controlDict -entry writeControl -set timeStep; foamDictionary system/controlDict -entry writeInterval -set 1; OMPI_MCA_hwloc_base_use_hwthreads_as_cpus=1 mpirun -np 4 semiFrozenChtMultiRegionFoam -case "$PWD" -parallel'
