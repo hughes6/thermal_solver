@@ -1532,6 +1532,16 @@ int main(int argc, char** argv) {
     }
     assert(std::filesystem::is_regular_file(
         case_path/"system"/"spatialConvergenceDict"));
+    assert(std::filesystem::is_regular_file(
+        case_path/"system"/"courantValidationDict"));
+    {
+        std::ifstream stream(case_path/"system"/"courantValidationDict");
+        std::ostringstream text;
+        text << stream.rdbuf();
+        assert(text.str().find("type        CourantNo;") != std::string::npos);
+        assert(text.str().find("fields      (phi rho);") != std::string::npos);
+        assert(text.str().find("field       Co;") != std::string::npos);
+    }
     {
         std::ifstream stream(case_path/"0"/"fluid"/"p_rgh");
         std::ostringstream text;

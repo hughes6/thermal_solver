@@ -291,6 +291,8 @@ public:
         write_control_dict(
             mesh, options,
             options.case_directory / "system" / "controlDict");
+        write_courant_validation_dict(
+            options.case_directory / "system" / "courantValidationDict");
         write_spatial_convergence_dict(
             options.case_directory / "system" / "spatialConvergenceDict");
         write_decompose_par_dict(
@@ -2477,6 +2479,7 @@ functions
         region      fluid;
         fields      (U UPrevious);
     }
+
     velocityDelta
     {
         type        subtract;
@@ -2511,6 +2514,45 @@ functions
         postOperation   sqrt;
         writeFields     false;
         fields          (velocityDeltaSquared velocitySquared);
+    }
+}
+)";
+    }
+
+    // Generic postProcess does not construct all multi-region solver objects
+    // (notably the fluid phi field) for a decomposed CHT restart.  Run these
+    // functions through semiFrozenChtMultiRegionFoam -postProcess instead: it
+    // builds the same region objects as a normal restart without advancing time.
+    static void write_courant_validation_dict(
+        const std::filesystem::path& path) {
+        std::ofstream output(path);
+        require_stream(output,path);
+        write_header(output,"dictionary","courantValidationDict","system");
+        output << R"(
+functions
+{
+    readCourantFields
+    {
+        type        readFields;
+        libs        (fieldFunctionObjects);
+        region      fluid;
+        fields      (phi rho);
+    }
+    courantNumber
+    {
+        type        CourantNo;
+        libs        (fieldFunctionObjects);
+        region      fluid;
+        writeToFile false;
+    }
+    courantMaximum
+    {
+        type        fieldMinMax;
+        libs        (fieldFunctionObjects);
+        region      fluid;
+        field       Co;
+        mode        magnitude;
+        writeFields false;
     }
 }
 )";
@@ -4900,6 +4942,18 @@ functions
                 "-v end=\"$end\" 'BEGIN { x=start+width; if(x>end)x=end; "
                 "printf \"%.17g\", x }'\n"
             "}\n"
+            "run_latest_courant_postprocess()\n"
+            "{\n"
+            "    local output_name=\"$1\"\n"
+            "    # The generic postProcess executable does not initialise phi for\n"
+            "    # this decomposed multi-region CHT restart.  The custom solver's\n"
+            "    # postProcess mode does initialise the live fluid region, without\n"
+            "    # advancing the case time.\n"
+            "    run_tracked_capture \"$output_name\" \"$foam_launcher\" mpirun "
+                "-np \"$processes\" \"$semi_frozen_solver\" "
+                "-case \"$case_dir\" -parallel -postProcess -latestTime "
+                "-dict system/courantValidationDict\n"
+            "}\n"
             "validate_latest_airflow_courant()\n"
             "{\n"
             "    local expected=\"$1\" label=\"$2\" actual output maximum\n"
@@ -4910,10 +4964,7 @@ functions
             "    if ! awk -v t=\"$expected\" 'BEGIN { exit !(t>1e-12) }'; then\n"
             "        return 0\n"
             "    fi\n"
-            "    if ! run_tracked_capture output \"$foam_launcher\" mpirun "
-                "-np \"$processes\" postProcess -case \"$case_dir\" "
-                "-parallel -region fluid -latestTime -fields '(phi rho)' "
-                "-funcs '(CourantNo fieldMinMax(Co))'; then\n"
+            "    if ! run_latest_courant_postprocess output; then\n"
             "        printf '%s\\n' \"$output\" >&2\n"
             "        echo \"$label Courant postflight failed at checkpoint=$expected.\" >&2\n"
             "        return 7\n"
@@ -6192,10 +6243,7 @@ functions
                 "            # CourantNo uses the checkpoint's stored deltaT.\n"
                 "            # The restart metadata now contains stage_dt, so the\n"
                 "            # reported Co predicts the proposed first live step.\n"
-                "            if ! run_tracked_capture courant_output \"$foam_launcher\" mpirun "
-                    "-np \"$processes\" postProcess -case \"$case_dir\" "
-                    "-parallel -region fluid -latestTime -fields '(phi rho)' "
-                    "-funcs '(CourantNo fieldMinMax(Co))'; then\n"
+            "            if ! run_latest_courant_postprocess courant_output; then\n"
                 "                printf '%s\\n' \"$courant_output\" >&2\n"
                 "                echo \"Courant preflight failed at t=$saved_time.\" >&2\n"
                 "                return 6\n"
@@ -6282,10 +6330,7 @@ functions
                     "\"$semi_frozen_solver\" "
                     "-case \"$case_dir\" -parallel\n"
                 "        if [[ \"$thermal_only\" == \"false\" ]]; then\n"
-                "            if ! run_tracked_capture postflight_output \"$foam_launcher\" mpirun "
-                    "-np \"$processes\" postProcess -case \"$case_dir\" "
-                    "-parallel -region fluid -latestTime -fields '(phi rho)' "
-                    "-funcs '(CourantNo fieldMinMax(Co))'; then\n"
+            "            if ! run_latest_courant_postprocess postflight_output; then\n"
                 "                printf '%s\\n' \"$postflight_output\" >&2\n"
                 "                echo \"Courant postflight failed at target=$target.\" >&2\n"
                 "                return 7\n"

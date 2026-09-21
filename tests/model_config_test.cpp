@@ -1579,8 +1579,12 @@ int main() {
         "Initial airflow failed to converge") != std::string::npos);
     assert(run_parallel.find(
         "printf \"%.17g %d\", remaining/n,n") != std::string::npos);
-    assert(run_parallel.find(
-        "-funcs '(CourantNo fieldMinMax(Co))'") != std::string::npos);
+    assert(run_parallel.find("run_latest_courant_postprocess()") !=
+           std::string::npos);
+    assert(run_parallel.find("-dict system/courantValidationDict") !=
+           std::string::npos);
+    assert(run_parallel.find("run_latest_courant_postprocess courant_output") !=
+           std::string::npos);
     assert(run_parallel.find(
         "Courant preflight: predictedMaxCo=") != std::string::npos);
     assert(run_parallel.find(
