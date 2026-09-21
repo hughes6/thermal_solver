@@ -1,1179 +1,591 @@
-import tkinter as tk
-from tkinter import scrolledtext
-from tkinter import ttk
-import csv
-import io
-import re
-
-
-current_count = 0
-detected_table = []
-detected_column_count = 0
-
-
-# =========================================
-# NUMBER FORMATTER
-# =========================================
-
-def convert():
-    global current_count
-
-    input_text = input_box.get("1.0", "end-1c")
-
-    values = input_text.split()
-    values = [x for x in values if x.isdigit()]
-
-    output_text = "\n".join(values)
-
-    output_box.delete("1.0", tk.END)
-    output_box.insert(tk.END, output_text)
-
-    current_count = len(values)
-
-    count_label.config(text=f"Items: {current_count}")
-    status_label.config(text="Number conversion complete.")
-
-
-# =========================================
-# BASIC TABLE HELPERS
-# =========================================
-
-def get_manual_column_count():
-    value = column_count_entry.get().strip()
-
-    if value == "":
-        return None
-
-    try:
-        column_count = int(value)
-    except ValueError:
-        return None
-
-    if column_count <= 0:
-        return None
-
-    return column_count
-
-
-def normalize_pdf_line(line):
-    line = line.replace("\t", " ")
-    line = re.sub(r"\s+", " ", line)
-
-    return line.strip()
-
-
-def is_integer_value(value):
-    value = normalize_pdf_line(value)
-
-    return re.fullmatch(r"\d+", value) is not None
-
-
-# =========================================
-# PDF WIRING TABLE DETECTION
-# =========================================
-
-def is_connector_designator(value):
-    value = normalize_pdf_line(value)
-
-    if value == "":
-        return False
-
-    if " " in value:
-        return False
-
-    if re.fullmatch(r"[A-Za-z][A-Za-z0-9_.#/-]*", value) is None:
-        return False
-
-    if re.search(r"[A-Za-z]", value) is None:
-        return False
-
-    if re.search(r"\d", value) is None:
-        return False
-
-    return True
-
-
-def looks_like_inline_wiring_row(line):
-    line = normalize_pdf_line(line)
-
-    if line == "":
-        return False
-
-    match = re.match(
-        r"^([A-Za-z][A-Za-z0-9_.#/-]*)\s+(\d+)\s+(\S+)(?:\s+.*)?$",
-        line
-    )
-
-    if match is None:
-        return False
-
-    return is_connector_designator(match.group(1))
-
-
-def is_pdf_junk_line(line):
-    text = normalize_pdf_line(line)
-    upper_text = text.upper()
-
-    if text == "":
-        return True
-
-    if re.fullmatch(r"PAGE\s+\d+\s+OF\s+\d+", upper_text):
-        return True
-
-    if re.fullmatch(r"\d+\s+OF\s+\d+", upper_text):
-        return True
-
-    exact_junk = {
-        "FROM",
-        "TO",
-        "SIGNAL NAME",
-        "MNEMONIC",
-        "DESCRIPTION",
-        "WIRE",
-        "CODE",
-        "WIRE CODE",
-        "NOTE",
-        "COMMENT",
-        "WIRE CODES"
-    }
-
-    if upper_text in exact_junk:
-        return True
-
-    if upper_text.startswith("DES POSN DES POSN"):
-        return True
-
-    if upper_text.startswith("CODE NOTE COMMENT"):
-        return True
-
-    if "DES" in upper_text and "POSN" in upper_text and "MNEMONIC" in upper_text:
-        return True
-
-    if "MNEMONIC" in upper_text and "DESCRIPTION" in upper_text:
-        return True
-
-    if "WIRE CODE" in upper_text and "NOTE" in upper_text:
-        return True
-
-    return False
-
-
-# =========================================
-# FIND PDF RECORDS
-#
-# Supports both:
-#
-# J12 18 114 SPARE
-#
-# AND:
-#
-# J12
-# 19
-# 114
-# MAG1-X-
-# Magnetometer 1 X axis negative
-# differential input
-# IN
-# =========================================
-
-def find_pdf_records(input_text):
-    raw_lines = input_text.split("\n")
-
-    lines = []
-
-    for raw_line in raw_lines:
-        line = normalize_pdf_line(raw_line)
-
-        if is_pdf_junk_line(line):
-            continue
-
-        lines.append(line)
-
-    records = []
-    current_record = None
-
-    index = 0
-
-    while index < len(lines):
-        line = lines[index]
-
-        # =========================================
-        # INLINE RECORD
-        #
-        # J12 19 114 MAG1-X- ...
-        # =========================================
-
-        if looks_like_inline_wiring_row(line):
-
-            if current_record is not None:
-                records.append(current_record)
-
-            match = re.match(
-                r"^(\S+)\s+(\d+)\s+(\S+)(?:\s+(.*))?$",
-                line
-            )
-
-            current_record = {
-                "from_des": match.group(1),
-                "from_posn": match.group(2),
-                "to_des": match.group(3),
-                "payload": []
-            }
-
-            remainder = match.group(4)
-
-            if remainder is not None:
-                remainder = remainder.strip()
-
-                if remainder != "":
-                    current_record["payload"].append(remainder)
-
-            index += 1
-            continue
-
-        # =========================================
-        # VERTICAL / BROKEN PDF RECORD
-        #
-        # J12
-        # 19
-        # 114
-        # MAG1-X-
-        # ...
-        # =========================================
-
-        if is_connector_designator(line):
-
-            if index + 2 < len(lines):
-                possible_pin = lines[index + 1]
-                possible_destination = lines[index + 2]
-
-                if is_integer_value(possible_pin):
-
-                    if current_record is not None:
-                        records.append(current_record)
-
-                    current_record = {
-                        "from_des": line,
-                        "from_posn": possible_pin,
-                        "to_des": possible_destination,
-                        "payload": []
-                    }
-
-                    index += 3
-                    continue
-
-        # =========================================
-        # CONTINUATION OF CURRENT ROW
-        # =========================================
-
-        if current_record is not None:
-            current_record["payload"].append(line)
-
-        index += 1
-
-    if current_record is not None:
-        records.append(current_record)
-
-    return records
-
-
-# =========================================
-# PARSE CONTENT OF ONE PDF ROW
-# =========================================
-
-def parse_wiring_payload(payload_lines):
-    to_posn = ""
-    mnemonic = ""
-    description = ""
-    wire_code = ""
-    note = ""
-    comment = ""
-
-    if len(payload_lines) == 0:
-        return (
-            to_posn,
-            mnemonic,
-            description,
-            wire_code,
-            note,
-            comment
-        )
-
-    payload_text = " ".join(payload_lines)
-    payload_text = normalize_pdf_line(payload_text)
-
-    if payload_text == "":
-        return (
-            to_posn,
-            mnemonic,
-            description,
-            wire_code,
-            note,
-            comment
-        )
-
-    tokens = payload_text.split()
-
-    # =========================================
-    # COMMENTS
-    #
-    # A SPARE row must produce a BLANK mnemonic.
-    # =========================================
-
-    comment_values = {
-        "SPARE",
-        "UNUSED",
-        "NC",
-        "N/C"
-    }
-
-    remaining = []
-
-    for token in tokens:
-
-        if token.upper() in comment_values:
-
-            if comment == "":
-                comment = token
-
-        else:
-            remaining.append(token)
-
-    tokens = remaining
-
-    if len(tokens) == 0:
-        return (
-            to_posn,
-            mnemonic,
-            description,
-            wire_code,
-            note,
-            comment
-        )
-
-    # =========================================
-    # NOTE / DIRECTION
-    # =========================================
-
-    note_values = {
-        "IN",
-        "OUT",
-        "IN/OUT",
-        "I/O",
-        "INPUT",
-        "OUTPUT"
-    }
-
-    remaining = []
-
-    for token in tokens:
-
-        if token.upper() in note_values:
-
-            if note == "":
-                note = token
-
-        else:
-            remaining.append(token)
-
-    tokens = remaining
-
-    # =========================================
-    # OPTIONAL TO POSITION
-    # =========================================
-
-    if len(tokens) >= 2:
-
-        if is_integer_value(tokens[0]):
-            to_posn = tokens.pop(0)
-
-    # =========================================
-    # MNEMONIC
-    #
-    # First remaining item is normally the
-    # mnemonic.
-    # =========================================
-
-    if len(tokens) >= 1:
-        mnemonic = tokens.pop(0)
-
-    # =========================================
-    # DESCRIPTION
-    #
-    # Preserve all remaining text. This is
-    # important because Acrobat frequently wraps
-    # descriptions onto multiple clipboard lines.
-    # =========================================
-
-    if len(tokens) > 0:
-        description = " ".join(tokens)
-
-    return (
-        to_posn,
-        mnemonic,
-        description,
-        wire_code,
-        note,
-        comment
-    )
-
-
-# =========================================
-# BUILD 9-COLUMN PDF TABLE
-# =========================================
-
-def parse_flat_pdf_wiring_table(input_text):
-    records = find_pdf_records(input_text)
-
-    rows = []
-
-    rows.append([
-        "FROM DES",
-        "FROM POSN",
-        "TO DES",
-        "TO POSN",
-        "MNEMONIC",
-        "DESCRIPTION",
-        "WIRE CODE",
-        "NOTE",
-        "COMMENT"
-    ])
-
-    for record in records:
-
-        (
-            to_posn,
-            mnemonic,
-            description,
-            wire_code,
-            note,
-            comment
-        ) = parse_wiring_payload(record["payload"])
-
-        rows.append([
-            record["from_des"],
-            record["from_posn"],
-            record["to_des"],
-            to_posn,
-            mnemonic,
-            description,
-            wire_code,
-            note,
-            comment
-        ])
-
-    return rows
-
-
-def looks_like_flat_pdf_wiring_table(input_text):
-    records = find_pdf_records(input_text)
-
-    manual_columns = get_manual_column_count()
-
-    if manual_columns == 9 and len(records) >= 1:
-        return True
-
-    if len(records) >= 2:
-        return True
-
-    return False
-
-
-# =========================================
-# GENERAL TABLE PARSER
-# =========================================
-
-def parse_table():
-    input_text = input_box.get("1.0", "end-1c")
-
-    if input_text == "":
-        return [], 0, "NONE"
-
-    input_text = input_text.replace("\r\n", "\n")
-    input_text = input_text.replace("\r", "\n")
-
-    manual_columns = get_manual_column_count()
-
-    rows = []
-    delimiter_name = ""
-
-    # =========================================
-    # PDF WIRING TABLE FIRST
-    #
-    # This MUST happen before generic TAB parsing
-    # because PDF clipboard data can contain tabs
-    # without actually preserving table structure.
-    # =========================================
-
-    if looks_like_flat_pdf_wiring_table(input_text):
-
-        rows = parse_flat_pdf_wiring_table(input_text)
-
-        if len(rows) > 1:
-            return rows, 9, "PDF WIRING TABLE"
-
-    # =========================================
-    # TRUE TAB-SEPARATED DATA
-    # =========================================
-
-    if "\t" in input_text:
-        delimiter_name = "TAB"
-
-        for line in input_text.split("\n"):
-            rows.append(line.split("\t"))
-
-    # =========================================
-    # CSV
-    # =========================================
-
-    elif "," in input_text:
-        delimiter_name = "COMMA"
-
-        reader = csv.reader(io.StringIO(input_text))
-
-        for row in reader:
-            rows.append(row)
-
-    # =========================================
-    # GENERIC SPACE-ALIGNED TABLE
-    # =========================================
-
-    elif manual_columns is not None and manual_columns > 1:
-        delimiter_name = "SPACED TABLE"
-
-        for line in input_text.split("\n"):
-
-            if line.strip() == "":
-                continue
-
-            row = re.split(r" {2,}", line.strip())
-
-            rows.append(row)
-
-    # =========================================
-    # SINGLE COLUMN
-    # =========================================
-
-    else:
-        delimiter_name = "LINES"
-
-        for line in input_text.split("\n"):
-            rows.append([line])
-
-    # =========================================
-    # COLUMN COUNT
-    # =========================================
-
-    if manual_columns is not None:
-        column_count = manual_columns
-
-    else:
-        column_count = 0
-
-        for row in rows:
-
-            if len(row) > column_count:
-                column_count = len(row)
-
-    # =========================================
-    # NORMALIZE ALL ROW WIDTHS
-    # =========================================
-
-    normalized_rows = []
-
-    for row in rows:
-
-        normalized_row = list(row)
-
-        while len(normalized_row) < column_count:
-            normalized_row.append("")
-
-        if len(normalized_row) > column_count:
-            normalized_row = normalized_row[:column_count]
-
-        normalized_rows.append(normalized_row)
-
-    return normalized_rows, column_count, delimiter_name
-
-
-# =========================================
-# DETECT TABLE
-# =========================================
-
-def detect_table():
-    global detected_table
-    global detected_column_count
-
-    rows, column_count, delimiter_name = parse_table()
-
-    detected_table = rows
-    detected_column_count = column_count
-
-    if len(rows) == 0:
-        column_selector["values"] = []
-        column_selector.set("")
-
-        status_label.config(
-            text="No table data found."
-        )
-
-        return
-
-    column_choices = []
-
-    first_row = rows[0]
-
-    for index in range(column_count):
-        header = ""
-
-        if index < len(first_row):
-            header = str(first_row[index]).strip()
-
-        if header == "":
-            column_choices.append(str(index + 1))
-
-        else:
-            column_choices.append(
-                f"{index + 1}: {header}"
-            )
-
-    column_selector["values"] = column_choices
-
-    if column_count > 0:
-        column_selector.current(0)
-
-    status_label.config(
-        text=f"Detected {len(rows) - 1 if delimiter_name == 'PDF WIRING TABLE' else len(rows)} rows x {column_count} columns | {delimiter_name}"
-    )
-
-
-def get_selected_column():
-    selected = column_selector.get().strip()
-
-    if selected == "":
-        return None
-
-    selected_number = selected.split(":")[0].strip()
-
-    try:
-        return int(selected_number)
-
-    except ValueError:
-        return None
-
-
-# =========================================
-# EXTRACT SELECTED COLUMN
-# =========================================
-
-def extract_column():
-    global current_count
-    global detected_table
-    global detected_column_count
-
-    rows, column_count, delimiter_name = parse_table()
-
-    detected_table = rows
-    detected_column_count = column_count
-
-    if len(rows) == 0:
-        status_label.config(
-            text="No table data found."
-        )
-
-        return
-
-    selected_column = get_selected_column()
-
-    if selected_column is None:
-
-        detect_table()
-
-        selected_column = get_selected_column()
-
-    if selected_column is None:
-        status_label.config(
-            text="Select a column."
-        )
-
-        return
-
-    if selected_column < 1 or selected_column > column_count:
-        status_label.config(
-            text=f"Column must be between 1 and {column_count}."
-        )
-
-        return
-
-    start_row = 0
-
-    if skip_header_var.get():
-        start_row = 1
-
-    output_values = []
-
-    for row_index in range(start_row, len(rows)):
-        row = rows[row_index]
-
-        if selected_column - 1 < len(row):
-            value = str(row[selected_column - 1]).strip()
-
-        else:
-            value = ""
-
-        output_values.append(value)
-
-    output_text = "\n".join(output_values)
-
-    output_box.delete("1.0", tk.END)
-    output_box.insert(tk.END, output_text)
-
-    current_count = len(output_values)
-
-    blank_count = 0
-
-    for value in output_values:
-
-        if value.strip() == "":
-            blank_count += 1
-
-    count_label.config(
-        text=f"Items: {current_count}"
-    )
-
-    status_label.config(
-        text=f"Column {selected_column} extracted | Blank cells: {blank_count}"
-    )
-
-
-# =========================================
-# OUTPUT FUNCTIONS
-# =========================================
-
-def copy_output():
-    output_text = output_box.get("1.0", "end-1c")
-
-    root.clipboard_clear()
-    root.clipboard_append(output_text)
-    root.update()
-
-    status_label.config(
-        text="Output copied to clipboard."
-    )
-
-
-def clear_all():
-    global current_count
-    global detected_table
-    global detected_column_count
-
-    input_box.delete("1.0", tk.END)
-    output_box.delete("1.0", tk.END)
-
-    column_count_entry.delete(0, tk.END)
-
-    column_selector.set("")
-    column_selector["values"] = []
-
-    detected_table = []
-    detected_column_count = 0
-
-    current_count = 0
-
-    count_label.config(
-        text="Items: 0"
-    )
-
-    status_label.config(
-        text=""
-    )
-
-
-# =========================================
-# CONNECTOR NUMBER GENERATOR
-# =========================================
-
-def copy_connector():
-    connector_number = connector_entry.get().strip()
-    copy_count_text = copy_count_entry.get().strip()
-
-    if connector_number == "":
-        connector_status.config(
-            text="Enter a connector number."
-        )
-
-        return
-
-    if copy_count_text == "":
-        copy_count = current_count
-
-    else:
+import time
+import json
+import os
+import win32com.client as win32
+
+
+def runn(secondary=False):
+    # ================================================
+    # CONNECT TO ACTIVE E3 PROJECT
+    # ================================================
+    app = win32.GetActiveObject("CT.Application")
+    prj = app.CreateJobObject()
+    dev = prj.CreateDeviceObject()
+    pin = prj.CreatePinObject()
+    sym = prj.CreateSymbolObject()
+    text = prj.CreateTextObject()
+    attr = prj.CreateAttributeObject()
+
+
+    # ================================================
+    # HELPERS
+    # ================================================
+    def extract_ids(result):
+        if result is None:
+            return []
+
+        if isinstance(result, (tuple, list)):
+            if len(result) >= 2 and isinstance(result[1], (tuple, list)):
+                return [x for x in result[1] if x is not None and x != 0]
+
+            return [x for x in result if isinstance(x, int) and x != 0]
+
+        if isinstance(result, int):
+            if result != 0:
+                return [result]
+
+        return []
+
+
+    def get_visibility(text_id):
+        text.SetId(text_id)
 
         try:
-            copy_count = int(copy_count_text)
+            return text.GetVisibility()
+        except Exception as e:
+            return "GET VIS ERROR: " + repr(e)
+
+
+    def get_pin_view_ids(pin_id):
+        pin.SetId(pin_id)
+
+        try:
+            result = pin.GetViewIds(None)
+            return extract_ids(result)
+        except Exception:
+            pass
+
+        try:
+            result = pin.GetViewIds()
+            return extract_ids(result)
+        except Exception as e:
+            print("GetViewIds ERROR:", pin_id, repr(e))
+            return []
+
+
+    def get_schema_location(text_id):
+        text.SetId(text_id)
 
-        except ValueError:
-            connector_status.config(
-                text="Copy count must be a number."
-            )
+        xloc = [0.0]
+        yloc = [0.0]
+        grid = [""]
+        column = [""]
+        row = [""]
+
+        try:
+            text.GetSchemaLocation(xloc, yloc, grid, column, row)
+            return float(xloc[0]), float(yloc[0])
+        except Exception as e:
+            print("GET SCHEMA LOCATION ERROR:", text_id, repr(e))
+            return None, None
+
+
+    def format_equipment_identification():
+        print("")
+        print("============================================================")
+        print("FORMATTING EQUIPMENT IDENTIFACATION")
+        print("USING EXACT BLOCK SYMBOL IDS FROM MAIN.PY")
+        print("============================================================")
+
+        metadata_path = os.environ.get("E3_SECONDARY_BLOCK_FILE")
+
+        if not metadata_path:
+            print("E3_SECONDARY_BLOCK_FILE WAS NOT PROVIDED BY LAUNCHER.PY")
+            return 0
+
+        if not os.path.isfile(metadata_path):
+            print("SECONDARY BLOCK METADATA FILE NOT FOUND:", metadata_path)
+            return 0
+
+        try:
+            with open(metadata_path, "r", encoding="utf-8") as metadata_handle:
+                secondary_blocks = json.load(metadata_handle)
+        except Exception as e:
+            print("FAILED TO READ SECONDARY BLOCK METADATA:", repr(e))
+            return 0
+
+        formatted_count = 0
+        block_count = 0
+        found_attribute_count = 0
+
+        for block_data in secondary_blocks:
+            block_count += 1
+
+            block_name = str(block_data.get("name", ""))
+            block_symbol_id = int(block_data["block_symbol_id"])
+            parent_block = int(block_data["parent_block"])
+            x = float(block_data["x"])
+            y = float(block_data["y"])
+            width = float(block_data["width"])
+            height = float(block_data["height"])
+
+            x_center = x + (width / 2.0)
+            equipment_y = y + height - 1.1
 
-            return
+            print("")
+            print("SECONDARY BLOCK:", block_name, "VIEW:", parent_block, "SYMBOL:", block_symbol_id)
+
+            try:
+                sym.SetId(block_symbol_id)
+            except Exception as e:
+                print("FAILED TO SET BLOCK SYMBOL ID:", block_symbol_id, repr(e))
+                continue
+
+            try:
+                attribute_result = sym.GetAttributeIds(None)
+                attribute_ids = extract_ids(attribute_result)
+            except Exception as e:
+                print("FAILED TO GET BLOCK ATTRIBUTES:", block_symbol_id, repr(e))
+                continue
 
-    if copy_count <= 0:
-        connector_status.config(
-            text="No items to copy."
-        )
+            print("BLOCK ATTRIBUTE IDS:", attribute_ids)
+
+            equipment_attribute_id = None
+
+            for attribute_id in attribute_ids:
+                attr.SetId(attribute_id)
 
-        return
+                try:
+                    attribute_name = str(attr.GetName()).strip()
+                except Exception:
+                    continue
 
-    connector_output = "\n".join(
-        [connector_number] * copy_count
-    )
+                print("BLOCK ATTRIBUTE:", attribute_id, repr(attribute_name))
 
-    root.clipboard_clear()
-    root.clipboard_append(connector_output)
-    root.update()
+                if attribute_name == "Equipment Identifacation":
+                    equipment_attribute_id = attribute_id
+                    break
 
-    connector_status.config(
-        text=f"Copied {copy_count} copies of connector {connector_number}"
-    )
+            if equipment_attribute_id is None:
+                print("EQUIPMENT IDENTIFACATION NOT FOUND ON EXACT BLOCK SYMBOL:", block_symbol_id)
+                continue
 
+            found_attribute_count += 1
+            attr.SetId(equipment_attribute_id)
 
-# =========================================
-# GUI
-# =========================================
+            equipment_value = ""
 
-root = tk.Tk()
+            try:
+                equipment_value = str(attr.GetValue()).strip()
+            except Exception:
+                try:
+                    equipment_value = str(attr.GetFormattedValue()).strip()
+                except Exception:
+                    equipment_value = ""
 
-root.title("Excel Column Formatter")
-root.geometry("600x680")
+            print("EQUIPMENT IDENTIFACATION VALUE:", repr(equipment_value))
 
+            try:
+                before_text_result = sym.GetTextIds(None)
+                before_text_ids = extract_ids(before_text_result)
+            except Exception:
+                before_text_ids = []
 
-# =========================================
-# INPUT
-# =========================================
+            print("SYMBOL TEXT IDS BEFORE DISPLAY:", before_text_ids)
 
-tk.Label(
-    root,
-    text="Paste Data Here:",
-    font=("Arial", 12, "bold")
-).pack(
-    pady=(12, 4)
-)
+            try:
+                display_result = attr.DisplayAttribute()
+                print("DISPLAY ATTRIBUTE RESULT:", display_result)
+            except Exception as e:
+                print("DISPLAY ATTRIBUTE ERROR:", block_symbol_id, equipment_attribute_id, repr(e))
+                continue
 
+            time.sleep(0.5)
 
-input_box = scrolledtext.ScrolledText(
-    root,
-    width=65,
-    height=7,
-    font=("Consolas", 11),
-    wrap=tk.NONE
-)
+            try:
+                after_text_result = sym.GetTextIds(None)
+                after_text_ids = extract_ids(after_text_result)
+            except Exception as e:
+                print("FAILED TO GET SYMBOL TEXT IDS AFTER DISPLAY:", block_symbol_id, repr(e))
+                after_text_ids = []
 
-input_box.pack(
-    padx=15
-)
+            print("SYMBOL TEXT IDS AFTER DISPLAY:", after_text_ids)
 
+            new_text_ids = [text_id for text_id in after_text_ids if text_id not in before_text_ids]
+            matching_text_ids = []
 
-# =========================================
-# MAIN TOOL BUTTONS
-# =========================================
+            for symbol_text_id in after_text_ids:
+                text.SetId(symbol_text_id)
 
-main_button_frame = tk.Frame(root)
+                try:
+                    symbol_text_value = str(text.GetText()).strip()
+                except Exception:
+                    continue
 
-main_button_frame.pack(
-    pady=7
-)
+                if equipment_value and symbol_text_value == equipment_value:
+                    matching_text_ids.append(symbol_text_id)
 
+            candidate_text_ids = []
 
-tk.Button(
-    main_button_frame,
-    text="Convert Numbers",
-    command=convert,
-    width=16
-).pack(
-    side=tk.LEFT,
-    padx=4
-)
+            for text_id in matching_text_ids:
+                if text_id not in candidate_text_ids:
+                    candidate_text_ids.append(text_id)
 
+            if not candidate_text_ids:
+                for text_id in new_text_ids:
+                    if text_id not in candidate_text_ids:
+                        candidate_text_ids.append(text_id)
 
-tk.Button(
-    main_button_frame,
-    text="Detect Table",
-    command=detect_table,
-    width=16
-).pack(
-    side=tk.LEFT,
-    padx=4
-)
-
-
-# =========================================
-# TABLE CONTROLS
-# =========================================
-
-table_frame = tk.Frame(root)
-
-table_frame.pack(
-    pady=3
-)
-
-
-tk.Label(
-    table_frame,
-    text="Columns:"
-).grid(
-    row=0,
-    column=0,
-    padx=3
-)
-
-
-column_count_entry = tk.Entry(
-    table_frame,
-    width=5,
-    font=("Consolas", 10)
-)
-
-column_count_entry.grid(
-    row=0,
-    column=1,
-    padx=3
-)
-
-
-tk.Label(
-    table_frame,
-    text="Output Column:"
-).grid(
-    row=0,
-    column=2,
-    padx=(10, 3)
-)
-
-
-column_selector = ttk.Combobox(
-    table_frame,
-    width=18,
-    state="readonly"
-)
-
-column_selector.grid(
-    row=0,
-    column=3,
-    padx=3
-)
-
-
-skip_header_var = tk.BooleanVar(
-    value=False
-)
-
-
-tk.Checkbutton(
-    table_frame,
-    text="Skip Header",
-    variable=skip_header_var
-).grid(
-    row=1,
-    column=0,
-    columnspan=2,
-    pady=4
-)
-
-
-tk.Button(
-    table_frame,
-    text="Extract Column",
-    command=extract_column,
-    width=18
-).grid(
-    row=1,
-    column=2,
-    columnspan=2,
-    pady=4
-)
-
-
-# =========================================
-# OUTPUT
-# =========================================
-
-tk.Label(
-    root,
-    text="Excel-Ready Output:",
-    font=("Arial", 12, "bold")
-).pack(
-    pady=(4, 4)
-)
-
-
-output_box = scrolledtext.ScrolledText(
-    root,
-    width=65,
-    height=8,
-    font=("Consolas", 11),
-    wrap=tk.NONE
-)
-
-output_box.pack(
-    padx=15
-)
-
-
-count_label = tk.Label(
-    root,
-    text="Items: 0",
-    font=("Arial", 11, "bold"),
-    fg="blue"
-)
-
-count_label.pack(
-    pady=(4, 1)
-)
-
-
-status_label = tk.Label(
-    root,
-    text="",
-    font=("Arial", 9)
-)
-
-status_label.pack(
-    pady=(0, 4)
-)
-
-
-output_button_frame = tk.Frame(root)
-
-output_button_frame.pack(
-    pady=4
-)
-
-
-tk.Button(
-    output_button_frame,
-    text="Copy to Clipboard",
-    command=copy_output,
-    width=18
-).pack(
-    side=tk.LEFT,
-    padx=5
-)
-
-
-tk.Button(
-    output_button_frame,
-    text="Clear",
-    command=clear_all,
-    width=12
-).pack(
-    side=tk.LEFT,
-    padx=5
-)
-
-
-# =========================================
-# CONNECTOR COPY SECTION
-# =========================================
-
-separator = tk.Frame(
-    root,
-    height=2,
-    bd=1,
-    relief=tk.SUNKEN
-)
-
-separator.pack(
-    fill=tk.X,
-    padx=20,
-    pady=8
-)
-
-
-tk.Label(
-    root,
-    text="Connector Number Generator",
-    font=("Arial", 11, "bold")
-).pack(
-    pady=(0, 4)
-)
-
-
-connector_frame = tk.Frame(root)
-
-connector_frame.pack()
-
-
-tk.Label(
-    connector_frame,
-    text="Connector:"
-).grid(
-    row=0,
-    column=0,
-    padx=3,
-    pady=3
-)
-
-
-connector_entry = tk.Entry(
-    connector_frame,
-    width=10,
-    font=("Consolas", 11)
-)
-
-connector_entry.grid(
-    row=0,
-    column=1,
-    padx=3,
-    pady=3
-)
-
-
-tk.Label(
-    connector_frame,
-    text="Copies:"
-).grid(
-    row=0,
-    column=2,
-    padx=(10, 3),
-    pady=3
-)
-
-
-copy_count_entry = tk.Entry(
-    connector_frame,
-    width=8,
-    font=("Consolas", 11)
-)
-
-copy_count_entry.grid(
-    row=0,
-    column=3,
-    padx=3,
-    pady=3
-)
-
-
-tk.Button(
-    root,
-    text="Copy Connector Column",
-    command=copy_connector,
-    width=22
-).pack(
-    pady=5
-)
-
-
-connector_status = tk.Label(
-    root,
-    text="Leave Copies blank to use Items count.",
-    font=("Arial", 9)
-)
-
-connector_status.pack(
-    pady=(0, 5)
-)
-
-
-root.mainloop()
+            print("NEW SYMBOL TEXT IDS:", new_text_ids)
+            print("MATCHING EQUIPMENT TEXT IDS:", matching_text_ids)
+            print("CANDIDATE EQUIPMENT TEXT IDS:", candidate_text_ids)
+
+            if not candidate_text_ids:
+                print("ATTRIBUTE EXISTS BUT NO DISPLAYED SYMBOL TEXT WAS FOUND:", equipment_attribute_id)
+                continue
+
+            for equipment_text_id in candidate_text_ids:
+                text.SetId(equipment_text_id)
+
+                try:
+                    equipment_text_value = str(text.GetText()).strip()
+                except Exception:
+                    equipment_text_value = ""
+
+                if equipment_value and equipment_text_value != equipment_value:
+                    print("SKIPPING NON-MATCHING NEW TEXT:", equipment_text_id, repr(equipment_text_value))
+                    continue
+
+                text.SetVisibility(1)
+                text.SetColour(0)
+                text.SetMode(1)
+                text.SetAlignment(2)
+                text.SetStyle(1)
+                text.SetHeight(0.2)
+                text.SetSchemaLocation(x_center, equipment_y)
+
+                print("EQUIPMENT IDENTIFACATION FORMATTED:", "BLOCK:", block_name, "SYMBOL:", block_symbol_id, "ATTR:", equipment_attribute_id, "TEXT:", equipment_text_id, "VALUE:", repr(equipment_text_value), "X:", x_center, "Y:", equipment_y)
+
+                formatted_count += 1
+
+        print("")
+        print("EQUIPMENT IDENTIFACATION BLOCKS READ:", block_count)
+        print("EQUIPMENT IDENTIFACATION ATTRIBUTES FOUND:", found_attribute_count)
+        print("EQUIPMENT IDENTIFACATION TEXTS FORMATTED:", formatted_count)
+
+        return formatted_count
+
+
+    # ================================================
+    # TRACK EVERYTHING WE MODIFY
+    # ================================================
+    modified_texts = []
+
+
+    print("")
+    print("============================================================")
+    print("E3 VISIBILITY TEST")
+    print("============================================================")
+
+
+    # ================================================
+    # GET ALL LOGICAL DEVICES
+    # ================================================
+    device_result = prj.GetAllDeviceIds(None)
+    device_ids = extract_ids(device_result)
+
+
+    for device_id in device_ids:
+        dev.SetId(device_id)
+
+        try:
+            device_name = str(dev.GetName())
+        except Exception:
+            continue
+
+        # ================================================
+        # DETECT CONNECTOR DEVICE
+        # ================================================
+        try:
+            symbol_result = dev.GetSymbolIds(None)
+            logical_symbol_ids = extract_ids(symbol_result)
+        except Exception:
+            logical_symbol_ids = []
+
+        is_connector = False
+
+        for logical_symbol_id in logical_symbol_ids:
+            sym.SetId(logical_symbol_id)
+
+            try:
+                text_result = sym.GetTextIds(None)
+                text_ids = extract_ids(text_result)
+            except Exception:
+                text_ids = []
+
+            for text_id in text_ids:
+                text.SetId(text_id)
+
+                try:
+                    text_type = text.GetType()
+                except Exception:
+                    continue
+
+                if text_type == 5:
+                    is_connector = True
+                    break
+
+            if is_connector:
+                break
+
+        if not is_connector:
+            continue
+
+        print("")
+        print("############################################################")
+        print("CONNECTOR:", device_name)
+        print("DEVICE ID:", device_id)
+        print("############################################################")
+
+        # ================================================
+        # GET LOGICAL CONNECTOR PINS
+        # ================================================
+        try:
+            pin_result = dev.GetPinIds(None)
+            logical_pin_ids = extract_ids(pin_result)
+        except Exception:
+            logical_pin_ids = []
+
+        for logical_pin_id in logical_pin_ids:
+            pin.SetId(logical_pin_id)
+
+            try:
+                pin_name = str(pin.GetName())
+            except Exception:
+                pin_name = "UNKNOWN"
+
+            pin_view_ids = get_pin_view_ids(logical_pin_id)
+
+            for pin_view_id in pin_view_ids:
+                sym.SetId(pin_view_id)
+                sym.SetBlockHatchColour(58)
+
+                try:
+                    text_result = sym.GetTextIds(None)
+                    symbol_text_ids = extract_ids(text_result)
+                except Exception:
+                    symbol_text_ids = []
+
+                # ================================================
+                # DETERMINE POSITION FROM TYPE 213
+                # ================================================
+                split_position = None
+
+                for text_id in symbol_text_ids:
+                    text.SetId(text_id)
+
+                    try:
+                        text_type = text.GetType()
+                        text_value = str(text.GetText()).strip()
+                    except Exception:
+                        continue
+
+                    if text_type == 213 and "/" in text_value and not text_value.startswith("*"):
+                        try:
+                            split_position = int(text_value.split("/")[0])
+                        except Exception:
+                            split_position = None
+
+                        break
+
+                if split_position is None:
+                    continue
+
+                print("")
+                print("PIN:", pin_name, "VIEW:", pin_view_id, "POSITION:", split_position)
+
+                # ================================================
+                # TEST EVERY RELEVANT TEXT
+                # ================================================
+                for text_id in symbol_text_ids:
+                    text.SetId(text_id)
+
+                    try:
+                        text_type = text.GetType()
+                        text_value = str(text.GetText()).strip()
+                    except Exception:
+                        continue
+
+                    # ================================================
+                    # TYPE 5 - COMPONENT CODE
+                    # ALWAYS OFF
+                    # ================================================
+                    if text_type == 5:
+                        before = get_visibility(text_id)
+                        text.SetId(text_id)
+                        result = text.SetVisibility(0)
+                        after = get_visibility(text_id)
+
+                        print("    TYPE 5")
+                        print("    TEXT ID:", text_id)
+                        print("    VALUE:", repr(text_value))
+                        print("    BEFORE:", before)
+                        print("    SET RESULT:", result)
+                        print("    AFTER:", after)
+
+                        if after == 0:
+                            print("    IMMEDIATE RESULT: PASS")
+                        else:
+                            print("    IMMEDIATE RESULT: FAIL")
+
+                        modified_texts.append({"device": device_name, "pin": pin_name, "position": split_position, "view": pin_view_id, "text_id": text_id, "type": 5, "value": text_value, "desired": 0})
+
+                    # ================================================
+                    # TYPE 12 - DEVICE DESIGNATION
+                    # ONLY TURN OFF NON-TOP PINS
+                    # ================================================
+                    elif text_type == 12 and split_position != 1:
+                        before = get_visibility(text_id)
+                        text.SetId(text_id)
+                        result = text.SetVisibility(0)
+                        after = get_visibility(text_id)
+
+                        print("    TYPE 12 NON-TOP")
+                        print("    TEXT ID:", text_id)
+                        print("    VALUE:", repr(text_value))
+                        print("    BEFORE:", before)
+                        print("    SET RESULT:", result)
+                        print("    AFTER:", after)
+
+                        if after == 0:
+                            print("    IMMEDIATE RESULT: PASS")
+                        else:
+                            print("    IMMEDIATE RESULT: FAIL")
+
+                        modified_texts.append({"device": device_name, "pin": pin_name, "position": split_position, "view": pin_view_id, "text_id": text_id, "type": 12, "value": text_value, "desired": 0})
+
+                    # ================================================
+                    # TYPE 12 TOP PIN
+                    # DO NOT TOUCH
+                    # ================================================
+                    elif text_type == 12 and split_position == 1:
+                        visibility = get_visibility(text_id)
+                        text.SetStyle(1)
+                        text.SetHeight(0.2)
+
+                        print("    TYPE 12 TOP - LEFT ALONE")
+                        print("    TEXT ID:", text_id)
+                        print("    VALUE:", repr(text_value))
+                        print("    VISIBILITY:", visibility)
+
+                    # ================================================
+                    # TYPE 617 - LOCAL SIGNAL NAME
+                    # ALWAYS ON
+                    # ================================================
+                    elif text_type == 617:
+                        before = get_visibility(text_id)
+
+                        text.SetId(text_id)
+                        result = text.SetVisibility(1)
+                        text.SetColour(0)
+                        text.SetAlignment(3)
+                        text.SetStyle(1)
+                        text.SetHeight(0.15)
+
+                        after = get_visibility(text_id)
+
+                        print("    TYPE 617 LOCAL SIGNAL")
+                        print("    TEXT ID:", text_id)
+                        print("    VALUE:", repr(text_value))
+                        print("    BEFORE:", before)
+                        print("    SET RESULT:", result)
+                        print("    AFTER:", after)
+
+                        if after == 1:
+                            print("    IMMEDIATE RESULT: PASS")
+                        else:
+                            print("    IMMEDIATE RESULT: FAIL")
+
+                        modified_texts.append({"device": device_name, "pin": pin_name, "position": split_position, "view": pin_view_id, "text_id": text_id, "type": 617, "value": text_value, "desired": 1})
+
+                    # ================================================
+                    # TYPE 203 - PIN NUMBER
+                    # ALWAYS VISIBLE AND BOLD
+                    # ================================================
+                    elif text_type == 203:
+                        before = get_visibility(text_id)
+
+                        text.SetId(text_id)
+                        result = text.SetVisibility(1)
+                        text.SetStyle(1)
+
+                        after = get_visibility(text_id)
+
+                        print("    TYPE 203 PIN NUMBER")
+                        print("    TEXT ID:", text_id)
+                        print("    VALUE:", repr(text_value))
+                        print("    BEFORE:", before)
+                        print("    SET RESULT:", result)
+                        print("    AFTER:", after)
+
+                        if after == 1:
+                            print("    IMMEDIATE RESULT: PASS")
+                        else:
+                            print("    IMMEDIATE RESULT: FAIL")
+
+                        modified_texts.append({"device": device_name, "pin": pin_name, "position": split_position, "view": pin_view_id, "text_id": text_id, "type": 203, "value": text_value, "desired": 1})
+
+
+    # ================================================
+    # FORMAT EQUIPMENT IDENTIFACATION ON SECONDARY BLOCKS
+    # ================================================
+    format_equipment_identification()
+
+
+    # ================================================
+    # WAIT TO SEE WHETHER E3 RESETS VISIBILITY
+    # ================================================
+    print("")
+    print("============================================================")
+    print("IMMEDIATE FORMATTING COMPLETE")
+    print("WAITING 5 SECONDS")
+    print("============================================================")
+
+    time.sleep(5.0)
+
+
+    # ================================================
+    # SECOND PASS - DO NOT MODIFY ANYTHING
+    # JUST READ VISIBILITY BACK
+    # ================================================
+    print("")
+    print("============================================================")
+    print("5 SECOND VISIBILITY VERIFICATION")
+    print("============================================================")
+
+    passed = 0
+    failed = 0
+
+    for item in modified_texts:
+        current_visibility = get_visibility(item["text_id"])
+
+        print("")
+        print("DEVICE:", item["device"])
+        print("PIN:", item["pin"])
+        print("POSITION:", item["position"])
+        print("VIEW:", item["view"])
+        print("TEXT ID:", item["text_id"])
+        print("TYPE:", item["type"])
+        print("VALUE:", repr(item["value"]))
+        print("EXPECTED VISIBILITY:", item["desired"])
+        print("ACTUAL VISIBILITY:", current_visibility)
+
+        if current_visibility == item["desired"]:
+            print("FINAL RESULT: PASS")
+            passed += 1
+        else:
+            print("FINAL RESULT: FAIL")
+            failed += 1
+
+
+    # ================================================
+    # FINAL SUMMARY
+    # ================================================
+    print("")
+    print("============================================================")
+    print("FINAL SUMMARY")
+    print("============================================================")
+    print("PASS:", passed)
+    print("FAIL:", failed)
+    print("TOTAL:", len(modified_texts))
+    print("============================================================")
