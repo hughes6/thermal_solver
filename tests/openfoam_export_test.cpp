@@ -1540,7 +1540,7 @@ int main(int argc, char** argv) {
         text << stream.rdbuf();
         assert(text.str().find("type        CourantNo;") != std::string::npos);
         assert(text.str().find("fields      (phi rho);") != std::string::npos);
-        assert(text.str().find("field       Co;") != std::string::npos);
+        assert(text.str().find("fields      (Co);") != std::string::npos);
     }
     {
         std::ifstream stream(case_path/"0"/"fluid"/"p_rgh");

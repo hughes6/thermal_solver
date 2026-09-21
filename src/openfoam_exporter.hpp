@@ -2550,7 +2550,7 @@ functions
         type        fieldMinMax;
         libs        (fieldFunctionObjects);
         region      fluid;
-        field       Co;
+        fields      (Co);
         mode        magnitude;
         writeFields false;
     }
