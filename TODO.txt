@@ -1,122 +1,3 @@
-def parse_table():
-    input_text = input_box.get("1.0", "end-1c")
-
-    if input_text == "":
-        return [], 0, "NONE"
-
-    input_text = input_text.replace("\r\n", "\n")
-    input_text = input_text.replace("\r", "\n")
-
-    manual_columns = get_manual_column_count()
-
-    rows = []
-    delimiter_name = ""
-
-    # =========================================
-    # REAL EXCEL / TAB-SEPARATED TABLE
-    # =========================================
-
-    if "\t" in input_text:
-        delimiter_name = "TAB"
-
-        for line in input_text.split("\n"):
-            rows.append(line.split("\t"))
-
-    # =========================================
-    # CSV
-    # =========================================
-
-    elif "," in input_text:
-        delimiter_name = "COMMA"
-
-        reader = csv.reader(io.StringIO(input_text))
-
-        for row in reader:
-            rows.append(row)
-
-    # =========================================
-    # FLATTENED PDF WIRING TABLE
-    #
-    # Detect the table by its known headings.
-    # =========================================
-
-    elif (
-        manual_columns == 9
-        and "MNEMONIC" in input_text.upper()
-        and "DESCRIPTION" in input_text.upper()
-        and "COMMENT" in input_text.upper()
-    ):
-
-        rows = parse_flat_pdf_wiring_table(input_text)
-        delimiter_name = "PDF WIRING TABLE"
-
-        if len(rows) > 0:
-            return rows, 9, delimiter_name
-
-    # =========================================
-    # SPACE-ALIGNED TABLE
-    # =========================================
-
-    elif manual_columns is not None and manual_columns > 1:
-        delimiter_name = "SPACED TABLE"
-
-        for line in input_text.split("\n"):
-
-            if line.strip() == "":
-                continue
-
-            row = re.split(r" {2,}", line.strip())
-
-            rows.append(row)
-
-    # =========================================
-    # SINGLE COLUMN
-    # =========================================
-
-    else:
-        delimiter_name = "LINES"
-
-        for line in input_text.split("\n"):
-            rows.append([line])
-
-    # =========================================
-    # DETERMINE COLUMN COUNT
-    # =========================================
-
-    if manual_columns is not None:
-        column_count = manual_columns
-    else:
-        column_count = 0
-
-        for row in rows:
-
-            if len(row) > column_count:
-                column_count = len(row)
-
-    # =========================================
-    # NORMALIZE ROW WIDTHS
-    # =========================================
-
-    normalized_rows = []
-
-    for row in rows:
-
-        normalized_row = list(row)
-
-        while len(normalized_row) < column_count:
-            normalized_row.append("")
-
-        if len(normalized_row) > column_count:
-            normalized_row = normalized_row[:column_count]
-
-        normalized_rows.append(normalized_row)
-
-    return normalized_rows, column_count, delimiter_name
-
-
-
-
-
 def parse_flat_pdf_wiring_table(input_text):
     lines = []
 
@@ -262,3 +143,137 @@ def parse_flat_pdf_wiring_table(input_text):
         ])
 
     return rows
+
+
+
+
+
+
+
+
+def parse_table():
+    input_text = input_box.get("1.0", "end-1c")
+
+    if input_text == "":
+        return [], 0, "NONE"
+
+    input_text = input_text.replace("\r\n", "\n")
+    input_text = input_text.replace("\r", "\n")
+
+    manual_columns = get_manual_column_count()
+
+    rows = []
+    delimiter_name = ""
+
+    # =========================================
+    # REAL EXCEL / TAB-SEPARATED TABLE
+    # =========================================
+
+    if "\t" in input_text:
+        delimiter_name = "TAB"
+
+        for line in input_text.split("\n"):
+            rows.append(line.split("\t"))
+
+    # =========================================
+    # CSV
+    # =========================================
+
+    elif "," in input_text:
+        delimiter_name = "COMMA"
+
+        reader = csv.reader(io.StringIO(input_text))
+
+        for row in reader:
+            rows.append(row)
+
+    # =========================================
+    # FLATTENED PDF WIRING TABLE
+    #
+    # Detect the table by its known headings.
+    # =========================================
+
+    elif (
+        manual_columns == 9
+        and "MNEMONIC" in input_text.upper()
+        and "DESCRIPTION" in input_text.upper()
+        and "COMMENT" in input_text.upper()
+    ):
+
+        rows = parse_flat_pdf_wiring_table(input_text)
+        delimiter_name = "PDF WIRING TABLE"
+
+        if len(rows) > 0:
+            return rows, 9, delimiter_name
+
+    # =========================================
+    # SPACE-ALIGNED TABLE
+    # =========================================
+
+    elif manual_columns is not None and manual_columns > 1:
+        delimiter_name = "SPACED TABLE"
+
+        for line in input_text.split("\n"):
+
+            if line.strip() == "":
+                continue
+
+            row = re.split(r" {2,}", line.strip())
+
+            rows.append(row)
+
+    # =========================================
+    # SINGLE COLUMN
+    # =========================================
+
+    else:
+        delimiter_name = "LINES"
+
+        for line in input_text.split("\n"):
+            rows.append([line])
+
+    # =========================================
+    # DETERMINE COLUMN COUNT
+    # =========================================
+
+    if manual_columns is not None:
+        column_count = manual_columns
+    else:
+        column_count = 0
+
+        for row in rows:
+
+            if len(row) > column_count:
+                column_count = len(row)
+
+    # =========================================
+    # NORMALIZE ROW WIDTHS
+    # =========================================
+
+    normalized_rows = []
+
+    for row in rows:
+
+        normalized_row = list(row)
+
+        while len(normalized_row) < column_count:
+            normalized_row.append("")
+
+        if len(normalized_row) > column_count:
+            normalized_row = normalized_row[:column_count]
+
+        normalized_rows.append(normalized_row)
+
+    return normalized_rows, column_count, delimiter_name
+
+
+
+
+
+
+T=2.73999999999997262
+for r in 0 1 2 3; do
+  d="processor$r/$T/uniform"
+  mkdir -p "$d"
+  printf 'FoamFile\n{\n    version     2.0;\n    format      ascii;\n    class       dictionary;\n    location    "%s/uniform";\n    object      time;\n}\n\nvalue           %s;\ndeltaT          0.0001089;\ndeltaT0         0.0001089;\nindex           0;\n' "$T" "$T" > "$d/time"
+done
