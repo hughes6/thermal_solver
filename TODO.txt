@@ -2,6 +2,24 @@ import pdfplumber
 import tkinter as tk
 from tkinter import filedialog
 from tkinter import simpledialog
+import re
+import statistics
+
+
+# ================================================
+# CONSTANTS
+# ================================================
+COLUMN_NAMES = [
+    "FROM_DES",
+    "FROM_POSN",
+    "TO_DES",
+    "TO_POSN",
+    "MNEMONIC",
+    "DESCRIPTION",
+    "WIRE_CODE",
+    "NOTE",
+    "COMMENT"
+]
 
 
 # ================================================
@@ -17,6 +35,7 @@ def ask_pdf_path():
     if not pdf_path:
         return None
     return pdf_path
+
 
 def ask_extraction_settings():
     root = tk.Tk()
@@ -36,20 +55,26 @@ def ask_extraction_settings():
         return None, None
     return start_page, separator_keyword
 
+
 def extract_sections_by_keyword(pdf_path, start_page, separator_keyword):
     sections = []
     current_section = []
     current_start_page = None
     keyword_lower = separator_keyword.lower()
+
     with pdfplumber.open(pdf_path) as pdf:
         if start_page > len(pdf.pages):
             raise ValueError(f"Start page {start_page} is greater than PDF page count {len(pdf.pages)}")
+
         for page_number in range(start_page, len(pdf.pages) + 1):
             page = pdf.pages[page_number - 1]
             text = page.extract_text()
+
             if not text:
                 continue
+
             lines = text.splitlines()
+
             for line in lines:
                 clean_line = line.strip()
 
@@ -60,22 +85,532 @@ def extract_sections_by_keyword(pdf_path, start_page, separator_keyword):
                             "start_page": current_start_page,
                             "text": "\n".join(current_section).strip()
                         })
+
                     current_section = [clean_line]
                     current_start_page = page_number
+
                 else:
-                    # Ignore anything before the first separator.
                     if current_section:
                         current_section.append(clean_line)
+
         if current_section:
             sections.append({
                 "section_number": len(sections) + 1,
                 "start_page": current_start_page,
                 "text": "\n".join(current_section).strip()
             })
+
     return sections
 
 
- 
+# ================================================
+# PDF GEOMETRY HELPERS
+# ================================================
+def word_center_x(word):
+    return (float(word["x0"]) + float(word["x1"])) / 2.0
+
+
+def group_words_into_lines(words, y_tolerance=3.0):
+    lines = []
+
+    sorted_words = sorted(words, key=lambda word: (float(word["top"]), float(word["x0"])))
+
+    for word in sorted_words:
+        word_top = float(word["top"])
+        target_line = None
+
+        for line in lines:
+            if abs(line["top"] - word_top) <= y_tolerance:
+                target_line = line
+                break
+
+        if target_line is None:
+            target_line = {
+                "top": word_top,
+                "words": []
+            }
+            lines.append(target_line)
+
+        target_line["words"].append(word)
+
+    for line in lines:
+        line["words"] = sorted(line["words"], key=lambda word: float(word["x0"]))
+        line["text"] = " ".join(str(word["text"]) for word in line["words"]).strip()
+
+    return lines
+
+
+def find_exact_word(words, wanted_text, target_y=None, y_tolerance=60.0):
+    candidates = []
+
+    for word in words:
+        text = str(word["text"]).strip().upper()
+
+        if text != wanted_text.upper():
+            continue
+
+        if target_y is not None:
+            if abs(float(word["top"]) - target_y) > y_tolerance:
+                continue
+
+        candidates.append(word)
+
+    if not candidates:
+        return None
+
+    if target_y is None:
+        return candidates[0]
+
+    candidates.sort(key=lambda word: abs(float(word["top"]) - target_y))
+
+    return candidates[0]
+
+
+# ================================================
+# FIND / LEARN TABLE COLUMN LOCATIONS
+# ================================================
+def find_column_centers(pdf_path, start_page):
+    with pdfplumber.open(pdf_path) as pdf:
+
+        for page_number in range(start_page, len(pdf.pages) + 1):
+            page = pdf.pages[page_number - 1]
+
+            words = page.extract_words(
+                keep_blank_chars=False,
+                use_text_flow=False
+            )
+
+            if not words:
+                continue
+
+            lines = group_words_into_lines(words)
+
+            for line in lines:
+                upper_values = [str(word["text"]).strip().upper() for word in line["words"]]
+
+                if "MNEMONIC" not in upper_values:
+                    continue
+
+                if "DESCRIPTION" not in upper_values:
+                    continue
+
+                header_y = line["top"]
+
+                nearby_words = []
+
+                for word in words:
+                    if abs(float(word["top"]) - header_y) <= 60.0:
+                        nearby_words.append(word)
+
+                des_words = []
+                posn_words = []
+
+                for word in nearby_words:
+                    text = str(word["text"]).strip().upper()
+
+                    if text == "DES":
+                        des_words.append(word)
+
+                    if text == "POSN":
+                        posn_words.append(word)
+
+                des_words.sort(key=lambda word: float(word["x0"]))
+                posn_words.sort(key=lambda word: float(word["x0"]))
+
+                if len(des_words) < 2:
+                    continue
+
+                if len(posn_words) < 2:
+                    continue
+
+                mnemonic_word = find_exact_word(nearby_words, "MNEMONIC", header_y)
+                description_word = find_exact_word(nearby_words, "DESCRIPTION", header_y)
+                wire_word = find_exact_word(nearby_words, "WIRE", header_y)
+                note_word = find_exact_word(nearby_words, "NOTE", header_y)
+                comment_word = find_exact_word(nearby_words, "COMMENT", header_y)
+
+                if mnemonic_word is None:
+                    continue
+
+                if description_word is None:
+                    continue
+
+                if wire_word is None:
+                    continue
+
+                if note_word is None:
+                    continue
+
+                if comment_word is None:
+                    continue
+
+                centers = [
+                    word_center_x(des_words[0]),
+                    word_center_x(posn_words[0]),
+                    word_center_x(des_words[1]),
+                    word_center_x(posn_words[1]),
+                    word_center_x(mnemonic_word),
+                    word_center_x(description_word),
+                    word_center_x(wire_word),
+                    word_center_x(note_word),
+                    word_center_x(comment_word)
+                ]
+
+                centers_are_valid = True
+
+                for index in range(len(centers) - 1):
+                    if centers[index] >= centers[index + 1]:
+                        centers_are_valid = False
+                        break
+
+                if not centers_are_valid:
+                    continue
+
+                print("")
+                print("============================================================")
+                print("TABLE COLUMNS LEARNED")
+                print("============================================================")
+                print("PAGE:", page_number)
+
+                for name, center in zip(COLUMN_NAMES, centers):
+                    print(name, "X =", round(center, 2))
+
+                print("============================================================")
+
+                return centers, float(page.width)
+
+    raise Exception("Could not automatically determine table column locations from PDF headers")
+
+
+def build_column_boundaries(column_centers, page_width):
+    boundaries = [0.0]
+
+    for index in range(len(column_centers) - 1):
+        midpoint = (column_centers[index] + column_centers[index + 1]) / 2.0
+        boundaries.append(midpoint)
+
+    boundaries.append(page_width)
+
+    return boundaries
+
+
+def get_column_index_for_word(word, boundaries):
+    x = float(word["x0"])
+
+    for index in range(len(boundaries) - 1):
+        if boundaries[index] <= x < boundaries[index + 1]:
+            return index
+
+    return None
+
+
+# ================================================
+# SECTION MARKERS USING PDF POSITION
+# ================================================
+def find_section_markers(pdf_path, start_page, separator_keyword):
+    markers = []
+    keyword_lower = separator_keyword.lower()
+
+    with pdfplumber.open(pdf_path) as pdf:
+
+        for page_number in range(start_page, len(pdf.pages) + 1):
+            page = pdf.pages[page_number - 1]
+
+            words = page.extract_words(
+                keep_blank_chars=False,
+                use_text_flow=False
+            )
+
+            if not words:
+                continue
+
+            lines = group_words_into_lines(words)
+
+            for line in lines:
+                if keyword_lower in line["text"].lower():
+                    markers.append({
+                        "section_number": len(markers) + 1,
+                        "page": page_number,
+                        "top": float(line["top"]),
+                        "title": line["text"]
+                    })
+
+    return markers
+
+
+def find_section_for_row(page_number, row_top, section_markers):
+    selected_marker = None
+
+    for marker in section_markers:
+        marker_position = (marker["page"], marker["top"])
+        row_position = (page_number, row_top)
+
+        if marker_position <= row_position:
+            selected_marker = marker
+        else:
+            break
+
+    return selected_marker
+
+
+# ================================================
+# J CONNECTOR ROW DETECTION
+# ================================================
+def is_connector_name(text):
+    text = str(text).strip()
+
+    return re.fullmatch(r"J\d+", text, re.IGNORECASE) is not None
+
+
+def find_connector_anchors(words, boundaries):
+    anchors = []
+
+    for word in words:
+        text = str(word["text"]).strip()
+
+        if not is_connector_name(text):
+            continue
+
+        column_index = get_column_index_for_word(word, boundaries)
+
+        if column_index != 0:
+            continue
+
+        anchors.append(word)
+
+    anchors.sort(key=lambda word: float(word["top"]))
+
+    return anchors
+
+
+# ================================================
+# FILTER KNOWN NON-TABLE TEXT
+# ================================================
+def is_junk_line(line_text, separator_keyword):
+    text = line_text.strip()
+    upper = text.upper()
+
+    if text == "":
+        return True
+
+    if re.fullmatch(r"PAGE\s+\d+\s+OF\s+\d+", upper):
+        return True
+
+    if upper in {
+        "FROM",
+        "TO",
+        "SIGNAL NAME",
+        "MNEMONIC",
+        "DESCRIPTION",
+        "WIRE",
+        "CODE",
+        "WIRE CODE",
+        "NOTE",
+        "COMMENT",
+        "WIRE CODES"
+    }:
+        return True
+
+    if upper.startswith("DES POSN DES POSN"):
+        return True
+
+    if separator_keyword.lower() in text.lower():
+        return True
+
+    return False
+
+
+# ================================================
+# PARSE ONE PHYSICAL TABLE ROW
+# ================================================
+def parse_row_words(row_words, boundaries):
+    column_words = [[] for _ in COLUMN_NAMES]
+
+    for word in row_words:
+        column_index = get_column_index_for_word(word, boundaries)
+
+        if column_index is None:
+            continue
+
+        if column_index < 0 or column_index >= len(COLUMN_NAMES):
+            continue
+
+        column_words[column_index].append(word)
+
+    output = {}
+
+    for index, column_name in enumerate(COLUMN_NAMES):
+        items = sorted(
+            column_words[index],
+            key=lambda word: (float(word["top"]), float(word["x0"]))
+        )
+
+        values = []
+
+        for word in items:
+            value = str(word["text"]).strip()
+
+            if value != "":
+                values.append(value)
+
+        output[column_name] = " ".join(values).strip()
+
+    return output
+
+
+# ================================================
+# EXTRACT STRUCTURED TABLE ROWS
+# ================================================
+def extract_structured_rows(pdf_path, start_page, separator_keyword):
+    column_centers, page_width = find_column_centers(pdf_path, start_page)
+    boundaries = build_column_boundaries(column_centers, page_width)
+    section_markers = find_section_markers(pdf_path, start_page, separator_keyword)
+
+    structured_rows = []
+
+    with pdfplumber.open(pdf_path) as pdf:
+
+        for page_number in range(start_page, len(pdf.pages) + 1):
+            page = pdf.pages[page_number - 1]
+
+            words = page.extract_words(
+                keep_blank_chars=False,
+                use_text_flow=False
+            )
+
+            if not words:
+                continue
+
+            lines = group_words_into_lines(words)
+            anchors = find_connector_anchors(words, boundaries)
+
+            if not anchors:
+                continue
+
+            anchor_tops = [float(anchor["top"]) for anchor in anchors]
+
+            gaps = []
+
+            for index in range(len(anchor_tops) - 1):
+                gap = anchor_tops[index + 1] - anchor_tops[index]
+
+                if gap > 0:
+                    gaps.append(gap)
+
+            if gaps:
+                normal_row_height = statistics.median(gaps)
+            else:
+                normal_row_height = 22.0
+
+            maximum_last_row_height = max(normal_row_height * 2.75, 50.0)
+
+            for anchor_index, anchor in enumerate(anchors):
+                row_top = float(anchor["top"]) - 2.0
+
+                if anchor_index + 1 < len(anchors):
+                    row_bottom = float(anchors[anchor_index + 1]["top"]) - 1.0
+                else:
+                    row_bottom = float(anchor["top"]) + maximum_last_row_height
+
+                row_words = []
+
+                for line in lines:
+                    if line["top"] < row_top:
+                        continue
+
+                    if line["top"] >= row_bottom:
+                        continue
+
+                    if is_junk_line(line["text"], separator_keyword):
+                        continue
+
+                    for word in line["words"]:
+                        row_words.append(word)
+
+                parsed_row = parse_row_words(row_words, boundaries)
+
+                if not is_connector_name(parsed_row["FROM_DES"]):
+                    continue
+
+                section_marker = find_section_for_row(
+                    page_number,
+                    float(anchor["top"]),
+                    section_markers
+                )
+
+                parsed_row["PAGE"] = page_number
+
+                if section_marker is None:
+                    parsed_row["SECTION"] = None
+                    parsed_row["SECTION_TITLE"] = ""
+                else:
+                    parsed_row["SECTION"] = section_marker["section_number"]
+                    parsed_row["SECTION_TITLE"] = section_marker["title"]
+
+                structured_rows.append(parsed_row)
+
+    return structured_rows
+
+
+# ================================================
+# GROUP STRUCTURED ROWS BY SECTION
+# ================================================
+def group_rows_by_section(structured_rows):
+    structured_sections = {}
+
+    for row in structured_rows:
+        section_number = row["SECTION"]
+
+        if section_number not in structured_sections:
+            structured_sections[section_number] = []
+
+        structured_sections[section_number].append(row)
+
+    return structured_sections
+
+
+# ================================================
+# PRINT STRUCTURED DATA
+# ================================================
+def print_structured_rows(structured_rows):
+    current_section = object()
+
+    for row in structured_rows:
+        if row["SECTION"] != current_section:
+            current_section = row["SECTION"]
+
+            print("")
+            print("")
+            print("############################################################")
+            print("STRUCTURED SECTION:", row["SECTION"])
+            print("TITLE:", row["SECTION_TITLE"])
+            print("############################################################")
+            print("FROM_DES | FROM_POSN | TO_DES | TO_POSN | MNEMONIC | DESCRIPTION | WIRE_CODE | NOTE | COMMENT")
+
+        print(
+            row["FROM_DES"],
+            "|",
+            row["FROM_POSN"],
+            "|",
+            row["TO_DES"],
+            "|",
+            row["TO_POSN"],
+            "|",
+            row["MNEMONIC"],
+            "|",
+            row["DESCRIPTION"],
+            "|",
+            row["WIRE_CODE"],
+            "|",
+            row["NOTE"],
+            "|",
+            row["COMMENT"]
+        )
+
+
+# ================================================
+# MAIN
+# ================================================
 if __name__ == "__main__":
     pdf_path = "C:/Users/conner.hughes/OneDrive/Documents/Python/Block Maker/CI42471-001 RevB EICD.pdf"
     start_page = 11
@@ -84,11 +619,24 @@ if __name__ == "__main__":
     # pdf_path = ask_pdf_path()
     # if pdf_path is None:
     #     raise Exception("No PDF selected")
+    #
     # start_page, separator_keyword = ask_extraction_settings()
     # if start_page is None or separator_keyword is None:
     #     raise Exception("Extraction settings cancelled")
-    
-    sections = extract_sections_by_keyword(pdf_path, start_page, separator_keyword)
+
+
+    # ================================================
+    # FIRST PASS
+    #
+    # Original raw-text section separation.
+    # Keep this because it is useful for identifying
+    # the logical connector/table sections.
+    # ================================================
+    sections = extract_sections_by_keyword(
+        pdf_path,
+        start_page,
+        separator_keyword
+    )
 
     print("")
     print("============================================================")
@@ -99,11 +647,38 @@ if __name__ == "__main__":
     print("SECTIONS FOUND:", len(sections))
     print("============================================================")
 
-    for section in sections:
-        print("")
-        print("")
-        print("############################################################")
-        print("SECTION:", section["section_number"])
-        print("START PAGE:", section["start_page"])
-        print("############################################################")
-        print(section["text"])
+
+    # ================================================
+    # SECOND PASS
+    #
+    # Reconstruct actual table rows from the PDF
+    # coordinates rather than relying on extract_text().
+    # ================================================
+    structured_rows = extract_structured_rows(
+        pdf_path,
+        start_page,
+        separator_keyword
+    )
+
+    print("")
+    print("============================================================")
+    print("STRUCTURED TABLE EXTRACTION COMPLETE")
+    print("============================================================")
+    print("ROWS FOUND:", len(structured_rows))
+    print("============================================================")
+
+
+    # ================================================
+    # GROUP ROWS BY ORIGINAL TABLE / SECTION
+    # ================================================
+    structured_sections = group_rows_by_section(
+        structured_rows
+    )
+
+
+    # ================================================
+    # PRINT STRUCTURED RESULTS
+    # ================================================
+    print_structured_rows(
+        structured_rows
+    )
