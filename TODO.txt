@@ -1,86 +1,159 @@
 import pdfplumber
-import re
+import tkinter as tk
+from tkinter import filedialog
+from tkinter import simpledialog
+
 
 # ================================================
-# HELPER FXN
+# SELECT PDF
 # ================================================
-def ask_save_path(default_full_path=""):
-    import os
-    import tkinter as tk
-    from tkinter import filedialog
-    default_folder = os.path.dirname(default_full_path)
 
+def ask_pdf_path():
     root = tk.Tk()
     root.withdraw()
     root.attributes("-topmost", True)
     root.update()
-    try:
-        selected_path = filedialog.askopenfilename(initialdir=default_folder, filetypes=[("PDF Files", "*.pdf"), ("All Files", "*.*")])
-    except Exception:
-        return None
 
-    # Cancel or X
-    if not selected_path:
-        root.destroy()
-        return None
+    pdf_path = filedialog.askopenfilename(filetypes=[("PDF Files", "*.pdf"), ("All Files", "*.*")])
+
     root.destroy()
-    # Return ONLY the file name (not full path)
-    return os.path.abspath(selected_path)
 
-def extract_pdf_text(file_path):
-    try:
-        all_text = []
-        with pdfplumber.open(file_path) as pdf:
-            for page_num, page in enumerate(pdf.pages, start=1):
-                text = page.extract_text()
-                if text:
-                    all_text.append(f"--- Page {page_num} ---\n{text}")
-        return "\n".join(all_text) if all_text else "No text found."
-    except FileNotFoundError:
-        return "Error: File not found."
-    except Exception as e:
-        return f"Error reading PDF: {e}"
+    if not pdf_path:
+        return None
+
+    return pdf_path
 
 
-def extract_data_by_keywords(pdf_path, keywords):
-    """
-    Extract text from PDF and organize data by given keywords.
-    
-    Args:
-        pdf_path (str): Path to the PDF file.
-        keywords (list): List of keywords to search in the PDF text.
-        
-    Returns:
-        dict: A dictionary where each keyword maps to a list of extracted values.
-    """
-    data = {key: [] for key in keywords}  # Initialize dictionary
-    
+# ================================================
+# GET EXTRACTION SETTINGS
+# ================================================
+
+def ask_extraction_settings():
+    root = tk.Tk()
+    root.withdraw()
+    root.attributes("-topmost", True)
+    root.update()
+
+    start_page = simpledialog.askinteger("PDF Start Page", "Enter the page where connector data begins:", minvalue=1, parent=root)
+
+    if start_page is None:
+        root.destroy()
+        return None, None
+
+    separator_keyword = simpledialog.askstring("Section Separator", "Enter the keyword that starts each connector section:", parent=root)
+
+    root.destroy()
+
+    if separator_keyword is None:
+        return None, None
+
+    separator_keyword = separator_keyword.strip()
+
+    if separator_keyword == "":
+        return None, None
+
+    return start_page, separator_keyword
+
+
+# ================================================
+# EXTRACT PDF SECTIONS
+# ================================================
+
+def extract_sections_by_keyword(pdf_path, start_page, separator_keyword):
+    sections = []
+    current_section = []
+    current_start_page = None
+
+    keyword_lower = separator_keyword.lower()
+
     with pdfplumber.open(pdf_path) as pdf:
-        for page in pdf.pages:
+
+        if start_page > len(pdf.pages):
+            raise ValueError(f"Start page {start_page} is greater than PDF page count {len(pdf.pages)}")
+
+        for page_number in range(start_page, len(pdf.pages) + 1):
+
+            page = pdf.pages[page_number - 1]
             text = page.extract_text()
+
             if not text:
                 continue
-            
-            # Iterate through each keyword
-            for key in keywords:
-                # Simple approach: find lines containing the keyword
-                pattern = rf"{key}\s*[:\-]?\s*(.*)"
-                matches = re.findall(pattern, text, re.IGNORECASE)
-                
-                for match in matches:
-                    # Clean up leading/trailing spaces
-                    data[key].append(match.strip())
-                    
-    return data
+
+            lines = text.splitlines()
+
+            for line in lines:
+
+                clean_line = line.strip()
+
+                # ================================================
+                # NEW SECTION
+                # ================================================
+
+                if keyword_lower in clean_line.lower():
+
+                    if current_section:
+                        sections.append({
+                            "section_number": len(sections) + 1,
+                            "start_page": current_start_page,
+                            "text": "\n".join(current_section).strip()
+                        })
+
+                    current_section = [clean_line]
+                    current_start_page = page_number
+
+                else:
+
+                    # Ignore anything before the first separator.
+                    if current_section:
+                        current_section.append(clean_line)
+
+        # ================================================
+        # SAVE FINAL SECTION
+        # ================================================
+
+        if current_section:
+            sections.append({
+                "section_number": len(sections) + 1,
+                "start_page": current_start_page,
+                "text": "\n".join(current_section).strip()
+            })
+
+    return sections
 
 
+# ================================================
+# MAIN
+# ================================================
 
-# Example usage
 if __name__ == "__main__":
-    pdf_path = ask_save_path()
-    # gui here to get where data starts from user and keyword to split by
-    CONNECTOR_DATA_START = 11
-    CONNECTOR_SEPARATION_KEYWORD = "Table"
-    structured_pdf_text = extract_data_by_keywords(pdf_path, CONNECTOR_SEPARATION_KEYWORD)
-    print(structured_pdf_text)
-   
+
+    pdf_path = ask_pdf_path()
+
+    if pdf_path is None:
+        raise Exception("No PDF selected")
+
+    start_page, separator_keyword = ask_extraction_settings()
+
+    if start_page is None or separator_keyword is None:
+        raise Exception("Extraction settings cancelled")
+
+    sections = extract_sections_by_keyword(pdf_path, start_page, separator_keyword)
+
+    print("")
+    print("============================================================")
+    print("PDF EXTRACTION COMPLETE")
+    print("============================================================")
+    print("START PAGE:", start_page)
+    print("SEPARATOR:", repr(separator_keyword))
+    print("SECTIONS FOUND:", len(sections))
+    print("============================================================")
+
+    for section in sections:
+
+        print("")
+        print("")
+        print("############################################################")
+        print("SECTION:", section["section_number"])
+        print("START PAGE:", section["start_page"])
+        print("############################################################")
+        print(section["text"])
