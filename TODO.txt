@@ -5,138 +5,89 @@ from tkinter import simpledialog
 
 
 # ================================================
-# SELECT PDF
+# HELPER FXNS
 # ================================================
-
 def ask_pdf_path():
     root = tk.Tk()
     root.withdraw()
     root.attributes("-topmost", True)
     root.update()
-
     pdf_path = filedialog.askopenfilename(filetypes=[("PDF Files", "*.pdf"), ("All Files", "*.*")])
-
     root.destroy()
-
     if not pdf_path:
         return None
-
     return pdf_path
-
-
-# ================================================
-# GET EXTRACTION SETTINGS
-# ================================================
 
 def ask_extraction_settings():
     root = tk.Tk()
     root.withdraw()
     root.attributes("-topmost", True)
     root.update()
-
     start_page = simpledialog.askinteger("PDF Start Page", "Enter the page where connector data begins:", minvalue=1, parent=root)
-
     if start_page is None:
         root.destroy()
         return None, None
-
     separator_keyword = simpledialog.askstring("Section Separator", "Enter the keyword that starts each connector section:", parent=root)
-
     root.destroy()
-
     if separator_keyword is None:
         return None, None
-
     separator_keyword = separator_keyword.strip()
-
     if separator_keyword == "":
         return None, None
-
     return start_page, separator_keyword
-
-
-# ================================================
-# EXTRACT PDF SECTIONS
-# ================================================
 
 def extract_sections_by_keyword(pdf_path, start_page, separator_keyword):
     sections = []
     current_section = []
     current_start_page = None
-
     keyword_lower = separator_keyword.lower()
-
     with pdfplumber.open(pdf_path) as pdf:
-
         if start_page > len(pdf.pages):
             raise ValueError(f"Start page {start_page} is greater than PDF page count {len(pdf.pages)}")
-
         for page_number in range(start_page, len(pdf.pages) + 1):
-
             page = pdf.pages[page_number - 1]
             text = page.extract_text()
-
             if not text:
                 continue
-
             lines = text.splitlines()
-
             for line in lines:
-
                 clean_line = line.strip()
 
-                # ================================================
-                # NEW SECTION
-                # ================================================
-
                 if keyword_lower in clean_line.lower():
-
                     if current_section:
                         sections.append({
                             "section_number": len(sections) + 1,
                             "start_page": current_start_page,
                             "text": "\n".join(current_section).strip()
                         })
-
                     current_section = [clean_line]
                     current_start_page = page_number
-
                 else:
-
                     # Ignore anything before the first separator.
                     if current_section:
                         current_section.append(clean_line)
-
-        # ================================================
-        # SAVE FINAL SECTION
-        # ================================================
-
         if current_section:
             sections.append({
                 "section_number": len(sections) + 1,
                 "start_page": current_start_page,
                 "text": "\n".join(current_section).strip()
             })
-
     return sections
 
 
-# ================================================
-# MAIN
-# ================================================
-
+ 
 if __name__ == "__main__":
+    pdf_path = "C:/Users/conner.hughes/OneDrive/Documents/Python/Block Maker/CI42471-001 RevB EICD.pdf"
+    start_page = 11
+    separator_keyword = "Table"
 
-    pdf_path = ask_pdf_path()
-
-    if pdf_path is None:
-        raise Exception("No PDF selected")
-
-    start_page, separator_keyword = ask_extraction_settings()
-
-    if start_page is None or separator_keyword is None:
-        raise Exception("Extraction settings cancelled")
-
+    # pdf_path = ask_pdf_path()
+    # if pdf_path is None:
+    #     raise Exception("No PDF selected")
+    # start_page, separator_keyword = ask_extraction_settings()
+    # if start_page is None or separator_keyword is None:
+    #     raise Exception("Extraction settings cancelled")
+    
     sections = extract_sections_by_keyword(pdf_path, start_page, separator_keyword)
 
     print("")
@@ -149,7 +100,6 @@ if __name__ == "__main__":
     print("============================================================")
 
     for section in sections:
-
         print("")
         print("")
         print("############################################################")
