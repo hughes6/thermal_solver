@@ -1,155 +1,126 @@
-def write_pdf_data_to_excel(source_excel_path, output_excel_path, pdf_connectors, pdf_roles, connector_info):
-    import win32com.client as win32
-
-    total_start = time.perf_counter()
-
-    source_excel_path = os.path.abspath(source_excel_path)
-    output_excel_path = os.path.abspath(output_excel_path)
-
-    if source_excel_path.lower() != output_excel_path.lower():
-        shutil.copy2(source_excel_path, output_excel_path)
-
-    jobs = build_excel_write_jobs(pdf_connectors, pdf_roles, connector_info)
-
-    excel = win32.DispatchEx("Excel.Application")
-
-    excel.Visible = False
-    excel.DisplayAlerts = False
-    excel.ScreenUpdating = False
-    excel.EnableEvents = False
-    excel.AskToUpdateLinks = False
-
-    workbook = None
-    previous_calculation = None
-    calculation_changed = False
-
-    try:
-        open_start = time.perf_counter()
-
-        workbook = excel.Workbooks.Open(output_excel_path, UpdateLinks=0, ReadOnly=False, AddToMru=False)
-
-        worksheet = workbook.Worksheets(TARGET_SHEET_NAME)
-
-        open_elapsed = time.perf_counter() - open_start
-
-        print(f"EXCEL OPEN TIME: {open_elapsed:.2f} SECONDS")
-
-        # ================================================
-        # SET CALCULATION MODE AFTER WORKBOOK IS OPEN
-        # ================================================
-        try:
-            previous_calculation = excel.Calculation
-            excel.Calculation = XL_CALCULATION_MANUAL
-            calculation_changed = True
-            print("EXCEL CALCULATION MODE: MANUAL")
-        except Exception as e:
-            print("WARNING: COULD NOT SET EXCEL CALCULATION TO MANUAL:", repr(e))
-            calculation_changed = False
-
-        print("")
-        print("============================================================")
-        print("EXCEL CONNECTOR CHECK")
-        print("============================================================")
-        print("EXCEL CONNECTORS:", len(connector_info))
-        print("PDF CONNECTORS:", len(pdf_connectors))
-        print("============================================================")
-
-        write_start = time.perf_counter()
-
-        written_blocks = 0
-        written_pin_rows = 0
-
-        for job in jobs:
-            print("")
-            print("BLOCK:", job["block_index"] + 1, "EXCEL CONNECTOR:", repr(job["excel_name"]), "PDF KEY:", repr(job["canonical"]))
-
-            if job["skip"]:
-                print("SKIPPED -", job["reason"], ":", job["excel_name"])
-                continue
-
-            destination_range = worksheet.Range(worksheet.Cells(job["first_row"], job["first_column"]), worksheet.Cells(job["last_row"], job["last_column"]))
-
-            destination_range.Value2 = job["matrix"]
-
-            written_blocks += 1
-            written_pin_rows += job["pin_count"]
-
-            print("WRITTEN PINS:", job["pin_count"], "EXPECTED:", job["expected_pins"], "MISSING:", job["missing"])
-
-        write_elapsed = time.perf_counter() - write_start
-
-        print(f"BULK EXCEL WRITE TIME: {write_elapsed:.2f} SECONDS")
-
-        # ================================================
-        # RECALCULATION
-        # ================================================
-        if RECALCULATE_AFTER_WRITE:
-            calc_start = time.perf_counter()
-
-            try:
-                if previous_calculation is not None:
-                    excel.Calculation = previous_calculation
-
-                excel.Calculate()
-
-                calc_elapsed = time.perf_counter() - calc_start
-
-                print(f"EXCEL RECALCULATION TIME: {calc_elapsed:.2f} SECONDS")
-
-            except Exception as e:
-                print("WARNING: EXCEL RECALCULATION FAILED:", repr(e))
-
-        else:
-            try:
-                workbook.ForceFullCalculation = True
-                workbook.FullCalculationOnLoad = True
-            except Exception as e:
-                print("WARNING: COULD NOT SET FULL CALCULATION ON LOAD:", repr(e))
-
-        # ================================================
-        # SAVE
-        # ================================================
-        save_start = time.perf_counter()
-
-        workbook.Save()
-
-        save_elapsed = time.perf_counter() - save_start
-
-        print(f"EXCEL SAVE TIME: {save_elapsed:.2f} SECONDS")
-
-        print("")
-        print("============================================================")
-        print("EXCEL WRITE COMPLETE")
-        print("============================================================")
-        print("OUTPUT:", output_excel_path)
-        print("BLOCKS WRITTEN:", written_blocks)
-        print("PIN ROWS WRITTEN:", written_pin_rows)
-        print("============================================================")
-
-    finally:
-        if calculation_changed and previous_calculation is not None:
-            try:
-                excel.Calculation = previous_calculation
-            except Exception:
-                pass
-
-        try:
-            excel.EnableEvents = True
-            excel.ScreenUpdating = True
         except Exception:
             pass
-
-        if workbook is not None:
-            try:
-                workbook.Close(SaveChanges=False)
-            except Exception:
-                pass
-
-        try:
-            excel.Quit()
-        except Exception:
-            pass
-
     total_elapsed = time.perf_counter() - total_start
-
     print(f"TOTAL EXCEL WRITE PHASE: {total_elapsed:.2f} SECONDS")
+
+
+# ================================================
+# MAIN
+# ================================================
+if __name__ == "__main__":
+    overall_start = time.perf_counter()
+
+    # ================================================
+    # CURRENT TEST VALUES
+    # ================================================
+    pdf_path = "C:/Users/conner.hughes/OneDrive/Documents/Python/Block Maker/CI42471-001 RevB EICD.pdf"
+    start_page = 11
+    separator_keyword = "Table"
+
+    # ================================================
+    # USE THESE WHEN READY FOR FULL GUI
+    # ================================================
+    # pdf_path = ask_pdf_path()
+    # if pdf_path is None:
+    #     raise Exception("No PDF selected")
+    # start_page, separator_keyword = ask_extraction_settings()
+    # if start_page is None or separator_keyword is None:
+    #     raise Exception("Extraction settings cancelled")
+
+    column_names = ask_column_names(DEFAULT_COLUMN_NAMES)
+    if column_names is None:
+        raise Exception("Column setup cancelled")
+
+    pdf_roles = ask_pdf_column_roles(column_names)
+    if pdf_roles is None:
+        raise Exception("PDF column role setup cancelled")
+
+    print("")
+    print("============================================================")
+    print("COLUMN NAMES")
+    print("============================================================")
+    for index, column_name in enumerate(column_names, start=1):
+        print(index, column_name)
+    print("============================================================")
+
+    print("")
+    print("============================================================")
+    print("PDF COLUMN ROLES")
+    print("============================================================")
+    print("CONNECTOR:", pdf_roles["connector"])
+    print("PIN:", pdf_roles["pin"])
+    print("LOCAL SIGNAL:", pdf_roles["signal"])
+    print("IN/OUT:", pdf_roles["direction"])
+    print("============================================================")
+
+    pdf_cache = load_pdf_cache(pdf_path, start_page)
+    sections = extract_sections_by_keyword(pdf_cache, separator_keyword)
+
+    print("")
+    print("============================================================")
+    print("PDF EXTRACTION COMPLETE")
+    print("============================================================")
+    print("START PAGE:", start_page)
+    print("SEPARATOR:", repr(separator_keyword))
+    print("SECTIONS FOUND:", len(sections))
+    print("============================================================")
+
+    if PRINT_RAW_SECTIONS:
+        for section in sections:
+            print("")
+            print("############################################################")
+            print("SECTION:", section["section_number"])
+            print("START PAGE:", section["start_page"])
+            print("############################################################")
+            print(section["text"])
+
+    structured_rows = extract_structured_rows(pdf_cache, separator_keyword, column_names)
+
+    print("")
+    print("============================================================")
+    print("STRUCTURED TABLE EXTRACTION COMPLETE")
+    print("============================================================")
+    print("ROWS FOUND:", len(structured_rows))
+    print("============================================================")
+
+    good_rows, suspicious_rows = validate_structured_rows(structured_rows, pdf_roles)
+
+    print("")
+    print("============================================================")
+    print("VALIDATION")
+    print("============================================================")
+    print("GOOD ROWS:", len(good_rows))
+    print("SUSPICIOUS ROWS:", len(suspicious_rows))
+    print("============================================================")
+
+    if suspicious_rows:
+        print("")
+        print("ROWS REQUIRING REVIEW")
+        for item in suspicious_rows:
+            print("PROBLEMS:", item["problems"])
+            print("ROW:", item["row"])
+
+    if PRINT_STRUCTURED_ROWS:
+        print_structured_rows(good_rows, column_names)
+
+    pdf_connectors = build_pdf_connector_map(good_rows, pdf_roles)
+
+    excel_path = ask_excel_path()
+    if excel_path is None:
+        print_connector_pin_diagnostics(pdf_connectors, pdf_roles)
+        raise Exception("No Excel workbook selected")
+
+    connector_info, expected_counts = read_excel_connector_info(excel_path)
+    print_connector_pin_diagnostics(pdf_connectors, pdf_roles, expected_counts)
+
+    output_excel_path = ask_output_excel_path(excel_path)
+    if output_excel_path is None:
+        raise Exception("No Excel output path selected")
+
+    write_pdf_data_to_excel(excel_path, output_excel_path, pdf_connectors, pdf_roles, connector_info)
+
+    overall_elapsed = time.perf_counter() - overall_start
+    print("")
+    print("============================================================")
+    print("TOTAL SCRIPT TIME:", round(overall_elapsed, 2), "SECONDS")
+    print("============================================================")
