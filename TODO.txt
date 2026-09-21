@@ -1,1 +1,17 @@
+T="$(find processor0 -mindepth 1 -maxdepth 1 -type d -printf '%f\n' | awk '/^[0-9]+([.][0-9]+)?([eE][-+]?[0-9]+)?$/' | sort -g | tail -1)"
+echo "Repairing metadata at t=$T"
+
+for r in 0 1 2 3; do
+  d="processor$r/$T/uniform"
+  mkdir -p "$d"
+  printf 'FoamFile\n{\n    version     2.0;\n    format      ascii;\n    class       dictionary;\n    location    "%s/uniform";\n    object      time;\n}\n\nvalue           %s;\ndeltaT          0.0001089;\ndeltaT0         0.0001089;\nindex           0;\n' "$T" "$T" > "$d/time"
+done
+
+for r in 0 1 2 3; do
+  ls -l "processor$r/$T/uniform/time"
+done
+
+
+
+
 OMPI_MCA_hwloc_base_use_hwthreads_as_cpus=1 THERMAL_SOLVER_OPENFOAM_ENV_READY=1 OPENFOAM_LAUNCHER=env bash ./run_parallel.sh 4 --multirate 30
