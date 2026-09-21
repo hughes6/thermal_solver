@@ -13,7 +13,7 @@ def parse_table():
     delimiter_name = ""
 
     # =========================================
-    # REAL EXCEL / TAB-SEPARATED DATA
+    # REAL EXCEL / TAB-SEPARATED TABLE
     # =========================================
 
     if "\t" in input_text:
@@ -23,7 +23,7 @@ def parse_table():
             rows.append(line.split("\t"))
 
     # =========================================
-    # CSV DATA
+    # CSV
     # =========================================
 
     elif "," in input_text:
@@ -35,20 +35,30 @@ def parse_table():
             rows.append(row)
 
     # =========================================
-    # PDF / SPACE-ALIGNED TABLE
+    # FLATTENED PDF WIRING TABLE
     #
-    # Split columns only when there are TWO OR
-    # MORE spaces between pieces of text.
-    #
-    # This prevents:
-    #
-    # +28V RTN LVPS1
-    #
-    # from becoming 3 separate columns.
+    # Detect the table by its known headings.
+    # =========================================
+
+    elif (
+        manual_columns == 9
+        and "MNEMONIC" in input_text.upper()
+        and "DESCRIPTION" in input_text.upper()
+        and "COMMENT" in input_text.upper()
+    ):
+
+        rows = parse_flat_pdf_wiring_table(input_text)
+        delimiter_name = "PDF WIRING TABLE"
+
+        if len(rows) > 0:
+            return rows, 9, delimiter_name
+
+    # =========================================
+    # SPACE-ALIGNED TABLE
     # =========================================
 
     elif manual_columns is not None and manual_columns > 1:
-        delimiter_name = "PDF / SPACED TABLE"
+        delimiter_name = "SPACED TABLE"
 
         for line in input_text.split("\n"):
 
@@ -79,6 +89,7 @@ def parse_table():
         column_count = 0
 
         for row in rows:
+
             if len(row) > column_count:
                 column_count = len(row)
 
@@ -106,8 +117,148 @@ def parse_table():
 
 
 
+def parse_flat_pdf_wiring_table(input_text):
+    lines = []
 
+    for line in input_text.split("\n"):
+        line = line.strip()
 
+        if line != "":
+            lines.append(line)
 
+    if len(lines) == 0:
+        return []
 
+    # Find where actual connector data starts.
+    # A row normally begins with something like:
+    #
+    # J1
+    # 1
+    #
+    # or
+    #
+    # SCP-J1
+    # 1
 
+    row_starts = []
+
+    for index in range(len(lines) - 1):
+
+        current_value = lines[index]
+        next_value = lines[index + 1]
+
+        looks_like_designator = re.fullmatch(r"[A-Za-z0-9_#./-]+", current_value) is not None
+        contains_letter = re.search(r"[A-Za-z]", current_value) is not None
+        contains_number = re.search(r"\d", current_value) is not None
+        next_is_pin_number = re.fullmatch(r"\d+", next_value) is not None
+
+        if looks_like_designator and contains_letter and contains_number and next_is_pin_number:
+            row_starts.append(index)
+
+    if len(row_starts) == 0:
+        return []
+
+    rows = []
+
+    # Build our own clean header.
+    rows.append([
+        "FROM DES",
+        "FROM POSN",
+        "TO DES",
+        "TO POSN",
+        "MNEMONIC",
+        "DESCRIPTION",
+        "WIRE CODE",
+        "NOTE",
+        "COMMENT"
+    ])
+
+    for row_number in range(len(row_starts)):
+
+        start_index = row_starts[row_number]
+
+        if row_number < len(row_starts) - 1:
+            end_index = row_starts[row_number + 1]
+        else:
+            end_index = len(lines)
+
+        raw_row = lines[start_index:end_index]
+
+        from_des = ""
+        from_posn = ""
+        to_des = ""
+        to_posn = ""
+        mnemonic = ""
+        description = ""
+        wire_code = ""
+        note = ""
+        comment = ""
+
+        if len(raw_row) >= 1:
+            from_des = raw_row[0]
+
+        if len(raw_row) >= 2:
+            from_posn = raw_row[1]
+
+        remaining = raw_row[2:]
+
+        # First remaining value is normally TO DES.
+        if len(remaining) > 0:
+            to_des = remaining[0]
+            remaining = remaining[1:]
+
+        # Detect NOTE.
+        for value in list(remaining):
+
+            upper_value = value.upper()
+
+            if upper_value in ["IN", "OUT", "I/O", "INPUT", "OUTPUT"]:
+                note = value
+                remaining.remove(value)
+                break
+
+        # Detect COMMENT.
+        for value in list(remaining):
+
+            upper_value = value.upper()
+
+            if upper_value in ["SPARE", "N/C", "NC", "UNUSED"]:
+                comment = value
+                remaining.remove(value)
+                break
+
+        # Detect wire code.
+        # Search backward because wire code normally occurs after signal data.
+        for index in range(len(remaining) - 1, -1, -1):
+
+            value = remaining[index]
+
+            if re.fullmatch(r"\d+", value):
+                wire_code = value
+                remaining.pop(index)
+                break
+
+        # Anything remaining now should be signal information.
+        #
+        # First value = mnemonic
+        # Second value = description
+
+        if len(remaining) >= 1:
+            mnemonic = remaining[0]
+
+        if len(remaining) >= 2:
+            description = remaining[1]
+
+        rows.append([
+            from_des,
+            from_posn,
+            to_des,
+            to_posn,
+            mnemonic,
+            description,
+            wire_code,
+            note,
+            comment
+        ])
+
+    return rows
