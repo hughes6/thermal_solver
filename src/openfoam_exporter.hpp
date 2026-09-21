@@ -3264,7 +3264,8 @@ functions
     static void write_solid_fv_options(
         const Mesh& mesh,
         const Mesh::OpenFoamComponentRegion& component,
-        const std::filesystem::path& path) {
+        const std::filesystem::path& path,
+        const bool include_heat_sources=true) {
         std::ofstream output(path);
         require_stream(output,path);
         const std::string region = component_region_name(component);
@@ -3272,7 +3273,8 @@ functions
             output,"dictionary","fvOptions",("constant/"+region).c_str());
         bool wrote_source = false;
         for(const auto& source : mesh.get_openfoam_heat_source_regions()) {
-            if(source.fluid || source.component_id != component.id) continue;
+            if(!include_heat_sources || source.fluid || source.component_id != component.id)
+                continue;
             wrote_source = true;
             const std::string set_name = heat_source_set_name(source);
             output << set_name << "_energy\n{\n"
@@ -3552,6 +3554,20 @@ functions
                 "constant/"+region);
             write_solid_fv_options(
                 mesh,component,case_directory/"constant"/region/"fvOptions");
+            std::filesystem::copy_file(
+                case_directory/"constant"/region/"fvOptions",
+                case_directory/"constant"/region/"fvOptions.fullHeat",
+                std::filesystem::copy_options::overwrite_existing);
+            write_solid_fv_options(
+                mesh,component,
+                case_directory/"constant"/region/"fvOptions.coldFlow",
+                false);
+            // Leave the normal fvOptions file heat-active for backwards
+            // compatibility; the runner opts into coldFlow explicitly.
+            std::filesystem::copy_file(
+                case_directory/"constant"/region/"fvOptions.fullHeat",
+                case_directory/"constant"/region/"fvOptions",
+                std::filesystem::copy_options::overwrite_existing);
             write_solid_region_schemes(
                 case_directory/"system"/region/"fvSchemes",region);
             write_solid_region_solution(
@@ -4043,9 +4059,10 @@ functions
             "    exit 2\n"
             "fi\n"
             "if [[ \"$mode\" != \"run\" && \"$mode\" != \"--warm-start\" "
-                "&& \"$mode\" != \"--multirate\" ]]; then\n"
+                "&& \"$mode\" != \"--multirate\" "
+                "&& \"$mode\" != \"--cold-flow-seed\" ]]; then\n"
             "    echo \"Usage: $0 [processes] "
-                "[--warm-start|--multirate [end-time] "
+                "[--warm-start|--multirate|--cold-flow-seed [end-time] "
                 "[airflow-refresh-interval]]\" >&2\n"
             "    exit 2\n"
             "fi\n"
@@ -4055,7 +4072,7 @@ functions
                   "    exit 2\n"
                   "fi\n"
                 : "if [[ \"$mode\" != \"run\" ]]; then\n"
-                  "    echo \"This export was not configured for --warm-start or --multirate; use conventional run mode.\" >&2\n"
+                  "    echo \"This export was not configured for --warm-start, --multirate, or --cold-flow-seed; use conventional run mode.\" >&2\n"
                   "    exit 2\n"
                   "fi\n") <<
             "if [[ \"$mode\" != \"run\" ]] && { "
@@ -4728,6 +4745,8 @@ functions
                 "fvOptions.fullFan\"\n"
             "flow_only_options=\"$case_dir/constant/fluid/"
                 "fvOptions.flowOnly\"\n"
+            "cold_flow_seed_marker=\"$case_dir/.cold_flow_seed_complete\"\n"
+            "cold_flow_seed_manifest=\"$case_dir/.cold_flow_seed_manifest\"\n"
             "fan_ramp_complete_marker=\"$case_dir/.fan_ramp_complete\"\n"
             "mapped_state_marker=\"$case_dir/.mapped_initial_state\"\n"
             "fan_startup_ramp_enabled="
@@ -4749,6 +4768,40 @@ functions
             "        mkdir -p \"$processor_dir/constant/fluid\"\n"
             "        cp \"$source\" \"$processor_dir/constant/fluid/fvOptions\"\n"
             "    done\n"
+            "}\n"
+            "install_solid_options()\n"
+            "{\n"
+            "    local suffix=\"$1\" source region_dir processor_dir region\n"
+            "    for source in \"$case_dir\"/constant/*/fvOptions.${suffix}; do\n"
+            "        [[ -f \"$source\" ]] || continue\n"
+            "        region_dir=\"${source%/fvOptions.${suffix}}\"\n"
+            "        region=\"${region_dir##*/}\"\n"
+            "        cp \"$source\" \"$region_dir/fvOptions\"\n"
+            "        for processor_dir in \"$case_dir\"/processor[0-9]*; do\n"
+            "            [[ -d \"$processor_dir\" ]] || continue\n"
+            "            mkdir -p \"$processor_dir/constant/$region\"\n"
+            "            cp \"$source\" \"$processor_dir/constant/$region/fvOptions\"\n"
+            "        done\n"
+            "    done\n"
+            "}\n"
+            "restore_full_solid_options()\n"
+            "{\n"
+            "    install_solid_options fullHeat\n"
+            "}\n"
+            "write_cold_flow_seed_manifest()\n"
+            "{\n"
+            "    local seed_time=\"$(latest_processor_restart_time)\"\n"
+            "    local fingerprint_files=() file fingerprint\n"
+            "    for file in \"$case_dir/constant/regionProperties\" \"$case_dir/constant/g\" \"$case_dir/system/decomposeParDict\"; do\n"
+            "        [[ -f \"$file\" ]] && fingerprint_files+=(\"$file\")\n"
+            "    done\n"
+            "    for file in \"$case_dir\"/constant/*/polyMesh/{points,boundary,faces,owner,neighbour}; do\n"
+            "        [[ -f \"$file\" ]] && fingerprint_files+=(\"$file\")\n"
+            "    done\n"
+            "    fingerprint=\"$(for file in \"${fingerprint_files[@]}\"; do sha256sum \"$file\"; done | sha256sum | awk '{print $1}')\"\n"
+            "    { printf 'version 1\\n'; printf 'seed_time %s\\n' \"$seed_time\"; printf 'geometry_sha256 %s\\n' \"$fingerprint\"; printf 'processes %s\\n' \"$processes\"; } > \"${cold_flow_seed_manifest}.tmp.$$\"\n"
+            "    mv -f -- \"${cold_flow_seed_manifest}.tmp.$$\" \"$cold_flow_seed_manifest\"\n"
+            "    touch \"$cold_flow_seed_marker\"\n"
             "}\n"
             "restore_full_fan_options()\n"
             "{\n"
@@ -5217,7 +5270,7 @@ functions
             "}\n\n";
         if(options.use_multirate_thermal) {
             output <<
-                "if [[ \"$mode\" == \"--multirate\" ]]; then\n"
+                "if [[ \"$mode\" == \"--multirate\" || \"$mode\" == \"--cold-flow-seed\" ]]; then\n"
                 "    current=$(latest_processor_restart_time)\n"
                 "    current=\"${current:-0}\"\n"
                 "    if ! awk -v a=\"$current\" -v b=\"$requested_end\" "
@@ -5362,9 +5415,18 @@ functions
                     "\"$initial_exchange_state\" "
                     "\"$initial_physical_settling_marker\" "
                     "\"$mapped_state_marker\"\n"
+                "        if [[ \"$mode\" == \"--cold-flow-seed\" ]]; then\n"
+                "            install_fluid_options \"$flow_only_options\"\n"
+                "            install_solid_options coldFlow\n"
+                "        fi\n"
                 "    fi\n"
                 "    if [[ ! -f \"$initial_convergence_marker\" ]]; then\n"
-                "        if [[ -f \"$mapped_state_marker\" ]]; then\n"
+                "        if [[ \"$mode\" == \"--cold-flow-seed\" ]]; then\n"
+                "            fan_options_source=\"$flow_only_options\"\n"
+                "            install_fluid_options \"$flow_only_options\"\n"
+                "            install_solid_options coldFlow\n"
+                "            echo \"COLD-FLOW-SEED mode: fluid and solid heat sources disabled; developing ambient airflow only.\"\n"
+                "        elif [[ -f \"$mapped_state_marker\" ]]; then\n"
                 "            fan_options_source=\"$full_fan_options\"\n"
                 "            restore_full_fan_options\n"
                 "            echo \"Mapped initial airflow retains full fluid heat sources.\"\n"
@@ -6836,13 +6898,17 @@ functions
                     "                    rm -f \"$initial_pending_marker\" "
                         "\"$mapped_state_marker\" \"$initial_exchange_state\" "
                         "\"$initial_physical_settling_marker\"\n"
-                    "                    fan_options_source="
-                        "\"$full_fan_options\"\n"
-                    "                    restore_full_fan_options\n"
-                    "                    echo \"Restored full fluid heat sources "
-                        "for thermal evolution.\"\n"
-                    "                    touch "
-                        "\"$initial_convergence_marker\"\n"
+                    "                    if [[ \"$mode\" == \"--cold-flow-seed\" ]]; then\n"
+                    "                        install_fluid_options \"$flow_only_options\"\n"
+                    "                        install_solid_options coldFlow\n"
+                    "                        write_cold_flow_seed_manifest\n"
+                    "                        echo \"Cold-flow seed complete at t=$current s; no thermal stage will be started.\"\n"
+                    "                    else\n"
+                    "                        fan_options_source=\"$full_fan_options\"\n"
+                    "                        restore_full_fan_options\n"
+                    "                        echo \"Restored full fluid heat sources for thermal evolution.\"\n"
+                    "                    fi\n"
+                    "                    touch \"$initial_convergence_marker\"\n"
                     "                    return 0\n"
                     "                fi\n"
                     "            fi\n"
@@ -6887,6 +6953,16 @@ functions
                     "        fi\n"
                     "    else\n"
                     "        normalize_airflow_refresh_journal || exit $?\n"
+                    "    fi\n"
+                    "    if [[ \"$mode\" == \"--cold-flow-seed\" ]]; then\n"
+                    "        if [[ ! -f \"$initial_convergence_marker\" ]]; then\n"
+                    "            echo \"Cold-flow seed airflow did not reach an accepted checkpoint; no thermal branch was created.\" >&2\n"
+                    "            exit 12\n"
+                    "        fi\n"
+                    "        write_cold_flow_seed_manifest\n"
+                    "        summary \"cold_flow_seed_complete time=$current processes=$processes\"\n"
+                    "        echo \"Cold-flow seed complete at t=$current s. Reuse this case with the branch-import tool; no thermal stage was started.\"\n"
+                    "        exit 0\n"
                     "    fi\n"
                     "    if [[ -f \"$refresh_pending_marker\" ]] && "
                         "awk -v a=\"$current\" -v b=\"$requested_end\" "

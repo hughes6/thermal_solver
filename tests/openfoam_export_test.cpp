@@ -676,6 +676,18 @@ int main(int argc, char** argv) {
         case_path/"constant"/"test_heater_0"/"thermophysicalProperties"));
     assert(std::filesystem::is_regular_file(
         case_path/"constant"/"test_heater_0"/"fvOptions"));
+    assert(std::filesystem::is_regular_file(
+        case_path/"constant"/"test_heater_0"/"fvOptions.fullHeat"));
+    assert(std::filesystem::is_regular_file(
+        case_path/"constant"/"test_heater_0"/"fvOptions.coldFlow"));
+    {
+        std::ifstream cold_options(
+            case_path/"constant"/"test_heater_0"/"fvOptions.coldFlow");
+        std::ostringstream text;
+        text << cold_options.rdbuf();
+        assert(text.str().find("test_heater_0_energy") == std::string::npos);
+        assert(text.str().find("No stamped heat sources") != std::string::npos);
+    }
     {
         std::ifstream fluid_options(case_path/"constant"/"fluid"/"fvOptions");
         std::ostringstream text;
@@ -705,6 +717,10 @@ int main(int argc, char** argv) {
         assert(text.str().find(
             "Initial airflow uses fans and vents with fluid heat sources disabled.") !=
                std::string::npos);
+        assert(text.str().find("--cold-flow-seed") != std::string::npos);
+        assert(text.str().find("install_solid_options coldFlow") != std::string::npos);
+        assert(text.str().find(".cold_flow_seed_complete") != std::string::npos);
+        assert(text.str().find("Cold-flow seed complete") != std::string::npos);
         assert(text.str().find(
             "Multirate end time $requested_end must be greater than the latest "
             "processor checkpoint $current; no airflow or thermal stage was run.") !=
