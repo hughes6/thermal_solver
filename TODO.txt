@@ -1,5 +1,403 @@
-bash -c 'stamp=$(date +%Y%m%d-%H%M%S); for d in processor0/*; do t=${d##*/}; [[ "$t" =~ ^[0-9]+([.][0-9]+)?$ ]] || continue; [[ -f "$d/uniform/time" && ! -f "$d/fluid/p" ]] || continue; echo "Quarantining incomplete time: $t"; for r in 0 1 2 3; do src="processor$r/$t"; [[ -d "$src" ]] && mv -- "$src" "${src}.incomplete-$stamp"; done; done'
+def normalize_pdf_line(line):
+    line = line.replace("\t", " ")
+    line = re.sub(r"\s+", " ", line)
+    return line.strip()
 
 
+def looks_like_wiring_row(line):
+    line = normalize_pdf_line(line)
 
-bash -c 'T=2.7399999999997262; END=2.740108899999726; foamDictionary system/controlDict -entry startFrom -set latestTime; foamDictionary system/controlDict -entry stopAt -set endTime; foamDictionary system/controlDict -entry endTime -set "$END"; foamDictionary system/controlDict -entry adjustTimeStep -set false; foamDictionary system/controlDict -entry deltaT -set 0.0001089; foamDictionary system/controlDict -entry maxDeltaT -set 0.0001089; foamDictionary system/controlDict -entry writeControl -set timeStep; foamDictionary system/controlDict -entry writeInterval -set 1; OMPI_MCA_hwloc_base_use_hwthreads_as_cpus=1 mpirun -np 4 semiFrozenChtMultiRegionFoam -case "$PWD" -parallel'
+    if line == "":
+        return False
+
+    match = re.match(r"^(\S+)\s+(\d+)\s+(\S+)(?:\s+.*)?$", line)
+
+    if match is None:
+        return False
+
+    designator = match.group(1)
+
+    # Require something connector-like such as J7, P1, SCP-J1, etc.
+    if re.search(r"[A-Za-z]", designator) is None:
+        return False
+
+    if re.search(r"\d", designator) is None:
+        return False
+
+    return True
+
+
+def is_pdf_junk_line(line):
+    text = normalize_pdf_line(line)
+    upper_text = text.upper()
+
+    if text == "":
+        return True
+
+    if re.fullmatch(r"PAGE\s+\d+\s+OF\s+\d+", upper_text):
+        return True
+
+    if re.fullmatch(r"\d+\s+OF\s+\d+", upper_text):
+        return True
+
+    if upper_text == "WIRE CODES":
+        return True
+
+    if upper_text == "FROM":
+        return True
+
+    if upper_text == "TO":
+        return True
+
+    if upper_text == "SIGNAL NAME":
+        return True
+
+    if upper_text == "MNEMONIC":
+        return True
+
+    if upper_text == "DESCRIPTION":
+        return True
+
+    if upper_text == "WIRE":
+        return True
+
+    if upper_text == "CODE":
+        return True
+
+    if upper_text == "WIRE CODE":
+        return True
+
+    if upper_text == "NOTE":
+        return True
+
+    if upper_text == "COMMENT":
+        return True
+
+    if upper_text.startswith("DES POSN DES POSN"):
+        return True
+
+    if upper_text.startswith("CODE NOTE COMMENT"):
+        return True
+
+    return False
+
+
+def looks_like_flat_pdf_wiring_table(input_text):
+    row_count = 0
+
+    for line in input_text.split("\n"):
+        if looks_like_wiring_row(line):
+            row_count += 1
+
+    manual_columns = get_manual_column_count()
+
+    if manual_columns == 9 and row_count >= 1:
+        return True
+
+    if row_count >= 2:
+        return True
+
+    return False
+
+
+def parse_wiring_record(record_lines):
+    first_line = normalize_pdf_line(record_lines[0])
+
+    match = re.match(r"^(\S+)\s+(\d+)\s+(\S+)(?:\s+(.*))?$", first_line)
+
+    if match is None:
+        return None
+
+    from_des = match.group(1)
+    from_posn = match.group(2)
+    to_des = match.group(3)
+
+    first_remainder = match.group(4)
+
+    parts = []
+
+    if first_remainder is not None:
+        first_remainder = first_remainder.strip()
+
+        if first_remainder != "":
+            parts.append(first_remainder)
+
+    for line in record_lines[1:]:
+        line = normalize_pdf_line(line)
+
+        if line != "":
+            parts.append(line)
+
+    combined = " ".join(parts).strip()
+
+    to_posn = ""
+    mnemonic = ""
+    description = ""
+    wire_code = ""
+    note = ""
+    comment = ""
+
+    if combined == "":
+        return [
+            from_des,
+            from_posn,
+            to_des,
+            to_posn,
+            mnemonic,
+            description,
+            wire_code,
+            note,
+            comment
+        ]
+
+    tokens = combined.split()
+
+    # =========================================
+    # COMMENT
+    # =========================================
+
+    comment_values = {
+        "SPARE",
+        "UNUSED",
+        "NC",
+        "N/C"
+    }
+
+    cleaned = []
+
+    for token in tokens:
+        if token.upper() in comment_values:
+            if comment == "":
+                comment = token
+        else:
+            cleaned.append(token)
+
+    tokens = cleaned
+
+    # =========================================
+    # NOTE
+    # =========================================
+
+    note_values = {
+        "IN",
+        "OUT",
+        "IN/OUT",
+        "I/O",
+        "INPUT",
+        "OUTPUT"
+    }
+
+    cleaned = []
+
+    for token in tokens:
+        if token.upper() in note_values:
+            if note == "":
+                note = token
+        else:
+            cleaned.append(token)
+
+    tokens = cleaned
+
+    # =========================================
+    # OPTIONAL TO POSN
+    # =========================================
+
+    if len(tokens) >= 2:
+        if re.fullmatch(r"\d+", tokens[0]):
+            to_posn = tokens.pop(0)
+
+    # =========================================
+    # WIRE CODE
+    #
+    # Only remove a numeric token near the END.
+    # Do not grab numbers inside descriptions
+    # like "ABI RETURN GROUP 12".
+    # =========================================
+
+    if len(tokens) >= 2:
+        last_token = tokens[-1]
+
+        if re.fullmatch(r"\d+", last_token):
+            wire_code = last_token
+            tokens.pop()
+
+    # =========================================
+    # SIGNAL
+    # =========================================
+
+    if len(tokens) >= 1:
+        mnemonic = tokens[0]
+
+    if len(tokens) >= 2:
+        description = " ".join(tokens[1:])
+
+    return [
+        from_des,
+        from_posn,
+        to_des,
+        to_posn,
+        mnemonic,
+        description,
+        wire_code,
+        note,
+        comment
+    ]
+
+
+def parse_flat_pdf_wiring_table(input_text):
+    raw_lines = input_text.split("\n")
+
+    records = []
+    current_record = []
+
+    for raw_line in raw_lines:
+        line = normalize_pdf_line(raw_line)
+
+        if is_pdf_junk_line(line):
+            continue
+
+        if looks_like_wiring_row(line):
+
+            if len(current_record) > 0:
+                records.append(current_record)
+
+            current_record = [line]
+
+        else:
+
+            if len(current_record) > 0:
+                current_record.append(line)
+
+    if len(current_record) > 0:
+        records.append(current_record)
+
+    rows = []
+
+    rows.append([
+        "FROM DES",
+        "FROM POSN",
+        "TO DES",
+        "TO POSN",
+        "MNEMONIC",
+        "DESCRIPTION",
+        "WIRE CODE",
+        "NOTE",
+        "COMMENT"
+    ])
+
+    for record in records:
+        parsed_row = parse_wiring_record(record)
+
+        if parsed_row is not None:
+            rows.append(parsed_row)
+
+    return rows
+
+
+def parse_table():
+    input_text = input_box.get("1.0", "end-1c")
+
+    if input_text == "":
+        return [], 0, "NONE"
+
+    input_text = input_text.replace("\r\n", "\n")
+    input_text = input_text.replace("\r", "\n")
+
+    manual_columns = get_manual_column_count()
+
+    rows = []
+    delimiter_name = ""
+
+    # =========================================
+    # IMPORTANT:
+    # DETECT PDF WIRING TABLE FIRST
+    #
+    # PDF clipboard data may contain tabs even
+    # when it is NOT a true tabular structure.
+    # =========================================
+
+    if looks_like_flat_pdf_wiring_table(input_text):
+        rows = parse_flat_pdf_wiring_table(input_text)
+
+        if len(rows) > 1:
+            return rows, 9, "PDF WIRING TABLE"
+
+    # =========================================
+    # TRUE TAB-SEPARATED DATA
+    # =========================================
+
+    if "\t" in input_text:
+        delimiter_name = "TAB"
+
+        for line in input_text.split("\n"):
+            rows.append(line.split("\t"))
+
+    # =========================================
+    # CSV
+    # =========================================
+
+    elif "," in input_text:
+        delimiter_name = "COMMA"
+
+        reader = csv.reader(io.StringIO(input_text))
+
+        for row in reader:
+            rows.append(row)
+
+    # =========================================
+    # GENERIC SPACE TABLE
+    # =========================================
+
+    elif manual_columns is not None and manual_columns > 1:
+        delimiter_name = "SPACED TABLE"
+
+        for line in input_text.split("\n"):
+
+            if line.strip() == "":
+                continue
+
+            row = re.split(r" {2,}", line.strip())
+
+            rows.append(row)
+
+    # =========================================
+    # SINGLE COLUMN
+    # =========================================
+
+    else:
+        delimiter_name = "LINES"
+
+        for line in input_text.split("\n"):
+            rows.append([line])
+
+    # =========================================
+    # COLUMN COUNT
+    # =========================================
+
+    if manual_columns is not None:
+        column_count = manual_columns
+    else:
+        column_count = 0
+
+        for row in rows:
+            if len(row) > column_count:
+                column_count = len(row)
+
+    # =========================================
+    # NORMALIZE WIDTH
+    # =========================================
+
+    normalized_rows = []
+
+    for row in rows:
+        normalized_row = list(row)
+
+        while len(normalized_row) < column_count:
+            normalized_row.append("")
+
+        if len(normalized_row) > column_count:
+            normalized_row = normalized_row[:column_count]
+
+        normalized_rows.append(normalized_row)
+
+    return normalized_rows, column_count, delimiter_name
