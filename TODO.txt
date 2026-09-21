@@ -11,13 +11,13 @@ detected_column_count = 0
 
 
 # =========================================
-# MAIN NUMBER FORMATTER
+# NUMBER FORMATTER
 # =========================================
 
 def convert():
     global current_count
 
-    input_text = input_box.get("1.0", tk.END)
+    input_text = input_box.get("1.0", "end-1c")
 
     values = input_text.split()
     values = [x for x in values if x.isdigit()]
@@ -30,29 +30,261 @@ def convert():
     current_count = len(values)
 
     count_label.config(text=f"Items: {current_count}")
+    status_label.config(text="Number conversion complete.")
 
+
+# =========================================
+# TABLE FUNCTIONS
+# =========================================
+
+def get_manual_column_count():
+    value = column_count_entry.get().strip()
+
+    if value == "":
+        return None
+
+    try:
+        column_count = int(value)
+    except ValueError:
+        return None
+
+    if column_count <= 0:
+        return None
+
+    return column_count
+
+
+def parse_table():
+    input_text = input_box.get("1.0", "end-1c")
+
+    if input_text == "":
+        return [], 0, "NONE"
+
+    input_text = input_text.replace("\r\n", "\n")
+    input_text = input_text.replace("\r", "\n")
+
+    manual_columns = get_manual_column_count()
+
+    rows = []
+    delimiter_name = ""
+
+    # Excel copied data
+    if "\t" in input_text:
+        delimiter_name = "TAB"
+
+        for line in input_text.split("\n"):
+            rows.append(line.split("\t"))
+
+    # CSV data
+    elif "," in input_text:
+        delimiter_name = "COMMA"
+
+        reader = csv.reader(io.StringIO(input_text))
+
+        for row in reader:
+            rows.append(row)
+
+    # Manual whitespace mode
+    elif manual_columns is not None and manual_columns > 1:
+        delimiter_name = "MANUAL"
+
+        tokens = input_text.split()
+
+        for index in range(0, len(tokens), manual_columns):
+            row = tokens[index:index + manual_columns]
+
+            while len(row) < manual_columns:
+                row.append("")
+
+            rows.append(row)
+
+    # Single-column data
+    else:
+        delimiter_name = "LINES"
+
+        for line in input_text.split("\n"):
+            rows.append([line])
+
+    if manual_columns is not None:
+        column_count = manual_columns
+    else:
+        column_count = 0
+
+        for row in rows:
+            if len(row) > column_count:
+                column_count = len(row)
+
+    normalized_rows = []
+
+    for row in rows:
+        normalized_row = list(row)
+
+        while len(normalized_row) < column_count:
+            normalized_row.append("")
+
+        if len(normalized_row) > column_count:
+            normalized_row = normalized_row[:column_count]
+
+        normalized_rows.append(normalized_row)
+
+    return normalized_rows, column_count, delimiter_name
+
+
+def detect_table():
+    global detected_table
+    global detected_column_count
+
+    rows, column_count, delimiter_name = parse_table()
+
+    detected_table = rows
+    detected_column_count = column_count
+
+    if len(rows) == 0:
+        column_selector["values"] = []
+        column_selector.set("")
+        status_label.config(text="No table data found.")
+        return
+
+    column_choices = []
+
+    for index in range(column_count):
+        header = ""
+
+        if len(rows) > 0 and index < len(rows[0]):
+            header = rows[0][index].strip()
+
+        if header == "":
+            column_choices.append(str(index + 1))
+        else:
+            column_choices.append(f"{index + 1}: {header}")
+
+    column_selector["values"] = column_choices
+
+    if column_count > 0:
+        column_selector.current(0)
+
+    status_label.config(
+        text=f"Detected: {len(rows)} rows x {column_count} columns | {delimiter_name}"
+    )
+
+
+def get_selected_column():
+    selected = column_selector.get().strip()
+
+    if selected == "":
+        return None
+
+    selected_number = selected.split(":")[0].strip()
+
+    try:
+        return int(selected_number)
+    except ValueError:
+        return None
+
+
+def extract_column():
+    global current_count
+    global detected_table
+    global detected_column_count
+
+    rows, column_count, delimiter_name = parse_table()
+
+    detected_table = rows
+    detected_column_count = column_count
+
+    if len(rows) == 0:
+        status_label.config(text="No table data found.")
+        return
+
+    selected_column = get_selected_column()
+
+    if selected_column is None:
+        detect_table()
+        selected_column = get_selected_column()
+
+    if selected_column is None:
+        status_label.config(text="Select a column.")
+        return
+
+    if selected_column < 1 or selected_column > column_count:
+        status_label.config(text=f"Column must be between 1 and {column_count}.")
+        return
+
+    start_row = 0
+
+    if skip_header_var.get():
+        start_row = 1
+
+    output_values = []
+
+    for row_index in range(start_row, len(rows)):
+        row = rows[row_index]
+
+        if selected_column - 1 < len(row):
+            value = row[selected_column - 1]
+        else:
+            value = ""
+
+        output_values.append(value)
+
+    output_text = "\n".join(output_values)
+
+    output_box.delete("1.0", tk.END)
+    output_box.insert(tk.END, output_text)
+
+    current_count = len(output_values)
+
+    blank_count = 0
+
+    for value in output_values:
+        if value == "":
+            blank_count += 1
+
+    count_label.config(text=f"Items: {current_count}")
+
+    status_label.config(
+        text=f"Column {selected_column} extracted | Blank cells: {blank_count}"
+    )
+
+
+# =========================================
+# OUTPUT FUNCTIONS
+# =========================================
 
 def copy_output():
-    output_text = output_box.get("1.0", tk.END).strip()
+    output_text = output_box.get("1.0", "end-1c")
 
     root.clipboard_clear()
     root.clipboard_append(output_text)
     root.update()
 
+    status_label.config(text="Output copied to clipboard.")
+
 
 def clear_all():
     global current_count
+    global detected_table
+    global detected_column_count
 
     input_box.delete("1.0", tk.END)
     output_box.delete("1.0", tk.END)
 
+    column_count_entry.delete(0, tk.END)
+
+    column_selector.set("")
+    column_selector["values"] = []
+
+    detected_table = []
+    detected_column_count = 0
+
     current_count = 0
 
     count_label.config(text="Items: 0")
+    status_label.config(text="")
 
 
 # =========================================
-# CONNECTOR NUMBER GENERATOR
+# CONNECTOR COPY
 # =========================================
 
 def copy_connector():
@@ -76,259 +308,17 @@ def copy_connector():
         connector_status.config(text="No items to copy.")
         return
 
-    connector_output = "\n".join([connector_number] * copy_count)
+    connector_output = "\n".join(
+        [connector_number] * copy_count
+    )
 
     root.clipboard_clear()
     root.clipboard_append(connector_output)
     root.update()
 
-    connector_status.config(text=f"Copied {copy_count} copies of connector {connector_number}")
-
-
-# =========================================
-# TABLE COLUMN EXTRACTOR
-# =========================================
-
-def get_table_input():
-    text = table_input_box.get("1.0", "end-1c")
-
-    if text == "":
-        return ""
-
-    text = text.replace("\r\n", "\n")
-    text = text.replace("\r", "\n")
-
-    return text
-
-
-def get_manual_column_count():
-    value = manual_column_count_entry.get().strip()
-
-    if value == "":
-        return None
-
-    try:
-        column_count = int(value)
-    except ValueError:
-        return None
-
-    if column_count <= 0:
-        return None
-
-    return column_count
-
-
-def parse_table_data():
-    text = get_table_input()
-    manual_columns = get_manual_column_count()
-
-    if text == "":
-        return [], 0, "NONE"
-
-    rows = []
-
-    if "\t" in text:
-        delimiter_name = "TAB"
-
-        for line in text.split("\n"):
-            rows.append(line.split("\t"))
-
-    elif "," in text:
-        delimiter_name = "COMMA"
-
-        reader = csv.reader(io.StringIO(text))
-
-        for row in reader:
-            rows.append(row)
-
-    else:
-        delimiter_name = "LINES"
-
-        raw_lines = text.split("\n")
-
-        if manual_columns is not None and manual_columns > 1:
-            delimiter_name = "WHITESPACE / MANUAL"
-
-            tokens = []
-
-            for line in raw_lines:
-                tokens.extend(line.split())
-
-            for index in range(0, len(tokens), manual_columns):
-                row = tokens[index:index + manual_columns]
-
-                while len(row) < manual_columns:
-                    row.append("")
-
-                rows.append(row)
-
-        else:
-            for line in raw_lines:
-                rows.append([line])
-
-    if manual_columns is not None:
-        column_count = manual_columns
-    else:
-        column_count = 0
-
-        for row in rows:
-            if len(row) > column_count:
-                column_count = len(row)
-
-    normalized_rows = []
-
-    for row in rows:
-        new_row = list(row)
-
-        while len(new_row) < column_count:
-            new_row.append("")
-
-        if len(new_row) > column_count:
-            new_row = new_row[:column_count]
-
-        normalized_rows.append(new_row)
-
-    return normalized_rows, column_count, delimiter_name
-
-
-def detect_table():
-    global detected_table
-    global detected_column_count
-
-    rows, column_count, delimiter_name = parse_table_data()
-
-    detected_table = rows
-    detected_column_count = column_count
-
-    if len(rows) == 0:
-        table_status.config(text="No table data detected.")
-        column_selector["values"] = []
-        return
-
-    column_choices = []
-
-    first_row = rows[0]
-
-    for index in range(column_count):
-        header = ""
-
-        if index < len(first_row):
-            header = first_row[index].strip()
-
-        if header == "":
-            column_choices.append(f"{index + 1}")
-        else:
-            column_choices.append(f"{index + 1}: {header}")
-
-    column_selector["values"] = column_choices
-
-    if column_count > 0:
-        column_selector.current(0)
-
-    table_status.config(text=f"Detected {len(rows)} rows x {column_count} columns | Delimiter: {delimiter_name}")
-
-
-def get_selected_column_number():
-    selected = column_selector.get().strip()
-
-    if selected == "":
-        return None
-
-    first_piece = selected.split(":")[0].strip()
-
-    try:
-        column_number = int(first_piece)
-    except ValueError:
-        return None
-
-    return column_number
-
-
-def extract_table_column():
-    global detected_table
-    global detected_column_count
-
-    rows, column_count, delimiter_name = parse_table_data()
-
-    detected_table = rows
-    detected_column_count = column_count
-
-    if len(rows) == 0:
-        table_status.config(text="No table data detected.")
-        return
-
-    selected_column = get_selected_column_number()
-
-    if selected_column is None:
-        table_status.config(text="Select a column to extract.")
-        return
-
-    if selected_column < 1 or selected_column > column_count:
-        table_status.config(text=f"Column must be between 1 and {column_count}.")
-        return
-
-    start_row = 0
-
-    if skip_header_var.get():
-        start_row = 1
-
-    output_values = []
-
-    for row_index in range(start_row, len(rows)):
-        row = rows[row_index]
-
-        if selected_column - 1 < len(row):
-            value = row[selected_column - 1]
-        else:
-            value = ""
-
-        output_values.append(value)
-
-    output_text = "\n".join(output_values)
-
-    table_output_box.delete("1.0", tk.END)
-    table_output_box.insert(tk.END, output_text)
-
-    blank_count = 0
-
-    for value in output_values:
-        if value == "":
-            blank_count += 1
-
-    table_status.config(text=f"Extracted column {selected_column} | Rows: {len(output_values)} | Blank cells preserved: {blank_count}")
-
-
-def copy_table_output():
-    output_text = table_output_box.get("1.0", "end-1c")
-
-    root.clipboard_clear()
-    root.clipboard_append(output_text)
-    root.update()
-
-    line_count = 0
-
-    if output_text != "":
-        line_count = len(output_text.split("\n"))
-
-    table_status.config(text=f"Copied {line_count} rows to clipboard. Blank rows preserved.")
-
-
-def clear_table():
-    global detected_table
-    global detected_column_count
-
-    table_input_box.delete("1.0", tk.END)
-    table_output_box.delete("1.0", tk.END)
-
-    manual_column_count_entry.delete(0, tk.END)
-
-    column_selector.set("")
-    column_selector["values"] = []
-
-    detected_table = []
-    detected_column_count = 0
-
-    table_status.config(text="")
+    connector_status.config(
+        text=f"Copied {copy_count} copies of connector {connector_number}"
+    )
 
 
 # =========================================
@@ -336,82 +326,213 @@ def clear_table():
 # =========================================
 
 root = tk.Tk()
+
 root.title("Excel Column Formatter")
-root.geometry("760x980")
+root.geometry("600x680")
 
 
 # =========================================
-# MAIN NUMBER FORMATTER
+# INPUT
 # =========================================
 
 tk.Label(
     root,
-    text="Paste numbers here:",
+    text="Paste Data Here:",
     font=("Arial", 12, "bold")
-).pack(pady=(15, 5))
+).pack(pady=(12, 4))
 
 
 input_box = scrolledtext.ScrolledText(
     root,
-    width=75,
-    height=5,
-    font=("Consolas", 11)
+    width=65,
+    height=7,
+    font=("Consolas", 11),
+    wrap=tk.NONE
 )
+
 input_box.pack(padx=15)
 
 
+# =========================================
+# MAIN TOOL BUTTONS
+# =========================================
+
+main_button_frame = tk.Frame(root)
+
+main_button_frame.pack(pady=7)
+
+
 tk.Button(
-    root,
-    text="Convert",
+    main_button_frame,
+    text="Convert Numbers",
     command=convert,
-    width=20,
-    height=2
-).pack(pady=10)
+    width=16
+).pack(
+    side=tk.LEFT,
+    padx=4
+)
+
+
+tk.Button(
+    main_button_frame,
+    text="Detect Table",
+    command=detect_table,
+    width=16
+).pack(
+    side=tk.LEFT,
+    padx=4
+)
+
+
+# =========================================
+# TABLE CONTROLS
+# =========================================
+
+table_frame = tk.Frame(root)
+
+table_frame.pack(pady=3)
 
 
 tk.Label(
+    table_frame,
+    text="Columns:"
+).grid(
+    row=0,
+    column=0,
+    padx=3
+)
+
+
+column_count_entry = tk.Entry(
+    table_frame,
+    width=5,
+    font=("Consolas", 10)
+)
+
+column_count_entry.grid(
+    row=0,
+    column=1,
+    padx=3
+)
+
+
+tk.Label(
+    table_frame,
+    text="Output Column:"
+).grid(
+    row=0,
+    column=2,
+    padx=(10, 3)
+)
+
+
+column_selector = ttk.Combobox(
+    table_frame,
+    width=18,
+    state="readonly"
+)
+
+column_selector.grid(
+    row=0,
+    column=3,
+    padx=3
+)
+
+
+skip_header_var = tk.BooleanVar(value=False)
+
+
+tk.Checkbutton(
+    table_frame,
+    text="Skip Header",
+    variable=skip_header_var
+).grid(
+    row=1,
+    column=0,
+    columnspan=2,
+    pady=4
+)
+
+
+tk.Button(
+    table_frame,
+    text="Extract Column",
+    command=extract_column,
+    width=18
+).grid(
+    row=1,
+    column=2,
+    columnspan=2,
+    pady=4
+)
+
+
+# =========================================
+# OUTPUT
+# =========================================
+
+tk.Label(
     root,
-    text="Excel-ready output:",
+    text="Excel-Ready Output:",
     font=("Arial", 12, "bold")
-).pack(pady=(5, 5))
+).pack(pady=(4, 4))
 
 
 output_box = scrolledtext.ScrolledText(
     root,
-    width=75,
-    height=6,
-    font=("Consolas", 11)
+    width=65,
+    height=8,
+    font=("Consolas", 11),
+    wrap=tk.NONE
 )
+
 output_box.pack(padx=15)
 
 
 count_label = tk.Label(
     root,
     text="Items: 0",
-    font=("Arial", 12, "bold"),
+    font=("Arial", 11, "bold"),
     fg="blue"
 )
-count_label.pack(pady=(5, 10))
+
+count_label.pack(pady=(4, 1))
 
 
-button_frame = tk.Frame(root)
-button_frame.pack(pady=8)
+status_label = tk.Label(
+    root,
+    text="",
+    font=("Arial", 9)
+)
+
+status_label.pack(pady=(0, 4))
+
+
+output_button_frame = tk.Frame(root)
+
+output_button_frame.pack(pady=4)
 
 
 tk.Button(
-    button_frame,
+    output_button_frame,
     text="Copy to Clipboard",
     command=copy_output,
-    width=20
-).pack(side=tk.LEFT, padx=5)
+    width=18
+).pack(
+    side=tk.LEFT,
+    padx=5
+)
 
 
 tk.Button(
-    button_frame,
+    output_button_frame,
     text="Clear",
     command=clear_all,
     width=12
-).pack(side=tk.LEFT, padx=5)
+).pack(
+    side=tk.LEFT,
+    padx=5
+)
 
 
 # =========================================
@@ -424,33 +545,34 @@ separator = tk.Frame(
     bd=1,
     relief=tk.SUNKEN
 )
+
 separator.pack(
     fill=tk.X,
     padx=20,
-    pady=15
+    pady=8
 )
 
 
 tk.Label(
     root,
     text="Connector Number Generator",
-    font=("Arial", 12, "bold")
-).pack(pady=(0, 8))
+    font=("Arial", 11, "bold")
+).pack(pady=(0, 4))
 
 
 connector_frame = tk.Frame(root)
+
 connector_frame.pack()
 
 
 tk.Label(
     connector_frame,
-    text="Connector Number:"
+    text="Connector:"
 ).grid(
     row=0,
     column=0,
-    padx=5,
-    pady=5,
-    sticky="e"
+    padx=3,
+    pady=3
 )
 
 
@@ -459,254 +581,55 @@ connector_entry = tk.Entry(
     width=10,
     font=("Consolas", 11)
 )
+
 connector_entry.grid(
     row=0,
     column=1,
-    padx=5,
-    pady=5
+    padx=3,
+    pady=3
 )
 
 
 tk.Label(
     connector_frame,
-    text="Number of Copies:"
+    text="Copies:"
 ).grid(
     row=0,
     column=2,
-    padx=5,
-    pady=5,
-    sticky="e"
+    padx=(10, 3),
+    pady=3
 )
 
 
 copy_count_entry = tk.Entry(
     connector_frame,
-    width=10,
+    width=8,
     font=("Consolas", 11)
 )
+
 copy_count_entry.grid(
     row=0,
     column=3,
-    padx=5,
-    pady=5
+    padx=3,
+    pady=3
 )
-
-
-tk.Label(
-    root,
-    text="Leave copy count blank to use the Items count above.",
-    font=("Arial", 9)
-).pack(pady=(2, 8))
 
 
 tk.Button(
     root,
     text="Copy Connector Column",
     command=copy_connector,
-    width=24,
-    height=2
+    width=22
 ).pack(pady=5)
 
 
 connector_status = tk.Label(
     root,
-    text="",
+    text="Leave Copies blank to use Items count.",
     font=("Arial", 9)
 )
-connector_status.pack(pady=(5, 10))
 
-
-# =========================================
-# TABLE COLUMN EXTRACTOR SECTION
-# =========================================
-
-separator2 = tk.Frame(
-    root,
-    height=2,
-    bd=1,
-    relief=tk.SUNKEN
-)
-separator2.pack(
-    fill=tk.X,
-    padx=20,
-    pady=15
-)
-
-
-tk.Label(
-    root,
-    text="Table Column Extractor",
-    font=("Arial", 12, "bold")
-).pack(pady=(0, 5))
-
-
-tk.Label(
-    root,
-    text="Paste an Excel table here. Empty cells are preserved.",
-    font=("Arial", 9)
-).pack(pady=(0, 5))
-
-
-table_input_box = scrolledtext.ScrolledText(
-    root,
-    width=75,
-    height=7,
-    font=("Consolas", 10),
-    wrap=tk.NONE
-)
-table_input_box.pack(padx=15)
-
-
-table_control_frame = tk.Frame(root)
-table_control_frame.pack(pady=10)
-
-
-tk.Label(
-    table_control_frame,
-    text="Columns:"
-).grid(
-    row=0,
-    column=0,
-    padx=5,
-    pady=5
-)
-
-
-manual_column_count_entry = tk.Entry(
-    table_control_frame,
-    width=7,
-    font=("Consolas", 10)
-)
-manual_column_count_entry.grid(
-    row=0,
-    column=1,
-    padx=5,
-    pady=5
-)
-
-
-tk.Label(
-    table_control_frame,
-    text="blank = auto"
-).grid(
-    row=0,
-    column=2,
-    padx=(0, 15),
-    pady=5
-)
-
-
-tk.Button(
-    table_control_frame,
-    text="Detect Table",
-    command=detect_table,
-    width=14
-).grid(
-    row=0,
-    column=3,
-    padx=5,
-    pady=5
-)
-
-
-tk.Label(
-    table_control_frame,
-    text="Output Column:"
-).grid(
-    row=1,
-    column=0,
-    padx=5,
-    pady=5
-)
-
-
-column_selector = ttk.Combobox(
-    table_control_frame,
-    width=28,
-    state="readonly"
-)
-column_selector.grid(
-    row=1,
-    column=1,
-    columnspan=2,
-    padx=5,
-    pady=5
-)
-
-
-skip_header_var = tk.BooleanVar(value=False)
-
-
-tk.Checkbutton(
-    table_control_frame,
-    text="Skip first row / header",
-    variable=skip_header_var
-).grid(
-    row=1,
-    column=3,
-    padx=10,
-    pady=5
-)
-
-
-tk.Button(
-    root,
-    text="Extract Selected Column",
-    command=extract_table_column,
-    width=24,
-    height=2
-).pack(pady=5)
-
-
-tk.Label(
-    root,
-    text="Excel-ready column:",
-    font=("Arial", 11, "bold")
-).pack(pady=(7, 4))
-
-
-table_output_box = scrolledtext.ScrolledText(
-    root,
-    width=75,
-    height=7,
-    font=("Consolas", 10),
-    wrap=tk.NONE
-)
-table_output_box.pack(padx=15)
-
-
-table_button_frame = tk.Frame(root)
-table_button_frame.pack(pady=8)
-
-
-tk.Button(
-    table_button_frame,
-    text="Copy Column",
-    command=copy_table_output,
-    width=18
-).pack(
-    side=tk.LEFT,
-    padx=5
-)
-
-
-tk.Button(
-    table_button_frame,
-    text="Clear Table",
-    command=clear_table,
-    width=14
-).pack(
-    side=tk.LEFT,
-    padx=5
-)
-
-
-table_status = tk.Label(
-    root,
-    text="",
-    font=("Arial", 9)
-)
-table_status.pack(pady=(2, 10))
+connector_status.pack(pady=(0, 5))
 
 
 root.mainloop()
