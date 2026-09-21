@@ -1594,6 +1594,19 @@ int main() {
            std::string::npos);
     assert(run_parallel.find(
         "Courant postflight: actualMaxCo=") != std::string::npos);
+    assert(run_parallel.find("root_time_complete()") != std::string::npos);
+    assert(run_parallel.find("same_checkpoint_time()") != std::string::npos);
+    assert(run_parallel.find("ensure_processor_time_metadata()") !=
+           std::string::npos);
+    assert(run_parallel.find(
+        "Reconstruction did not produce a complete root checkpoint") !=
+           std::string::npos);
+    assert(run_parallel.find(
+        "Repartitioned complete checkpoint t=$repartitioned_time") !=
+           std::string::npos);
+    assert(run_parallel.find(
+        "requestedProcesses=$processes previousProcesses=$existing_processes") !=
+           std::string::npos);
     assert(run_parallel.find(
         "Live-flow Courant limit exceeded") != std::string::npos);
     assert(run_parallel.find(
