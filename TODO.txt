@@ -1,18 +1,11 @@
-bash -c 'T=2.7399999999997262
+T=2.7399999999997262
 for r in 0 1 2 3; do
-  d="processor${r}/${T}/uniform"
-  if test -L "$d"; then
-    mv -- "$d" "${d}.broken-link"
-  fi
-  mkdir -p -- "$d" || exit 1
-  printf "FoamFile\n{\n    version 2.0;\n    format ascii;\n    class dictionary;\n    location \"%s/uniform\";\n    object time;\n}\n\nvalue %s;\ndeltaT 0.0001089;\ndeltaT0 0.0001089;\nindex 0;\n" "$T" "$T" > "$d/time" || exit 1
+  echo "===== processor$r ====="
+  for f in U p T p_rgh phi rho; do
+    if test -e "processor${r}/${T}/fluid/$f"; then
+      echo "$f PRESENT"
+    else
+      echo "$f MISSING"
+    fi
+  done
 done
-for r in 0 1 2 3; do
-  ls -ld "processor${r}/${T}/uniform"
-  ls -l "processor${r}/${T}/uniform/time"
-done'
-
-
-
-
-OMPI_MCA_hwloc_base_use_hwthreads_as_cpus=1 THERMAL_SOLVER_OPENFOAM_ENV_READY=1 OPENFOAM_LAUNCHER=env bash ./run_parallel.sh 4 --multirate 30
