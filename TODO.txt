@@ -1,678 +1,86 @@
-import time
-import json
-import os
-import win32com.client as win32
+import pdfplumber
+import re
+
+# ================================================
+# HELPER FXN
+# ================================================
+def ask_save_path(default_full_path=""):
+    import os
+    import tkinter as tk
+    from tkinter import filedialog
+    default_folder = os.path.dirname(default_full_path)
+
+    root = tk.Tk()
+    root.withdraw()
+    root.attributes("-topmost", True)
+    root.update()
+    try:
+        selected_path = filedialog.askopenfilename(initialdir=default_folder, filetypes=[("PDF Files", "*.pdf"), ("All Files", "*.*")])
+    except Exception:
+        return None
+
+    # Cancel or X
+    if not selected_path:
+        root.destroy()
+        return None
+    root.destroy()
+    # Return ONLY the file name (not full path)
+    return os.path.abspath(selected_path)
+
+def extract_pdf_text(file_path):
+    try:
+        all_text = []
+        with pdfplumber.open(file_path) as pdf:
+            for page_num, page in enumerate(pdf.pages, start=1):
+                text = page.extract_text()
+                if text:
+                    all_text.append(f"--- Page {page_num} ---\n{text}")
+        return "\n".join(all_text) if all_text else "No text found."
+    except FileNotFoundError:
+        return "Error: File not found."
+    except Exception as e:
+        return f"Error reading PDF: {e}"
 
 
-def runn(secondary=False):
-    # ================================================
-    # CONNECT TO ACTIVE E3 PROJECT
-    # ================================================
-    app = win32.GetActiveObject("CT.Application")
-    prj = app.CreateJobObject()
-    dev = prj.CreateDeviceObject()
-    pin = prj.CreatePinObject()
-    sym = prj.CreateSymbolObject()
-    text = prj.CreateTextObject()
-    attr = prj.CreateAttributeObject()
-
-
-    # ================================================
-    # HELPERS
-    # ================================================
-    def extract_ids(result):
-        if result is None:
-            return []
-
-        if isinstance(result, (tuple, list)):
-            if len(result) >= 2 and isinstance(result[1], (tuple, list)):
-                return [x for x in result[1] if x is not None and x != 0]
-
-            return [x for x in result if isinstance(x, int) and x != 0]
-
-        if isinstance(result, int):
-            if result != 0:
-                return [result]
-
-        return []
-
-
-    def get_visibility(text_id):
-        text.SetId(text_id)
-
-        try:
-            return text.GetVisibility()
-        except Exception as e:
-            return "GET VIS ERROR: " + repr(e)
-
-
-    def get_pin_view_ids(pin_id):
-        pin.SetId(pin_id)
-
-        try:
-            result = pin.GetViewIds(None)
-            return extract_ids(result)
-        except Exception:
-            pass
-
-        try:
-            result = pin.GetViewIds()
-            return extract_ids(result)
-        except Exception as e:
-            print("GetViewIds ERROR:", pin_id, repr(e))
-            return []
-
-
-    def get_schema_location(text_id):
-        text.SetId(text_id)
-
-        xloc = [0.0]
-        yloc = [0.0]
-        grid = [""]
-        column = [""]
-        row = [""]
-
-        try:
-            text.GetSchemaLocation(xloc, yloc, grid, column, row)
-            return float(xloc[0]), float(yloc[0])
-        except Exception as e:
-            print("GET SCHEMA LOCATION ERROR:", text_id, repr(e))
-            return None, None
-
-
-    def format_equipment_identification():
-        print("")
-        print("============================================================")
-        print("FORMATTING EQUIPMENT IDENTIFACATION")
-        print("USING EXACT BLOCK SYMBOL IDS FROM MAIN.PY")
-        print("============================================================")
-
-        metadata_path = os.environ.get("E3_SECONDARY_BLOCK_FILE")
-
-        if not metadata_path:
-            print("E3_SECONDARY_BLOCK_FILE WAS NOT PROVIDED BY LAUNCHER.PY")
-            return 0
-
-        if not os.path.isfile(metadata_path):
-            print("SECONDARY BLOCK METADATA FILE NOT FOUND:", metadata_path)
-            return 0
-
-        try:
-            with open(metadata_path, "r", encoding="utf-8") as metadata_handle:
-                secondary_blocks = json.load(metadata_handle)
-        except Exception as e:
-            print("FAILED TO READ SECONDARY BLOCK METADATA:", repr(e))
-            return 0
-
-        formatted_count = 0
-        block_count = 0
-        found_attribute_count = 0
-
-        for block_data in secondary_blocks:
-            block_count += 1
-
-            block_name = str(block_data.get("name", ""))
-            block_symbol_id = int(block_data["block_symbol_id"])
-            parent_block = int(block_data["parent_block"])
-            x = float(block_data["x"])
-            y = float(block_data["y"])
-            width = float(block_data["width"])
-            height = float(block_data["height"])
-
-            x_center = x + (width / 2.0)
-            equipment_y = y + height - 1.1
-
-            print("")
-            print("SECONDARY BLOCK:", block_name, "VIEW:", parent_block, "SYMBOL:", block_symbol_id)
-
-            try:
-                sym.SetId(block_symbol_id)
-            except Exception as e:
-                print("FAILED TO SET BLOCK SYMBOL ID:", block_symbol_id, repr(e))
+def extract_data_by_keywords(pdf_path, keywords):
+    """
+    Extract text from PDF and organize data by given keywords.
+    
+    Args:
+        pdf_path (str): Path to the PDF file.
+        keywords (list): List of keywords to search in the PDF text.
+        
+    Returns:
+        dict: A dictionary where each keyword maps to a list of extracted values.
+    """
+    data = {key: [] for key in keywords}  # Initialize dictionary
+    
+    with pdfplumber.open(pdf_path) as pdf:
+        for page in pdf.pages:
+            text = page.extract_text()
+            if not text:
                 continue
-
-            try:
-                attribute_result = sym.GetAttributeIds(None)
-                attribute_ids = extract_ids(attribute_result)
-            except Exception as e:
-                print("FAILED TO GET BLOCK ATTRIBUTES:", block_symbol_id, repr(e))
-                continue
-
-            print("BLOCK ATTRIBUTE IDS:", attribute_ids)
-
-            equipment_attribute_id = None
-
-            for attribute_id in attribute_ids:
-                attr.SetId(attribute_id)
-
-                try:
-                    attribute_name = str(attr.GetName()).strip()
-                except Exception:
-                    continue
-
-                print("BLOCK ATTRIBUTE:", attribute_id, repr(attribute_name))
-
-                if attribute_name == "Equipment Identifacation":
-                    equipment_attribute_id = attribute_id
-                    break
-
-            if equipment_attribute_id is None:
-                print("EQUIPMENT IDENTIFACATION NOT FOUND ON EXACT BLOCK SYMBOL:", block_symbol_id)
-                continue
-
-            found_attribute_count += 1
-            attr.SetId(equipment_attribute_id)
-
-            equipment_value = ""
-
-            try:
-                equipment_value = str(attr.GetValue()).strip()
-            except Exception:
-                try:
-                    equipment_value = str(attr.GetFormattedValue()).strip()
-                except Exception:
-                    equipment_value = ""
-
-            print("EQUIPMENT IDENTIFACATION VALUE:", repr(equipment_value))
-
-            try:
-                before_text_result = sym.GetTextIds(None)
-                before_text_ids = extract_ids(before_text_result)
-            except Exception:
-                before_text_ids = []
-
-            print("SYMBOL TEXT IDS BEFORE DISPLAY:", before_text_ids)
-
-            try:
-                display_result = attr.DisplayAttribute()
-                print("DISPLAY ATTRIBUTE RESULT:", display_result)
-            except Exception as e:
-                print("DISPLAY ATTRIBUTE ERROR:", block_symbol_id, equipment_attribute_id, repr(e))
-                continue
-
-            time.sleep(0.5)
-
-            try:
-                after_text_result = sym.GetTextIds(None)
-                after_text_ids = extract_ids(after_text_result)
-            except Exception as e:
-                print("FAILED TO GET SYMBOL TEXT IDS AFTER DISPLAY:", block_symbol_id, repr(e))
-                after_text_ids = []
-
-            print("SYMBOL TEXT IDS AFTER DISPLAY:", after_text_ids)
-
-            new_text_ids = [text_id for text_id in after_text_ids if text_id not in before_text_ids]
-            matching_text_ids = []
-
-            for symbol_text_id in after_text_ids:
-                text.SetId(symbol_text_id)
-
-                try:
-                    symbol_text_value = str(text.GetText()).strip()
-                except Exception:
-                    continue
-
-                if equipment_value and symbol_text_value == equipment_value:
-                    matching_text_ids.append(symbol_text_id)
-
-            candidate_text_ids = []
-
-            for text_id in matching_text_ids:
-                if text_id not in candidate_text_ids:
-                    candidate_text_ids.append(text_id)
-
-            if not candidate_text_ids:
-                for text_id in new_text_ids:
-                    if text_id not in candidate_text_ids:
-                        candidate_text_ids.append(text_id)
-
-            print("NEW SYMBOL TEXT IDS:", new_text_ids)
-            print("MATCHING EQUIPMENT TEXT IDS:", matching_text_ids)
-            print("CANDIDATE EQUIPMENT TEXT IDS:", candidate_text_ids)
-
-            if not candidate_text_ids:
-                print("ATTRIBUTE EXISTS BUT NO DISPLAYED SYMBOL TEXT WAS FOUND:", equipment_attribute_id)
-                continue
-
-            for equipment_text_id in candidate_text_ids:
-                text.SetId(equipment_text_id)
-
-                try:
-                    equipment_text_value = str(text.GetText()).strip()
-                except Exception:
-                    equipment_text_value = ""
-
-                if equipment_value and equipment_text_value != equipment_value:
-                    print("SKIPPING NON-MATCHING NEW TEXT:", equipment_text_id, repr(equipment_text_value))
-                    continue
-
-                text.SetVisibility(1)
-                text.SetColour(0)
-                text.SetMode(1)
-                text.SetAlignment(2)
-                text.SetStyle(1)
-                text.SetHeight(0.2)
-                text.SetSchemaLocation(x_center, equipment_y)
-
-                print(
-                    "EQUIPMENT IDENTIFACATION FORMATTED:",
-                    "BLOCK:",
-                    block_name,
-                    "SYMBOL:",
-                    block_symbol_id,
-                    "ATTR:",
-                    equipment_attribute_id,
-                    "TEXT:",
-                    equipment_text_id,
-                    "VALUE:",
-                    repr(equipment_text_value),
-                    "X:",
-                    x_center,
-                    "Y:",
-                    equipment_y
-                )
-
-                formatted_count += 1
-
-        print("")
-        print("EQUIPMENT IDENTIFACATION BLOCKS READ:", block_count)
-        print("EQUIPMENT IDENTIFACATION ATTRIBUTES FOUND:", found_attribute_count)
-        print("EQUIPMENT IDENTIFACATION TEXTS FORMATTED:", formatted_count)
-
-        return formatted_count
-
-
-    # ================================================
-    # SECONDARY RUN
-    #
-    # After Equipment Identifacation attributes have
-    # been turned on, secondary=True means ONLY format
-    # those Equipment Identifacation texts and exit.
-    #
-    # This skips:
-    # - connector scanning
-    # - pin scanning
-    # - component code formatting
-    # - device designation formatting
-    # - local signal formatting
-    # - pin number formatting
-    # - 5 second wait
-    # - visibility verification
-    # ================================================
-    if secondary:
-        print("")
-        print("============================================================")
-        print("SECONDARY FORMATTER RUN")
-        print("EQUIPMENT IDENTIFACATION ONLY")
-        print("============================================================")
-
-        formatted_count = format_equipment_identification()
-
-        print("")
-        print("============================================================")
-        print("SECONDARY FORMATTER COMPLETE")
-        print("EQUIPMENT IDENTIFACATION TEXTS FORMATTED:", formatted_count)
-        print("============================================================")
-
-        return formatted_count
-
-
-    # ================================================
-    # TRACK EVERYTHING WE MODIFY
-    # ================================================
-    modified_texts = []
-
-
-    print("")
-    print("============================================================")
-    print("E3 VISIBILITY TEST")
-    print("============================================================")
-
-
-    # ================================================
-    # GET ALL LOGICAL DEVICES
-    # ================================================
-    device_result = prj.GetAllDeviceIds(None)
-    device_ids = extract_ids(device_result)
-
-
-    for device_id in device_ids:
-        dev.SetId(device_id)
-
-        try:
-            device_name = str(dev.GetName())
-        except Exception:
-            continue
-
-        # ================================================
-        # DETECT CONNECTOR DEVICE
-        # ================================================
-        try:
-            symbol_result = dev.GetSymbolIds(None)
-            logical_symbol_ids = extract_ids(symbol_result)
-        except Exception:
-            logical_symbol_ids = []
-
-        is_connector = False
-
-        for logical_symbol_id in logical_symbol_ids:
-            sym.SetId(logical_symbol_id)
-
-            try:
-                text_result = sym.GetTextIds(None)
-                text_ids = extract_ids(text_result)
-            except Exception:
-                text_ids = []
-
-            for text_id in text_ids:
-                text.SetId(text_id)
-
-                try:
-                    text_type = text.GetType()
-                except Exception:
-                    continue
-
-                if text_type == 5:
-                    is_connector = True
-                    break
-
-            if is_connector:
-                break
-
-        if not is_connector:
-            continue
-
-        print("")
-        print("############################################################")
-        print("CONNECTOR:", device_name)
-        print("DEVICE ID:", device_id)
-        print("############################################################")
-
-        # ================================================
-        # GET LOGICAL CONNECTOR PINS
-        # ================================================
-        try:
-            pin_result = dev.GetPinIds(None)
-            logical_pin_ids = extract_ids(pin_result)
-        except Exception:
-            logical_pin_ids = []
-
-        for logical_pin_id in logical_pin_ids:
-            pin.SetId(logical_pin_id)
-
-            try:
-                pin_name = str(pin.GetName())
-            except Exception:
-                pin_name = "UNKNOWN"
-
-            pin_view_ids = get_pin_view_ids(logical_pin_id)
-
-            for pin_view_id in pin_view_ids:
-                sym.SetId(pin_view_id)
-                sym.SetBlockHatchColour(58)
-
-                try:
-                    text_result = sym.GetTextIds(None)
-                    symbol_text_ids = extract_ids(text_result)
-                except Exception:
-                    symbol_text_ids = []
-
-                # ================================================
-                # DETERMINE POSITION FROM TYPE 213
-                # ================================================
-                split_position = None
-
-                for text_id in symbol_text_ids:
-                    text.SetId(text_id)
-
-                    try:
-                        text_type = text.GetType()
-                        text_value = str(text.GetText()).strip()
-                    except Exception:
-                        continue
-
-                    if text_type == 213 and "/" in text_value and not text_value.startswith("*"):
-                        try:
-                            split_position = int(text_value.split("/")[0])
-                        except Exception:
-                            split_position = None
-
-                        break
-
-                if split_position is None:
-                    continue
-
-                print("")
-                print("PIN:", pin_name, "VIEW:", pin_view_id, "POSITION:", split_position)
-
-                # ================================================
-                # TEST EVERY RELEVANT TEXT
-                # ================================================
-                for text_id in symbol_text_ids:
-                    text.SetId(text_id)
-
-                    try:
-                        text_type = text.GetType()
-                        text_value = str(text.GetText()).strip()
-                    except Exception:
-                        continue
-
-                    # ================================================
-                    # TYPE 5 - COMPONENT CODE
-                    # ALWAYS OFF
-                    # ================================================
-                    if text_type == 5:
-                        before = get_visibility(text_id)
-                        text.SetId(text_id)
-                        result = text.SetVisibility(0)
-                        after = get_visibility(text_id)
-
-                        print("    TYPE 5")
-                        print("    TEXT ID:", text_id)
-                        print("    VALUE:", repr(text_value))
-                        print("    BEFORE:", before)
-                        print("    SET RESULT:", result)
-                        print("    AFTER:", after)
-
-                        if after == 0:
-                            print("    IMMEDIATE RESULT: PASS")
-                        else:
-                            print("    IMMEDIATE RESULT: FAIL")
-
-                        modified_texts.append({
-                            "device": device_name,
-                            "pin": pin_name,
-                            "position": split_position,
-                            "view": pin_view_id,
-                            "text_id": text_id,
-                            "type": 5,
-                            "value": text_value,
-                            "desired": 0
-                        })
-
-                    # ================================================
-                    # TYPE 12 - DEVICE DESIGNATION
-                    # ONLY TURN OFF NON-TOP PINS
-                    # ================================================
-                    elif text_type == 12 and split_position != 1:
-                        before = get_visibility(text_id)
-                        text.SetId(text_id)
-                        result = text.SetVisibility(0)
-                        after = get_visibility(text_id)
-
-                        print("    TYPE 12 NON-TOP")
-                        print("    TEXT ID:", text_id)
-                        print("    VALUE:", repr(text_value))
-                        print("    BEFORE:", before)
-                        print("    SET RESULT:", result)
-                        print("    AFTER:", after)
-
-                        if after == 0:
-                            print("    IMMEDIATE RESULT: PASS")
-                        else:
-                            print("    IMMEDIATE RESULT: FAIL")
-
-                        modified_texts.append({
-                            "device": device_name,
-                            "pin": pin_name,
-                            "position": split_position,
-                            "view": pin_view_id,
-                            "text_id": text_id,
-                            "type": 12,
-                            "value": text_value,
-                            "desired": 0
-                        })
-
-                    # ================================================
-                    # TYPE 12 TOP PIN
-                    # DO NOT TOUCH
-                    # ================================================
-                    elif text_type == 12 and split_position == 1:
-                        visibility = get_visibility(text_id)
-                        text.SetStyle(1)
-                        text.SetHeight(0.2)
-
-                        print("    TYPE 12 TOP - LEFT ALONE")
-                        print("    TEXT ID:", text_id)
-                        print("    VALUE:", repr(text_value))
-                        print("    VISIBILITY:", visibility)
-
-                    # ================================================
-                    # TYPE 617 - LOCAL SIGNAL NAME
-                    # ALWAYS ON
-                    # ================================================
-                    elif text_type == 617:
-                        before = get_visibility(text_id)
-
-                        text.SetId(text_id)
-                        result = text.SetVisibility(1)
-                        text.SetColour(0)
-                        text.SetAlignment(3)
-                        text.SetStyle(1)
-                        text.SetHeight(0.15)
-
-                        after = get_visibility(text_id)
-
-                        print("    TYPE 617 LOCAL SIGNAL")
-                        print("    TEXT ID:", text_id)
-                        print("    VALUE:", repr(text_value))
-                        print("    BEFORE:", before)
-                        print("    SET RESULT:", result)
-                        print("    AFTER:", after)
-
-                        if after == 1:
-                            print("    IMMEDIATE RESULT: PASS")
-                        else:
-                            print("    IMMEDIATE RESULT: FAIL")
-
-                        modified_texts.append({
-                            "device": device_name,
-                            "pin": pin_name,
-                            "position": split_position,
-                            "view": pin_view_id,
-                            "text_id": text_id,
-                            "type": 617,
-                            "value": text_value,
-                            "desired": 1
-                        })
-
-                    # ================================================
-                    # TYPE 203 - PIN NUMBER
-                    # ALWAYS VISIBLE AND BOLD
-                    # ================================================
-                    elif text_type == 203:
-                        before = get_visibility(text_id)
-
-                        text.SetId(text_id)
-                        result = text.SetVisibility(1)
-                        text.SetStyle(1)
-
-                        after = get_visibility(text_id)
-
-                        print("    TYPE 203 PIN NUMBER")
-                        print("    TEXT ID:", text_id)
-                        print("    VALUE:", repr(text_value))
-                        print("    BEFORE:", before)
-                        print("    SET RESULT:", result)
-                        print("    AFTER:", after)
-
-                        if after == 1:
-                            print("    IMMEDIATE RESULT: PASS")
-                        else:
-                            print("    IMMEDIATE RESULT: FAIL")
-
-                        modified_texts.append({
-                            "device": device_name,
-                            "pin": pin_name,
-                            "position": split_position,
-                            "view": pin_view_id,
-                            "text_id": text_id,
-                            "type": 203,
-                            "value": text_value,
-                            "desired": 1
-                        })
-
-
-    # ================================================
-    # FORMAT EQUIPMENT IDENTIFACATION ON SECONDARY BLOCKS
-    # ================================================
-    format_equipment_identification()
-
-
-    # ================================================
-    # WAIT TO SEE WHETHER E3 RESETS VISIBILITY
-    # ================================================
-    print("")
-    print("============================================================")
-    print("IMMEDIATE FORMATTING COMPLETE")
-    print("WAITING 5 SECONDS")
-    print("============================================================")
-
-    time.sleep(5.0)
-
-
-    # ================================================
-    # SECOND PASS - DO NOT MODIFY ANYTHING
-    # JUST READ VISIBILITY BACK
-    # ================================================
-    print("")
-    print("============================================================")
-    print("5 SECOND VISIBILITY VERIFICATION")
-    print("============================================================")
-
-    passed = 0
-    failed = 0
-
-    for item in modified_texts:
-        current_visibility = get_visibility(item["text_id"])
-
-        print("")
-        print("DEVICE:", item["device"])
-        print("PIN:", item["pin"])
-        print("POSITION:", item["position"])
-        print("VIEW:", item["view"])
-        print("TEXT ID:", item["text_id"])
-        print("TYPE:", item["type"])
-        print("VALUE:", repr(item["value"]))
-        print("EXPECTED VISIBILITY:", item["desired"])
-        print("ACTUAL VISIBILITY:", current_visibility)
-
-        if current_visibility == item["desired"]:
-            print("FINAL RESULT: PASS")
-            passed += 1
-        else:
-            print("FINAL RESULT: FAIL")
-            failed += 1
-
-
-    # ================================================
-    # FINAL SUMMARY
-    # ================================================
-    print("")
-    print("============================================================")
-    print("FINAL SUMMARY")
-    print("============================================================")
-    print("PASS:", passed)
-    print("FAIL:", failed)
-    print("TOTAL:", len(modified_texts))
-    print("============================================================")
+            
+            # Iterate through each keyword
+            for key in keywords:
+                # Simple approach: find lines containing the keyword
+                pattern = rf"{key}\s*[:\-]?\s*(.*)"
+                matches = re.findall(pattern, text, re.IGNORECASE)
+                
+                for match in matches:
+                    # Clean up leading/trailing spaces
+                    data[key].append(match.strip())
+                    
+    return data
+
+
+
+# Example usage
+if __name__ == "__main__":
+    pdf_path = ask_save_path()
+    # gui here to get where data starts from user and keyword to split by
+    CONNECTOR_DATA_START = 11
+    CONNECTOR_SEPARATION_KEYWORD = "Table"
+    structured_pdf_text = extract_data_by_keywords(pdf_path, CONNECTOR_SEPARATION_KEYWORD)
+    print(structured_pdf_text)
+   
