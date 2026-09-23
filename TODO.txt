@@ -1,101 +1,30 @@
-def ask_extraction_settings():
-    result = {
-        "start_page": None,
-        "end_page": None,
-        "separator_keyword": None
-    }
+with pdfplumber.open(pdf_path) as pdf:
+    total_pages = len(pdf.pages)
 
-    root = tk.Tk()
-    root.title("PDF Extraction Settings")
-    root.geometry("420x250")
-    root.attributes("-topmost", True)
+    if start_page > total_pages:
+        raise ValueError(f"Start page {start_page} is greater than PDF page count {total_pages}")
 
-    tk.Label(root, text="PDF Extraction Settings", font=("Arial", 12, "bold")).pack(pady=(15, 10))
+    if end_page is None:
+        actual_end_page = total_pages
+    else:
+        actual_end_page = min(end_page, total_pages)
 
-    frame = tk.Frame(root)
-    frame.pack(padx=20, pady=5)
+    for page_number in range(start_page, actual_end_page + 1):
+        page = pdf.pages[page_number - 1]
 
-    tk.Label(frame, text="Start Page:").grid(row=0, column=0, sticky="e", padx=6, pady=6)
+        text = page.extract_text() or ""
+        words = page.extract_words(x_tolerance=3, y_tolerance=3, keep_blank_chars=False, use_text_flow=False)
+        chars = list(page.chars)
+        lines = group_words_into_lines(words)
+        edges = list(page.edges)
 
-    start_entry = tk.Entry(frame, width=12)
-    start_entry.grid(row=0, column=1, sticky="w", padx=6, pady=6)
-    start_entry.insert(0, "1")
-
-    tk.Label(frame, text="Stop Page:").grid(row=1, column=0, sticky="e", padx=6, pady=6)
-
-    end_entry = tk.Entry(frame, width=12)
-    end_entry.grid(row=1, column=1, sticky="w", padx=6, pady=6)
-
-    tk.Label(frame, text="Leave blank to go to end of PDF", font=("Arial", 9)).grid(row=1, column=2, sticky="w", padx=6, pady=6)
-
-    tk.Label(frame, text="Section Keyword:").grid(row=2, column=0, sticky="e", padx=6, pady=6)
-
-    keyword_entry = tk.Entry(frame, width=20)
-    keyword_entry.grid(row=2, column=1, sticky="w", padx=6, pady=6)
-    keyword_entry.insert(0, "Table")
-
-    status_label = tk.Label(root, text="", font=("Arial", 9))
-    status_label.pack(pady=5)
-
-    def accept():
-        start_text = start_entry.get().strip()
-        end_text = end_entry.get().strip()
-        keyword = keyword_entry.get().strip()
-
-        if start_text == "":
-            status_label.config(text="Start page is required.")
-            return
-
-        try:
-            start_page = int(start_text)
-        except ValueError:
-            status_label.config(text="Start page must be a number.")
-            return
-
-        if start_page < 1:
-            status_label.config(text="Start page must be 1 or greater.")
-            return
-
-        if end_text == "":
-            end_page = None
-        else:
-            try:
-                end_page = int(end_text)
-            except ValueError:
-                status_label.config(text="Stop page must be a number or blank.")
-                return
-
-            if end_page < start_page:
-                status_label.config(text="Stop page must be greater than or equal to start page.")
-                return
-
-        if keyword == "":
-            status_label.config(text="Section keyword is required.")
-            return
-
-        result["start_page"] = start_page
-        result["end_page"] = end_page
-        result["separator_keyword"] = keyword
-
-        root.destroy()
-
-    def cancel():
-        root.destroy()
-
-    button_frame = tk.Frame(root)
-    button_frame.pack(pady=12)
-
-    tk.Button(button_frame, text="Continue", command=accept, width=14).pack(side=tk.LEFT, padx=5)
-    tk.Button(button_frame, text="Cancel", command=cancel, width=12).pack(side=tk.LEFT, padx=5)
-
-    root.protocol("WM_DELETE_WINDOW", cancel)
-    root.mainloop()
-
-    return result["start_page"], result["end_page"], result["separator_keyword"]
-
-
-
-
-
-
-
+        pdf_cache[page_number] = {
+            "text": text,
+            "words": words,
+            "chars": chars,
+            "lines": lines,
+            "edges": edges,
+            "footer_top": find_page_footer_top(lines),
+            "width": float(page.width),
+            "height": float(page.height)
+        }
