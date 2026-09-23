@@ -1,6 +1,7 @@
 import os
 import math
 import shutil
+import tempfile
 import time
 import tkinter as tk
 from tkinter import filedialog
@@ -697,20 +698,59 @@ def add_report_sheet(workbook, name, headers, rows, widths):
     return sheet
 
 
+def wait_for_file(path, timeout_seconds=10.0):
+    deadline = time.time() + timeout_seconds
+
+    while time.time() < deadline:
+        if os.path.exists(path):
+            try:
+                if os.path.getsize(path) > 0:
+                    return True
+            except Exception:
+                pass
+
+        time.sleep(0.25)
+
+    return False
+
+
+def copy_file_with_retry(source_path, destination_path, timeout_seconds=10.0):
+    deadline = time.time() + timeout_seconds
+    last_error = None
+
+    while time.time() < deadline:
+        try:
+            shutil.copy2(source_path, destination_path)
+            return True
+        except Exception as e:
+            last_error = e
+            time.sleep(0.25)
+
+    if last_error is not None:
+        print("FINAL COPY ERROR:", repr(last_error))
+
+    return False
+
+
 def create_diff_report(excel, report_path, old_snapshot, new_snapshot, comparison):
     report_path = os.path.abspath(report_path)
     report_folder = os.path.dirname(report_path)
     os.makedirs(report_folder, exist_ok=True)
+
     if os.path.isfile(report_path):
         try:
             os.remove(report_path)
         except Exception:
             pass
+
+    temp_folder = tempfile.mkdtemp(prefix="block_maker_diff_")
+    temp_report_path = os.path.join(temp_folder, "Block_Maker_Diff_Report.xlsx")
     workbook = excel.Workbooks.Add()
-    actual_saved_path = None
+
     try:
         while workbook.Worksheets.Count > 1:
             workbook.Worksheets(workbook.Worksheets.Count).Delete()
+
         summary_sheet = workbook.Worksheets(1)
         summary_sheet.Name = "Summary"
         block_diffs = [diff for diff in comparison["diffs"] if diff["kind"] in ("Block", "Connector Selection")]
@@ -731,45 +771,73 @@ def create_diff_report(excel, report_path, old_snapshot, new_snapshot, compariso
         add_report_sheet(workbook, "Block Summary", block_summary_headers, block_summary_rows, [18, 10, 20, 12, 35, 35, 30])
         block_headers = ["Sheet", "Block #", "Connector", "Pin", "Field", "Diff Type", "Location", "Cell", "Old Value", "New Value", "Old Formula", "New Formula"]
         block_rows = []
+
         for diff in block_diffs:
             block_rows.append([diff["sheet"], diff["block"], diff["connector"], diff["pin"], diff["field"], diff["diff_type"], diff["location"], diff["cell"], report_text(diff["old_value"]), report_text(diff["new_value"]), report_text(diff["old_formula"]), report_text(diff["new_formula"])])
+
         add_report_sheet(workbook, "Block Diffs", block_headers, block_rows, [16, 9, 20, 9, 22, 28, 65, 10, 35, 35, 45, 45])
         generic_headers = ["Sheet", "Cell", "Row", "Column", "Field/Header", "Diff Type", "Location", "Old Value", "New Value", "Old Formula", "New Formula"]
         generic_rows = []
+
         for diff in generic_diffs:
             generic_rows.append([diff["sheet"], diff["cell"], diff["row"], diff["column"], diff["field"], diff["diff_type"], diff["location"], report_text(diff["old_value"]), report_text(diff["new_value"]), report_text(diff["old_formula"]), report_text(diff["new_formula"])])
+
         add_report_sheet(workbook, "Other Diffs", generic_headers, generic_rows, [18, 10, 9, 9, 28, 28, 70, 35, 35, 45, 45])
         sheet_change_headers = ["Change", "Sheet"]
         sheet_change_rows = []
+
         for name in comparison["added_sheets"]:
             sheet_change_rows.append(["Added", name])
+
         for name in comparison["removed_sheets"]:
             sheet_change_rows.append(["Removed", name])
+
         add_report_sheet(workbook, "Sheet Changes", sheet_change_headers, sheet_change_rows, [16, 30])
         summary_sheet.Activate()
-        print("SAVING DIFF REPORT TO:", report_path)
-        workbook.SaveAs(Filename=report_path, FileFormat=REPORT_FILE_FORMAT_XLSX, CreateBackup=False, AddToMru=False, Local=True)
-        actual_saved_path = os.path.abspath(str(workbook.FullName))
-        print("EXCEL REPORTED SAVED PATH:", actual_saved_path)
+
+        print("SAVING DIFF REPORT TO LOCAL TEMP:", temp_report_path)
+        workbook.SaveAs(Filename=temp_report_path, FileFormat=REPORT_FILE_FORMAT_XLSX, CreateBackup=False, AddToMru=False, Local=True)
+        print("EXCEL REPORTED SAVED PATH:", workbook.FullName)
         workbook.Saved = True
         print("CLOSING REPORT WORKBOOK")
         workbook.Close(SaveChanges=False)
         workbook = None
         print("REPORT WORKBOOK CLOSED")
-        time.sleep(0.1)
-        if not os.path.isfile(report_path) and actual_saved_path and os.path.isfile(actual_saved_path):
-            shutil.copy2(actual_saved_path, report_path)
-        if not os.path.isfile(report_path):
-            raise Exception(f"Diff report was not created at {report_path}")
+
+        if not wait_for_file(temp_report_path, 10.0):
+            raise Exception(f"Excel did not create the local temporary diff report at {temp_report_path}")
+
+        print("LOCAL TEMP REPORT SIZE:", os.path.getsize(temp_report_path), "BYTES")
+        print("COPYING DIFF REPORT TO:", report_path)
+
+        if not copy_file_with_retry(temp_report_path, report_path, 10.0):
+            raise Exception(f"Diff report was created locally but could not be copied to {report_path}")
+
+        if not wait_for_file(report_path, 10.0):
+            raise Exception(f"Diff report copy did not become visible at {report_path}")
+
         print("DIFF REPORT SAVED:", report_path)
         print("DIFF REPORT SIZE:", os.path.getsize(report_path), "BYTES")
+
         return report_path
+
     finally:
         if workbook is not None:
             try:
                 workbook.Close(SaveChanges=False)
             except Exception:
                 pass
+
+        try:
+            if os.path.isfile(temp_report_path):
+                os.remove(temp_report_path)
+        except Exception:
+            pass
+
+        try:
+            os.rmdir(temp_folder)
+        except Exception:
+            pass
 
 
 # ================================================
