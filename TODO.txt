@@ -7,6 +7,9 @@ import tkinter as tk
 from tkinter import filedialog
 
 import win32com.client as win32
+from openpyxl import Workbook
+from openpyxl.styles import Font, PatternFill, Border, Side, Alignment
+from openpyxl.utils import get_column_letter
 
 
 # ================================================
@@ -732,6 +735,39 @@ def copy_file_with_retry(source_path, destination_path, timeout_seconds=10.0):
     return False
 
 
+def openpyxl_style_header(sheet, row_number, column_count):
+    fill = PatternFill(fill_type="solid", fgColor="D9EAF7")
+    side = Side(style="thin", color="000000")
+    border = Border(left=side, right=side, top=side, bottom=side)
+
+    for column_number in range(1, column_count + 1):
+        cell = sheet.cell(row=row_number, column=column_number)
+        cell.font = Font(bold=True)
+        cell.fill = fill
+        cell.border = border
+        cell.alignment = Alignment(vertical="center")
+
+
+def openpyxl_set_widths(sheet, widths):
+    for column_number, width in enumerate(widths, start=1):
+        sheet.column_dimensions[get_column_letter(column_number)].width = width
+
+
+def openpyxl_add_report_sheet(workbook, name, headers, rows, widths):
+    sheet = workbook.create_sheet(title=name)
+    sheet.append(headers)
+
+    for row in rows[:MAX_REPORT_ROWS_PER_SHEET]:
+        sheet.append(row)
+
+    openpyxl_style_header(sheet, 1, len(headers))
+    openpyxl_set_widths(sheet, widths)
+    sheet.freeze_panes = "A2"
+    sheet.auto_filter.ref = sheet.dimensions
+
+    return sheet
+
+
 def create_diff_report(excel, report_path, old_snapshot, new_snapshot, comparison):
     report_path = os.path.abspath(report_path)
     report_folder = os.path.dirname(report_path)
@@ -740,105 +776,108 @@ def create_diff_report(excel, report_path, old_snapshot, new_snapshot, compariso
     if os.path.isfile(report_path):
         try:
             os.remove(report_path)
-        except Exception:
-            pass
+        except PermissionError:
+            raise Exception(f"Close the existing diff report before running the checker: {report_path}")
 
-    temp_folder = tempfile.mkdtemp(prefix="block_maker_diff_")
-    temp_report_path = os.path.join(temp_folder, "Block_Maker_Diff_Report.xlsx")
-    workbook = excel.Workbooks.Add()
+    workbook = Workbook()
+    summary_sheet = workbook.active
+    summary_sheet.title = "Summary"
+
+    block_diffs = [diff for diff in comparison["diffs"] if diff["kind"] in ("Block", "Connector Selection")]
+    generic_diffs = [diff for diff in comparison["diffs"] if diff["kind"] == "Generic"]
+
+    summary_rows = [["EXCEL DIFF REPORT", ""], ["Reference Workbook", old_snapshot["path"]], ["Comparison Workbook", new_snapshot["path"]], ["Total Cell Diffs", len(comparison["diffs"])], ["Block-Maker Diffs", len(block_diffs)], ["Generic Diffs", len(generic_diffs)], ["Added Sheets", ", ".join(comparison["added_sheets"])], ["Removed Sheets", ", ".join(comparison["removed_sheets"])]]
+
+    for row in summary_rows:
+        summary_sheet.append(row)
+
+    openpyxl_style_header(summary_sheet, 1, 2)
+    summary_sheet.column_dimensions["A"].width = 24
+    summary_sheet.column_dimensions["B"].width = 90
+
+    sheet_summary_headers = ["Sheet", "Status", "Total Diffs", "Block-Maker Diffs", "Generic Diffs"]
+    sheet_summary_rows = build_sheet_summary(old_snapshot, new_snapshot, comparison)
+
+    while summary_sheet.max_row < 10:
+        summary_sheet.append([])
+
+    summary_sheet.append(sheet_summary_headers)
+
+    for row in sheet_summary_rows:
+        summary_sheet.append(row)
+
+    openpyxl_style_header(summary_sheet, 11, len(sheet_summary_headers))
+
+    block_summary_headers = ["Sheet", "Block #", "Connector", "Diff Count", "Pins Affected", "Fields Affected", "Diff Types"]
+    block_summary_rows = build_block_summary(block_diffs)
+    openpyxl_add_report_sheet(workbook, "Block Summary", block_summary_headers, block_summary_rows, [18, 10, 20, 12, 35, 35, 30])
+
+    block_headers = ["Sheet", "Block #", "Connector", "Pin", "Field", "Diff Type", "Location", "Cell", "Old Value", "New Value", "Old Formula", "New Formula"]
+    block_rows = []
+
+    for diff in block_diffs:
+        block_rows.append([diff["sheet"], diff["block"], diff["connector"], diff["pin"], diff["field"], diff["diff_type"], diff["location"], diff["cell"], report_text(diff["old_value"]), report_text(diff["new_value"]), report_text(diff["old_formula"]), report_text(diff["new_formula"])])
+
+    openpyxl_add_report_sheet(workbook, "Block Diffs", block_headers, block_rows, [16, 9, 20, 9, 22, 28, 65, 10, 35, 35, 45, 45])
+
+    generic_headers = ["Sheet", "Cell", "Row", "Column", "Field/Header", "Diff Type", "Location", "Old Value", "New Value", "Old Formula", "New Formula"]
+    generic_rows = []
+
+    for diff in generic_diffs:
+        generic_rows.append([diff["sheet"], diff["cell"], diff["row"], diff["column"], diff["field"], diff["diff_type"], diff["location"], report_text(diff["old_value"]), report_text(diff["new_value"]), report_text(diff["old_formula"]), report_text(diff["new_formula"])])
+
+    openpyxl_add_report_sheet(workbook, "Other Diffs", generic_headers, generic_rows, [18, 10, 9, 9, 28, 28, 70, 35, 35, 45, 45])
+
+    sheet_change_headers = ["Change", "Sheet"]
+    sheet_change_rows = []
+
+    for name in comparison["added_sheets"]:
+        sheet_change_rows.append(["Added", name])
+
+    for name in comparison["removed_sheets"]:
+        sheet_change_rows.append(["Removed", name])
+
+    openpyxl_add_report_sheet(workbook, "Sheet Changes", sheet_change_headers, sheet_change_rows, [16, 30])
+
+    fd, temp_report_path = tempfile.mkstemp(prefix="block_maker_diff_", suffix=".xlsx", dir=report_folder)
+    os.close(fd)
 
     try:
-        while workbook.Worksheets.Count > 1:
-            workbook.Worksheets(workbook.Worksheets.Count).Delete()
+        if os.path.exists(temp_report_path):
+            os.remove(temp_report_path)
 
-        summary_sheet = workbook.Worksheets(1)
-        summary_sheet.Name = "Summary"
-        block_diffs = [diff for diff in comparison["diffs"] if diff["kind"] in ("Block", "Connector Selection")]
-        generic_diffs = [diff for diff in comparison["diffs"] if diff["kind"] == "Generic"]
-        summary_rows = [["Reference Workbook", old_snapshot["path"]], ["Comparison Workbook", new_snapshot["path"]], ["Total Cell Diffs", len(comparison["diffs"])], ["Block-Maker Diffs", len(block_diffs)], ["Generic Diffs", len(generic_diffs)], ["Added Sheets", ", ".join(comparison["added_sheets"])], ["Removed Sheets", ", ".join(comparison["removed_sheets"])]]
-        write_matrix(summary_sheet, 1, 1, [["EXCEL DIFF REPORT", ""]] + summary_rows)
-        summary_sheet.Range("A1:B1").Font.Bold = True
-        summary_sheet.Range("A1:B1").Interior.Color = 0xD9EAF7
-        summary_sheet.Columns(1).ColumnWidth = 24
-        summary_sheet.Columns(2).ColumnWidth = 90
-        sheet_summary_headers = ["Sheet", "Status", "Total Diffs", "Block-Maker Diffs", "Generic Diffs"]
-        sheet_summary_rows = build_sheet_summary(old_snapshot, new_snapshot, comparison)
-        write_matrix(summary_sheet, 11, 1, [sheet_summary_headers] + sheet_summary_rows)
-        summary_sheet.Range(summary_sheet.Cells(11, 1), summary_sheet.Cells(11, len(sheet_summary_headers))).Font.Bold = True
-        summary_sheet.Range(summary_sheet.Cells(11, 1), summary_sheet.Cells(11, len(sheet_summary_headers))).Interior.Color = 0xD9EAF7
-        block_summary_headers = ["Sheet", "Block #", "Connector", "Diff Count", "Pins Affected", "Fields Affected", "Diff Types"]
-        block_summary_rows = build_block_summary(block_diffs)
-        add_report_sheet(workbook, "Block Summary", block_summary_headers, block_summary_rows, [18, 10, 20, 12, 35, 35, 30])
-        block_headers = ["Sheet", "Block #", "Connector", "Pin", "Field", "Diff Type", "Location", "Cell", "Old Value", "New Value", "Old Formula", "New Formula"]
-        block_rows = []
+        print("WRITING DIFF REPORT WITH OPENPYXL:", temp_report_path)
+        workbook.save(temp_report_path)
+        workbook.close()
 
-        for diff in block_diffs:
-            block_rows.append([diff["sheet"], diff["block"], diff["connector"], diff["pin"], diff["field"], diff["diff_type"], diff["location"], diff["cell"], report_text(diff["old_value"]), report_text(diff["new_value"]), report_text(diff["old_formula"]), report_text(diff["new_formula"])])
+        if not os.path.isfile(temp_report_path):
+            raise Exception(f"Openpyxl did not create the temporary diff report at {temp_report_path}")
 
-        add_report_sheet(workbook, "Block Diffs", block_headers, block_rows, [16, 9, 20, 9, 22, 28, 65, 10, 35, 35, 45, 45])
-        generic_headers = ["Sheet", "Cell", "Row", "Column", "Field/Header", "Diff Type", "Location", "Old Value", "New Value", "Old Formula", "New Formula"]
-        generic_rows = []
+        if os.path.getsize(temp_report_path) <= 0:
+            raise Exception(f"Openpyxl created an empty diff report at {temp_report_path}")
 
-        for diff in generic_diffs:
-            generic_rows.append([diff["sheet"], diff["cell"], diff["row"], diff["column"], diff["field"], diff["diff_type"], diff["location"], report_text(diff["old_value"]), report_text(diff["new_value"]), report_text(diff["old_formula"]), report_text(diff["new_formula"])])
+        print("TEMP DIFF REPORT SIZE:", os.path.getsize(temp_report_path), "BYTES")
+        print("MOVING DIFF REPORT TO:", report_path)
 
-        add_report_sheet(workbook, "Other Diffs", generic_headers, generic_rows, [18, 10, 9, 9, 28, 28, 70, 35, 35, 45, 45])
-        sheet_change_headers = ["Change", "Sheet"]
-        sheet_change_rows = []
+        os.replace(temp_report_path, report_path)
 
-        for name in comparison["added_sheets"]:
-            sheet_change_rows.append(["Added", name])
-
-        for name in comparison["removed_sheets"]:
-            sheet_change_rows.append(["Removed", name])
-
-        add_report_sheet(workbook, "Sheet Changes", sheet_change_headers, sheet_change_rows, [16, 30])
-        summary_sheet.Activate()
-
-        print("SAVING DIFF REPORT TO LOCAL TEMP:", temp_report_path)
-        workbook.SaveAs(Filename=temp_report_path, FileFormat=REPORT_FILE_FORMAT_XLSX, CreateBackup=False, AddToMru=False, Local=True)
-        print("EXCEL REPORTED SAVED PATH:", workbook.FullName)
-        workbook.Saved = True
-        print("CLOSING REPORT WORKBOOK")
-        workbook.Close(SaveChanges=False)
-        workbook = None
-        print("REPORT WORKBOOK CLOSED")
-
-        if not wait_for_file(temp_report_path, 10.0):
-            raise Exception(f"Excel did not create the local temporary diff report at {temp_report_path}")
-
-        print("LOCAL TEMP REPORT SIZE:", os.path.getsize(temp_report_path), "BYTES")
-        print("COPYING DIFF REPORT TO:", report_path)
-
-        if not copy_file_with_retry(temp_report_path, report_path, 10.0):
-            raise Exception(f"Diff report was created locally but could not be copied to {report_path}")
-
-        if not wait_for_file(report_path, 10.0):
-            raise Exception(f"Diff report copy did not become visible at {report_path}")
+        if not os.path.isfile(report_path):
+            raise Exception(f"Diff report was not visible after move to {report_path}")
 
         print("DIFF REPORT SAVED:", report_path)
         print("DIFF REPORT SIZE:", os.path.getsize(report_path), "BYTES")
 
-        return report_path
-
     finally:
-        if workbook is not None:
+        try:
+            workbook.close()
+        except Exception:
+            pass
+
+        if os.path.exists(temp_report_path):
             try:
-                workbook.Close(SaveChanges=False)
+                os.remove(temp_report_path)
             except Exception:
                 pass
-
-        try:
-            if os.path.isfile(temp_report_path):
-                os.remove(temp_report_path)
-        except Exception:
-            pass
-
-        try:
-            os.rmdir(temp_folder)
-        except Exception:
-            pass
-
 
 # ================================================
 # TERMINAL OUTPUT
