@@ -2380,6 +2380,41 @@ struct ModelLoader {
             if(cfg.use_multirate_thermal)
                 std::cout << " --multirate " << model.simulation.duration;
             std::cout << " 2>&1 | tee -a thermal_solver.stdout.log\n";
+            if(cfg.use_multirate_thermal && cfg.use_adaptive_airflow_refresh) {
+                std::cout
+                    << "\nOPTIONAL REUSABLE COLD-FLOW SEED (choose this on a fresh export before running the command above):\n"
+                    << "  # All stamped fluid/solid watts are disabled until airflow convergence.\n"
+                    << "  source \"${THERMAL_SIM_OPENFOAM_BASHRC:-$HOME/OpenFOAM/OpenFOAM-v2606/etc/bashrc}\" && cd "
+                    << command_quote(launch_directory)
+                    << " && bash ./build_semifrozen_solver.sh && set -o pipefail && "
+                       "THERMAL_SOLVER_OPENFOAM_ENV_READY=1 OPENFOAM_LAUNCHER=env bash ./run_parallel.sh "
+                    << cfg.parallel_processes << " --cold-flow-seed " << model.simulation.duration
+                    << " 2>&1 | tee -a cold_seed.stdout.log\n"
+                    << "  # Resume with the same command; increase its end time if convergence is still pending.\n"
+                    << "  # A seed is accepted only when .cold_flow_seed_complete exists. Keep its directory intact.\n"
+                    << "  # Export each new heat-load model into a DIFFERENT case directory with identical mesh, fans, materials and ambient conditions.\n"
+                    << "  # In the NEW case, after loading OpenFOAM, set SEED_CASE to the accepted seed's absolute WSL path:\n"
+                    << "  SEED_CASE='/absolute/path/to/accepted_seed'\n"
+                    << "  OPENFOAM_LAUNCHER=env bash ./prepare_regions_low_memory.sh \"$PWD\" && "
+                       "OPENFOAM_LAUNCHER=env bash ./create_thermal_branch_from_cold_flow_seed.sh \"$SEED_CASE\" \"$PWD\" "
+                    << cfg.parallel_processes << "\n"
+                    << "  # Then use the thermal command printed by the importer. It starts at thermal t=0 with target ambient T and target watts.\n"
+                    << "  # Normal --multirate retains periodic live-airflow refreshes as heating changes buoyancy.\n"
+                    << "  # Full instructions: README.md (Reusable cold-flow seeds) and COLD_FLOW_SEED_WORKFLOW.md.\n\n"
+                    << "REUSE AN EXISTING HEATED AIRFLOW CHECKPOINT (not an accepted cold seed):\n"
+                    << "  # Stop the donor cleanly. Work in a DIFFERENT, fresh target export; do not overwrite the donor.\n"
+                    << "  # Load OpenFOAM and build the solver as above. Replace both placeholders below.\n"
+                    << "  DONOR_CASE='/absolute/path/to/old_100pct_case'\n"
+                    << "  DONOR_TIME='EXACT_SAVED_TIME_FOLDER_NAME'\n"
+                    << "  cd " << command_quote(launch_directory) << " && "
+                       "OPENFOAM_LAUNCHER=env bash ./prepare_regions_low_memory.sh \"$PWD\" && "
+                       "OPENFOAM_LAUNCHER=env bash ./prepare_heated_airflow_reuse.sh \"$DONOR_CASE\" \"$PWD\" \"$DONOR_TIME\" "
+                    << cfg.parallel_processes << "\n"
+                    << "  # Follow its printed qualification command, then import only after acceptance.\n"
+                    << "  # Imports velocity/turbulence into a separate heat-off case; resets pressure and all temperatures.\n"
+                    << "  # Does not reuse hot density/flux or certify the hot operating point as cold.\n"
+                    << "  # Qualification can need more airflow time. See HEATED_AIRFLOW_REUSE.md for validation limits.\n\n";
+            }
             if(cfg.use_multirate_thermal) {
                 std::cout
                     << "\nTwo-stage long-rack convergence workflow "

@@ -31,6 +31,91 @@ direct C++ construction in `main.cpp`.
 
 ## 1. Coordinate system and units
 
+### Reusable cold-flow seeds for several heat loads
+
+Already have a valuable **heated** airflow run? Do not label it a cold seed or
+copy its hot density/flux into an ambient-temperature model. Use the separate
+[heated-checkpoint workflow](HEATED_AIRFLOW_REUSE.md): export a fresh target,
+prepare its mesh, then run the following in that target with OpenFOAM loaded:
+
+```bash
+OPENFOAM_LAUNCHER=env bash ./prepare_heated_airflow_reuse.sh \
+  '/absolute/path/to/old_100pct_case' "$PWD" 'EXACT_SAVED_TIME_FOLDER_NAME' 4
+```
+
+Stop the donor first. The helper copies velocity/turbulence through a private
+snapshot, leaves the donor unchanged, and prints continuation commands for a
+separate unheated qualification case and then thermal import. Keep mesh, fans,
+materials and ambient conditions identical. Acceptance is still required; the
+suggested 0.2-second attempt is not a guaranteed convergence time. All target
+temperatures reset to its ambient initial fields; target watts are preserved.
+Normal multirate and previously accepted cold-seed workflows remain separate.
+Tiny constant-density and temperature-dependent-air/gravity physical tests passed; see
+[validation scope and results](COLD_FLOW_SEED_TEST_STATUS.md) before production use.
+
+Use this optional workflow when 20%, 60%, and 100% load models have the same
+geometry, mesh, fans, boundary conditions, materials, and ambient temperature.
+Develop airflow once with all stamped heat sources disabled, then import that
+flow into a fresh ambient-temperature case for each load. Normal `--multirate`
+commands remain available. A branch uses periodic airflow refreshes as heating
+changes buoyancy; this is not a promise of permanently frozen velocity.
+
+1. Build `./model` as usual and export a **new, separate seed case** with the
+   multirate and adaptive-airflow options enabled. Run the cold-seed command
+   printed by `./model` instead of its normal multirate command. In WSL:
+
+   ```bash
+   # Source your actual installation (packaged Ubuntu example):
+   source /usr/lib/openfoam/openfoam2606/etc/bashrc
+   cd '/absolute/path/to/seed_case'
+   bash ./build_semifrozen_solver.sh
+   set -o pipefail
+   THERMAL_SOLVER_OPENFOAM_ENV_READY=1 OPENFOAM_LAUNCHER=env \
+     bash ./run_parallel.sh 4 --cold-flow-seed 3 2>&1 | tee -a cold_seed.stdout.log
+   ```
+
+   `3` is the requested simulation-time ceiling, not an acceptance guarantee.
+   The seed stops earlier if its airflow criteria pass. If pending at the ceiling,
+   resume with a larger ceiling within the configured `airflow_warmup_time`.
+   Ctrl+C uses the runner's checkpoint mechanism; wait for it to finish writing.
+   After interruption, rerun the same command. Do not re-export over the seed.
+   Confirm acceptance with `test -f .cold_flow_seed_complete && cat .cold_flow_seed_manifest`.
+
+2. Change only the heat loads in the model/component TOMLs and export to a
+   **different case directory**. Its `0/` temperatures must be ambient. Do not
+   launch its normal solver yet. Prepare region meshes and import the seed:
+
+   ```bash
+   cd '/absolute/path/to/new_heat_load_case'
+   SEED_CASE='/absolute/path/to/seed_case'
+   OPENFOAM_LAUNCHER=env bash ./prepare_regions_low_memory.sh "$PWD"
+   OPENFOAM_LAUNCHER=env bash ./create_thermal_branch_from_cold_flow_seed.sh \
+     "$SEED_CASE" "$PWD" 4
+   ```
+
+   The helper is included in newly exported multirate cases. It requires matching
+   prepared meshes and a completed version-2 seed. It reconstructs the seed if
+   necessary, copies developed fluid fields, preserves target fluid/solid `T`
+   and target heat-source dictionaries, then decomposes for the requested ranks.
+   Initialized targets are refused; it does not erase an existing run. Import
+   does not alter the seed's processor checkpoints. Keep its manifest and fields.
+
+3. Start the thermal branch using the command printed by the importer:
+
+   ```bash
+   THERMAL_SOLVER_OPENFOAM_ENV_READY=1 OPENFOAM_LAUNCHER=env \
+     bash ./run_parallel.sh 4 --multirate 30 2>&1 | tee -a thermal_solver.stdout.log
+   ```
+
+   Thermal time starts at zero. Initial airflow development and fan ramp are
+   skipped; live-flow refreshes still occur. Resume with the same command, or a
+   later end time such as `18000`. Repeat steps 2–3 for each heat load. Never use
+   a heat-developed legacy checkpoint as a validated cold seed simply by adding
+   a marker file.
+
+See [the detailed workflow](COLD_FLOW_SEED_WORKFLOW.md) and
+[test status and continuation commands](COLD_FLOW_SEED_TEST_STATUS.md).
+
 The entire project uses:
 
 | Axis | Meaning | Positive direction |

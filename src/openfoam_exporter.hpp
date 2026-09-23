@@ -312,6 +312,19 @@ public:
         write_parallel_run_script(
             mesh,options,options.case_directory / "run_parallel.sh",
             fluid_volume_m3);
+        if(options.use_multirate_thermal) {
+            const auto helper=options.case_directory/"create_thermal_branch_from_cold_flow_seed.sh";
+            std::ofstream stream(helper,std::ios::binary);
+            require_stream(stream,helper);
+            stream << load_project_asset(
+                "tools/create_thermal_branch_from_cold_flow_seed.sh",
+                "cold_flow_seed_complete",false);
+            const auto heated=options.case_directory/"prepare_heated_airflow_reuse.sh";
+            std::ofstream heated_stream(heated,std::ios::binary);
+            require_stream(heated_stream,heated);
+            heated_stream << load_project_asset(
+                "tools/prepare_heated_airflow_reuse.sh","heated-donor-snapshot",false);
+        }
     }
 
     static double ambient_connected_fluid_volume(const Mesh& mesh) {
@@ -4075,6 +4088,12 @@ functions
                   "    echo \"This export was not configured for --warm-start, --multirate, or --cold-flow-seed; use conventional run mode.\" >&2\n"
                   "    exit 2\n"
                   "fi\n") <<
+            "if [[ \"$mode\" == \"--cold-flow-seed\" && "
+            << (options.use_adaptive_airflow_refresh ? "true" : "false")
+            << " != true ]]; then\n"
+            "    echo \"Cold-flow seeds require adaptive airflow convergence in this export.\" >&2\n"
+            "    exit 2\n"
+            "fi\n"
             "if [[ \"$mode\" != \"run\" ]] && { "
                 "! [[ \"$requested_end\" =~ ^[0-9]+([.][0-9]+)?$ ]] || "
                 "! awk -v v=\"$requested_end\" "
@@ -4294,6 +4313,21 @@ functions
             "fi\n"
             ": >\"$run_lock\"\n"
             "printf '%s\\n' \"$$\" >&9\n"
+            "if [[ \"$mode\" == \"--cold-flow-seed\" ]]; then\n"
+            "    if [[ ! -f \"$case_dir/.cold_flow_seed_started\" ]]; then\n"
+            "        if [[ -d \"$case_dir/processor0\" || -f \"$case_dir/.initial_airflow_converged\" ]]; then\n"
+            "            echo \"Start cold-flow seed mode from a fresh export, not a heated checkpoint.\" >&2; exit 4\n"
+            "        fi\n"
+            "        while IFS= read -r candidate; do\n"
+            "            if [[ \"$candidate\" =~ ^[0-9]+([.][0-9]+)?([eE][-+]?[0-9]+)?$ ]] && awk -v t=\"$candidate\" 'BEGIN {exit !(t>0)}'; then\n"
+            "                echo \"Cold-flow seed requires a fresh export.\" >&2; exit 4\n"
+            "            fi\n"
+            "        done < <(find \"$case_dir\" -mindepth 1 -maxdepth 1 -type d -printf '%f\\n')\n"
+            "        touch \"$case_dir/.cold_flow_seed_started\"\n"
+            "    fi\n"
+            "elif [[ -f \"$case_dir/.cold_flow_seed_started\" ]]; then\n"
+            "    echo \"Create a separate thermal branch from this cold-flow seed.\" >&2; exit 4\n"
+            "fi\n"
             "apply_checkpoint_retention\n";
         output << (mesh.get_openfoam_component_regions().empty()
             ? "run_tracked bash \"$case_dir/prepare_regions.sh\"\n"
@@ -4337,6 +4371,8 @@ functions
             "        time_dir=\"$case_dir/processor${rank}/${candidate}\"\n"
             "        [[ -d \"$time_dir/fluid\" ]] || return 1\n"
             "        for field in T U p p_rgh phi rho k omega nut alphat; do\n"
+            "            # Fresh exports initialize flux/density inside the solver.\n"
+            "            if [[ \"$candidate\" == 0 && ( \"$field\" == phi || \"$field\" == rho ) && ! -f \"$case_dir/0/fluid/$field\" && ! -f \"$case_dir/.cold_flow_seed_import_manifest\" ]]; then continue; fi\n"
             "            [[ -f \"$time_dir/fluid/$field\" ]] || return 1\n"
             "        done\n"
             "        for region_dir in \"$case_dir/processor${rank}/constant\"/*; do\n"
@@ -4724,7 +4760,7 @@ functions
             "    run_tracked \"$foam_launcher\" decomposePar -case \"$case_dir\" "
                 "-allRegions -latestTime -force\n\n"
             "    repartitioned_time=$(\"$foam_launcher\" foamListTimes "
-                "-case \"$case_dir\" -processor -latestTime 2>/dev/null || echo 0)\n"
+                "-case \"$case_dir\" -processor -withZero -latestTime 2>/dev/null || echo 0)\n"
             "    repartitioned_time=\"${repartitioned_time##*$'\\n'}\"\n"
             "    if ! processor_time_complete \"$repartitioned_time\" \"$processes\"; then\n"
             "        echo \"Redecomposition did not produce a complete checkpoint "
@@ -4792,14 +4828,14 @@ functions
             "{\n"
             "    local seed_time=\"$(latest_processor_restart_time)\"\n"
             "    local fingerprint_files=() file fingerprint\n"
-            "    for file in \"$case_dir/constant/regionProperties\" \"$case_dir/constant/g\" \"$case_dir/system/decomposeParDict\"; do\n"
+            "    for file in \"$case_dir/constant/regionProperties\" \"$case_dir/constant/g\"; do\n"
             "        [[ -f \"$file\" ]] && fingerprint_files+=(\"$file\")\n"
             "    done\n"
             "    for file in \"$case_dir\"/constant/*/polyMesh/{points,boundary,faces,owner,neighbour}; do\n"
             "        [[ -f \"$file\" ]] && fingerprint_files+=(\"$file\")\n"
             "    done\n"
-            "    fingerprint=\"$(for file in \"${fingerprint_files[@]}\"; do sha256sum \"$file\"; done | sha256sum | awk '{print $1}')\"\n"
-            "    { printf 'version 1\\n'; printf 'seed_time %s\\n' \"$seed_time\"; printf 'geometry_sha256 %s\\n' \"$fingerprint\"; printf 'processes %s\\n' \"$processes\"; } > \"${cold_flow_seed_manifest}.tmp.$$\"\n"
+            "    fingerprint=\"$(cd \"$case_dir\"; for file in \"${fingerprint_files[@]}\"; do sha256sum \"${file#\"$case_dir/\"}\"; done | sha256sum | awk '{print $1}')\"\n"
+            "    { printf 'version 2\\n'; printf 'seed_time %s\\n' \"$seed_time\"; printf 'geometry_sha256 %s\\n' \"$fingerprint\"; printf 'processes %s\\n' \"$processes\"; } > \"${cold_flow_seed_manifest}.tmp.$$\"\n"
             "    mv -f -- \"${cold_flow_seed_manifest}.tmp.$$\" \"$cold_flow_seed_manifest\"\n"
             "    touch \"$cold_flow_seed_marker\"\n"
             "}\n"
@@ -4874,6 +4910,7 @@ functions
             "restore_run_state()\n"
             "{\n"
             "    restore_full_fan_options || true\n"
+            "    if [[ \"$mode\" == \"--cold-flow-seed\" ]]; then restore_full_solid_options || true; fi\n"
             "    restore_production_solver_controls || true\n"
             "    cleanup_script_snapshot || true\n"
             "}\n"
@@ -6376,7 +6413,7 @@ functions
                 "            done\n"
                 "        fi\n"
                 "        if [[ \"$thermal_only\" == \"false\" && "
-                    "-n \"$saved_time\" ]]; then\n"
+                    "-n \"$saved_time\" && ( \"$saved_time\" != 0 || -f \"$case_dir/processor0/0/fluid/phi\" ) ]]; then\n"
                 "            # CourantNo uses the checkpoint's stored deltaT.\n"
                 "            # The restart metadata now contains stage_dt, so the\n"
                 "            # reported Co predicts the proposed first live step.\n"

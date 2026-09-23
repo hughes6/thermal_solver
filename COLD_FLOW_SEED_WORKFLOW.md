@@ -31,14 +31,17 @@ after the accepted airflow checkpoint and writes:
 - `.cold_flow_seed_manifest`
 - the complete decomposed processor checkpoint
 
-No thermal stage is started and no temperature field is copied or altered.
+No thermal stage is started. Temperature fields still evolve in the coupled solver;
+the later import preserves the fresh target's ambient temperature fields.
 If interrupted, rerun the same command; the normal checkpoint/restart logic
 continues from the last complete processor time.
 
 ## 3. Create a thermal branch for a heat-load case
 
 Export a fresh case with the desired 20%, 60%, or 100% heat-load TOMLs, using
-the same geometry/mesh/fans and ambient settings. Then run:
+the same geometry/mesh/fans and ambient settings. Prepare its region meshes with
+its generated preparation script before importing. The importer requires matching
+prepared region meshes and version 2 seed metadata. Then run:
 
 ```bash
 bash ./tools/create_thermal_branch_from_cold_flow_seed.sh \
@@ -68,7 +71,10 @@ that transition.
 ## Continuation checkpoints
 
 If a session ends after export, continue with step 2. If it ends during branch
-creation, rerun the same branch command; the target's original `0/fluid` is
-backed up before replacement. If it ends during the thermal run, rerun the
+creation, inspect the target before retrying: initialized targets are refused to
+protect existing checkpoints. The original `0/fluid` is backed up before replacement.
+If it ends during the thermal run, rerun the
 printed `run_parallel.sh ... --multirate ...` command with the desired process
 count.
+
+See `COLD_FLOW_SEED_TEST_STATUS.md` for validation limits and regression commands.

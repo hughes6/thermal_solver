@@ -953,7 +953,7 @@ int main(int argc, char** argv) {
             "run_tracked \"$foam_launcher\" mpirun -np \"$processes\"") !=
                std::string::npos);
         assert(text.str().find(
-            "run_tracked_capture postflight_output") !=
+            "run_latest_courant_postprocess postflight_output") !=
                std::string::npos);
         assert(text.str().find(
             "Initializing OpenFOAM environment once with $foam_launcher.") !=
@@ -1494,7 +1494,7 @@ int main(int argc, char** argv) {
         const auto restart_courant_precheck=text.str().find(
             "checkpoint before Courant validation",restart_courant_helper);
         const auto restart_courant_postprocess=text.str().find(
-            "run_tracked_capture output",restart_courant_helper);
+            "run_latest_courant_postprocess output",restart_courant_helper);
         const auto restart_courant_postcheck=text.str().find(
             "checkpoint after Courant validation",restart_courant_postprocess);
         const auto restart_courant_resume=text.str().find(
