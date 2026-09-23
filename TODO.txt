@@ -47,6 +47,7 @@ RECALCULATE_AFTER_WRITE = True
 
 XL_CALCULATION_MANUAL = -4135
 XL_CALCULATION_AUTOMATIC = -4105
+ACCEPTABLE_DIRECTIONS = {"IN", "OUT", "IN/OUT"}
 
 
 # ================================================
@@ -239,6 +240,66 @@ def clean_extracted_value(value):
 def get_role_value(row, pdf_roles, role_name):
     column_name = pdf_roles[role_name]
     return str(row.get(column_name, "") or "").strip()
+
+
+def normalize_direction_value(value):
+    text = str(value or "").strip().upper()
+    text = re.sub(r"\s+", " ", text)
+    if re.search(r"(?<![A-Z0-9_])IN\s*/\s*OUT(?![A-Z0-9_])", text):
+        return "IN/OUT"
+    if re.search(r"(?<![A-Z0-9_])OUT(?![A-Z0-9_])", text):
+        return "OUT"
+    if re.search(r"(?<![A-Z0-9_])IN(?![A-Z0-9_])", text):
+        return "IN"
+    return ""
+
+
+def extract_role_text_from_words(row_words, boundaries, column_index, left_pad=0.0, right_pad=0.0, skip_numeric=False):
+    if column_index < 0 or column_index >= len(boundaries) - 1:
+        return ""
+    left = boundaries[column_index] - left_pad
+    right = boundaries[column_index + 1] + right_pad
+    candidates = []
+    for word in row_words:
+        value = str(word.get("text", "")).strip()
+        if value == "":
+            continue
+        x0 = float(word["x0"])
+        if x0 < left or x0 >= right:
+            continue
+        if skip_numeric and re.fullmatch(r"[+-]?\d+(?:\.\d+)?", value):
+            continue
+        candidates.append(word)
+    if not candidates:
+        return ""
+    candidates.sort(key=lambda word: (float(word["top"]), float(word["x0"])))
+    line_groups = []
+    for word in candidates:
+        top = float(word["top"])
+        if not line_groups or abs(top - line_groups[-1]["top"]) > 3.0:
+            line_groups.append({"top": top, "words": [word]})
+        else:
+            line_groups[-1]["words"].append(word)
+    rebuilt_lines = []
+    for line in line_groups:
+        line["words"].sort(key=lambda word: float(word["x0"]))
+        line_text = ""
+        previous_x1 = None
+        for word in line["words"]:
+            value = str(word.get("text", "")).strip()
+            if value == "":
+                continue
+            x0 = float(word["x0"])
+            x1 = float(word["x1"])
+            if line_text != "" and previous_x1 is not None:
+                gap = x0 - previous_x1
+                if gap > 2.5:
+                    line_text += " "
+            line_text += value
+            previous_x1 = x1
+        if line_text != "":
+            rebuilt_lines.append(line_text)
+    return clean_extracted_value(" ".join(value for value in rebuilt_lines if value != ""))
 
 
 # ================================================
@@ -607,17 +668,21 @@ def parse_row_chars(row_chars, boundaries, column_names):
 # ================================================
 # EXTRACT STRUCTURED ROWS
 # ================================================
-def extract_structured_rows(pdf_cache, separator_keyword, column_names):
+def extract_structured_rows(pdf_cache, separator_keyword, column_names, pdf_roles):
     start_time = time.perf_counter()
     column_centers, page_width, header_page = find_column_centers(pdf_cache, column_names)
-    boundaries = build_column_boundaries(pdf_cache, column_centers, page_width, header_page)
+    reference_boundaries = build_column_boundaries(pdf_cache, column_centers, page_width, header_page)
     section_markers = find_section_markers(pdf_cache, separator_keyword)
+    signal_index = column_names.index(pdf_roles["signal"])
+    direction_index = column_names.index(pdf_roles["direction"])
     structured_rows = []
     for page_number in sorted(pdf_cache):
         page_data = pdf_cache[page_number]
         chars = page_data["chars"]
+        words = page_data["words"]
         if not chars:
             continue
+        boundaries = reference_boundaries
         anchors = find_connector_anchors(chars, boundaries)
         if not anchors:
             continue
@@ -633,7 +698,13 @@ def extract_structured_rows(pdf_cache, separator_keyword, column_names):
             if row_bottom <= row_top:
                 continue
             row_chars = [char for char in chars if row_top <= float(char["top"]) < row_bottom]
+            row_words = [word for word in words if row_top <= float(word["top"]) < row_bottom]
             parsed_row = parse_row_chars(row_chars, boundaries, column_names)
+            signal_from_words = extract_role_text_from_words(row_words, boundaries, signal_index, left_pad=10.0, right_pad=0.0, skip_numeric=True)
+            direction_from_words = extract_role_text_from_words(row_words, boundaries, direction_index, left_pad=4.0, right_pad=4.0, skip_numeric=False)
+            if signal_from_words != "":
+                parsed_row[pdf_roles["signal"]] = signal_from_words
+            parsed_row[pdf_roles["direction"]] = normalize_direction_value(direction_from_words if direction_from_words != "" else parsed_row.get(pdf_roles["direction"], ""))
             parsed_row[column_names[0]] = anchor["connector"]
             if not is_connector_name(parsed_row[column_names[0]]):
                 continue
@@ -793,7 +864,7 @@ def build_excel_write_jobs(pdf_connectors, pdf_roles, connector_info):
                 continue
             matrix[pin_number - 1][0] = pin_number
             matrix[pin_number - 1][1] = get_role_value(row, pdf_roles, "signal")
-            matrix[pin_number - 1][2] = get_role_value(row, pdf_roles, "direction")
+            matrix[pin_number - 1][2] = normalize_direction_value(get_role_value(row, pdf_roles, "direction"))
         missing = []
         if expected_pins is not None and expected_pins > 0:
             missing = [pin_number for pin_number in range(1, expected_pins + 1) if pin_number not in pin_map]
@@ -969,7 +1040,7 @@ if __name__ == "__main__":
             print("############################################################")
             print(section["text"])
 
-    structured_rows = extract_structured_rows(pdf_cache, separator_keyword, column_names)
+    structured_rows = extract_structured_rows(pdf_cache, separator_keyword, column_names, pdf_roles)
 
     print("")
     print("============================================================")
@@ -1054,30 +1125,924 @@ if __name__ == "__main__":
 
 
 
-Block 1 / CTU-J1 / Pin 1 / IN/OUT | Added Value | None -> 'IN'
-Block 2 / CTU-J2 / Pin 1 / IN/OUT | Added Value | None -> 'IN'
-Block 7 / CTU-J7 / Pin 1 / IN/OUT | Removed Value | 'IN' -> None
-Block 9 / CTU-J9 / Pin 1 / IN/OUT | Value | 'IN' -> '500Ω'
-Block 10 / CTU-J10 / Pin 1 / IN/OUT | Removed Value | 'IN' -> None
-Block 11 / CTU-J11 / Pin 1 / IN/OUT | Removed Value | 'IN' -> None
-Block 19 / CTU-J19 / Pin 1 / Local Signal | Value | 'PRI_VAL_TC_CB_TP' -> 'PRI_VAL_TC_CB_'
-Block 20 / CTU-J20 / Pin 1 / Local Signal | Value | 'PRI_CDU_BUSA_H' -> 'I_CDU_BUSA_H'
-Block 19 / CTU-J19 / Pin 3 / Local Signal | Value | 'PRI_DTU_POR_TP' -> 'PRI_DTU_POR_T'
-Block 20 / CTU-J20 / Pin 3 / Local Signal | Value | 'PRI_CDU_BUSB_H' -> 'I_CDU_BUSB_H'
-Block 21 / CTU-J21 / Pin 3 / Local Signal | Value | 'RED_CDU_BUSB_H' -> 'RED_CDU_BUSB_'
-Block 22 / CTU-J22 / Pin 3 / Local Signal | Value | 'RED_DTU_POR_TP' -> 'D_DTU_POR_TP'
-Block 24 / CTU-J24 / Pin 3 / Local Signal | Value | 'DSU1_REC_GATE1_IN' -> 'DSU1_REC_GATE1'
-Block 25 / CTU-J25 / Pin 3 / Local Signal | Value | 'DSU2_RECORD_TP' -> 'DSU2_RECORD_'
-Block 32 / CTU-J34 / Pin 3 / Local Signal | Value | 'CTU' -> 'CTU RTN'
-Block 2 / CTU-J2 / Pin 4 / Pin | Formula Only | 4.0 -> 4.0
-Block 7 / CTU-J7 / Pin 4 / IN/OUT | Removed Value | 'IN' -> None
-Block 9 / CTU-J9 / Pin 4 / IN/OUT | Removed Value | 'IN' -> None
-Block 10 / CTU-J10 / Pin 4 / IN/OUT | Removed Value | 'IN' -> None
-Block 11 / CTU-J11 / Pin 4 / IN/OUT | Removed Value | 'IN' -> None
-Block 24 / CTU-J24 / Pin 4 / Local Signal | Value | 'DSU1_REC_GATE2_IN' -> 'DSU1_REC_GATE2'
-Block 32 / CTU-J34 / Pin 4 / Local Signal | Value | 'CSS-D_TEST_OUT' -> 'CSS-D_TEST_O'
 
 
 
 
 
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+import os
+import math
+import shutil
+import time
+import tkinter as tk
+from tkinter import filedialog
+
+import win32com.client as win32
+
+
+# ================================================
+# CONFIG
+# ================================================
+BLOCK_FIRST_COLUMN = 8
+BLOCK_WIDTH = 5
+BLOCK_PIN_COUNT_ROW = 5
+BLOCK_CONNECTOR_ROW = 6
+BLOCK_HEADER_ROW = 7
+BLOCK_DATA_FIRST_ROW = 8
+BLOCK_CENTER_OFFSET = 2
+BLOCK_PIN_OFFSET = 1
+BLOCK_SIGNAL_OFFSET = 2
+BLOCK_DIRECTION_OFFSET = 3
+
+SELECTION_CONNECTOR_FIRST_ROW = 7
+SELECTION_CONNECTOR_COLUMNS = {
+    2: "Connector Name",
+    3: "Connector Type",
+    4: "Class",
+    5: "Description",
+    6: "Pins",
+}
+
+VALUE_TOLERANCE = 1e-9
+MAX_REPORT_ROWS_PER_SHEET = 100000
+REPORT_FILE_FORMAT_XLSX = 51
+
+XL_UP = -4162
+XL_TO_LEFT = -4159
+
+
+# ================================================
+# GUI
+# ================================================
+def ask_excel_path(title):
+    root = tk.Tk()
+    root.withdraw()
+    root.attributes("-topmost", True)
+    root.update()
+    path = filedialog.askopenfilename(title=title, filetypes=[("Excel Workbooks", "*.xlsx *.xlsm *.xlsb *.xls"), ("All Files", "*.*")])
+    root.destroy()
+    if not path:
+        return None
+    return os.path.abspath(path)
+
+
+def ask_report_path(default_folder):
+    root = tk.Tk()
+    root.withdraw()
+    root.attributes("-topmost", True)
+    root.update()
+    path = filedialog.asksaveasfilename(title="Save Excel Diff Report", initialdir=default_folder, initialfile="Block_Maker_Diff_Report.xlsx", defaultextension=".xlsx", filetypes=[("Excel Workbook", "*.xlsx")])
+    root.destroy()
+    if not path:
+        return None
+    return os.path.abspath(path)
+
+
+# ================================================
+# BASIC HELPERS
+# ================================================
+def excel_column_letter(column_number):
+    result = ""
+    number = int(column_number)
+
+    while number > 0:
+        number, remainder = divmod(number - 1, 26)
+        result = chr(65 + remainder) + result
+
+    return result
+
+
+def cell_address(row, column):
+    return f"{excel_column_letter(column)}{row}"
+
+
+def safe_text(value):
+    if value is None:
+        return ""
+
+    if isinstance(value, bool):
+        return "TRUE" if value else "FALSE"
+
+    if isinstance(value, float):
+        if math.isnan(value):
+            return "NaN"
+        if value.is_integer():
+            return str(int(value))
+
+    return str(value)
+
+
+def report_text(value):
+    text = safe_text(value)
+
+    if text.startswith("=") or text.startswith("+") or text.startswith("-") or text.startswith("@"):
+        return "'" + text
+
+    return text
+
+
+def normalize_blank(value):
+    if value is None:
+        return ""
+
+    return value
+
+
+def values_equal(left, right):
+    left = normalize_blank(left)
+    right = normalize_blank(right)
+
+    if left == right:
+        return True
+
+    if isinstance(left, (int, float)) and isinstance(right, (int, float)):
+        try:
+            return abs(float(left) - float(right)) <= VALUE_TOLERANCE
+        except Exception:
+            return False
+
+    return False
+
+
+def formula_text(value):
+    if isinstance(value, str) and value.startswith("="):
+        return value
+
+    return ""
+
+
+def formulas_equal(left, right):
+    return formula_text(left) == formula_text(right)
+
+
+def matrix_from_com(value, row_count, column_count):
+    if row_count <= 0 or column_count <= 0:
+        return []
+
+    if row_count == 1 and column_count == 1:
+        return [[value]]
+
+    if row_count == 1:
+        if isinstance(value, tuple):
+            return [list(value)]
+        return [[value]]
+
+    if column_count == 1:
+        if isinstance(value, tuple):
+            result = []
+
+            for item in value:
+                if isinstance(item, tuple):
+                    result.append([item[0] if item else None])
+                else:
+                    result.append([item])
+
+            return result
+
+        return [[value]]
+
+    if not isinstance(value, tuple):
+        return [[value for _ in range(column_count)] for _ in range(row_count)]
+
+    return [list(row) if isinstance(row, tuple) else [row] for row in value]
+
+
+def get_matrix_value(matrix, row, column):
+    if row < 1 or column < 1:
+        return None
+
+    row_index = row - 1
+    column_index = column - 1
+
+    if row_index >= len(matrix):
+        return None
+
+    if column_index >= len(matrix[row_index]):
+        return None
+
+    return matrix[row_index][column_index]
+
+
+# ================================================
+# WORKBOOK READING
+# ================================================
+def meaningful_bounds(sheet):
+    used = sheet.UsedRange
+
+    first_row = int(used.Row)
+    first_column = int(used.Column)
+    last_row = int(used.Row + used.Rows.Count - 1)
+    last_column = int(used.Column + used.Columns.Count - 1)
+
+    if last_row < 1:
+        last_row = 1
+
+    if last_column < 1:
+        last_column = 1
+
+    return first_row, first_column, last_row, last_column
+
+
+def read_sheet_snapshot(sheet):
+    first_row, first_column, last_row, last_column = meaningful_bounds(sheet)
+
+    row_count = last_row
+    column_count = last_column
+
+    data_range = sheet.Range(sheet.Cells(1, 1), sheet.Cells(row_count, column_count))
+
+    values_raw = data_range.Value2
+
+    try:
+        formulas_raw = data_range.Formula2
+    except Exception:
+        formulas_raw = data_range.Formula
+
+    values = matrix_from_com(values_raw, row_count, column_count)
+    formulas = matrix_from_com(formulas_raw, row_count, column_count)
+
+    return {
+        "name": str(sheet.Name),
+        "rows": row_count,
+        "cols": column_count,
+        "values": values,
+        "formulas": formulas,
+        "used_first_row": first_row,
+        "used_first_col": first_column,
+        "used_last_row": last_row,
+        "used_last_col": last_column,
+    }
+
+
+def read_workbook_snapshot(workbook):
+    sheets = {}
+    order = []
+
+    for sheet in workbook.Worksheets:
+        snapshot = read_sheet_snapshot(sheet)
+        sheets[snapshot["name"]] = snapshot
+        order.append(snapshot["name"])
+
+    return {
+        "path": os.path.abspath(workbook.FullName),
+        "sheets": sheets,
+        "order": order,
+    }
+
+
+# ================================================
+# BLOCK MAKER LOCATION HELPERS
+# ================================================
+def selection_connector_count(sheet_snapshot):
+    value = get_matrix_value(sheet_snapshot["values"], 5, 3)
+
+    try:
+        return max(0, int(value))
+    except Exception:
+        return 0
+
+
+def value_from_either(old_sheet, new_sheet, row, column):
+    new_value = get_matrix_value(new_sheet["values"], row, column) if new_sheet is not None else None
+
+    if new_value not in (None, ""):
+        return new_value
+
+    old_value = get_matrix_value(old_sheet["values"], row, column) if old_sheet is not None else None
+
+    return old_value
+
+
+def describe_selection_connector_table(old_sheet, new_sheet, row, column):
+    if row < SELECTION_CONNECTOR_FIRST_ROW:
+        return None
+
+    if column not in SELECTION_CONNECTOR_COLUMNS:
+        return None
+
+    old_count = selection_connector_count(old_sheet) if old_sheet is not None else 0
+    new_count = selection_connector_count(new_sheet) if new_sheet is not None else 0
+    connector_count = max(old_count, new_count)
+
+    if connector_count <= 0:
+        return None
+
+    last_row = SELECTION_CONNECTOR_FIRST_ROW + connector_count - 1
+
+    if row > last_row:
+        return None
+
+    block_number = row - SELECTION_CONNECTOR_FIRST_ROW + 1
+    connector = value_from_either(old_sheet, new_sheet, row, 2)
+    field = SELECTION_CONNECTOR_COLUMNS[column]
+
+    return {
+        "kind": "Connector Selection",
+        "block": block_number,
+        "connector": safe_text(connector),
+        "pin": "",
+        "field": field,
+        "location": f"Connector Selection / Block {block_number} / {safe_text(connector)} / {field}",
+    }
+
+
+def block_number_for_column(column):
+    if column < BLOCK_FIRST_COLUMN:
+        return None
+
+    return ((column - BLOCK_FIRST_COLUMN) // BLOCK_WIDTH) + 1
+
+
+def block_start_column(block_number):
+    return BLOCK_FIRST_COLUMN + ((block_number - 1) * BLOCK_WIDTH)
+
+
+def describe_block_cell(old_sheet, new_sheet, row, column):
+    block_number = block_number_for_column(column)
+
+    if block_number is None:
+        return None
+
+    start_column = block_start_column(block_number)
+    relative_column = column - start_column
+
+    if relative_column < 0 or relative_column >= BLOCK_WIDTH:
+        return None
+
+    connector_column = start_column + BLOCK_CENTER_OFFSET
+    connector = value_from_either(old_sheet, new_sheet, BLOCK_CONNECTOR_ROW, connector_column)
+    connector_text = safe_text(connector)
+
+    pin = ""
+    field = "Block Cell"
+
+    if row == BLOCK_PIN_COUNT_ROW:
+        field = "Number of Pins"
+    elif row == BLOCK_CONNECTOR_ROW:
+        field = "Connector Name"
+    elif row == BLOCK_HEADER_ROW:
+        field = "Header"
+    elif row >= BLOCK_DATA_FIRST_ROW:
+        if relative_column == BLOCK_PIN_OFFSET:
+            field = "Pin"
+        elif relative_column == BLOCK_SIGNAL_OFFSET:
+            field = "Local Signal"
+        elif relative_column == BLOCK_DIRECTION_OFFSET:
+            field = "IN/OUT"
+        elif relative_column == 0:
+            field = "Left Helper"
+        elif relative_column == BLOCK_WIDTH - 1:
+            field = "Right Helper"
+
+        pin_value = value_from_either(old_sheet, new_sheet, row, start_column + BLOCK_PIN_OFFSET)
+
+        if pin_value in (None, ""):
+            pin = row - BLOCK_DATA_FIRST_ROW + 1
+        else:
+            pin = pin_value
+
+    location_parts = [f"Block {block_number}"]
+
+    if connector_text:
+        location_parts.append(connector_text)
+
+    if pin != "":
+        location_parts.append(f"Pin {safe_text(pin)}")
+
+    location_parts.append(field)
+
+    return {
+        "kind": "Block",
+        "block": block_number,
+        "connector": connector_text,
+        "pin": safe_text(pin),
+        "field": field,
+        "location": " / ".join(location_parts),
+    }
+
+
+def generic_row_label(old_sheet, new_sheet, row):
+    if row < 1:
+        return ""
+
+    label = value_from_either(old_sheet, new_sheet, row, 1)
+
+    return safe_text(label)
+
+
+def generic_column_label(old_sheet, new_sheet, column):
+    if column < 1:
+        return ""
+
+    label = value_from_either(old_sheet, new_sheet, 1, column)
+
+    return safe_text(label)
+
+
+def describe_cell(sheet_name, old_sheet, new_sheet, row, column):
+    if sheet_name.lower() == "selection":
+        selection_info = describe_selection_connector_table(old_sheet, new_sheet, row, column)
+
+        if selection_info is not None:
+            return selection_info
+
+        block_info = describe_block_cell(old_sheet, new_sheet, row, column)
+
+        if block_info is not None:
+            return block_info
+
+    block_info = describe_block_cell(old_sheet, new_sheet, row, column)
+
+    if block_info is not None:
+        header_value = value_from_either(old_sheet, new_sheet, BLOCK_HEADER_ROW, block_start_column(block_info["block"]) + BLOCK_PIN_OFFSET)
+        signal_header = value_from_either(old_sheet, new_sheet, BLOCK_HEADER_ROW, block_start_column(block_info["block"]) + BLOCK_SIGNAL_OFFSET)
+
+        if safe_text(header_value).lower() == "pins" or "signal" in safe_text(signal_header).lower():
+            return block_info
+
+    row_label = generic_row_label(old_sheet, new_sheet, row)
+    column_label = generic_column_label(old_sheet, new_sheet, column)
+    address = cell_address(row, column)
+
+    location = f"{sheet_name} / {address}"
+
+    if row_label:
+        location += f" / Row: {row_label}"
+
+    if column_label:
+        location += f" / Column: {column_label}"
+
+    return {
+        "kind": "Generic",
+        "block": "",
+        "connector": "",
+        "pin": "",
+        "field": column_label,
+        "location": location,
+    }
+
+
+# ================================================
+# DIFF LOGIC
+# ================================================
+def classify_diff(old_value, new_value, old_formula, new_formula):
+    value_changed = not values_equal(old_value, new_value)
+    formula_changed = not formulas_equal(old_formula, new_formula)
+
+    old_formula_text = formula_text(old_formula)
+    new_formula_text = formula_text(new_formula)
+
+    if not value_changed and not formula_changed:
+        return None
+
+    if old_value in (None, "") and new_value not in (None, "") and not old_formula_text and not new_formula_text:
+        return "Added Value"
+
+    if new_value in (None, "") and old_value not in (None, "") and not old_formula_text and not new_formula_text:
+        return "Removed Value"
+
+    if formula_changed and value_changed:
+        return "Formula + Value"
+
+    if formula_changed:
+        return "Formula Only"
+
+    if old_formula_text and old_formula_text == new_formula_text and value_changed:
+        return "Same Formula / Different Result"
+
+    return "Value"
+
+
+def compare_matching_sheet(sheet_name, old_sheet, new_sheet):
+    max_rows = max(old_sheet["rows"], new_sheet["rows"])
+    max_cols = max(old_sheet["cols"], new_sheet["cols"])
+
+    diffs = []
+
+    for row in range(1, max_rows + 1):
+        for column in range(1, max_cols + 1):
+            old_value = get_matrix_value(old_sheet["values"], row, column)
+            new_value = get_matrix_value(new_sheet["values"], row, column)
+            old_formula_raw = get_matrix_value(old_sheet["formulas"], row, column)
+            new_formula_raw = get_matrix_value(new_sheet["formulas"], row, column)
+            diff_type = classify_diff(old_value, new_value, old_formula_raw, new_formula_raw)
+
+            if diff_type is None:
+                continue
+
+            location_info = describe_cell(sheet_name, old_sheet, new_sheet, row, column)
+
+            diffs.append({
+                "sheet": sheet_name,
+                "row": row,
+                "column": column,
+                "cell": cell_address(row, column),
+                "kind": location_info["kind"],
+                "block": location_info["block"],
+                "connector": location_info["connector"],
+                "pin": location_info["pin"],
+                "field": location_info["field"],
+                "location": location_info["location"],
+                "diff_type": diff_type,
+                "old_value": old_value,
+                "new_value": new_value,
+                "old_formula": formula_text(old_formula_raw),
+                "new_formula": formula_text(new_formula_raw),
+            })
+
+    return diffs
+
+
+def compare_workbooks(old_snapshot, new_snapshot):
+    old_sheet_names = set(old_snapshot["sheets"].keys())
+    new_sheet_names = set(new_snapshot["sheets"].keys())
+
+    added_sheets = sorted(new_sheet_names - old_sheet_names)
+    removed_sheets = sorted(old_sheet_names - new_sheet_names)
+    common_sheets = [name for name in old_snapshot["order"] if name in new_sheet_names]
+
+    diffs = []
+
+    for sheet_name in common_sheets:
+        print("COMPARING SHEET:", sheet_name)
+        old_sheet = old_snapshot["sheets"][sheet_name]
+        new_sheet = new_snapshot["sheets"][sheet_name]
+        diffs.extend(compare_matching_sheet(sheet_name, old_sheet, new_sheet))
+
+    return {
+        "diffs": diffs,
+        "added_sheets": added_sheets,
+        "removed_sheets": removed_sheets,
+    }
+
+
+# ================================================
+# REPORT DATA
+# ================================================
+def build_block_summary(block_diffs):
+    groups = {}
+
+    for diff in block_diffs:
+        key = (diff["sheet"], diff["block"], diff["connector"])
+
+        if key not in groups:
+            groups[key] = {
+                "sheet": diff["sheet"],
+                "block": diff["block"],
+                "connector": diff["connector"],
+                "count": 0,
+                "pins": set(),
+                "fields": set(),
+                "types": set(),
+            }
+
+        group = groups[key]
+        group["count"] += 1
+
+        if diff["pin"] != "":
+            group["pins"].add(str(diff["pin"]))
+
+        if diff["field"]:
+            group["fields"].add(str(diff["field"]))
+
+        group["types"].add(str(diff["diff_type"]))
+
+    result = []
+
+    def pin_sort(value):
+        try:
+            return int(value)
+        except Exception:
+            return 999999
+
+    for key in sorted(groups, key=lambda item: (item[0], int(item[1]) if str(item[1]).isdigit() else 999999, item[2])):
+        group = groups[key]
+        pins = sorted(group["pins"], key=pin_sort)
+        fields = sorted(group["fields"])
+        types = sorted(group["types"])
+
+        result.append([
+            group["sheet"],
+            group["block"],
+            group["connector"],
+            group["count"],
+            ", ".join(pins),
+            ", ".join(fields),
+            ", ".join(types),
+        ])
+
+    return result
+
+
+def build_sheet_summary(old_snapshot, new_snapshot, comparison):
+    rows = []
+
+    all_names = []
+
+    for name in old_snapshot["order"]:
+        if name not in all_names:
+            all_names.append(name)
+
+    for name in new_snapshot["order"]:
+        if name not in all_names:
+            all_names.append(name)
+
+    for sheet_name in all_names:
+        if sheet_name in comparison["added_sheets"]:
+            status = "Added Sheet"
+        elif sheet_name in comparison["removed_sheets"]:
+            status = "Removed Sheet"
+        else:
+            status = "Compared"
+
+        sheet_diffs = [diff for diff in comparison["diffs"] if diff["sheet"] == sheet_name]
+        block_diffs = [diff for diff in sheet_diffs if diff["kind"] in ("Block", "Connector Selection")]
+        generic_diffs = [diff for diff in sheet_diffs if diff["kind"] == "Generic"]
+
+        rows.append([sheet_name, status, len(sheet_diffs), len(block_diffs), len(generic_diffs)])
+
+    return rows
+
+
+# ================================================
+# REPORT WORKBOOK HELPERS
+# ================================================
+def write_matrix(sheet, start_row, start_col, matrix):
+    if not matrix:
+        return
+
+    row_count = len(matrix)
+    col_count = max(len(row) for row in matrix)
+
+    normalized = []
+
+    for row in matrix:
+        new_row = list(row)
+
+        while len(new_row) < col_count:
+            new_row.append("")
+
+        normalized.append(tuple(new_row))
+
+    target = sheet.Range(sheet.Cells(start_row, start_col), sheet.Cells(start_row + row_count - 1, start_col + col_count - 1))
+    target.Value2 = tuple(normalized)
+
+
+def style_report_sheet(sheet, column_count, freeze_row=1):
+    header = sheet.Range(sheet.Cells(1, 1), sheet.Cells(1, column_count))
+    header.Font.Bold = True
+    header.Interior.Color = 0xD9EAF7
+    header.Borders.LineStyle = 1
+    header.AutoFilter()
+
+    used = sheet.UsedRange
+    used.VerticalAlignment = -4108
+    used.WrapText = False
+
+    sheet.Activate()
+
+    window = sheet.Application.ActiveWindow
+
+    if window is not None:
+        window.SplitRow = freeze_row
+        window.FreezePanes = True
+
+
+def set_widths(sheet, widths):
+    for column_number, width in enumerate(widths, start=1):
+        sheet.Columns(column_number).ColumnWidth = width
+
+
+def add_report_sheet(workbook, name, headers, rows, widths):
+    sheet = workbook.Worksheets.Add(After=workbook.Worksheets(workbook.Worksheets.Count))
+    sheet.Name = name
+
+    data = [headers]
+
+    for row in rows[:MAX_REPORT_ROWS_PER_SHEET]:
+        data.append(row)
+
+    write_matrix(sheet, 1, 1, data)
+    style_report_sheet(sheet, len(headers), 1)
+    set_widths(sheet, widths)
+
+    return sheet
+
+
+def create_diff_report(excel, report_path, old_snapshot, new_snapshot, comparison):
+    report_path = os.path.abspath(report_path)
+    report_folder = os.path.dirname(report_path)
+    os.makedirs(report_folder, exist_ok=True)
+    if os.path.isfile(report_path):
+        try:
+            os.remove(report_path)
+        except Exception:
+            pass
+    workbook = excel.Workbooks.Add()
+    actual_saved_path = None
+    try:
+        while workbook.Worksheets.Count > 1:
+            workbook.Worksheets(workbook.Worksheets.Count).Delete()
+        summary_sheet = workbook.Worksheets(1)
+        summary_sheet.Name = "Summary"
+        block_diffs = [diff for diff in comparison["diffs"] if diff["kind"] in ("Block", "Connector Selection")]
+        generic_diffs = [diff for diff in comparison["diffs"] if diff["kind"] == "Generic"]
+        summary_rows = [["Reference Workbook", old_snapshot["path"]], ["Comparison Workbook", new_snapshot["path"]], ["Total Cell Diffs", len(comparison["diffs"])], ["Block-Maker Diffs", len(block_diffs)], ["Generic Diffs", len(generic_diffs)], ["Added Sheets", ", ".join(comparison["added_sheets"])], ["Removed Sheets", ", ".join(comparison["removed_sheets"])]]
+        write_matrix(summary_sheet, 1, 1, [["EXCEL DIFF REPORT", ""]] + summary_rows)
+        summary_sheet.Range("A1:B1").Font.Bold = True
+        summary_sheet.Range("A1:B1").Interior.Color = 0xD9EAF7
+        summary_sheet.Columns(1).ColumnWidth = 24
+        summary_sheet.Columns(2).ColumnWidth = 90
+        sheet_summary_headers = ["Sheet", "Status", "Total Diffs", "Block-Maker Diffs", "Generic Diffs"]
+        sheet_summary_rows = build_sheet_summary(old_snapshot, new_snapshot, comparison)
+        write_matrix(summary_sheet, 11, 1, [sheet_summary_headers] + sheet_summary_rows)
+        summary_sheet.Range(summary_sheet.Cells(11, 1), summary_sheet.Cells(11, len(sheet_summary_headers))).Font.Bold = True
+        summary_sheet.Range(summary_sheet.Cells(11, 1), summary_sheet.Cells(11, len(sheet_summary_headers))).Interior.Color = 0xD9EAF7
+        block_summary_headers = ["Sheet", "Block #", "Connector", "Diff Count", "Pins Affected", "Fields Affected", "Diff Types"]
+        block_summary_rows = build_block_summary(block_diffs)
+        add_report_sheet(workbook, "Block Summary", block_summary_headers, block_summary_rows, [18, 10, 20, 12, 35, 35, 30])
+        block_headers = ["Sheet", "Block #", "Connector", "Pin", "Field", "Diff Type", "Location", "Cell", "Old Value", "New Value", "Old Formula", "New Formula"]
+        block_rows = []
+        for diff in block_diffs:
+            block_rows.append([diff["sheet"], diff["block"], diff["connector"], diff["pin"], diff["field"], diff["diff_type"], diff["location"], diff["cell"], report_text(diff["old_value"]), report_text(diff["new_value"]), report_text(diff["old_formula"]), report_text(diff["new_formula"])])
+        add_report_sheet(workbook, "Block Diffs", block_headers, block_rows, [16, 9, 20, 9, 22, 28, 65, 10, 35, 35, 45, 45])
+        generic_headers = ["Sheet", "Cell", "Row", "Column", "Field/Header", "Diff Type", "Location", "Old Value", "New Value", "Old Formula", "New Formula"]
+        generic_rows = []
+        for diff in generic_diffs:
+            generic_rows.append([diff["sheet"], diff["cell"], diff["row"], diff["column"], diff["field"], diff["diff_type"], diff["location"], report_text(diff["old_value"]), report_text(diff["new_value"]), report_text(diff["old_formula"]), report_text(diff["new_formula"])])
+        add_report_sheet(workbook, "Other Diffs", generic_headers, generic_rows, [18, 10, 9, 9, 28, 28, 70, 35, 35, 45, 45])
+        sheet_change_headers = ["Change", "Sheet"]
+        sheet_change_rows = []
+        for name in comparison["added_sheets"]:
+            sheet_change_rows.append(["Added", name])
+        for name in comparison["removed_sheets"]:
+            sheet_change_rows.append(["Removed", name])
+        add_report_sheet(workbook, "Sheet Changes", sheet_change_headers, sheet_change_rows, [16, 30])
+        summary_sheet.Activate()
+        print("SAVING DIFF REPORT TO:", report_path)
+        workbook.SaveAs(Filename=report_path, FileFormat=REPORT_FILE_FORMAT_XLSX, CreateBackup=False, AddToMru=False, Local=True)
+        workbook.Save()
+        actual_saved_path = os.path.abspath(str(workbook.FullName))
+        print("EXCEL REPORTED SAVED PATH:", actual_saved_path)
+        workbook.Close(SaveChanges=True)
+        workbook = None
+        time.sleep(0.5)
+        if not os.path.isfile(report_path) and actual_saved_path and os.path.isfile(actual_saved_path):
+            shutil.copy2(actual_saved_path, report_path)
+        if not os.path.isfile(report_path):
+            raise Exception(f"Diff report was not created at {report_path}")
+        print("DIFF REPORT SAVED:", report_path)
+        print("DIFF REPORT SIZE:", os.path.getsize(report_path), "BYTES")
+        return report_path
+    finally:
+        if workbook is not None:
+            try:
+                workbook.Close(SaveChanges=False)
+            except Exception:
+                pass
+
+
+# ================================================
+# TERMINAL OUTPUT
+# ================================================
+def print_terminal_summary(old_path, new_path, report_path, comparison):
+    block_diffs = [diff for diff in comparison["diffs"] if diff["kind"] in ("Block", "Connector Selection")]
+    generic_diffs = [diff for diff in comparison["diffs"] if diff["kind"] == "Generic"]
+
+    print("")
+    print("============================================================")
+    print("EXCEL DIFF COMPLETE")
+    print("============================================================")
+    print("REFERENCE:", old_path)
+    print("COMPARISON:", new_path)
+    print("REPORT:", report_path)
+    print("TOTAL DIFFS:", len(comparison["diffs"]))
+    print("BLOCK-MAKER DIFFS:", len(block_diffs))
+    print("OTHER DIFFS:", len(generic_diffs))
+    print("ADDED SHEETS:", comparison["added_sheets"])
+    print("REMOVED SHEETS:", comparison["removed_sheets"])
+    print("============================================================")
+
+    if block_diffs:
+        print("")
+        print("BLOCK-MAKER DIFF PREVIEW")
+        print("============================================================")
+
+        for diff in block_diffs[:40]:
+            print(diff["location"], "|", diff["diff_type"], "|", repr(diff["old_value"]), "->", repr(diff["new_value"]))
+
+        if len(block_diffs) > 40:
+            print("... MORE BLOCK DIFFS IN REPORT:", len(block_diffs) - 40)
+
+
+# ================================================
+# MAIN
+# ================================================
+if __name__ == "__main__":
+    start_time = time.perf_counter()
+
+    reference_path = ask_excel_path("Select REFERENCE / OLD Block Maker Workbook")
+
+    if reference_path is None:
+        raise Exception("No reference workbook selected")
+
+    comparison_path = ask_excel_path("Select COMPARISON / NEW Block Maker Workbook")
+
+    if comparison_path is None:
+        raise Exception("No comparison workbook selected")
+
+    report_path = ask_report_path(os.path.dirname(comparison_path))
+
+    if report_path is None:
+        raise Exception("No report path selected")
+
+    excel = win32.DispatchEx("Excel.Application")
+    excel.Visible = False
+    excel.DisplayAlerts = False
+    excel.ScreenUpdating = False
+    excel.EnableEvents = False
+    excel.AskToUpdateLinks = False
+
+    try:
+        excel.AutomationSecurity = 3
+    except Exception:
+        pass
+
+    reference_book = None
+    comparison_book = None
+
+    try:
+        print("OPENING REFERENCE WORKBOOK")
+        reference_book = excel.Workbooks.Open(reference_path, UpdateLinks=0, ReadOnly=True, AddToMru=False)
+
+        print("READING REFERENCE WORKBOOK")
+        reference_snapshot = read_workbook_snapshot(reference_book)
+
+        reference_book.Close(SaveChanges=False)
+        reference_book = None
+
+        print("OPENING COMPARISON WORKBOOK")
+        comparison_book = excel.Workbooks.Open(comparison_path, UpdateLinks=0, ReadOnly=True, AddToMru=False)
+
+        print("READING COMPARISON WORKBOOK")
+        comparison_snapshot = read_workbook_snapshot(comparison_book)
+
+        comparison_book.Close(SaveChanges=False)
+        comparison_book = None
+
+        print("COMPARING WORKBOOKS")
+        comparison = compare_workbooks(reference_snapshot, comparison_snapshot)
+
+        print("CREATING DIFF REPORT")
+        create_diff_report(excel, report_path, reference_snapshot, comparison_snapshot, comparison)
+
+    finally:
+        if reference_book is not None:
+            reference_book.Close(SaveChanges=False)
+
+        if comparison_book is not None:
+            comparison_book.Close(SaveChanges=False)
+
+        try:
+            excel.EnableEvents = True
+            excel.ScreenUpdating = True
+        except Exception:
+            pass
+
+        excel.Quit()
+
+    print_terminal_summary(reference_path, comparison_path, report_path, comparison)
+
+    elapsed = time.perf_counter() - start_time
+
+    print("TOTAL TIME:", round(elapsed, 2), "SECONDS")
