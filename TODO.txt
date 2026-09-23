@@ -1,15 +1,14 @@
-source "${THERMAL_SIM_OPENFOAM_BASHRC:-$HOME/OpenFOAM/OpenFOAM-v2606/etc/bashrc}"
-
 (
-set -e
-cd '/mnt/c/OpenFOAM/PATH_TO_NEW_60_PERCENT_CASE'
+cd '/mnt/c/OpenFOAM/thermal_sim_SOLAR_ATB/SOLAR_ATB_20PCT_HEAT_LOAD' || exit
+set +e
 
-bash ./build_semifrozen_solver.sh
-OPENFOAM_LAUNCHER=env bash ./prepare_regions_low_memory.sh "$PWD"
-
-OPENFOAM_LAUNCHER=env bash ./prepare_heated_airflow_reuse.sh \
-  '/mnt/c/OpenFOAM/PATH_TO_OLD_100_PERCENT_CASE' \
+OPENFOAM_LAUNCHER=env bash -x ./prepare_heated_airflow_reuse.sh \
+  '/mnt/c/OpenFOAM/thermal_sim_SOLAR_ATB/SOLAR_ATB_60PCT_HEAT_LOAD_nodelete' \
   "$PWD" \
-  'EXACT_SAVED_TIME_FOLDER_NAME' \
-  4
+  '3.3601088999995983' \
+  6 > reuse-debug.log 2>&1
+
+result=$?
+tail -n 60 reuse-debug.log
+printf '\nReuse helper exit code: %s\n' "$result"
 )
