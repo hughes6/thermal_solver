@@ -2413,7 +2413,14 @@ struct ModelLoader {
                     << "  # Follow its printed qualification command, then import only after acceptance.\n"
                     << "  # Imports velocity/turbulence into a separate heat-off case; resets pressure and all temperatures.\n"
                     << "  # Does not reuse hot density/flux or certify the hot operating point as cold.\n"
-                    << "  # Qualification can need more airflow time. See HEATED_AIRFLOW_REUSE.md for validation limits.\n\n";
+                    << "  # Qualification can need more airflow time. See HEATED_AIRFLOW_REUSE.md for validation limits.\n\n"
+                    << "SCREENING AIRFLOW TO AN IN-DEPTH MESH (same layout, different mesh resolution):\n"
+                    << "  # In a fresh, prepared in-depth case, use this INSTEAD of the identical-mesh helper:\n"
+                    << "  OPENFOAM_LAUNCHER=env bash ./prepare_mapped_airflow_reuse.sh \"$DONOR_CASE\" \"$PWD\" \"$DONOR_TIME\" "
+                    << cfg.parallel_processes << "\n"
+                    << "  # Requires python3; maps velocity/turbulence and checks target coverage.\n"
+                    << "  # Run the printed .mapped-flow-check qualification, then import only after acceptance.\n"
+                    << "  # Fine-mesh temperatures and watts come from this target model. See MAPPED_AIRFLOW_REUSE.md.\n\n";
             }
             if(cfg.use_multirate_thermal) {
                 std::cout

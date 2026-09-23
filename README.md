@@ -33,6 +33,15 @@ direct C++ construction in `main.cpp`.
 
 ### Reusable cold-flow seeds for several heat loads
 
+Changing from a screening mesh to an in-depth mesh? Use
+[screening-to-in-depth airflow mapping](MAPPED_AIRFLOW_REUSE.md), exposed as
+`prepare_mapped_airflow_reuse.sh` in new exports and in `./model` output.
+It maps developed velocity/turbulence into a separate fine-mesh qualification
+case, checks interpolation coverage, and requires airflow acceptance before
+thermal import. Target ambient temperatures and target watt loads are retained.
+The physical layout, fans and materials must match; this is a mesh-resolution
+change workflow. The existing identical-mesh import commands are unchanged.
+
 Already have a valuable **heated** airflow run? Do not label it a cold seed or
 copy its hot density/flux into an ambient-temperature model. Use the separate
 [heated-checkpoint workflow](HEATED_AIRFLOW_REUSE.md): export a fresh target,

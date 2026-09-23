@@ -15,8 +15,10 @@ int main(int argc,char** argv) {
     auto* previous=std::cout.rdbuf(captured.rdbuf());
     loader.run();
     std::cout.rdbuf(previous);
-    for(const auto* required : {"--cold-flow-seed", "prepare_heated_airflow_reuse.sh", "DONOR_TIME=", "--multirate", "Qualification can need more airflow time"})
+    for(const auto* required : {"--cold-flow-seed", "prepare_heated_airflow_reuse.sh", "prepare_mapped_airflow_reuse.sh", "DONOR_TIME=", "--multirate", "Qualification can need more airflow time"})
         assert(captured.str().find(required)!=std::string::npos);
     assert(std::filesystem::exists(std::filesystem::path(argv[1])/"prepare_heated_airflow_reuse.sh"));
+    assert(std::filesystem::exists(std::filesystem::path(argv[1])/"prepare_mapped_airflow_reuse.sh"));
+    assert(std::filesystem::exists(std::filesystem::path(argv[1])/"mapped_airflow_checks.py"));
     std::cout<<"PASS: model output includes separate cold/heated reuse commands and bundled helper\n";
 }

@@ -7,7 +7,8 @@ int main(int argc,char** argv) {
     Workload load(10000,1000000,100000,100);
     auto rack=Rack::from_meters(0.2,0.4,0.2);
     rack.set_t(20); rack.set_cp(1005); rack.set_k(0.02587); rack.set_rho(1.225);
-    auto mesh=Mesh().build_mesh(rack,0.05,0.05,0.05,env,load);
+    const double spacing=std::getenv("REUSE_TEST_FINE") ? 0.025 : 0.05;
+    auto mesh=Mesh().build_mesh(rack,spacing,spacing,spacing,env,load);
     auto heater=Component::from_meters(0.1,0.1,0.1,"heater");
     heater.set_coords_m(0,0.15,0); heater.set_t(20);
     heater.set_rho_solid(1000); heater.set_cp(1000); heater.set_k_solid(10);
@@ -31,5 +32,5 @@ int main(int argc,char** argv) {
     o.pimple_outer_correctors=3; o.pimple_pressure_correctors=2;
     o.thermal_only_pimple_outer_correctors=3; o.saved_time_directories=20;
     OpenFoamExporter::export_mesh(mesh,o);
-    std::cout<<"Exported 128-cell physical fixture: "<<argv[1]<<"\n";
+    std::cout<<"Exported physical fixture: "<<argv[1]<<"\n";
 }

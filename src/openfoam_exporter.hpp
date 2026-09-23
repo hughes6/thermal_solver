@@ -324,6 +324,13 @@ public:
             require_stream(heated_stream,heated);
             heated_stream << load_project_asset(
                 "tools/prepare_heated_airflow_reuse.sh","heated-donor-snapshot",false);
+            for(const char* filename : {"prepare_mapped_airflow_reuse.sh", "mapped_airflow_checks.py"}) {
+                const auto path=options.case_directory/filename;
+                std::ofstream mapped_stream(path,std::ios::binary);
+                require_stream(mapped_stream,path);
+                mapped_stream << load_project_asset(std::string("tools/")+filename,
+                    std::string(filename)=="mapped_airflow_checks.py" ? "thermalSimMappingCoverage" : "--map-mesh",false);
+            }
         }
     }
 
@@ -4047,6 +4054,10 @@ functions
                 "bash \"$script_snapshot_path\" \"$@\"\n"
             "fi\n"
             "case_dir=\"${THERMAL_SOLVER_CASE_DIR:-$case_dir}\"\n"
+            "if [[ -e \"$case_dir/.airflow_reuse_preparation_pending\" ]]; then\n"
+            "    echo 'Airflow reuse preparation is incomplete. Inspect reconstruct-donor.log or map-airflow.log before running.' >&2\n"
+            "    exit 1\n"
+            "fi\n"
             "foam_launcher=\"${OPENFOAM_LAUNCHER:-openfoam2606}\"\n"
             "processes=\"${1:-" << options.parallel_processes << "}\"\n"
             "mode=\"${2:-"
