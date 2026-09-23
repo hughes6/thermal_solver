@@ -10,6 +10,7 @@ import win32com.client as win32
 from openpyxl import Workbook
 from openpyxl.styles import Font, PatternFill, Border, Side, Alignment
 from openpyxl.utils import get_column_letter
+from openpyxl.cell import WriteOnlyCell
 
 
 # ================================================
@@ -549,66 +550,31 @@ def compare_workbooks(old_snapshot, new_snapshot):
 
 
 # ================================================
-# REPORT DATA
+# FAST WRITE-ONLY REPORT HELPERS
 # ================================================
-def build_block_summary(block_diffs):
-    groups = {}
+def make_header_cells(sheet, headers):
+    fill = PatternFill(fill_type="solid", fgColor="D9EAF7")
+    side = Side(style="thin", color="000000")
+    border = Border(left=side, right=side, top=side, bottom=side)
+    cells = []
 
-    for diff in block_diffs:
-        key = (diff["sheet"], diff["block"], diff["connector"])
+    for value in headers:
+        cell = WriteOnlyCell(sheet, value=value)
+        cell.font = Font(bold=True)
+        cell.fill = fill
+        cell.border = border
+        cell.alignment = Alignment(vertical="center")
+        cells.append(cell)
 
-        if key not in groups:
-            groups[key] = {
-                "sheet": diff["sheet"],
-                "block": diff["block"],
-                "connector": diff["connector"],
-                "count": 0,
-                "pins": set(),
-                "fields": set(),
-                "types": set(),
-            }
-
-        group = groups[key]
-        group["count"] += 1
-
-        if diff["pin"] != "":
-            group["pins"].add(str(diff["pin"]))
-
-        if diff["field"]:
-            group["fields"].add(str(diff["field"]))
-
-        group["types"].add(str(diff["diff_type"]))
-
-    result = []
-
-    def pin_sort(value):
-        try:
-            return int(value)
-        except Exception:
-            return 999999
-
-    for key in sorted(groups, key=lambda item: (item[0], int(item[1]) if str(item[1]).isdigit() else 999999, item[2])):
-        group = groups[key]
-        pins = sorted(group["pins"], key=pin_sort)
-        fields = sorted(group["fields"])
-        types = sorted(group["types"])
-
-        result.append([
-            group["sheet"],
-            group["block"],
-            group["connector"],
-            group["count"],
-            ", ".join(pins),
-            ", ".join(fields),
-            ", ".join(types),
-        ])
-
-    return result
+    return cells
 
 
-def build_sheet_summary(old_snapshot, new_snapshot, comparison):
-    rows = []
+def set_write_only_widths(sheet, widths):
+    for column_number, width in enumerate(widths, start=1):
+        sheet.column_dimensions[get_column_letter(column_number)].width = width
 
+
+def build_fast_report_aggregates(old_snapshot, new_snapshot, comparison):
     all_names = []
 
     for name in old_snapshot["order"]:
@@ -619,156 +585,68 @@ def build_sheet_summary(old_snapshot, new_snapshot, comparison):
         if name not in all_names:
             all_names.append(name)
 
+    added_set = set(comparison["added_sheets"])
+    removed_set = set(comparison["removed_sheets"])
+
+    sheet_counts = {}
+
     for sheet_name in all_names:
-        if sheet_name in comparison["added_sheets"]:
+        if sheet_name in added_set:
             status = "Added Sheet"
-        elif sheet_name in comparison["removed_sheets"]:
+        elif sheet_name in removed_set:
             status = "Removed Sheet"
         else:
             status = "Compared"
 
-        sheet_diffs = [diff for diff in comparison["diffs"] if diff["sheet"] == sheet_name]
-        block_diffs = [diff for diff in sheet_diffs if diff["kind"] in ("Block", "Connector Selection")]
-        generic_diffs = [diff for diff in sheet_diffs if diff["kind"] == "Generic"]
+        sheet_counts[sheet_name] = {"status": status, "total": 0, "block": 0, "generic": 0}
 
-        rows.append([sheet_name, status, len(sheet_diffs), len(block_diffs), len(generic_diffs)])
+    block_groups = {}
+    total_block = 0
+    total_generic = 0
 
-    return rows
+    for diff in comparison["diffs"]:
+        sheet_name = diff["sheet"]
 
+        if sheet_name not in sheet_counts:
+            sheet_counts[sheet_name] = {"status": "Compared", "total": 0, "block": 0, "generic": 0}
+            all_names.append(sheet_name)
 
-# ================================================
-# REPORT WORKBOOK HELPERS
-# ================================================
-def write_matrix(sheet, start_row, start_col, matrix):
-    if not matrix:
-        return
+        sheet_counts[sheet_name]["total"] += 1
 
-    row_count = len(matrix)
-    col_count = max(len(row) for row in matrix)
+        if diff["kind"] in ("Block", "Connector Selection"):
+            total_block += 1
+            sheet_counts[sheet_name]["block"] += 1
+            key = (diff["sheet"], diff["block"], diff["connector"])
 
-    normalized = []
+            if key not in block_groups:
+                block_groups[key] = {"sheet": diff["sheet"], "block": diff["block"], "connector": diff["connector"], "count": 0, "pins": set(), "fields": set(), "types": set()}
 
-    for row in matrix:
-        new_row = list(row)
+            group = block_groups[key]
+            group["count"] += 1
 
-        while len(new_row) < col_count:
-            new_row.append("")
+            if diff["pin"] != "":
+                group["pins"].add(str(diff["pin"]))
 
-        normalized.append(tuple(new_row))
+            if diff["field"]:
+                group["fields"].add(str(diff["field"]))
 
-    target = sheet.Range(sheet.Cells(start_row, start_col), sheet.Cells(start_row + row_count - 1, start_col + col_count - 1))
-    target.Value2 = tuple(normalized)
+            group["types"].add(str(diff["diff_type"]))
+        else:
+            total_generic += 1
+            sheet_counts[sheet_name]["generic"] += 1
 
-
-def style_report_sheet(sheet, column_count, freeze_row=1):
-    header = sheet.Range(sheet.Cells(1, 1), sheet.Cells(1, column_count))
-    header.Font.Bold = True
-    header.Interior.Color = 0xD9EAF7
-    header.Borders.LineStyle = 1
-    header.AutoFilter()
-
-    used = sheet.UsedRange
-    used.VerticalAlignment = -4108
-    used.WrapText = False
-
-    sheet.Activate()
-
-    window = sheet.Application.ActiveWindow
-
-    if window is not None:
-        window.SplitRow = freeze_row
-        window.FreezePanes = True
+    return all_names, sheet_counts, block_groups, total_block, total_generic
 
 
-def set_widths(sheet, widths):
-    for column_number, width in enumerate(widths, start=1):
-        sheet.Columns(column_number).ColumnWidth = width
-
-
-def add_report_sheet(workbook, name, headers, rows, widths):
-    sheet = workbook.Worksheets.Add(After=workbook.Worksheets(workbook.Worksheets.Count))
-    sheet.Name = name
-
-    data = [headers]
-
-    for row in rows[:MAX_REPORT_ROWS_PER_SHEET]:
-        data.append(row)
-
-    write_matrix(sheet, 1, 1, data)
-    style_report_sheet(sheet, len(headers), 1)
-    set_widths(sheet, widths)
-
-    return sheet
-
-
-def wait_for_file(path, timeout_seconds=10.0):
-    deadline = time.time() + timeout_seconds
-
-    while time.time() < deadline:
-        if os.path.exists(path):
-            try:
-                if os.path.getsize(path) > 0:
-                    return True
-            except Exception:
-                pass
-
-        time.sleep(0.25)
-
-    return False
-
-
-def copy_file_with_retry(source_path, destination_path, timeout_seconds=10.0):
-    deadline = time.time() + timeout_seconds
-    last_error = None
-
-    while time.time() < deadline:
-        try:
-            shutil.copy2(source_path, destination_path)
-            return True
-        except Exception as e:
-            last_error = e
-            time.sleep(0.25)
-
-    if last_error is not None:
-        print("FINAL COPY ERROR:", repr(last_error))
-
-    return False
-
-
-def openpyxl_style_header(sheet, row_number, column_count):
-    fill = PatternFill(fill_type="solid", fgColor="D9EAF7")
-    side = Side(style="thin", color="000000")
-    border = Border(left=side, right=side, top=side, bottom=side)
-
-    for column_number in range(1, column_count + 1):
-        cell = sheet.cell(row=row_number, column=column_number)
-        cell.font = Font(bold=True)
-        cell.fill = fill
-        cell.border = border
-        cell.alignment = Alignment(vertical="center")
-
-
-def openpyxl_set_widths(sheet, widths):
-    for column_number, width in enumerate(widths, start=1):
-        sheet.column_dimensions[get_column_letter(column_number)].width = width
-
-
-def openpyxl_add_report_sheet(workbook, name, headers, rows, widths):
-    sheet = workbook.create_sheet(title=name)
-    sheet.append(headers)
-
-    for row in rows[:MAX_REPORT_ROWS_PER_SHEET]:
-        sheet.append(row)
-
-    openpyxl_style_header(sheet, 1, len(headers))
-    openpyxl_set_widths(sheet, widths)
-    sheet.freeze_panes = "A2"
-    sheet.auto_filter.ref = sheet.dimensions
-
-    return sheet
+def pin_sort_value(value):
+    try:
+        return int(value)
+    except Exception:
+        return 999999
 
 
 def create_diff_report(excel, report_path, old_snapshot, new_snapshot, comparison):
+    report_start = time.perf_counter()
     report_path = os.path.abspath(report_path)
     report_folder = os.path.dirname(report_path)
     os.makedirs(report_folder, exist_ok=True)
@@ -779,65 +657,120 @@ def create_diff_report(excel, report_path, old_snapshot, new_snapshot, compariso
         except PermissionError:
             raise Exception(f"Close the existing diff report before running the checker: {report_path}")
 
-    workbook = Workbook()
-    summary_sheet = workbook.active
-    summary_sheet.title = "Summary"
+    total_diffs = len(comparison["diffs"])
 
-    block_diffs = [diff for diff in comparison["diffs"] if diff["kind"] in ("Block", "Connector Selection")]
-    generic_diffs = [diff for diff in comparison["diffs"] if diff["kind"] == "Generic"]
+    print("REPORT PHASE 1/6 - AGGREGATING", total_diffs, "DIFFS")
+    aggregate_start = time.perf_counter()
+    all_names, sheet_counts, block_groups, total_block, total_generic = build_fast_report_aggregates(old_snapshot, new_snapshot, comparison)
+    print("REPORT AGGREGATION TIME:", round(time.perf_counter() - aggregate_start, 2), "SECONDS")
+    print("BLOCK-MAKER DIFFS:", total_block)
+    print("OTHER DIFFS:", total_generic)
 
-    summary_rows = [["EXCEL DIFF REPORT", ""], ["Reference Workbook", old_snapshot["path"]], ["Comparison Workbook", new_snapshot["path"]], ["Total Cell Diffs", len(comparison["diffs"])], ["Block-Maker Diffs", len(block_diffs)], ["Generic Diffs", len(generic_diffs)], ["Added Sheets", ", ".join(comparison["added_sheets"])], ["Removed Sheets", ", ".join(comparison["removed_sheets"])]]
+    block_rows_to_write = min(total_block, MAX_REPORT_ROWS_PER_SHEET)
+    generic_rows_to_write = min(total_generic, MAX_REPORT_ROWS_PER_SHEET)
 
-    for row in summary_rows:
-        summary_sheet.append(row)
+    print("BLOCK DIFF ROWS TO WRITE:", block_rows_to_write)
+    print("OTHER DIFF ROWS TO WRITE:", generic_rows_to_write)
 
-    openpyxl_style_header(summary_sheet, 1, 2)
+    if total_block > MAX_REPORT_ROWS_PER_SHEET:
+        print("WARNING: BLOCK DIFF SHEET WILL BE TRUNCATED TO", MAX_REPORT_ROWS_PER_SHEET, "ROWS")
+
+    if total_generic > MAX_REPORT_ROWS_PER_SHEET:
+        print("WARNING: OTHER DIFF SHEET WILL BE TRUNCATED TO", MAX_REPORT_ROWS_PER_SHEET, "ROWS")
+
+    workbook = Workbook(write_only=True)
+
+    print("REPORT PHASE 2/6 - BUILDING SUMMARY")
+    summary_sheet = workbook.create_sheet(title="Summary")
     summary_sheet.column_dimensions["A"].width = 24
     summary_sheet.column_dimensions["B"].width = 90
+    summary_sheet.append(make_header_cells(summary_sheet, ["EXCEL DIFF REPORT", ""]))
+    summary_sheet.append(["Reference Workbook", old_snapshot["path"]])
+    summary_sheet.append(["Comparison Workbook", new_snapshot["path"]])
+    summary_sheet.append(["Total Cell Diffs", total_diffs])
+    summary_sheet.append(["Block-Maker Diffs", total_block])
+    summary_sheet.append(["Generic Diffs", total_generic])
+    summary_sheet.append(["Block Diff Rows Written", block_rows_to_write])
+    summary_sheet.append(["Other Diff Rows Written", generic_rows_to_write])
+    summary_sheet.append(["Added Sheets", ", ".join(comparison["added_sheets"])])
+    summary_sheet.append(["Removed Sheets", ", ".join(comparison["removed_sheets"])])
+    summary_sheet.append(make_header_cells(summary_sheet, ["Sheet", "Status", "Total Diffs", "Block-Maker Diffs", "Generic Diffs"]))
 
-    sheet_summary_headers = ["Sheet", "Status", "Total Diffs", "Block-Maker Diffs", "Generic Diffs"]
-    sheet_summary_rows = build_sheet_summary(old_snapshot, new_snapshot, comparison)
+    for sheet_name in all_names:
+        counts = sheet_counts[sheet_name]
+        summary_sheet.append([sheet_name, counts["status"], counts["total"], counts["block"], counts["generic"]])
 
-    while summary_sheet.max_row < 10:
-        summary_sheet.append([])
+    print("REPORT PHASE 3/6 - BUILDING BLOCK SUMMARY")
+    block_summary_sheet = workbook.create_sheet(title="Block Summary")
+    set_write_only_widths(block_summary_sheet, [18, 10, 20, 12, 35, 35, 30])
+    block_summary_sheet.freeze_panes = "A2"
+    block_summary_sheet.append(make_header_cells(block_summary_sheet, ["Sheet", "Block #", "Connector", "Diff Count", "Pins Affected", "Fields Affected", "Diff Types"]))
 
-    summary_sheet.append(sheet_summary_headers)
+    sorted_group_keys = sorted(block_groups, key=lambda item: (item[0], int(item[1]) if str(item[1]).isdigit() else 999999, item[2]))
 
-    for row in sheet_summary_rows:
-        summary_sheet.append(row)
+    for key in sorted_group_keys:
+        group = block_groups[key]
+        pins = sorted(group["pins"], key=pin_sort_value)
+        fields = sorted(group["fields"])
+        types = sorted(group["types"])
+        block_summary_sheet.append([group["sheet"], group["block"], group["connector"], group["count"], ", ".join(pins), ", ".join(fields), ", ".join(types)])
 
-    openpyxl_style_header(summary_sheet, 11, len(sheet_summary_headers))
+    print("REPORT PHASE 4/6 - STREAMING BLOCK DIFFS")
+    block_sheet = workbook.create_sheet(title="Block Diffs")
+    set_write_only_widths(block_sheet, [16, 9, 20, 9, 22, 28, 65, 10, 35, 35, 45, 45])
+    block_sheet.freeze_panes = "A2"
+    block_sheet.append(make_header_cells(block_sheet, ["Sheet", "Block #", "Connector", "Pin", "Field", "Diff Type", "Location", "Cell", "Old Value", "New Value", "Old Formula", "New Formula"]))
 
-    block_summary_headers = ["Sheet", "Block #", "Connector", "Diff Count", "Pins Affected", "Fields Affected", "Diff Types"]
-    block_summary_rows = build_block_summary(block_diffs)
-    openpyxl_add_report_sheet(workbook, "Block Summary", block_summary_headers, block_summary_rows, [18, 10, 20, 12, 35, 35, 30])
+    block_written = 0
 
-    block_headers = ["Sheet", "Block #", "Connector", "Pin", "Field", "Diff Type", "Location", "Cell", "Old Value", "New Value", "Old Formula", "New Formula"]
-    block_rows = []
+    for diff in comparison["diffs"]:
+        if diff["kind"] not in ("Block", "Connector Selection"):
+            continue
 
-    for diff in block_diffs:
-        block_rows.append([diff["sheet"], diff["block"], diff["connector"], diff["pin"], diff["field"], diff["diff_type"], diff["location"], diff["cell"], report_text(diff["old_value"]), report_text(diff["new_value"]), report_text(diff["old_formula"]), report_text(diff["new_formula"])])
+        if block_written >= MAX_REPORT_ROWS_PER_SHEET:
+            break
 
-    openpyxl_add_report_sheet(workbook, "Block Diffs", block_headers, block_rows, [16, 9, 20, 9, 22, 28, 65, 10, 35, 35, 45, 45])
+        block_sheet.append([diff["sheet"], diff["block"], diff["connector"], diff["pin"], diff["field"], diff["diff_type"], diff["location"], diff["cell"], report_text(diff["old_value"]), report_text(diff["new_value"]), report_text(diff["old_formula"]), report_text(diff["new_formula"])])
+        block_written += 1
 
-    generic_headers = ["Sheet", "Cell", "Row", "Column", "Field/Header", "Diff Type", "Location", "Old Value", "New Value", "Old Formula", "New Formula"]
-    generic_rows = []
+        if block_written % 10000 == 0:
+            print("BLOCK DIFF ROWS STREAMED:", block_written)
 
-    for diff in generic_diffs:
-        generic_rows.append([diff["sheet"], diff["cell"], diff["row"], diff["column"], diff["field"], diff["diff_type"], diff["location"], report_text(diff["old_value"]), report_text(diff["new_value"]), report_text(diff["old_formula"]), report_text(diff["new_formula"])])
+    print("BLOCK DIFF ROWS STREAMED:", block_written)
 
-    openpyxl_add_report_sheet(workbook, "Other Diffs", generic_headers, generic_rows, [18, 10, 9, 9, 28, 28, 70, 35, 35, 45, 45])
+    print("REPORT PHASE 5/6 - STREAMING OTHER DIFFS")
+    generic_sheet = workbook.create_sheet(title="Other Diffs")
+    set_write_only_widths(generic_sheet, [18, 10, 9, 9, 28, 28, 70, 35, 35, 45, 45])
+    generic_sheet.freeze_panes = "A2"
+    generic_sheet.append(make_header_cells(generic_sheet, ["Sheet", "Cell", "Row", "Column", "Field/Header", "Diff Type", "Location", "Old Value", "New Value", "Old Formula", "New Formula"]))
 
-    sheet_change_headers = ["Change", "Sheet"]
-    sheet_change_rows = []
+    generic_written = 0
+
+    for diff in comparison["diffs"]:
+        if diff["kind"] != "Generic":
+            continue
+
+        if generic_written >= MAX_REPORT_ROWS_PER_SHEET:
+            break
+
+        generic_sheet.append([diff["sheet"], diff["cell"], diff["row"], diff["column"], diff["field"], diff["diff_type"], diff["location"], report_text(diff["old_value"]), report_text(diff["new_value"]), report_text(diff["old_formula"]), report_text(diff["new_formula"])])
+        generic_written += 1
+
+        if generic_written % 10000 == 0:
+            print("OTHER DIFF ROWS STREAMED:", generic_written)
+
+    print("OTHER DIFF ROWS STREAMED:", generic_written)
+
+    sheet_change_sheet = workbook.create_sheet(title="Sheet Changes")
+    set_write_only_widths(sheet_change_sheet, [16, 30])
+    sheet_change_sheet.freeze_panes = "A2"
+    sheet_change_sheet.append(make_header_cells(sheet_change_sheet, ["Change", "Sheet"]))
 
     for name in comparison["added_sheets"]:
-        sheet_change_rows.append(["Added", name])
+        sheet_change_sheet.append(["Added", name])
 
     for name in comparison["removed_sheets"]:
-        sheet_change_rows.append(["Removed", name])
-
-    openpyxl_add_report_sheet(workbook, "Sheet Changes", sheet_change_headers, sheet_change_rows, [16, 30])
+        sheet_change_sheet.append(["Removed", name])
 
     fd, temp_report_path = tempfile.mkstemp(prefix="block_maker_diff_", suffix=".xlsx", dir=report_folder)
     os.close(fd)
@@ -846,9 +779,11 @@ def create_diff_report(excel, report_path, old_snapshot, new_snapshot, compariso
         if os.path.exists(temp_report_path):
             os.remove(temp_report_path)
 
-        print("WRITING DIFF REPORT WITH OPENPYXL:", temp_report_path)
+        print("REPORT PHASE 6/6 - SAVING XLSX")
+        print("WRITING DIFF REPORT TO:", temp_report_path)
+        save_start = time.perf_counter()
         workbook.save(temp_report_path)
-        workbook.close()
+        print("OPENPYXL SAVE TIME:", round(time.perf_counter() - save_start, 2), "SECONDS")
 
         if not os.path.isfile(temp_report_path):
             raise Exception(f"Openpyxl did not create the temporary diff report at {temp_report_path}")
@@ -858,7 +793,6 @@ def create_diff_report(excel, report_path, old_snapshot, new_snapshot, compariso
 
         print("TEMP DIFF REPORT SIZE:", os.path.getsize(temp_report_path), "BYTES")
         print("MOVING DIFF REPORT TO:", report_path)
-
         os.replace(temp_report_path, report_path)
 
         if not os.path.isfile(report_path):
@@ -866,6 +800,7 @@ def create_diff_report(excel, report_path, old_snapshot, new_snapshot, compariso
 
         print("DIFF REPORT SAVED:", report_path)
         print("DIFF REPORT SIZE:", os.path.getsize(report_path), "BYTES")
+        print("TOTAL REPORT CREATION TIME:", round(time.perf_counter() - report_start, 2), "SECONDS")
 
     finally:
         try:
