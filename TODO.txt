@@ -264,6 +264,129 @@ def normalize_direction_value(value):
     return ""
 
 
+def is_signal_prefix_candidate(value):
+    text = str(value or "").strip()
+
+    if text == "":
+        return False
+
+    if re.fullmatch(r"[+-]?\d+(?:\.\d+)?", text):
+        return False
+
+    if re.fullmatch(r"J\d+", canonical_connector_name(text), re.IGNORECASE):
+        return False
+
+    if normalize_direction_value(text) != "":
+        return False
+
+    return True
+
+
+def extract_local_signal_from_words(row_words, boundaries, signal_index):
+    if signal_index < 0 or signal_index >= len(boundaries) - 1:
+        return ""
+
+    left = boundaries[signal_index]
+    right = boundaries[signal_index + 1]
+    sorted_words = sorted(row_words, key=lambda word: (float(word["top"]), float(word["x0"])))
+    line_groups = []
+
+    for word in sorted_words:
+        top = float(word["top"])
+
+        if not line_groups or abs(top - line_groups[-1]["top"]) > 3.0:
+            line_groups.append({"top": top, "words": [word]})
+        else:
+            line_groups[-1]["words"].append(word)
+
+    best_text = ""
+    best_score = None
+
+    for line in line_groups:
+        words = sorted(line["words"], key=lambda word: float(word["x0"]))
+        seed_indexes = []
+
+        for index, word in enumerate(words):
+            value = str(word.get("text", "")).strip()
+
+            if value == "":
+                continue
+
+            if re.fullmatch(r"[+-]?\d+(?:\.\d+)?", value):
+                continue
+
+            x0 = float(word["x0"])
+            x1 = float(word["x1"])
+
+            if x1 > left and x0 < right:
+                seed_indexes.append(index)
+
+        if not seed_indexes:
+            continue
+
+        start_index = min(seed_indexes)
+        end_index = max(seed_indexes)
+
+        while start_index > 0:
+            previous_word = words[start_index - 1]
+            current_word = words[start_index]
+            previous_value = str(previous_word.get("text", "")).strip()
+
+            if not is_signal_prefix_candidate(previous_value):
+                break
+
+            previous_x1 = float(previous_word["x1"])
+            current_x0 = float(current_word["x0"])
+            gap = current_x0 - previous_x1
+
+            if gap > 8.0:
+                break
+
+            if previous_x1 < left - 35.0:
+                break
+
+            start_index -= 1
+
+        selected_words = words[start_index:end_index + 1]
+        line_text = ""
+        previous_x1 = None
+
+        for word in selected_words:
+            value = str(word.get("text", "")).strip()
+
+            if value == "":
+                continue
+
+            if re.fullmatch(r"[+-]?\d+(?:\.\d+)?", value):
+                continue
+
+            x0 = float(word["x0"])
+            x1 = float(word["x1"])
+
+            if line_text != "" and previous_x1 is not None:
+                gap = x0 - previous_x1
+
+                if gap > 2.5:
+                    line_text += " "
+
+            line_text += value
+            previous_x1 = x1
+
+        line_text = normalize_local_signal_value(line_text)
+
+        if line_text == "":
+            continue
+
+        first_x0 = float(selected_words[0]["x0"])
+        overlap_score = abs(first_x0 - left)
+
+        if best_score is None or overlap_score < best_score:
+            best_text = line_text
+            best_score = overlap_score
+
+    return best_text
+
+
 def find_direction_in_column_from_words(row_words, boundaries, column_index):
     if column_index < 0 or column_index >= len(boundaries) - 1:
         return ""
@@ -791,7 +914,7 @@ def extract_structured_rows(pdf_cache, separator_keyword, column_names, pdf_role
             row_chars = [char for char in chars if row_top <= float(char["top"]) < row_bottom]
             row_words = [word for word in words if row_top <= float(word["top"]) < row_bottom]
             parsed_row = parse_row_chars(row_chars, boundaries, column_names)
-            signal_from_words = extract_role_text_from_words(row_words, boundaries, signal_index, left_pad=10.0, right_pad=0.0, skip_numeric=True)
+            signal_from_words = extract_local_signal_from_words(row_words, boundaries, signal_index)
             direction_from_words = extract_role_text_from_words(row_words, boundaries, direction_index, left_pad=8.0, right_pad=8.0, skip_numeric=False)
 
             if signal_from_words != "":
