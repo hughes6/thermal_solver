@@ -1,3 +1,33 @@
+get rid of old snapshot
+(
+set -euo pipefail
+cd '/mnt/c/OpenFOAM/thermal_sim_SOLAR_ATB/SOLAR_ATB_20PCT_HEAT_LOAD_EXPLORATORY'
+
+# Refuse recovery if a thermal branch has already been initialized.
+for entry in processor[0-9]* .cold_flow_seed_import_manifest .unqualified_airflow_imported; do
+    if [[ -e "$entry" || -L "$entry" ]]; then
+        printf 'STOP: target already contains %s\n' "$entry"
+        exit 1
+    fi
+done
+
+exec 9>>.thermal_solver_run.lock
+flock -n 9 || {
+    echo 'STOP: this target is currently in use.'
+    exit 1
+}
+
+test -d .unqualified-source-snapshot
+backup=$(mktemp -d "$PWD/import-recovery.XXXXXX")
+mv -- .unqualified-source-snapshot "$backup/"
+printf 'Previous snapshot preserved in: %s\n' "$backup"
+)
+
+
+
+
+
+
 (
 source "${THERMAL_SIM_OPENFOAM_BASHRC:-$HOME/OpenFOAM/OpenFOAM-v2606/etc/bashrc}" || exit 1
 set -euo pipefail
