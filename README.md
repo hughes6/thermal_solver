@@ -33,6 +33,10 @@ direct C++ construction in `main.cpp`.
 
 ### Reusable cold-flow seeds for several heat loads
 
+For a quick exploratory temperature check while a seed is still unqualified,
+see [UNQUALIFIED_THERMAL_TEST.md](UNQUALIFIED_THERMAL_TEST.md). This explicit
+opt-in holds the imported airflow fixed and is not a production result.
+
 Changing from a screening mesh to an in-depth mesh? Use
 [screening-to-in-depth airflow mapping](MAPPED_AIRFLOW_REUSE.md), exposed as
 `prepare_mapped_airflow_reuse.sh` in new exports and in `./model` output.
