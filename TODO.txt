@@ -1,21 +1,15 @@
 (
+source "${THERMAL_SIM_OPENFOAM_BASHRC:-$HOME/OpenFOAM/OpenFOAM-v2606/etc/bashrc}" || exit 1
 set -euo pipefail
+
 cd '/mnt/c/OpenFOAM/thermal_sim_SOLAR_ATB/SOLAR_ATB_20PCT_HEAT_LOAD_EXPLORATORY'
 
-backup=$(mktemp -d "$PWD/preparation-recovery.XXXXXX")
-
-cp -p constant/fluid/polyMesh/cellZones "$backup/cellZones.failed"
-
-for name in splitMeshRegions.state.json splitMeshRegions.done; do
-    path=".openfoam_prepare_checkpoints/$name"
-    if [[ -f "$path" ]]; then
-        mv -- "$path" "$backup/"
-    fi
-done
-
-printf 'Recovery backup: %s\n' "$backup"
+command -v splitMeshRegions || {
+    printf 'OpenFOAM loaded, but splitMeshRegions is still unavailable.\n'
+    exit 1
+}
 
 OPENFOAM_LAUNCHER=env \
 bash ./prepare_regions_low_memory.sh "$PWD" \
-    2>&1 | tee "$backup/reprepare.log"
+    2>&1 | tee reprepare.stdout.log
 )
