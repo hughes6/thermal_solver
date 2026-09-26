@@ -1,8 +1,45 @@
 (
-cd '/mnt/c/OpenFOAM/thermal_sim_SOLAR_ATB/SOLAR_ATB_20PCT_HEAT_LOAD.heated-flow-check' || exit
-set -o pipefail
+set -euo pipefail
+
+SEED_CASE='/mnt/c/OpenFOAM/thermal_sim_SOLAR_ATB/SOLAR_ATB_20PCT_HEAT_LOAD.heated-flow-check'
+TARGET_CASE='/mnt/c/OpenFOAM/thermal_sim_SOLAR_ATB/SOLAR_ATB_20PCT_EXPLORATORY'
+
+cd "$TARGET_CASE"
+
+CHECKPOINT=$(
+  find "$SEED_CASE/processor0" -mindepth 1 -maxdepth 1 \
+    -type d -printf '%f\n' |
+  awk '/^[0-9]+([.][0-9]+)?([eE][-+]?[0-9]+)?$/' |
+  sort -g | tail -1
+)
+
+test -n "$CHECKPOINT"
+printf 'Using saved airflow checkpoint: %s\n' "$CHECKPOINT"
+
+bash ./build_semifrozen_solver.sh
+
+OPENFOAM_LAUNCHER=env \
+bash ./prepare_regions_low_memory.sh "$TARGET_CASE"
+
+OPENFOAM_LAUNCHER=env \
+bash ./create_thermal_branch_from_cold_flow_seed.sh \
+  "$SEED_CASE" "$TARGET_CASE" 6 \
+  --allow-unqualified "$CHECKPOINT"
 
 THERMAL_SOLVER_OPENFOAM_ENV_READY=1 OPENFOAM_LAUNCHER=env \
-bash ./run_parallel.sh 6 --cold-flow-seed 0.2 \
-2>&1 | tee -a cold_seed.stdout.log
+bash ./run_parallel.sh 6 --unqualified-thermal 1 \
+  2>&1 | tee -a unqualified-thermal.stdout.log
+)
+
+
+
+
+
+cd '/mnt/c/OpenFOAM/thermal_sim_SOLAR_ATB/SOLAR_ATB_20PCT_EXPLORATORY'
+
+(
+set -o pipefail
+THERMAL_SOLVER_OPENFOAM_ENV_READY=1 OPENFOAM_LAUNCHER=env \
+bash ./run_parallel.sh 6 --unqualified-thermal 30 \
+  2>&1 | tee -a unqualified-thermal.stdout.log
 )
