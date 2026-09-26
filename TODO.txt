@@ -1,45 +1,21 @@
 (
 set -euo pipefail
+cd '/mnt/c/OpenFOAM/thermal_sim_SOLAR_ATB/SOLAR_ATB_20PCT_HEAT_LOAD_EXPLORATORY'
 
-SEED_CASE='/mnt/c/OpenFOAM/thermal_sim_SOLAR_ATB/SOLAR_ATB_20PCT_HEAT_LOAD.heated-flow-check'
-TARGET_CASE='/mnt/c/OpenFOAM/thermal_sim_SOLAR_ATB/SOLAR_ATB_20PCT_EXPLORATORY'
+backup=$(mktemp -d "$PWD/preparation-recovery.XXXXXX")
 
-cd "$TARGET_CASE"
+cp -p constant/fluid/polyMesh/cellZones "$backup/cellZones.failed"
 
-CHECKPOINT=$(
-  find "$SEED_CASE/processor0" -mindepth 1 -maxdepth 1 \
-    -type d -printf '%f\n' |
-  awk '/^[0-9]+([.][0-9]+)?([eE][-+]?[0-9]+)?$/' |
-  sort -g | tail -1
-)
+for name in splitMeshRegions.state.json splitMeshRegions.done; do
+    path=".openfoam_prepare_checkpoints/$name"
+    if [[ -f "$path" ]]; then
+        mv -- "$path" "$backup/"
+    fi
+done
 
-test -n "$CHECKPOINT"
-printf 'Using saved airflow checkpoint: %s\n' "$CHECKPOINT"
-
-bash ./build_semifrozen_solver.sh
+printf 'Recovery backup: %s\n' "$backup"
 
 OPENFOAM_LAUNCHER=env \
-bash ./prepare_regions_low_memory.sh "$TARGET_CASE"
-
-OPENFOAM_LAUNCHER=env \
-bash ./create_thermal_branch_from_cold_flow_seed.sh \
-  "$SEED_CASE" "$TARGET_CASE" 6 \
-  --allow-unqualified "$CHECKPOINT"
-
-THERMAL_SOLVER_OPENFOAM_ENV_READY=1 OPENFOAM_LAUNCHER=env \
-bash ./run_parallel.sh 6 --unqualified-thermal 1 \
-  2>&1 | tee -a unqualified-thermal.stdout.log
-)
-
-
-
-
-
-cd '/mnt/c/OpenFOAM/thermal_sim_SOLAR_ATB/SOLAR_ATB_20PCT_EXPLORATORY'
-
-(
-set -o pipefail
-THERMAL_SOLVER_OPENFOAM_ENV_READY=1 OPENFOAM_LAUNCHER=env \
-bash ./run_parallel.sh 6 --unqualified-thermal 30 \
-  2>&1 | tee -a unqualified-thermal.stdout.log
+bash ./prepare_regions_low_memory.sh "$PWD" \
+    2>&1 | tee "$backup/reprepare.log"
 )
