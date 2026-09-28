@@ -1,116 +1,230 @@
-============================================================
-CABLE SHIELD STRETCH METHOD TEST
-============================================================
-SHEET 1 ID: 204828
+import win32com.client as win32
+import time
 
-============================================================
-TEST 1 - BASELINE
-============================================================
-SYMBOL ID: 165988
-DISPLAY LENGTH: 0.10000000000000214
-DISPLAY WIDTH: 0.0
-NODE COUNT: 2
-NODE: 204780 | X: 8.0 | Y: 10.0
-NODE: 147638 | X: 8.0 | Y: 10.1
-BOTTOM NODE: 204780 | X: 8.0 | Y: 10.0
-TOP NODE: 147638 | X: 8.0 | Y: 10.1
-VERTICAL LENGTH: 0.09999999999999964
 
-============================================================
-TEST 2 - PLACENODE BEFORE
-============================================================
-SYMBOL ID: 147588
-DISPLAY LENGTH: 0.10000000000000214
-DISPLAY WIDTH: 0.0
-NODE COUNT: 2
-NODE: 147587 | X: 16.0 | Y: 10.0
-NODE: 147586 | X: 16.0 | Y: 10.1
-BOTTOM NODE: 147587 | X: 16.0 | Y: 10.0
-TOP NODE: 147586 | X: 16.0 | Y: 10.1
-VERTICAL LENGTH: 0.09999999999999964
+#====================================================================================================================================
+# SETTINGS
+#====================================================================================================================================
+SYMBOL_NAME = "Cable Shield"
+SYMBOL_VERSION = 1
 
-============================================================
-TESTING pin.PlaceNode
-============================================================
-TOP NODE ID: 147586
-ORIGINAL X: 16.0
-ORIGINAL Y: 10.1
-TARGET X: 16.0
-TARGET Y: 18.0
-PLACENODE RESULT: -4
+PLACE_X = 24.0
+PLACE_Y = 10.0
 
-============================================================
-TEST 2 - PLACENODE AFTER
-============================================================
-SYMBOL ID: 147588
-DISPLAY LENGTH: 0.10000000000000214
-DISPLAY WIDTH: 0.0
-NODE COUNT: 2
-NODE: 147587 | X: 16.0 | Y: 10.0
-NODE: 147586 | X: 16.0 | Y: 10.1
-BOTTOM NODE: 147587 | X: 16.0 | Y: 10.0
-TOP NODE: 147586 | X: 16.0 | Y: 10.1
-VERTICAL LENGTH: 0.09999999999999964
+SHIELD_HEIGHT = 8.0
+SHIELD_WIDTH = 0.1
 
-============================================================
-TEST 3 - SETDISPLAYWIDTH BEFORE
-============================================================
-SYMBOL ID: 147375
-DISPLAY LENGTH: 0.10000000000000214
-DISPLAY WIDTH: 0.0
-NODE COUNT: 2
-NODE: 147374 | X: 24.0 | Y: 10.0
-NODE: 147373 | X: 24.0 | Y: 10.1
-BOTTOM NODE: 147374 | X: 24.0 | Y: 10.0
-TOP NODE: 147373 | X: 24.0 | Y: 10.1
-VERTICAL LENGTH: 0.09999999999999964
+TEXT_TEMPLATE = ""
+FIT_SYMBOL = 0
 
-WIDTH BEFORE: 0.0
-SETDISPLAYWIDTH RESULT: 0
-WIDTH AFTER: 0.0
 
-============================================================
-TEST 3 - SETDISPLAYWIDTH AFTER
-============================================================
-SYMBOL ID: 147375
-DISPLAY LENGTH: 0.10000000000000214
-DISPLAY WIDTH: 0.0
-NODE COUNT: 2
-NODE: 147374 | X: 24.0 | Y: 10.0
-NODE: 147373 | X: 24.0 | Y: 10.1
-BOTTOM NODE: 147374 | X: 24.0 | Y: 10.0
-TOP NODE: 147373 | X: 24.0 | Y: 10.1
-VERTICAL LENGTH: 0.09999999999999964
+#====================================================================================================================================
+# CREATE E3 OBJECTS
+#====================================================================================================================================
+app = win32.gencache.EnsureDispatch("CT.Application")
+prj = app.CreateJobObject()
 
-============================================================
-TEST 4 - PLACEDYNAMIC
-============================================================
-LOAD RESULT: 149127
-PLACEDYNAMIC RESULT: 147210
+sht = prj.CreateSheetObject()
+sym = prj.CreateSymbolObject()
 
-============================================================
-TEST 4 - PLACEDYNAMIC RESULT
-============================================================
-SYMBOL ID: 147210
-DISPLAY LENGTH: 0.0
-DISPLAY WIDTH: 0.0
-NODE COUNT: 0
 
-============================================================
-TEST LOCATIONS
-============================================================
-BASELINE: X = 8.0 Y = 10.0 ID = 165988
-PLACENODE: X = 16.0 Y = 10.0 ID = 147588
-DISPLAY WIDTH: X = 24.0 Y = 10.0 ID = 147375
-PLACE DYNAMIC: X = 32.0 Y = 10.0
-============================================================
+#====================================================================================================================================
+# START
+#====================================================================================================================================
+app.PutMessage("Starting Dynamic Cable Shield Placement")
 
-============================================================
-WHAT TO LOOK FOR
-============================================================
-TEST 2 IS THE IMPORTANT ONE.
-IF pin.PlaceNode WORKS, THE SYMBOL AT X = 16.0 SHOULD BECOME VERTICALLY LONG.
-IF IT CREATES A SEPARATE NODE INSTEAD, THE NODE COUNT OR GEOMETRY SHOULD REVEAL THAT.
-TEST 3 CHECKS WHETHER E3 CALLS THE VERTICAL DIMENSION DISPLAY WIDTH.
-TEST 4 CHECKS WHETHER THE SHIELD CAN BE CREATED DIRECTLY WITH A HEIGHT.
-============================================================
+print("")
+print("============================================================")
+print("DYNAMIC CABLE SHIELD PLACEMENT")
+print("============================================================")
+
+
+#====================================================================================================================================
+# STEP 1 - FIND SHEET 1
+#====================================================================================================================================
+sheet_info = prj.GetAllSheetIds(None)
+
+sheet_ids = [x for x in sheet_info[1] if x is not None]
+
+sheet_1_id = None
+
+for sheet_id in sheet_ids:
+    sht.SetId(sheet_id)
+
+    if sht.GetName() == "1":
+        sheet_1_id = sheet_id
+        break
+
+
+if sheet_1_id is None:
+    raise Exception("Could not find Sheet 1")
+
+
+print("SHEET 1 ID:", sheet_1_id)
+
+app.PutMessage(f"Sheet 1 ID: {sheet_1_id}")
+
+
+#====================================================================================================================================
+# STEP 2 - LOAD THE SYMBOL
+#====================================================================================================================================
+load_result = sym.Load(SYMBOL_NAME, SYMBOL_VERSION)
+
+
+print("")
+print("============================================================")
+print("STEP 2 - LOAD SYMBOL")
+print("============================================================")
+print("SYMBOL:", SYMBOL_NAME)
+print("VERSION:", SYMBOL_VERSION)
+print("LOAD RESULT:", load_result)
+
+
+if load_result == 0:
+    app.PutMessage(f"Symbol load failed. Result: {load_result}")
+    raise Exception(f"Could not load symbol {SYMBOL_NAME}")
+
+
+app.PutMessage(f"Symbol loaded successfully. Result: {load_result}")
+
+
+#====================================================================================================================================
+# STEP 3 - PLACE THE SYMBOL DYNAMICALLY
+#
+# IMPORTANT:
+#
+# PlaceDynamic(
+#     sheet ID,
+#     X,
+#     Y,
+#     height,
+#     width,
+#     text template,
+#     fit symbol
+# )
+#
+# HEIGHT is what stretched the vertical Cable Shield in our test.
+#====================================================================================================================================
+print("")
+print("============================================================")
+print("STEP 3 - PLACE DYNAMIC SYMBOL")
+print("============================================================")
+
+print("X:", PLACE_X)
+print("Y:", PLACE_Y)
+print("HEIGHT:", SHIELD_HEIGHT)
+print("WIDTH:", SHIELD_WIDTH)
+
+
+dynamic_symbol_id = sym.PlaceDynamic(sheet_1_id, PLACE_X, PLACE_Y, SHIELD_HEIGHT, SHIELD_WIDTH, TEXT_TEMPLATE, FIT_SYMBOL)
+
+
+print("PLACED DYNAMIC SYMBOL ID:", dynamic_symbol_id)
+
+
+if dynamic_symbol_id == 0:
+    app.PutMessage("PlaceDynamic failed.")
+    raise Exception("Dynamic Cable Shield placement failed")
+
+
+app.PutMessage(f"Dynamic Cable Shield placed successfully. ID: {dynamic_symbol_id}")
+
+
+#====================================================================================================================================
+# STEP 4 - BIND SYMBOL OBJECT TO NEW DYNAMIC SYMBOL
+#====================================================================================================================================
+sym.SetId(dynamic_symbol_id)
+
+
+print("")
+print("============================================================")
+print("STEP 4 - DYNAMIC SYMBOL INFORMATION")
+print("============================================================")
+
+print("SYMBOL ID:", dynamic_symbol_id)
+
+
+try:
+    print("SYMBOL NAME:", sym.GetName())
+except Exception as e:
+    print("GET NAME FAILED:", repr(e))
+
+
+try:
+    print("SYMBOL TYPE:", sym.GetSymbolType())
+except Exception as e:
+    print("GET SYMBOL TYPE FAILED:", repr(e))
+
+
+try:
+    print("DISPLAY LENGTH:", sym.GetDisplayLength())
+except Exception as e:
+    print("GET DISPLAY LENGTH FAILED:", repr(e))
+
+
+try:
+    print("DISPLAY WIDTH:", sym.GetDisplayWidth())
+except Exception as e:
+    print("GET DISPLAY WIDTH FAILED:", repr(e))
+
+
+#====================================================================================================================================
+# STEP 5 - GET PLACED AREA
+#
+# This is more useful for a dynamic symbol than GetPinIds because
+# the dynamic object from our test did not expose the two original
+# symbol nodes.
+#====================================================================================================================================
+print("")
+print("============================================================")
+print("STEP 5 - PLACED AREA")
+print("============================================================")
+
+
+try:
+    placed_area = sym.GetPlacedArea(None, None, None, None)
+
+    print("PLACED AREA RESULT:", placed_area)
+
+except Exception as e:
+    print("GET PLACED AREA FAILED:", repr(e))
+
+
+#====================================================================================================================================
+# STEP 6 - GET PLACED POLYGON
+#====================================================================================================================================
+try:
+    placed_polygon = sym.GetPlacedPolygon(None, None, None)
+
+    print("PLACED POLYGON RESULT:", placed_polygon)
+
+except Exception as e:
+    print("GET PLACED POLYGON FAILED:", repr(e))
+
+
+#====================================================================================================================================
+# STEP 7 - FINAL RESULT
+#====================================================================================================================================
+print("")
+print("============================================================")
+print("DYNAMIC SHIELD COMPLETE")
+print("============================================================")
+print("SYMBOL:", SYMBOL_NAME)
+print("SYMBOL ID:", dynamic_symbol_id)
+print("X:", PLACE_X)
+print("Y:", PLACE_Y)
+print("HEIGHT:", SHIELD_HEIGHT)
+print("WIDTH:", SHIELD_WIDTH)
+print("============================================================")
+
+
+app.PutMessage("Dynamic Cable Shield placement complete.")
+
+
+#====================================================================================================================================
+# CLEANUP
+#====================================================================================================================================
+del sym
+del sht
+del prj
+del app
