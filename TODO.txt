@@ -1,6 +1,6 @@
 import win32com.client as win32
+import inspect
 import time
-import pyodbc
 
 
 #====================================================================================================================================
@@ -9,26 +9,16 @@ import pyodbc
 SYMBOL_NAME = "Cable Shield"
 SYMBOL_VERSION = 1
 
-PLACE_X = 24.0
-PLACE_Y = 10.0
+TEST_Y = 12.0
 
-DESIRED_VERTICAL_LENGTH = 10.0
+TEST_1_X = 20.0
+TEST_2_X = 24.0
+TEST_3_X = 28.0
+TEST_4_X = 32.0
+
+DESIRED_LENGTH = 10.0
 
 FLIP = 0
-
-
-#====================================================================================================================================
-# CONNECT TO DB
-#====================================================================================================================================
-CONNECTION_STRING = (
-    "DRIVER={SQL Server};"
-    "SERVER=sql-zuken-prd;"
-    "DATABASE=Zuken_E3Library;"
-    "Trusted_Connection=yes;"
-)
-
-conn = pyodbc.connect(CONNECTION_STRING, autocommit=True)
-cur = conn.cursor()
 
 
 #====================================================================================================================================
@@ -41,20 +31,16 @@ prj = app.CreateJobObject()
 sht = prj.CreateSheetObject()
 sym = prj.CreateSymbolObject()
 pin = prj.CreatePinObject()
-dev = prj.CreateDeviceObject()
-text = prj.CreateTextObject()
-attr = prj.CreateAttributeObject()
-comp = prj.CreateComponentObject()
 
 
 #====================================================================================================================================
 # START
 #====================================================================================================================================
-app.PutMessage("Starting Cable Shield Stretch Test")
+app.PutMessage("Starting Cable Shield Method Test")
 
 print("")
 print("============================================================")
-print("CABLE SHIELD STRETCH TEST")
+print("CABLE SHIELD METHOD TEST")
 print("============================================================")
 
 
@@ -81,368 +67,383 @@ if sheet_1_id is None:
 
 print("SHEET 1 ID:", sheet_1_id)
 
-app.PutMessage(f"Sheet 1 ID: {sheet_1_id}")
+
+#====================================================================================================================================
+# HELPER - LOAD AND PLACE A FRESH SYMBOL
+#====================================================================================================================================
+def place_test_symbol(x, y):
+    load_result = sym.Load(SYMBOL_NAME, SYMBOL_VERSION)
+
+    if load_result == 0:
+        raise Exception("Could not load Cable Shield symbol")
+
+    placed_id = sym.Place(sheet_1_id, x, y, FLIP, 1.0, 0)
+
+    if placed_id == 0:
+        raise Exception("Could not place Cable Shield symbol")
+
+    sym.SetId(placed_id)
+
+    return placed_id
 
 
 #====================================================================================================================================
-# STEP 2 - LOAD SYMBOL
+# HELPER - GET NODE LOCATIONS
 #====================================================================================================================================
-load_result = sym.Load(SYMBOL_NAME, SYMBOL_VERSION)
+def get_symbol_node_locations(symbol_id):
+    sym.SetId(symbol_id)
 
+    pin_info = sym.GetPinIds(None)
+
+    pin_ids = [x for x in pin_info[1] if x is not None]
+
+    output = []
+
+    for pin_id in pin_ids:
+        pin.SetId(pin_id)
+
+        xloc = [0.0]
+        yloc = [0.0]
+        grid = [""]
+        column = [""]
+        row = [""]
+
+        result = pin.GetSchemaLocation(xloc, yloc, grid, column, row)
+
+        node_x = None
+        node_y = None
+
+        try:
+            node_x = float(result[1])
+            node_y = float(result[2])
+        except Exception:
+            pass
+
+        output.append(
+            {
+                "id": pin_id,
+                "x": node_x,
+                "y": node_y,
+                "raw": result
+            }
+        )
+
+    return output
+
+
+#====================================================================================================================================
+# HELPER - PRINT NODE LOCATIONS
+#====================================================================================================================================
+def print_symbol_nodes(symbol_id, title):
+    print("")
+    print("============================================================")
+    print(title)
+    print("============================================================")
+
+    nodes = get_symbol_node_locations(symbol_id)
+
+    for node in nodes:
+        print("NODE ID:", node["id"], "| X:", node["x"], "| Y:", node["y"])
+
+    if len(nodes) >= 2:
+        valid_nodes = [node for node in nodes if node["y"] is not None]
+
+        if len(valid_nodes) >= 2:
+            valid_nodes.sort(key=lambda item: item["y"])
+
+            bottom_y = valid_nodes[0]["y"]
+            top_y = valid_nodes[-1]["y"]
+
+            print("GEOMETRIC VERTICAL LENGTH:", top_y - bottom_y)
+
+    return nodes
+
+
+#====================================================================================================================================
+# STEP 2 - INSPECT AVAILABLE SYMBOL METHODS
+#====================================================================================================================================
 print("")
 print("============================================================")
-print("STEP 2 - LOAD SYMBOL")
+print("AVAILABLE SYMBOL METHODS")
 print("============================================================")
-print("SYMBOL:", SYMBOL_NAME)
-print("VERSION:", SYMBOL_VERSION)
-print("LOAD RESULT:", load_result)
+
+keywords = [
+    "loc",
+    "position",
+    "move",
+    "length",
+    "display",
+    "size",
+    "stretch",
+    "schema",
+    "pin",
+    "place",
+    "transform"
+]
+
+method_names = []
+
+for name in dir(sym):
+    lower_name = name.lower()
+
+    if any(keyword in lower_name for keyword in keywords):
+        method_names.append(name)
 
 
-if load_result == 0:
-    app.PutMessage(f"Step 2 failed. Symbol load result: {load_result}")
-    raise Exception("Cable Shield symbol failed to load")
+method_names.sort()
 
 
-app.PutMessage(f"Step 2 success. Symbol loaded. Result: {load_result}")
+for name in method_names:
+    try:
+        member = getattr(sym, name)
+    except Exception as e:
+        print(name, "| GET FAILED:", repr(e))
+        continue
+
+    if callable(member):
+        try:
+            signature = inspect.signature(member)
+            print(name, signature)
+        except Exception:
+            print(name, "| CALLABLE")
+    else:
+        print(name, "| PROPERTY:", repr(member))
+
+
+print("============================================================")
 
 
 #====================================================================================================================================
-# STEP 3 - PLACE SYMBOL
+# STEP 3 - INSPECT AVAILABLE PIN METHODS
 #====================================================================================================================================
-place_result = sym.Place(sheet_1_id, PLACE_X, PLACE_Y, FLIP, 1.0, 0)
-
 print("")
 print("============================================================")
-print("STEP 3 - PLACE SYMBOL")
+print("AVAILABLE PIN METHODS")
 print("============================================================")
-print("PLACE X:", PLACE_X)
-print("PLACE Y:", PLACE_Y)
-print("PLACE RESULT:", place_result)
+
+pin_method_names = []
+
+for name in dir(pin):
+    lower_name = name.lower()
+
+    if any(keyword in lower_name for keyword in keywords):
+        pin_method_names.append(name)
 
 
-if place_result == 0:
-    app.PutMessage(f"Step 3 failed. Symbol placement result: {place_result}")
-    raise Exception("Cable Shield symbol failed to place")
+pin_method_names.sort()
 
 
-placed_symbol_id = place_result
+for name in pin_method_names:
+    try:
+        member = getattr(pin, name)
+    except Exception as e:
+        print(name, "| GET FAILED:", repr(e))
+        continue
 
-app.PutMessage(f"Step 3 success. Symbol placed. Result: {placed_symbol_id}")
+    if callable(member):
+        try:
+            signature = inspect.signature(member)
+            print(name, signature)
+        except Exception:
+            print(name, "| CALLABLE")
+    else:
+        print(name, "| PROPERTY:", repr(member))
+
+
+print("============================================================")
 
 
 #====================================================================================================================================
-# STEP 4 - BIND SYMBOL OBJECT TO PLACED SYMBOL
+# STEP 4 - PLACE BASELINE SYMBOL
 #====================================================================================================================================
-set_id_result = sym.SetId(placed_symbol_id)
+baseline_id = place_test_symbol(TEST_1_X, TEST_Y)
 
 print("")
-print("============================================================")
-print("STEP 4 - PLACED SYMBOL")
-print("============================================================")
-print("PLACED SYMBOL ID:", placed_symbol_id)
-print("SET ID RESULT:", set_id_result)
-print("SYMBOL NAME:", sym.GetName())
+print("BASELINE SYMBOL ID:", baseline_id)
 
+sym.SetId(baseline_id)
 
 try:
-    symbol_type = sym.GetSymbolType()
-    print("SYMBOL TYPE:", symbol_type)
+    print("BASELINE SYMBOL TYPE:", sym.GetSymbolType())
 except Exception as e:
     print("GET SYMBOL TYPE FAILED:", repr(e))
 
-
 try:
-    display_length_before = sym.GetDisplayLength()
-    print("DISPLAY LENGTH BEFORE:", display_length_before)
+    print("BASELINE DISPLAY LENGTH:", sym.GetDisplayLength())
 except Exception as e:
-    display_length_before = None
     print("GET DISPLAY LENGTH FAILED:", repr(e))
 
 
-#====================================================================================================================================
-# STEP 5 - GET SYMBOL PIN / NODE IDS
-#====================================================================================================================================
-pin_info = sym.GetPinIds(None)
+print_symbol_nodes(baseline_id, "BASELINE NODE LOCATIONS")
 
-pin_ids = [x for x in pin_info[1] if x is not None]
 
+#====================================================================================================================================
+# STEP 5 - TEST SETDISPLAYLENGTH ON A DIFFERENT SYMBOL
+#====================================================================================================================================
+display_length_test_id = place_test_symbol(TEST_2_X, TEST_Y)
 
 print("")
 print("============================================================")
-print("STEP 5 - SYMBOL PIN / NODE IDS")
+print("SETDISPLAYLENGTH TEST")
 print("============================================================")
-print("PIN/NODE IDS:", pin_ids)
-print("PIN/NODE COUNT:", len(pin_ids))
+print("TEST SYMBOL ID:", display_length_test_id)
 
 
-if len(pin_ids) < 2:
-    raise Exception("Expected at least two nodes on the Cable Shield symbol")
+sym.SetId(display_length_test_id)
+
+before_length = sym.GetDisplayLength()
+
+print("DISPLAY LENGTH BEFORE:", before_length)
+
+
+display_result = sym.SetDisplayLength(DESIRED_LENGTH)
+
+print("SETDISPLAYLENGTH RESULT:", display_result)
+
+
+sym.SetId(display_length_test_id)
+
+after_length = sym.GetDisplayLength()
+
+print("DISPLAY LENGTH AFTER:", after_length)
+
+
+print_symbol_nodes(display_length_test_id, "SETDISPLAYLENGTH NODE LOCATIONS")
 
 
 #====================================================================================================================================
-# STEP 6 - READ CURRENT NODE LOCATIONS
+# STEP 6 - PLACE FRESH SYMBOL FOR LOCATION METHOD TESTS
 #====================================================================================================================================
-node_data = []
-
+location_test_id = place_test_symbol(TEST_3_X, TEST_Y)
 
 print("")
 print("============================================================")
-print("STEP 6 - CURRENT NODE LOCATIONS")
+print("LOCATION TEST SYMBOL")
 print("============================================================")
+print("SYMBOL ID:", location_test_id)
 
 
-for pin_id in pin_ids:
-    pin.SetId(pin_id)
-
-    xloc = [0.0]
-    yloc = [0.0]
-    grid = [""]
-    column = [""]
-    row = [""]
-
-    location_result = pin.GetSchemaLocation(xloc, yloc, grid, column, row)
-
-    print("PIN/NODE:", pin_id, "| RESULT:", location_result)
-
-    node_x = float(location_result[1])
-    node_y = float(location_result[2])
-
-    node_data.append({
-        "id": pin_id,
-        "x": node_x,
-        "y": node_y
-    })
+print_symbol_nodes(location_test_id, "LOCATION TEST BEFORE")
 
 
 #====================================================================================================================================
-# STEP 7 - SORT NODES VERTICALLY
+# STEP 7 - TEST SYMBOL SETLOCATION IF IT EXISTS
 #====================================================================================================================================
-node_data.sort(key=lambda item: item["y"])
-
-
-fixed_node = node_data[0]
-
-moving_node = node_data[-1]
-
-
-print("")
-print("============================================================")
-print("STEP 7 - STRETCH NODES")
-print("============================================================")
-
-print("FIXED NODE ID:", fixed_node["id"])
-print("FIXED NODE X:", fixed_node["x"])
-print("FIXED NODE Y:", fixed_node["y"])
-
-print("")
-
-print("MOVING NODE ID:", moving_node["id"])
-print("MOVING NODE X:", moving_node["x"])
-print("MOVING NODE Y:", moving_node["y"])
-
-
-current_vertical_length = moving_node["y"] - fixed_node["y"]
-
-
-print("")
-print("CURRENT VERTICAL LENGTH:", current_vertical_length)
-print("DESIRED VERTICAL LENGTH:", DESIRED_VERTICAL_LENGTH)
-
-
-#====================================================================================================================================
-# STEP 8 - CALCULATE NEW UPPER NODE LOCATION
-#====================================================================================================================================
-target_x = moving_node["x"]
-
-target_y = fixed_node["y"] + DESIRED_VERTICAL_LENGTH
-
-
-print("")
-print("TARGET X:", target_x)
-print("TARGET Y:", target_y)
-
-
-#====================================================================================================================================
-# STEP 9 - MOVE ONLY THE UPPER NODE IN Y
-#====================================================================================================================================
-pin.SetId(moving_node["id"])
-
-
-print("")
-print("============================================================")
-print("STEP 9 - MOVING UPPER NODE")
-print("============================================================")
-
-
-try:
-    move_result = pin.SetSchemaLocation(target_x, target_y)
-
-    print("SET SCHEMA LOCATION RESULT:", move_result)
-
-    app.PutMessage(f"Upper shield node moved. Result: {move_result}")
-
-except Exception as e:
-    print("SET SCHEMA LOCATION FAILED:", repr(e))
-
-    app.PutMessage(f"SetSchemaLocation failed: {repr(e)}")
-
-    raise
-
-
-#====================================================================================================================================
-# STEP 10 - VERIFY MOVING NODE LOCATION
-#====================================================================================================================================
-time.sleep(0.5)
-
-pin.SetId(moving_node["id"])
-
-xloc = [0.0]
-yloc = [0.0]
-grid = [""]
-column = [""]
-row = [""]
-
-verify_result = pin.GetSchemaLocation(xloc, yloc, grid, column, row)
-
-actual_x = float(verify_result[1])
-actual_y = float(verify_result[2])
-
-
-print("")
-print("============================================================")
-print("STEP 10 - VERIFY MOVING NODE")
-print("============================================================")
-print("VERIFY RESULT:", verify_result)
-print("ACTUAL X:", actual_x)
-print("ACTUAL Y:", actual_y)
-
-
-#====================================================================================================================================
-# STEP 11 - VERIFY BOTH NODES
-#====================================================================================================================================
-verified_nodes = []
-
-
-print("")
-print("============================================================")
-print("STEP 11 - FINAL NODE LOCATIONS")
-print("============================================================")
-
-
-for pin_id in pin_ids:
-    pin.SetId(pin_id)
-
-    xloc = [0.0]
-    yloc = [0.0]
-    grid = [""]
-    column = [""]
-    row = [""]
-
-    location_result = pin.GetSchemaLocation(xloc, yloc, grid, column, row)
-
-    node_x = float(location_result[1])
-    node_y = float(location_result[2])
-
-    verified_nodes.append({
-        "id": pin_id,
-        "x": node_x,
-        "y": node_y
-    })
-
-    print("PIN/NODE:", pin_id, "| X:", node_x, "| Y:", node_y)
-
-
-#====================================================================================================================================
-# STEP 12 - CALCULATE ACTUAL FINAL LENGTH
-#====================================================================================================================================
-verified_nodes.sort(key=lambda item: item["y"])
-
-
-final_bottom_node = verified_nodes[0]
-
-final_top_node = verified_nodes[-1]
-
-
-actual_vertical_length = final_top_node["y"] - final_bottom_node["y"]
-
-
-print("")
-print("============================================================")
-print("STEP 12 - FINAL LENGTH")
-print("============================================================")
-print("BOTTOM Y:", final_bottom_node["y"])
-print("TOP Y:", final_top_node["y"])
-print("ACTUAL VERTICAL LENGTH:", actual_vertical_length)
-print("REQUESTED VERTICAL LENGTH:", DESIRED_VERTICAL_LENGTH)
-
-
-if abs(actual_vertical_length - DESIRED_VERTICAL_LENGTH) < 0.001:
-    print("VERTICAL NODE STRETCH SUCCESS")
-
-    app.PutMessage(f"Vertical shield stretch success. Length: {actual_vertical_length}")
-
-else:
-    print("VERTICAL NODE STRETCH DID NOT VERIFY")
-
-    app.PutMessage(f"Vertical shield stretch did not verify. Requested {DESIRED_VERTICAL_LENGTH}, actual {actual_vertical_length}")
-
-
-#====================================================================================================================================
-# STEP 13 - CHECK SYMBOL DISPLAY LENGTH AFTER NODE MOVE
-#====================================================================================================================================
-sym.SetId(placed_symbol_id)
-
-
-try:
-    display_length_after = sym.GetDisplayLength()
-
+if hasattr(sym, "SetLocation"):
     print("")
     print("============================================================")
-    print("STEP 13 - SYMBOL DISPLAY LENGTH")
+    print("TESTING sym.SetLocation")
     print("============================================================")
-    print("DISPLAY LENGTH BEFORE:", display_length_before)
-    print("DISPLAY LENGTH AFTER:", display_length_after)
 
-except Exception as e:
-    print("GET DISPLAY LENGTH AFTER MOVE FAILED:", repr(e))
+    sym.SetId(location_test_id)
+
+    try:
+        result = sym.SetLocation(TEST_3_X, TEST_Y + 5.0)
+
+        print("SETLOCATION RESULT:", result)
+
+        time.sleep(0.5)
+
+        print_symbol_nodes(location_test_id, "AFTER sym.SetLocation")
+
+    except Exception as e:
+        print("sym.SetLocation FAILED:", repr(e))
+
+else:
+    print("")
+    print("sym.SetLocation DOES NOT EXIST")
 
 
 #====================================================================================================================================
-# STEP 14 - FINAL OUTPUT
+# STEP 8 - PLACE ANOTHER FRESH SYMBOL FOR SETSCHEMALOCATION TEST
+#====================================================================================================================================
+schema_location_test_id = place_test_symbol(TEST_4_X, TEST_Y)
+
+print("")
+print("============================================================")
+print("SCHEMA LOCATION TEST SYMBOL")
+print("============================================================")
+print("SYMBOL ID:", schema_location_test_id)
+
+
+print_symbol_nodes(schema_location_test_id, "SCHEMA LOCATION TEST BEFORE")
+
+
+#====================================================================================================================================
+# STEP 9 - TEST SYMBOL SETSCHEMALOCATION IF IT EXISTS
+#====================================================================================================================================
+if hasattr(sym, "SetSchemaLocation"):
+    print("")
+    print("============================================================")
+    print("TESTING sym.SetSchemaLocation")
+    print("============================================================")
+
+    sym.SetId(schema_location_test_id)
+
+    try:
+        result = sym.SetSchemaLocation(TEST_4_X, TEST_Y + 5.0)
+
+        print("SYMBOL SETSCHEMALOCATION RESULT:", result)
+
+        time.sleep(0.5)
+
+        print_symbol_nodes(schema_location_test_id, "AFTER sym.SetSchemaLocation")
+
+    except Exception as e:
+        print("sym.SetSchemaLocation FAILED:", repr(e))
+
+else:
+    print("")
+    print("sym.SetSchemaLocation DOES NOT EXIST")
+
+
+#====================================================================================================================================
+# STEP 10 - REPORT PLACEPINVIEW AVAILABILITY
 #====================================================================================================================================
 print("")
 print("============================================================")
-print("FINAL RESULT")
+print("PLACEPINVIEW CHECK")
 print("============================================================")
-print("PLACED SYMBOL ID:", placed_symbol_id)
-print("FIXED NODE:", final_bottom_node)
-print("MOVED NODE:", final_top_node)
-print("REQUESTED LENGTH:", DESIRED_VERTICAL_LENGTH)
-print("ACTUAL LENGTH:", actual_vertical_length)
+
+
+if hasattr(sym, "PlacePinView"):
+    print("sym.PlacePinView EXISTS")
+
+    try:
+        print("SIGNATURE:", inspect.signature(sym.PlacePinView))
+    except Exception:
+        print("Could not read PlacePinView signature")
+
+else:
+    print("sym.PlacePinView DOES NOT EXIST")
+
+
+#====================================================================================================================================
+# STEP 11 - FINAL SUMMARY
+#====================================================================================================================================
+print("")
+print("============================================================")
+print("TEST SYMBOL LOCATIONS")
+print("============================================================")
+print("BASELINE:", TEST_1_X, TEST_Y, "| ID:", baseline_id)
+print("DISPLAY LENGTH TEST:", TEST_2_X, TEST_Y, "| ID:", display_length_test_id)
+print("SETLOCATION TEST:", TEST_3_X, TEST_Y, "| ID:", location_test_id)
+print("SETSCHEMALOCATION TEST:", TEST_4_X, TEST_Y, "| ID:", schema_location_test_id)
+print("============================================================")
+
+
+print("")
+print("IMPORTANT:")
+print("pin.GetSchemaLocation IS ONLY USED TO READ THE NODE POSITIONS.")
+print("THIS SCRIPT DOES NOT CALL pin.SetSchemaLocation.")
 print("============================================================")
 
 
 #====================================================================================================================================
 # CLEANUP
 #====================================================================================================================================
-try:
-    cur.close()
-except Exception:
-    pass
-
-
-try:
-    conn.close()
-except Exception:
-    pass
-
-
-del attr
-del text
-del sym
 del pin
-del comp
-del dev
+del sym
 del sht
 del prj
 del app
