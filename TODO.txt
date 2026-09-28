@@ -1,339 +1,116 @@
-import win32com.client as win32
-import time
-
-
-#====================================================================================================================================
-# SETTINGS
-#====================================================================================================================================
-SYMBOL_NAME = "Cable Shield"
-SYMBOL_VERSION = 1
-
-TEST_Y = 10.0
-DESIRED_VERTICAL_LENGTH = 8.0
-
-BASELINE_X = 8.0
-PLACENODE_X = 16.0
-DISPLAYWIDTH_X = 24.0
-PLACEDYNAMIC_X = 32.0
-
-FLIP = 0
-
-
-#====================================================================================================================================
-# CREATE E3 OBJECTS
-#====================================================================================================================================
-app = win32.gencache.EnsureDispatch("CT.Application")
-prj = app.CreateJobObject()
-sht = prj.CreateSheetObject()
-sym = prj.CreateSymbolObject()
-pin = prj.CreatePinObject()
-
-
-#====================================================================================================================================
-# START
-#====================================================================================================================================
-app.PutMessage("Starting Cable Shield Stretch Method Test")
-
-print("")
-print("============================================================")
-print("CABLE SHIELD STRETCH METHOD TEST")
-print("============================================================")
-
-
-#====================================================================================================================================
-# STEP 1 - FIND SHEET 1
-#====================================================================================================================================
-sheet_info = prj.GetAllSheetIds(None)
-sheet_ids = [x for x in sheet_info[1] if x is not None]
-
-sheet_1_id = None
-
-for sheet_id in sheet_ids:
-    sht.SetId(sheet_id)
-
-    if sht.GetName() == "1":
-        sheet_1_id = sheet_id
-        break
-
-
-if sheet_1_id is None:
-    raise Exception("Could not find Sheet 1")
-
-
-print("SHEET 1 ID:", sheet_1_id)
-
-
-#====================================================================================================================================
-# HELPER - PLACE FRESH SYMBOL
-#====================================================================================================================================
-def place_test_symbol(x, y):
-    load_result = sym.Load(SYMBOL_NAME, SYMBOL_VERSION)
-
-    if load_result == 0:
-        raise Exception("Could not load symbol")
-
-    placed_id = sym.Place(sheet_1_id, x, y, FLIP, 1.0, 0)
-
-    if placed_id == 0:
-        raise Exception("Could not place symbol")
-
-    sym.SetId(placed_id)
-
-    return placed_id
-
-
-#====================================================================================================================================
-# HELPER - GET NODE LOCATIONS
-#====================================================================================================================================
-def get_node_locations(symbol_id):
-    sym.SetId(symbol_id)
-
-    pin_info = sym.GetPinIds(None)
-    pin_ids = [x for x in pin_info[1] if x is not None]
-
-    nodes = []
-
-    for pin_id in pin_ids:
-        pin.SetId(pin_id)
-
-        xloc = [0.0]
-        yloc = [0.0]
-        grid = [""]
-        column = [""]
-        row = [""]
-
-        result = pin.GetSchemaLocation(xloc, yloc, grid, column, row)
-
-        try:
-            node_x = float(result[1])
-            node_y = float(result[2])
-        except Exception:
-            node_x = None
-            node_y = None
-
-        nodes.append({
-            "id": pin_id,
-            "x": node_x,
-            "y": node_y,
-            "raw": result
-        })
-
-    return nodes
-
-
-#====================================================================================================================================
-# HELPER - PRINT SYMBOL GEOMETRY
-#====================================================================================================================================
-def print_symbol_geometry(symbol_id, title):
-    print("")
-    print("============================================================")
-    print(title)
-    print("============================================================")
-
-    sym.SetId(symbol_id)
-
-    print("SYMBOL ID:", symbol_id)
-
-    try:
-        print("DISPLAY LENGTH:", sym.GetDisplayLength())
-    except Exception as e:
-        print("GET DISPLAY LENGTH FAILED:", repr(e))
-
-    try:
-        print("DISPLAY WIDTH:", sym.GetDisplayWidth())
-    except Exception as e:
-        print("GET DISPLAY WIDTH FAILED:", repr(e))
-
-    nodes = get_node_locations(symbol_id)
-
-    print("NODE COUNT:", len(nodes))
-
-    for node in nodes:
-        print("NODE:", node["id"], "| X:", node["x"], "| Y:", node["y"])
-
-    valid_nodes = [node for node in nodes if node["x"] is not None and node["y"] is not None]
-
-    if len(valid_nodes) >= 2:
-        valid_nodes.sort(key=lambda item: item["y"])
-
-        bottom_node = valid_nodes[0]
-        top_node = valid_nodes[-1]
-
-        print("BOTTOM NODE:", bottom_node["id"], "| X:", bottom_node["x"], "| Y:", bottom_node["y"])
-        print("TOP NODE:", top_node["id"], "| X:", top_node["x"], "| Y:", top_node["y"])
-        print("VERTICAL LENGTH:", top_node["y"] - bottom_node["y"])
-
-    return nodes
-
-
-#====================================================================================================================================
-# TEST 1 - BASELINE
-#====================================================================================================================================
-baseline_id = place_test_symbol(BASELINE_X, TEST_Y)
-
-print_symbol_geometry(baseline_id, "TEST 1 - BASELINE")
-
-
-#====================================================================================================================================
-# TEST 2 - PIN.PLACENODE
-#
-# THIS IS THE MOST IMPORTANT TEST
-#====================================================================================================================================
-placenode_id = place_test_symbol(PLACENODE_X, TEST_Y)
-
-nodes_before = print_symbol_geometry(placenode_id, "TEST 2 - PLACENODE BEFORE")
-
-
-valid_nodes = [node for node in nodes_before if node["x"] is not None and node["y"] is not None]
-
-valid_nodes.sort(key=lambda item: item["y"])
-
-
-if len(valid_nodes) < 2:
-    raise Exception("PlaceNode test symbol does not have two readable nodes")
-
-
-bottom_node = valid_nodes[0]
-top_node = valid_nodes[-1]
-
-target_x = top_node["x"]
-target_y = bottom_node["y"] + DESIRED_VERTICAL_LENGTH
-
-
-print("")
-print("============================================================")
-print("TESTING pin.PlaceNode")
-print("============================================================")
-print("TOP NODE ID:", top_node["id"])
-print("ORIGINAL X:", top_node["x"])
-print("ORIGINAL Y:", top_node["y"])
-print("TARGET X:", target_x)
-print("TARGET Y:", target_y)
-
-
-pin.SetId(top_node["id"])
-
-
-try:
-    place_node_result = pin.PlaceNode(sheet_1_id, target_x, target_y)
-
-    print("PLACENODE RESULT:", place_node_result)
-
-except Exception as e:
-    print("PLACENODE FAILED:", repr(e))
-
-
-time.sleep(0.5)
-
-
-print_symbol_geometry(placenode_id, "TEST 2 - PLACENODE AFTER")
-
-
-#====================================================================================================================================
-# TEST 3 - SETDISPLAYWIDTH
-#
-# POSSIBLE THAT THIS SYMBOL'S VERTICAL AXIS IS WIDTH
-#====================================================================================================================================
-displaywidth_id = place_test_symbol(DISPLAYWIDTH_X, TEST_Y)
-
-print_symbol_geometry(displaywidth_id, "TEST 3 - SETDISPLAYWIDTH BEFORE")
-
-
-sym.SetId(displaywidth_id)
-
-
-try:
-    width_before = sym.GetDisplayWidth()
-
-    print("")
-    print("WIDTH BEFORE:", width_before)
-
-    width_result = sym.SetDisplayWidth(DESIRED_VERTICAL_LENGTH)
-
-    print("SETDISPLAYWIDTH RESULT:", width_result)
-
-    sym.SetId(displaywidth_id)
-
-    width_after = sym.GetDisplayWidth()
-
-    print("WIDTH AFTER:", width_after)
-
-except Exception as e:
-    print("SETDISPLAYWIDTH FAILED:", repr(e))
-
-
-time.sleep(0.5)
-
-
-print_symbol_geometry(displaywidth_id, "TEST 3 - SETDISPLAYWIDTH AFTER")
-
-
-#====================================================================================================================================
-# TEST 4 - PLACEDYNAMIC
-#
-# TEST ON ITS OWN LOCATION ONLY
-#====================================================================================================================================
-print("")
-print("============================================================")
-print("TEST 4 - PLACEDYNAMIC")
-print("============================================================")
-
-
-dynamic_load_result = sym.Load(SYMBOL_NAME, SYMBOL_VERSION)
-
-print("LOAD RESULT:", dynamic_load_result)
-
-
-if dynamic_load_result != 0:
-
-    try:
-        dynamic_result = sym.PlaceDynamic(sheet_1_id, PLACEDYNAMIC_X, TEST_Y, DESIRED_VERTICAL_LENGTH, 0.1, "", 0)
-
-        print("PLACEDYNAMIC RESULT:", dynamic_result)
-
-        if dynamic_result != 0:
-            time.sleep(0.5)
-
-            print_symbol_geometry(dynamic_result, "TEST 4 - PLACEDYNAMIC RESULT")
-
-    except Exception as e:
-        print("PLACEDYNAMIC FAILED:", repr(e))
-
-
-#====================================================================================================================================
-# FINAL TEST LOCATIONS
-#====================================================================================================================================
-print("")
-print("============================================================")
-print("TEST LOCATIONS")
-print("============================================================")
-print("BASELINE: X =", BASELINE_X, "Y =", TEST_Y, "ID =", baseline_id)
-print("PLACENODE: X =", PLACENODE_X, "Y =", TEST_Y, "ID =", placenode_id)
-print("DISPLAY WIDTH: X =", DISPLAYWIDTH_X, "Y =", TEST_Y, "ID =", displaywidth_id)
-print("PLACE DYNAMIC: X =", PLACEDYNAMIC_X, "Y =", TEST_Y)
-print("============================================================")
-
-
-#====================================================================================================================================
-# WHAT TO LOOK FOR
-#====================================================================================================================================
-print("")
-print("============================================================")
-print("WHAT TO LOOK FOR")
-print("============================================================")
-print("TEST 2 IS THE IMPORTANT ONE.")
-print("IF pin.PlaceNode WORKS, THE SYMBOL AT X =", PLACENODE_X, "SHOULD BECOME VERTICALLY LONG.")
-print("IF IT CREATES A SEPARATE NODE INSTEAD, THE NODE COUNT OR GEOMETRY SHOULD REVEAL THAT.")
-print("TEST 3 CHECKS WHETHER E3 CALLS THE VERTICAL DIMENSION DISPLAY WIDTH.")
-print("TEST 4 CHECKS WHETHER THE SHIELD CAN BE CREATED DIRECTLY WITH A HEIGHT.")
-print("============================================================")
-
-
-#====================================================================================================================================
-# CLEANUP
-#====================================================================================================================================
-del pin
-del sym
-del sht
-del prj
-del app
+============================================================
+CABLE SHIELD STRETCH METHOD TEST
+============================================================
+SHEET 1 ID: 204828
+
+============================================================
+TEST 1 - BASELINE
+============================================================
+SYMBOL ID: 165988
+DISPLAY LENGTH: 0.10000000000000214
+DISPLAY WIDTH: 0.0
+NODE COUNT: 2
+NODE: 204780 | X: 8.0 | Y: 10.0
+NODE: 147638 | X: 8.0 | Y: 10.1
+BOTTOM NODE: 204780 | X: 8.0 | Y: 10.0
+TOP NODE: 147638 | X: 8.0 | Y: 10.1
+VERTICAL LENGTH: 0.09999999999999964
+
+============================================================
+TEST 2 - PLACENODE BEFORE
+============================================================
+SYMBOL ID: 147588
+DISPLAY LENGTH: 0.10000000000000214
+DISPLAY WIDTH: 0.0
+NODE COUNT: 2
+NODE: 147587 | X: 16.0 | Y: 10.0
+NODE: 147586 | X: 16.0 | Y: 10.1
+BOTTOM NODE: 147587 | X: 16.0 | Y: 10.0
+TOP NODE: 147586 | X: 16.0 | Y: 10.1
+VERTICAL LENGTH: 0.09999999999999964
+
+============================================================
+TESTING pin.PlaceNode
+============================================================
+TOP NODE ID: 147586
+ORIGINAL X: 16.0
+ORIGINAL Y: 10.1
+TARGET X: 16.0
+TARGET Y: 18.0
+PLACENODE RESULT: -4
+
+============================================================
+TEST 2 - PLACENODE AFTER
+============================================================
+SYMBOL ID: 147588
+DISPLAY LENGTH: 0.10000000000000214
+DISPLAY WIDTH: 0.0
+NODE COUNT: 2
+NODE: 147587 | X: 16.0 | Y: 10.0
+NODE: 147586 | X: 16.0 | Y: 10.1
+BOTTOM NODE: 147587 | X: 16.0 | Y: 10.0
+TOP NODE: 147586 | X: 16.0 | Y: 10.1
+VERTICAL LENGTH: 0.09999999999999964
+
+============================================================
+TEST 3 - SETDISPLAYWIDTH BEFORE
+============================================================
+SYMBOL ID: 147375
+DISPLAY LENGTH: 0.10000000000000214
+DISPLAY WIDTH: 0.0
+NODE COUNT: 2
+NODE: 147374 | X: 24.0 | Y: 10.0
+NODE: 147373 | X: 24.0 | Y: 10.1
+BOTTOM NODE: 147374 | X: 24.0 | Y: 10.0
+TOP NODE: 147373 | X: 24.0 | Y: 10.1
+VERTICAL LENGTH: 0.09999999999999964
+
+WIDTH BEFORE: 0.0
+SETDISPLAYWIDTH RESULT: 0
+WIDTH AFTER: 0.0
+
+============================================================
+TEST 3 - SETDISPLAYWIDTH AFTER
+============================================================
+SYMBOL ID: 147375
+DISPLAY LENGTH: 0.10000000000000214
+DISPLAY WIDTH: 0.0
+NODE COUNT: 2
+NODE: 147374 | X: 24.0 | Y: 10.0
+NODE: 147373 | X: 24.0 | Y: 10.1
+BOTTOM NODE: 147374 | X: 24.0 | Y: 10.0
+TOP NODE: 147373 | X: 24.0 | Y: 10.1
+VERTICAL LENGTH: 0.09999999999999964
+
+============================================================
+TEST 4 - PLACEDYNAMIC
+============================================================
+LOAD RESULT: 149127
+PLACEDYNAMIC RESULT: 147210
+
+============================================================
+TEST 4 - PLACEDYNAMIC RESULT
+============================================================
+SYMBOL ID: 147210
+DISPLAY LENGTH: 0.0
+DISPLAY WIDTH: 0.0
+NODE COUNT: 0
+
+============================================================
+TEST LOCATIONS
+============================================================
+BASELINE: X = 8.0 Y = 10.0 ID = 165988
+PLACENODE: X = 16.0 Y = 10.0 ID = 147588
+DISPLAY WIDTH: X = 24.0 Y = 10.0 ID = 147375
+PLACE DYNAMIC: X = 32.0 Y = 10.0
+============================================================
+
+============================================================
+WHAT TO LOOK FOR
+============================================================
+TEST 2 IS THE IMPORTANT ONE.
+IF pin.PlaceNode WORKS, THE SYMBOL AT X = 16.0 SHOULD BECOME VERTICALLY LONG.
+IF IT CREATES A SEPARATE NODE INSTEAD, THE NODE COUNT OR GEOMETRY SHOULD REVEAL THAT.
+TEST 3 CHECKS WHETHER E3 CALLS THE VERTICAL DIMENSION DISPLAY WIDTH.
+TEST 4 CHECKS WHETHER THE SHIELD CAN BE CREATED DIRECTLY WITH A HEIGHT.
+============================================================
