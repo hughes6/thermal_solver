@@ -1,28 +1,448 @@
-import inspect
+import win32com.client as win32
+import time
+import pyodbc
+
+
+#====================================================================================================================================
+# SETTINGS
+#====================================================================================================================================
+SYMBOL_NAME = "Cable Shield"
+SYMBOL_VERSION = 1
+
+PLACE_X = 24.0
+PLACE_Y = 10.0
+
+DESIRED_VERTICAL_LENGTH = 10.0
+
+FLIP = 0
+
+
+#====================================================================================================================================
+# CONNECT TO DB
+#====================================================================================================================================
+CONNECTION_STRING = (
+    "DRIVER={SQL Server};"
+    "SERVER=sql-zuken-prd;"
+    "DATABASE=Zuken_E3Library;"
+    "Trusted_Connection=yes;"
+)
+
+conn = pyodbc.connect(CONNECTION_STRING, autocommit=True)
+cur = conn.cursor()
+
+
+#====================================================================================================================================
+# CREATE E3 OBJECTS
+#====================================================================================================================================
+app = win32.gencache.EnsureDispatch("CT.Application")
+
+prj = app.CreateJobObject()
+
+sht = prj.CreateSheetObject()
+sym = prj.CreateSymbolObject()
+pin = prj.CreatePinObject()
+dev = prj.CreateDeviceObject()
+text = prj.CreateTextObject()
+attr = prj.CreateAttributeObject()
+comp = prj.CreateComponentObject()
+
+
+#====================================================================================================================================
+# START
+#====================================================================================================================================
+app.PutMessage("Starting Cable Shield Stretch Test")
 
 print("")
 print("============================================================")
-print("SETSCHEMALOCATION METHOD INFO")
+print("CABLE SHIELD STRETCH TEST")
 print("============================================================")
 
-try:
-    print("DOC:")
-    print(pin.SetSchemaLocation.__doc__)
-except Exception as e:
-    print("DOC ERROR:", repr(e))
 
-try:
-    print("")
-    print("SIGNATURE:")
-    print(inspect.signature(pin.SetSchemaLocation))
-except Exception as e:
-    print("SIGNATURE ERROR:", repr(e))
+#====================================================================================================================================
+# STEP 1 - FIND SHEET 1
+#====================================================================================================================================
+sheet_info = prj.GetAllSheetIds(None)
 
-try:
-    print("")
-    print("METHOD:")
-    print(pin.SetSchemaLocation)
-except Exception as e:
-    print("METHOD ERROR:", repr(e))
+sheet_ids = [x for x in sheet_info[1] if x is not None]
 
+sheet_1_id = None
+
+for sheet_id in sheet_ids:
+    sht.SetId(sheet_id)
+
+    if sht.GetName() == "1":
+        sheet_1_id = sheet_id
+        break
+
+
+if sheet_1_id is None:
+    raise Exception("Could not find Sheet 1")
+
+
+print("SHEET 1 ID:", sheet_1_id)
+
+app.PutMessage(f"Sheet 1 ID: {sheet_1_id}")
+
+
+#====================================================================================================================================
+# STEP 2 - LOAD SYMBOL
+#====================================================================================================================================
+load_result = sym.Load(SYMBOL_NAME, SYMBOL_VERSION)
+
+print("")
 print("============================================================")
+print("STEP 2 - LOAD SYMBOL")
+print("============================================================")
+print("SYMBOL:", SYMBOL_NAME)
+print("VERSION:", SYMBOL_VERSION)
+print("LOAD RESULT:", load_result)
+
+
+if load_result == 0:
+    app.PutMessage(f"Step 2 failed. Symbol load result: {load_result}")
+    raise Exception("Cable Shield symbol failed to load")
+
+
+app.PutMessage(f"Step 2 success. Symbol loaded. Result: {load_result}")
+
+
+#====================================================================================================================================
+# STEP 3 - PLACE SYMBOL
+#====================================================================================================================================
+place_result = sym.Place(sheet_1_id, PLACE_X, PLACE_Y, FLIP, 1.0, 0)
+
+print("")
+print("============================================================")
+print("STEP 3 - PLACE SYMBOL")
+print("============================================================")
+print("PLACE X:", PLACE_X)
+print("PLACE Y:", PLACE_Y)
+print("PLACE RESULT:", place_result)
+
+
+if place_result == 0:
+    app.PutMessage(f"Step 3 failed. Symbol placement result: {place_result}")
+    raise Exception("Cable Shield symbol failed to place")
+
+
+placed_symbol_id = place_result
+
+app.PutMessage(f"Step 3 success. Symbol placed. Result: {placed_symbol_id}")
+
+
+#====================================================================================================================================
+# STEP 4 - BIND SYMBOL OBJECT TO PLACED SYMBOL
+#====================================================================================================================================
+set_id_result = sym.SetId(placed_symbol_id)
+
+print("")
+print("============================================================")
+print("STEP 4 - PLACED SYMBOL")
+print("============================================================")
+print("PLACED SYMBOL ID:", placed_symbol_id)
+print("SET ID RESULT:", set_id_result)
+print("SYMBOL NAME:", sym.GetName())
+
+
+try:
+    symbol_type = sym.GetSymbolType()
+    print("SYMBOL TYPE:", symbol_type)
+except Exception as e:
+    print("GET SYMBOL TYPE FAILED:", repr(e))
+
+
+try:
+    display_length_before = sym.GetDisplayLength()
+    print("DISPLAY LENGTH BEFORE:", display_length_before)
+except Exception as e:
+    display_length_before = None
+    print("GET DISPLAY LENGTH FAILED:", repr(e))
+
+
+#====================================================================================================================================
+# STEP 5 - GET SYMBOL PIN / NODE IDS
+#====================================================================================================================================
+pin_info = sym.GetPinIds(None)
+
+pin_ids = [x for x in pin_info[1] if x is not None]
+
+
+print("")
+print("============================================================")
+print("STEP 5 - SYMBOL PIN / NODE IDS")
+print("============================================================")
+print("PIN/NODE IDS:", pin_ids)
+print("PIN/NODE COUNT:", len(pin_ids))
+
+
+if len(pin_ids) < 2:
+    raise Exception("Expected at least two nodes on the Cable Shield symbol")
+
+
+#====================================================================================================================================
+# STEP 6 - READ CURRENT NODE LOCATIONS
+#====================================================================================================================================
+node_data = []
+
+
+print("")
+print("============================================================")
+print("STEP 6 - CURRENT NODE LOCATIONS")
+print("============================================================")
+
+
+for pin_id in pin_ids:
+    pin.SetId(pin_id)
+
+    xloc = [0.0]
+    yloc = [0.0]
+    grid = [""]
+    column = [""]
+    row = [""]
+
+    location_result = pin.GetSchemaLocation(xloc, yloc, grid, column, row)
+
+    print("PIN/NODE:", pin_id, "| RESULT:", location_result)
+
+    node_x = float(location_result[1])
+    node_y = float(location_result[2])
+
+    node_data.append({
+        "id": pin_id,
+        "x": node_x,
+        "y": node_y
+    })
+
+
+#====================================================================================================================================
+# STEP 7 - SORT NODES VERTICALLY
+#====================================================================================================================================
+node_data.sort(key=lambda item: item["y"])
+
+
+fixed_node = node_data[0]
+
+moving_node = node_data[-1]
+
+
+print("")
+print("============================================================")
+print("STEP 7 - STRETCH NODES")
+print("============================================================")
+
+print("FIXED NODE ID:", fixed_node["id"])
+print("FIXED NODE X:", fixed_node["x"])
+print("FIXED NODE Y:", fixed_node["y"])
+
+print("")
+
+print("MOVING NODE ID:", moving_node["id"])
+print("MOVING NODE X:", moving_node["x"])
+print("MOVING NODE Y:", moving_node["y"])
+
+
+current_vertical_length = moving_node["y"] - fixed_node["y"]
+
+
+print("")
+print("CURRENT VERTICAL LENGTH:", current_vertical_length)
+print("DESIRED VERTICAL LENGTH:", DESIRED_VERTICAL_LENGTH)
+
+
+#====================================================================================================================================
+# STEP 8 - CALCULATE NEW UPPER NODE LOCATION
+#====================================================================================================================================
+target_x = moving_node["x"]
+
+target_y = fixed_node["y"] + DESIRED_VERTICAL_LENGTH
+
+
+print("")
+print("TARGET X:", target_x)
+print("TARGET Y:", target_y)
+
+
+#====================================================================================================================================
+# STEP 9 - MOVE ONLY THE UPPER NODE IN Y
+#====================================================================================================================================
+pin.SetId(moving_node["id"])
+
+
+print("")
+print("============================================================")
+print("STEP 9 - MOVING UPPER NODE")
+print("============================================================")
+
+
+try:
+    move_result = pin.SetSchemaLocation(target_x, target_y)
+
+    print("SET SCHEMA LOCATION RESULT:", move_result)
+
+    app.PutMessage(f"Upper shield node moved. Result: {move_result}")
+
+except Exception as e:
+    print("SET SCHEMA LOCATION FAILED:", repr(e))
+
+    app.PutMessage(f"SetSchemaLocation failed: {repr(e)}")
+
+    raise
+
+
+#====================================================================================================================================
+# STEP 10 - VERIFY MOVING NODE LOCATION
+#====================================================================================================================================
+time.sleep(0.5)
+
+pin.SetId(moving_node["id"])
+
+xloc = [0.0]
+yloc = [0.0]
+grid = [""]
+column = [""]
+row = [""]
+
+verify_result = pin.GetSchemaLocation(xloc, yloc, grid, column, row)
+
+actual_x = float(verify_result[1])
+actual_y = float(verify_result[2])
+
+
+print("")
+print("============================================================")
+print("STEP 10 - VERIFY MOVING NODE")
+print("============================================================")
+print("VERIFY RESULT:", verify_result)
+print("ACTUAL X:", actual_x)
+print("ACTUAL Y:", actual_y)
+
+
+#====================================================================================================================================
+# STEP 11 - VERIFY BOTH NODES
+#====================================================================================================================================
+verified_nodes = []
+
+
+print("")
+print("============================================================")
+print("STEP 11 - FINAL NODE LOCATIONS")
+print("============================================================")
+
+
+for pin_id in pin_ids:
+    pin.SetId(pin_id)
+
+    xloc = [0.0]
+    yloc = [0.0]
+    grid = [""]
+    column = [""]
+    row = [""]
+
+    location_result = pin.GetSchemaLocation(xloc, yloc, grid, column, row)
+
+    node_x = float(location_result[1])
+    node_y = float(location_result[2])
+
+    verified_nodes.append({
+        "id": pin_id,
+        "x": node_x,
+        "y": node_y
+    })
+
+    print("PIN/NODE:", pin_id, "| X:", node_x, "| Y:", node_y)
+
+
+#====================================================================================================================================
+# STEP 12 - CALCULATE ACTUAL FINAL LENGTH
+#====================================================================================================================================
+verified_nodes.sort(key=lambda item: item["y"])
+
+
+final_bottom_node = verified_nodes[0]
+
+final_top_node = verified_nodes[-1]
+
+
+actual_vertical_length = final_top_node["y"] - final_bottom_node["y"]
+
+
+print("")
+print("============================================================")
+print("STEP 12 - FINAL LENGTH")
+print("============================================================")
+print("BOTTOM Y:", final_bottom_node["y"])
+print("TOP Y:", final_top_node["y"])
+print("ACTUAL VERTICAL LENGTH:", actual_vertical_length)
+print("REQUESTED VERTICAL LENGTH:", DESIRED_VERTICAL_LENGTH)
+
+
+if abs(actual_vertical_length - DESIRED_VERTICAL_LENGTH) < 0.001:
+    print("VERTICAL NODE STRETCH SUCCESS")
+
+    app.PutMessage(f"Vertical shield stretch success. Length: {actual_vertical_length}")
+
+else:
+    print("VERTICAL NODE STRETCH DID NOT VERIFY")
+
+    app.PutMessage(f"Vertical shield stretch did not verify. Requested {DESIRED_VERTICAL_LENGTH}, actual {actual_vertical_length}")
+
+
+#====================================================================================================================================
+# STEP 13 - CHECK SYMBOL DISPLAY LENGTH AFTER NODE MOVE
+#====================================================================================================================================
+sym.SetId(placed_symbol_id)
+
+
+try:
+    display_length_after = sym.GetDisplayLength()
+
+    print("")
+    print("============================================================")
+    print("STEP 13 - SYMBOL DISPLAY LENGTH")
+    print("============================================================")
+    print("DISPLAY LENGTH BEFORE:", display_length_before)
+    print("DISPLAY LENGTH AFTER:", display_length_after)
+
+except Exception as e:
+    print("GET DISPLAY LENGTH AFTER MOVE FAILED:", repr(e))
+
+
+#====================================================================================================================================
+# STEP 14 - FINAL OUTPUT
+#====================================================================================================================================
+print("")
+print("============================================================")
+print("FINAL RESULT")
+print("============================================================")
+print("PLACED SYMBOL ID:", placed_symbol_id)
+print("FIXED NODE:", final_bottom_node)
+print("MOVED NODE:", final_top_node)
+print("REQUESTED LENGTH:", DESIRED_VERTICAL_LENGTH)
+print("ACTUAL LENGTH:", actual_vertical_length)
+print("============================================================")
+
+
+#====================================================================================================================================
+# CLEANUP
+#====================================================================================================================================
+try:
+    cur.close()
+except Exception:
+    pass
+
+
+try:
+    conn.close()
+except Exception:
+    pass
+
+
+del attr
+del text
+del sym
+del pin
+del comp
+del dev
+del sht
+del prj
+del app
