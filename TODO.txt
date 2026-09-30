@@ -1,4 +1,17 @@
 # ======================================================================
+# V12 - ROOT-CAUSE FIX
+#
+# The successful exact-sequence matrix test used Shield_DemoA.
+# The failing main script was still loading Shield_Demo.
+#
+# This version:
+#   - uses Shield_DemoA
+#   - keeps the proven Load -> Place -> immediate SetDisplayLength sequence
+#   - creates exactly ONE outer shield per side
+#   - does NOT use PlaceDynamic
+# ======================================================================
+
+# ======================================================================
 # V11 - ONE LOGICAL OUTER SHIELD ACROSS CONNECTOR BLOCKS
 #
 # BASE: exact user-provided script that can resize Shield_Demo.
@@ -57,7 +70,7 @@ CONNECTOR_ROOT_NAME = "W1"
 # ZUKEN LIBRARY SYMBOLS
 #====================================================================================================================================
 TWIST_SYMBOL_NAME = "MIL_Twist_ArrowsDown"
-SHIELD_SYMBOL_NAME = "Shield_Demo"
+SHIELD_SYMBOL_NAME = "Shield_DemoA"
 
 SYMBOL_VERSION = 1
 
@@ -514,24 +527,13 @@ def build_section_jobs(rows):
 #====================================================================================================================================
 def build_outer_shield_jobs(rows):
     """
-    Build OUTER shield jobs across an entire cable side.
+    Build exactly ONE OUTER shield job per cable side.
 
-    CRITICAL FIX:
-    - Connector changes do NOT split an outer shield.
-    - Blank Excel row gaps between connector blocks do NOT split it.
-    - Only an actual DATA ROW with outer_shield == False ends a shield run.
+    The outer shield is the cable overshield, so connector changes and
+    spreadsheet gaps do NOT create separate outer shields.
 
-    Example:
-        LEFT P1 rows marked
-        [blank/spacer rows]
-        LEFT P3 rows marked
-        [blank/spacer rows]
-        LEFT P4 rows marked
-
-    becomes ONE outer shield job covering P1 + P3 + P4.
-
-    This is the intended behavior for one overshield spanning all connectors
-    on that side.
+    If at least one data row on this side is marked for outer shield,
+    every marked row contributes to ONE side-wide outer shield.
     """
     jobs = []
 
@@ -539,70 +541,45 @@ def build_outer_shield_jobs(rows):
         return jobs
 
     side = rows[0]["side"]
-    current_marked_rows = []
+    marked_rows = [row for row in rows if row["outer_shield"]]
 
-    def flush_current():
-        nonlocal current_marked_rows
+    if not marked_rows:
+        print("")
+        print("OUTER SHIELD BUILD:", side, "-> 0 jobs")
+        return jobs
 
-        if not current_marked_rows:
-            return
+    connectors = []
 
-        connectors = []
+    for row in marked_rows:
+        connector = row["connector"]
 
-        for row in current_marked_rows:
-            connector = row["connector"]
+        if connector and connector not in connectors:
+            connectors.append(connector)
 
-            if connector and connector not in connectors:
-                connectors.append(connector)
+    job = {
+        "type": "shield_outer",
+        "side": side,
+        "connector": "/".join(connectors),
+        "connectors": connectors,
+        "rows": marked_rows,
+        "pins": [row["pin"] for row in marked_rows],
+        "excel_rows": [row["excel_row"] for row in marked_rows],
+        "twist_column": None,
+        "symbol_name": SHIELD_SYMBOL_NAME
+    }
 
-        jobs.append({
-            "type": "shield_outer",
-            "side": side,
-            "connector": "/".join(connectors),
-            "connectors": connectors,
-            "rows": list(current_marked_rows),
-            "pins": [row["pin"] for row in current_marked_rows],
-            "excel_rows": [row["excel_row"] for row in current_marked_rows],
-            "twist_column": None,
-            "symbol_name": SHIELD_SYMBOL_NAME
-        })
-
-        current_marked_rows = []
-
-    for row in rows:
-        if row["outer_shield"]:
-            # IMPORTANT:
-            # Do NOT care whether this row is the next Excel row.
-            # Do NOT care whether connector changed.
-            # If the previous data row was marked and this one is marked,
-            # they belong to the same logical overshield.
-            current_marked_rows.append(row)
-        else:
-            # An actual pin/data row with no outer-shield mark is an
-            # intentional break in the overshield.
-            flush_current()
-
-    flush_current()
+    jobs.append(job)
 
     print("")
     print("============================================================")
-    print("OUTER SHIELD JOB BUILD:", side)
+    print("OUTER SHIELD BUILD:", side)
     print("============================================================")
-    print("OUTER SHIELD JOB COUNT:", len(jobs))
-
-    for index, job in enumerate(jobs, start=1):
-        print(
-            "OUTER JOB",
-            index,
-            "CONNECTORS:",
-            job["connectors"],
-            "FIRST EXCEL ROW:",
-            job["excel_rows"][0],
-            "LAST EXCEL ROW:",
-            job["excel_rows"][-1],
-            "PIN COUNT:",
-            len(job["pins"])
-        )
+    print("OUTER SHIELD JOB COUNT: 1")
+    print("CONNECTORS:", connectors)
+    print("FIRST MARKED EXCEL ROW:", job["excel_rows"][0])
+    print("LAST MARKED EXCEL ROW:", job["excel_rows"][-1])
+    print("MARKED PIN COUNT:", len(job["pins"]))
+    print("LIBRARY SYMBOL:", job["symbol_name"])
 
     return jobs
 
@@ -1761,6 +1738,7 @@ def main():
     print("DEVICE REFERENCE FROM B1:", sheet_device_reference)
     print("CONNECTOR ROOT:", CONNECTOR_ROOT_NAME)
     print("SHIELD SYMBOL:", SHIELD_SYMBOL_NAME)
+    print("IMPORTANT: THIS SCRIPT MUST SHOW Shield_DemoA HERE")
     print("TWIST SYMBOL:", TWIST_SYMBOL_NAME)
     print("LEFT TWIST OFFSET J2:K2:", "YES" if twist_offset_settings["LEFT"] else "NO")
     print("RIGHT TWIST OFFSET R2:S2:", "YES" if twist_offset_settings["RIGHT"] else "NO")
@@ -1794,6 +1772,16 @@ def main():
         build_outer_shield_jobs(left_rows) +
         build_outer_shield_jobs(right_rows)
     )
+
+    # HARD SAFETY CHECK: there must be at most one outer shield per side.
+    for side_name in ["LEFT", "RIGHT"]:
+        side_outer_jobs = [job for job in outer_jobs if job["side"] == side_name]
+
+        if len(side_outer_jobs) > 1:
+            raise Exception(
+                f"BUG: {side_name} generated {len(side_outer_jobs)} outer shields. "
+                f"Expected at most 1."
+            )
 
     print("")
     print("============================================================")
