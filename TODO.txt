@@ -46,7 +46,7 @@ CONNECTOR_ROOT_NAME = "W1"
 # ZUKEN LIBRARY SYMBOLS
 #====================================================================================================================================
 TWIST_SYMBOL_NAME = "MIL_Twist_ArrowsDown"
-SHIELD_SYMBOL_NAME = "Cable Shield"
+SHIELD_SYMBOL_NAME = "Shield_Demo"
 
 SYMBOL_VERSION = 1
 
@@ -60,10 +60,11 @@ MOVE_DELAY_SECONDS = 0.10
 
 
 #====================================================================================================================================
-# LEGACY SHIELD STAGING SETTINGS
+# SHIELD FALLBACK STAGING SETTINGS
 #
-# Retained only for reference. Shield placement now uses PlaceDynamic
-# directly at the final location and does not use SetDisplayLength.
+# Final placement is attempted first. If E3 rejects the resize there,
+# the same exact Load -> Place -> immediate SetDisplayLength sequence
+# is tried in open staging positions.
 #====================================================================================================================================
 # The known-good standalone stretch test used X=24.0, Y=22.0.
 # Keep X=24 first and choose Y dynamically so long shields remain on-sheet.
@@ -77,7 +78,6 @@ SHIELD_STAGE_MARGIN = 0.50
 # SYMBOL LENGTH SETTINGS
 #====================================================================================================================================
 MIN_SYMBOL_LENGTH = 0.10
-SHIELD_DYNAMIC_WIDTH = 0.10
 
 
 #====================================================================================================================================
@@ -1394,100 +1394,244 @@ def place_twist(sym, job, placement):
 #====================================================================================================================================
 def place_shield(prj, job, placement):
     """
-    Place the shield at its FINAL size in one call.
+    Place a REAL Shield_Demo symbol and resize it with SetDisplayLength.
 
-    IMPORTANT:
-    The older overlay implementation that actually produced resized shields
-    did NOT use SetDisplayLength.  It loaded "Cable Shield" and called
-    PlaceDynamic(sheet, x, y, height, width, "", 0).
+    CRITICAL E3 BEHAVIOR:
+    The earlier working test called SetDisplayLength IMMEDIATELY after Place()
+    on the SAME symbol object returned from Load/Place.
 
-    SetDisplayLength has repeatedly returned 0 in the current E3 environment,
-    so do not use it for shield sizing here.
+    Do NOT call SetId() first.
+    Do NOT call GetDisplayLength() first.
+    Do NOT use PlaceDynamic().
+
+    Calling SetId before SetDisplayLength was the important difference in the
+    later broken versions.
     """
     requested_length = float(placement["length"])
     final_x = float(placement["x"])
     final_y = float(placement["y"])
+    sheet_id = int(placement["sheet_id"])
 
+    print("")
     print("SHIELD FINAL X:", final_x)
     print("SHIELD FINAL Y:", final_y)
     print("SHIELD REQUESTED LENGTH:", requested_length)
     print("SHIELD LIBRARY SYMBOL:", job["symbol_name"])
-    print("SHIELD PLACEMENT MODE: PlaceDynamic")
-    print("SHIELD DYNAMIC WIDTH:", SHIELD_DYNAMIC_WIDTH)
+    print("SHIELD MODE: Load -> Place -> IMMEDIATE SetDisplayLength")
+    print("SHIELD NOTE: NO SetId / GetDisplayLength BEFORE STRETCH")
 
-    shield_sym = prj.CreateSymbolObject()
+    # Try the final location first.  If E3 rejects the resize there, try the
+    # same exact sequence in a clear staging area and move the resized shield.
+    attempts = [("FINAL", final_x, final_y)]
 
-    load_result = shield_sym.Load(job["symbol_name"], SYMBOL_VERSION)
-    print("SHIELD LOAD RESULT:", load_result)
+    # Pick stage Y values that leave enough room for a long shield.
+    max_stage_y = SHIELD_STAGE_TOP_LIMIT - requested_length - SHIELD_STAGE_MARGIN
+    if max_stage_y < 0.5:
+        max_stage_y = 0.5
 
-    if load_result == 0:
-        raise Exception(f"Could not load library shield {job['symbol_name']}")
+    stage_base_y = min(SHIELD_STAGE_DEFAULT_Y, max_stage_y)
+    stage_y_values = [
+        stage_base_y,
+        max(0.5, stage_base_y - 0.5),
+        max(0.5, stage_base_y + 0.5),
+        max(0.5, stage_base_y - 1.0),
+        max(0.5, stage_base_y + 1.0),
+    ]
 
-    # Directly create the shield at the required height.
-    placed_id = shield_sym.PlaceDynamic(
-        placement["sheet_id"],
-        final_x,
-        final_y,
-        requested_length,
-        SHIELD_DYNAMIC_WIDTH,
-        "",
-        0
-    )
+    seen_stage_y = []
+    for y in stage_y_values:
+        y = round(float(y), 6)
+        if y not in seen_stage_y:
+            seen_stage_y.append(y)
 
-    print("SHIELD PLACEDYNAMIC RESULT:", placed_id)
+    for stage_y in seen_stage_y:
+        for stage_x in SHIELD_STAGE_X_VALUES:
+            attempts.append(("STAGE", float(stage_x), float(stage_y)))
 
-    if placed_id == 0:
-        raise Exception(
-            f"PlaceDynamic failed for {job['symbol_name']} "
-            f"at X={final_x} Y={final_y} height={requested_length}"
+    for attempt_number, (mode, x, y) in enumerate(attempts, start=1):
+        print("")
+        print("SHIELD ATTEMPT:", attempt_number, "MODE:", mode, "X:", x, "Y:", y)
+
+        # Fresh object for each attempt.
+        shield_sym = prj.CreateSymbolObject()
+
+        load_result = shield_sym.Load(job["symbol_name"], SYMBOL_VERSION)
+        print("SHIELD LOAD RESULT:", load_result)
+
+        if load_result == 0:
+            try:
+                del shield_sym
+            except Exception:
+                pass
+            continue
+
+        placed_id = shield_sym.Place(sheet_id, x, y, 0, 1.0, 0)
+        print("SHIELD PLACE RESULT:", placed_id)
+
+        if placed_id == 0:
+            try:
+                del shield_sym
+            except Exception:
+                pass
+            time.sleep(PLACEMENT_DELAY_SECONDS)
+            continue
+
+        # ================================================================
+        # THIS IS THE KEY FIX.
+        #
+        # The old working test did:
+        #     Load(...)
+        #     Place(...)
+        #     SetDisplayLength(...)
+        #
+        # It did NOT SetId() between Place and SetDisplayLength.
+        # It did NOT read GetDisplayLength() before SetDisplayLength.
+        # ================================================================
+        try:
+            stretch_result = shield_sym.SetDisplayLength(requested_length)
+        except Exception as error:
+            stretch_result = None
+            print("SHIELD IMMEDIATE STRETCH EXCEPTION:", repr(error))
+
+        print("SHIELD IMMEDIATE STRETCH RESULT:", stretch_result)
+
+        time.sleep(STRETCH_DELAY_SECONDS)
+
+        try:
+            immediate_length = float(shield_sym.GetDisplayLength())
+        except Exception:
+            immediate_length = None
+
+        print("SHIELD IMMEDIATE LENGTH AFTER:", immediate_length)
+
+        immediate_success = (
+            immediate_length is not None
+            and abs(immediate_length - requested_length) <= 0.001
         )
 
-    time.sleep(PLACEMENT_DELAY_SECONDS)
+        # Only NOW bind by ID, after the resize attempt is already complete.
+        try:
+            set_id_result = shield_sym.SetId(placed_id)
+            print("SHIELD POST-STRETCH SetId RESULT:", set_id_result)
+        except Exception as error:
+            print("SHIELD POST-STRETCH SetId EXCEPTION:", repr(error))
 
-    shield_sym.SetId(placed_id)
+        try:
+            verified_length = float(shield_sym.GetDisplayLength())
+        except Exception:
+            verified_length = immediate_length
 
-    try:
-        placed_name = shield_sym.GetName()
-    except Exception:
-        placed_name = "UNKNOWN"
+        print("SHIELD VERIFIED LENGTH:", verified_length)
 
-    try:
-        symbol_type = shield_sym.GetSymbolType()
-    except Exception:
-        symbol_type = "UNKNOWN"
+        verified_success = (
+            verified_length is not None
+            and abs(verified_length - requested_length) <= 0.001
+        )
 
-    try:
-        is_shield = shield_sym.IsShield()
-    except Exception:
-        is_shield = "UNKNOWN"
+        if immediate_success or verified_success:
+            print("SHIELD RESIZE SUCCESS")
 
-    try:
-        display_length = float(shield_sym.GetDisplayLength())
-    except Exception:
-        display_length = None
+            final_id = placed_id
 
-    try:
-        display_width = float(shield_sym.GetDisplayWidth())
-    except Exception:
-        display_width = None
+            # If resized in staging, move that SAME real shield to final X/Y.
+            if mode == "STAGE":
+                time.sleep(MOVE_DELAY_SECONDS)
 
-    final_location = get_symbol_location(shield_sym, placed_id)
+                try:
+                    shield_sym.SetId(placed_id)
+                except Exception:
+                    pass
 
-    print("SHIELD PLACED ID:", placed_id)
-    print("SHIELD PLACED NAME:", placed_name)
-    print("SHIELD SYMBOL TYPE:", symbol_type)
-    print("SHIELD IS SHIELD:", is_shield)
-    print("SHIELD DISPLAY LENGTH:", display_length)
-    print("SHIELD DISPLAY WIDTH:", display_width)
+                move_result = shield_sym.Place(
+                    sheet_id,
+                    final_x,
+                    final_y,
+                    0,
+                    1.0,
+                    0
+                )
 
-    if final_location is not None:
-        print("SHIELD FINAL SHEET:", final_location["sheet_id"])
-        print("SHIELD FINAL ACTUAL X:", final_location["x"])
-        print("SHIELD FINAL ACTUAL Y:", final_location["y"])
+                print("SHIELD FINAL MOVE RESULT:", move_result)
 
-    print("SHIELD PLACED AT REQUESTED DYNAMIC HEIGHT:", requested_length)
+                if move_result == 0:
+                    raise Exception(
+                        f"{job['symbol_name']} resized correctly but could not "
+                        f"move to final X={final_x} Y={final_y}"
+                    )
 
-    return placed_id
+                final_id = move_result
+                time.sleep(PLACEMENT_DELAY_SECONDS)
+
+            # Final verification.
+            try:
+                shield_sym.SetId(final_id)
+            except Exception:
+                pass
+
+            try:
+                final_length = float(shield_sym.GetDisplayLength())
+            except Exception:
+                final_length = None
+
+            try:
+                final_name = shield_sym.GetName()
+            except Exception:
+                final_name = "UNKNOWN"
+
+            try:
+                final_type = shield_sym.GetSymbolType()
+            except Exception:
+                final_type = "UNKNOWN"
+
+            try:
+                final_is_shield = shield_sym.IsShield()
+            except Exception:
+                final_is_shield = "UNKNOWN"
+
+            final_location = get_symbol_location(shield_sym, final_id)
+
+            print("SHIELD FINAL ID:", final_id)
+            print("SHIELD FINAL NAME:", final_name)
+            print("SHIELD FINAL SYMBOL TYPE:", final_type)
+            print("SHIELD FINAL IS SHIELD:", final_is_shield)
+            print("SHIELD FINAL DISPLAY LENGTH:", final_length)
+
+            if final_location is not None:
+                print("SHIELD FINAL SHEET:", final_location["sheet_id"])
+                print("SHIELD FINAL ACTUAL X:", final_location["x"])
+                print("SHIELD FINAL ACTUAL Y:", final_location["y"])
+
+            if final_length is None or abs(final_length - requested_length) > 0.001:
+                raise Exception(
+                    f"{job['symbol_name']} resized successfully but final length "
+                    f"changed. Expected {requested_length}, actual {final_length}"
+                )
+
+            print("SHIELD REAL SYMBOL + LENGTH VERIFIED")
+            return final_id
+
+        print("SHIELD RESIZE FAILED FOR THIS ATTEMPT")
+
+        # Remove the failed trial before trying another position.
+        try:
+            shield_sym.SetId(placed_id)
+            delete_result = shield_sym.Delete()
+            print("FAILED SHIELD DELETE RESULT:", delete_result)
+        except Exception as error:
+            print("FAILED SHIELD DELETE EXCEPTION:", repr(error))
+
+        try:
+            del shield_sym
+        except Exception:
+            pass
+
+        time.sleep(PLACEMENT_DELAY_SECONDS)
+
+    raise Exception(
+        f"{job['symbol_name']} could not resize to {requested_length}. "
+        f"All attempts used Load -> Place -> immediate SetDisplayLength "
+        f"without SetId before the stretch."
+    )
 
 
 #====================================================================================================================================
@@ -1566,7 +1710,7 @@ def main():
     print("RIGHT TWIST OFFSET R2:S2:", "YES" if twist_offset_settings["RIGHT"] else "NO")
     print("PLACEMENT DELAY:", PLACEMENT_DELAY_SECONDS)
     print("TWIST STRETCHING: DISABLED")
-    print("SHIELD MODE: DIRECT PlaceDynamic AT FINAL SIZE")
+    print("SHIELD MODE: REAL Shield_Demo -> Place -> immediate SetDisplayLength")
     print("DATA ROWS:", DATA_FIRST_ROW, "TO", last_row)
 
     left_rows = read_side_rows(ws, "LEFT", last_row)
