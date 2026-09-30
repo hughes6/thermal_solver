@@ -1,195 +1,168 @@
-============================================================
-ZUKEN CABLE SHIELD / TWIST OVERLAY
-============================================================
-EXCEL: C:\Users\conner.hughes\Downloads\Cable Generator.xlsx
-WORKSHEET: Selection
-DEVICE REFERENCE FROM B1: TEST_FOR_SYMBOLS
-CONNECTOR ROOT: W1
-SHIELD SYMBOL: Shield_Demo
-TWIST SYMBOL: MIL_Twist_ArrowsDown
-DATA ROWS: 5 TO 108
+#====================================================================================================================================
+# CALCULATE SYMBOL POSITION FROM EXISTING CABLE PIN LOCATIONS
+#====================================================================================================================================
+def calculate_placement(job, pin_map, sheet_id):
+    locations = []
 
-CONNECTOR SECTIONS WITH SYMBOLS: 1
+    for pin_name in job["pins"]:
+        location = pin_location_on_sheet(pin_map, pin_name, sheet_id)
 
-E3 BASE DEVICE ID COUNT: 30
+        if location is None:
+            raise Exception(f"{job['side']} {job['connector']}: pin {pin_name} has no schematic location on sheet {sheet_id}")
 
-============================================================
-PROCESSING CONNECTOR SECTION
-============================================================
-SIDE: LEFT
-EXCEL CONNECTOR: P1
-EXPECTED E3 CONNECTOR: W1.P1
-EXCEL ROWS: 5 TO 30
-REQUIRED PINS: ['1', '10', '2', '11', '19', '20', '3', '12', '4', '13', '21', '22', '5', '14', '6', '15', '23', '24', '7', '16', '8', '17', '9', '18', '25', '26']
-BASE DEVICE ID: 143921 VIEW IDS: [140442]
+        locations.append(location)
 
-============================================================
-E3 CANDIDATES FOR: W1.P1
-============================================================
-CANDIDATE ID: 143921 SOURCE: BASE NAME: W1.P1 SHEET: 204828 PLACED: 26 UNIQUE X: 1 UNIQUE Y: 1 X SPAN: 0.0 Y SPAN: 0.0
-CANDIDATE ID: 140442 SOURCE: VIEW NAME: W1.P1 SHEET: 204828 PLACED: 26 UNIQUE X: 1 UNIQUE Y: 26 X SPAN: 0.0 Y SPAN: 6.25
+    x_values = [location["x"] for location in locations]
+    y_values = [location["y"] for location in locations]
 
-SELECTED SCHEMATIC VIEW ID: 140442
-SELECTED SOURCE: VIEW
-SELECTED NAME: W1.P1
-SELECTED SHEET: 204828
-SELECTED PLACED PIN COUNT: 26
-SELECTED UNIQUE Y COUNT: 26
-SELECTED Y SPAN: 6.25
-============================================================
+    anchor_x = statistics.median(x_values)
+    bottom_y = min(y_values)
+    top_y = max(y_values)
 
-ACTUAL SCHEMATIC PIN LOCATIONS
-PIN: 1 X: 1.0 Y: 31.5
-PIN: 10 X: 1.0 Y: 31.25
-PIN: 2 X: 1.0 Y: 31.0
-PIN: 11 X: 1.0 Y: 30.75
-PIN: 19 X: 1.0 Y: 30.5
-PIN: 20 X: 1.0 Y: 30.25
-PIN: 3 X: 1.0 Y: 30.0
-PIN: 12 X: 1.0 Y: 29.75
-PIN: 4 X: 1.0 Y: 29.5
-PIN: 13 X: 1.0 Y: 29.25
-PIN: 21 X: 1.0 Y: 29.0
-PIN: 22 X: 1.0 Y: 28.75
-PIN: 5 X: 1.0 Y: 28.5
-PIN: 14 X: 1.0 Y: 28.25
-PIN: 6 X: 1.0 Y: 28.0
-PIN: 15 X: 1.0 Y: 27.75
-PIN: 23 X: 1.0 Y: 27.5
-PIN: 24 X: 1.0 Y: 27.25
-PIN: 7 X: 1.0 Y: 27.0
-PIN: 16 X: 1.0 Y: 26.75
-PIN: 8 X: 1.0 Y: 26.5
-PIN: 17 X: 1.0 Y: 26.25
-PIN: 9 X: 1.0 Y: 26.0
-PIN: 18 X: 1.0 Y: 25.75
-PIN: 25 X: 1.0 Y: 25.5
-PIN: 26 X: 1.0 Y: 25.25
+    if top_y - bottom_y < SCHEMATIC_MIN_Y_SPAN and len(job["pins"]) > 1:
+        raise Exception(f"{job['side']} {job['connector']} {job['type']}: pins {job['pins']} all have effectively the same Y coordinate")
 
-------------------------------------------------------------
-TYPE: shield_outer
-SIDE: LEFT
-CONNECTOR: P1
-PINS: ['1', '10', '2', '11']
-EXCEL ROWS: [5, 6, 7, 8]
-LIBRARY SYMBOL: Shield_Demo
-SHEET: 204828
-CONNECTOR PIN X: 1.0
-SYMBOL X: 1.5
-BOTTOM WIRE Y: 30.75
-TOP WIRE Y: 31.5
-SYMBOL Y: 30.75
-REQUESTED SYMBOL LENGTH: 0.75
-LOAD RESULT: 147946
-LOADED SHIELD LENGTH: 0.0
-PRE-PLACE SHIELD STRETCH RESULT: 0
-PLACE RESULT / SYMBOL ID: 0
-ERROR: Could not place library symbol Shield_Demo at X=1.5 Y=30.75
+    direction = 1.0 if job["side"] == "LEFT" else -1.0
+    offset = job_offset(job)
+    x = anchor_x + direction * offset
 
-------------------------------------------------------------
-TYPE: shield_inner
-SIDE: LEFT
-CONNECTOR: P1
-PINS: ['2', '11']
-EXCEL ROWS: [7, 8]
-LIBRARY SYMBOL: Shield_Demo
-SHEET: 204828
-CONNECTOR PIN X: 1.0
-SYMBOL X: 1.25
-BOTTOM WIRE Y: 30.75
-TOP WIRE Y: 31.0
-SYMBOL Y: 30.75
-REQUESTED SYMBOL LENGTH: 0.25
-LOAD RESULT: 147946
-LOADED SHIELD LENGTH: 0.0
-PRE-PLACE SHIELD STRETCH RESULT: 0
-PLACE RESULT / SYMBOL ID: 0
-ERROR: Could not place library symbol Shield_Demo at X=1.25 Y=30.75
+    if job["type"] == "twist":
+        y = bottom_y
+        length = top_y - bottom_y
 
-------------------------------------------------------------
-TYPE: shield_inner
-SIDE: LEFT
-CONNECTOR: P1
-PINS: ['1', '10']
-EXCEL ROWS: [5, 6]
-LIBRARY SYMBOL: Shield_Demo
-SHEET: 204828
-CONNECTOR PIN X: 1.0
-SYMBOL X: 1.25
-BOTTOM WIRE Y: 31.25
-TOP WIRE Y: 31.5
-SYMBOL Y: 31.25
-REQUESTED SYMBOL LENGTH: 0.25
-LOAD RESULT: 147946
-LOADED SHIELD LENGTH: 0.0
-PRE-PLACE SHIELD STRETCH RESULT: 0
-PLACE RESULT / SYMBOL ID: 0
-ERROR: Could not place library symbol Shield_Demo at X=1.25 Y=31.25
+    if job["type"] == "shield_inner":
+        y = top_y
+        length = top_y - bottom_y
 
-------------------------------------------------------------
-TYPE: twist
-SIDE: LEFT
-CONNECTOR: P1
-PINS: ['2', '11']
-EXCEL ROWS: [7, 8]
-LIBRARY SYMBOL: MIL_Twist_ArrowsDown
-SHEET: 204828
-CONNECTOR PIN X: 1.0
-SYMBOL X: 2.0
-BOTTOM WIRE Y: 30.75
-TOP WIRE Y: 31.0
-SYMBOL Y: 30.75
-REQUESTED SYMBOL LENGTH: 0.25
-LOAD RESULT: 149035
-PLACE RESULT / SYMBOL ID: 147649
-PLACED SYMBOL ID: 147649
-PLACED SYMBOL NAME: 1
-PLACED SYMBOL TYPE: 21
-IS SHIELD: 0
-IS TWISTED: 1
-DISPLAY LENGTH BEFORE: 0.35000000000000214
-SET DISPLAY LENGTH RESULT: 1
-REQUESTED DISPLAY LENGTH: 0.25
-DISPLAY LENGTH AFTER: 0.24999999999999642
-REAL LIBRARY SYMBOL PLACED AND STRETCHED SUCCESSFULLY
+    if job["type"] == "shield_outer":
+        y = top_y
+        length = top_y - bottom_y
 
-------------------------------------------------------------
-TYPE: twist
-SIDE: LEFT
-CONNECTOR: P1
-PINS: ['1', '10']
-EXCEL ROWS: [5, 6]
-LIBRARY SYMBOL: MIL_Twist_ArrowsDown
-SHEET: 204828
-CONNECTOR PIN X: 1.0
-SYMBOL X: 2.0
-BOTTOM WIRE Y: 31.25
-TOP WIRE Y: 31.5
-SYMBOL Y: 31.25
-REQUESTED SYMBOL LENGTH: 0.25
-LOAD RESULT: 149035
-PLACE RESULT / SYMBOL ID: 146784
-PLACED SYMBOL ID: 146784
-PLACED SYMBOL NAME: 2
-PLACED SYMBOL TYPE: 21
-IS SHIELD: 0
-IS TWISTED: 1
-DISPLAY LENGTH BEFORE: 0.35000000000000214
-SET DISPLAY LENGTH RESULT: 1
-REQUESTED DISPLAY LENGTH: 0.25
-DISPLAY LENGTH AFTER: 0.24999999999999642
-REAL LIBRARY SYMBOL PLACED AND STRETCHED SUCCESSFULLY
+    if length < MIN_SYMBOL_LENGTH:
+        length = MIN_SYMBOL_LENGTH
 
-============================================================
-OVERLAY COMPLETE
-============================================================
-PLACED SYMBOL COUNT: 2
-PLACED SYMBOL IDS: [147649, 146784]
-============================================================
+    placement = {
+        "sheet_id": sheet_id,
+        "x": x,
+        "y": y,
+        "length": length,
+        "anchor_x": anchor_x,
+        "bottom_y": bottom_y,
+        "top_y": top_y
+    }
+
+    return placement
 
 
-Starting Cable Shield / Twist Overlay Script
-Cable overlay warning: Could not place library symbol Shield_Demo at X=1.5 Y=30.75
-Cable overlay warning: Could not place library symbol Shield_Demo at X=1.25 Y=30.75
-Cable overlay warning: Could not place library symbol Shield_Demo at X=1.25 Y=31.25
-Cable Shield / Twist Overlay complete. Placed 2 symbols.
+#====================================================================================================================================
+# PLACE REAL LIBRARY SYMBOL
+#
+# Both Shield_Demo and MIL_Twist_ArrowsDown now use:
+#
+#     Load
+#     Place
+#     SetId
+#     SetDisplayLength
+#
+# The only geometry difference:
+#
+#     Shield starts at TOP wire Y
+#     Twist starts at BOTTOM wire Y
+#====================================================================================================================================
+def place_job(sym, job, placement):
+    print("")
+    print("------------------------------------------------------------")
+    print("TYPE:", job["type"])
+    print("SIDE:", job["side"])
+    print("CONNECTOR:", job["connector"])
+    print("PINS:", job["pins"])
+    print("EXCEL ROWS:", job["excel_rows"])
+    print("LIBRARY SYMBOL:", job["symbol_name"])
+    print("SHEET:", placement["sheet_id"])
+    print("CONNECTOR PIN X:", placement["anchor_x"])
+    print("SYMBOL X:", placement["x"])
+    print("BOTTOM WIRE Y:", placement["bottom_y"])
+    print("TOP WIRE Y:", placement["top_y"])
+    print("SYMBOL INSERTION Y:", placement["y"])
+    print("REQUESTED SYMBOL LENGTH:", placement["length"])
+
+    if DRY_RUN:
+        print("DRY RUN - NOT PLACED")
+        return None
+
+    requested_length = float(placement["length"])
+
+    if requested_length < MIN_SYMBOL_LENGTH:
+        requested_length = MIN_SYMBOL_LENGTH
+
+    load_result = sym.Load(job["symbol_name"], SYMBOL_VERSION)
+
+    print("LOAD RESULT:", load_result)
+
+    if load_result == 0:
+        raise Exception(f"Could not load library symbol {job['symbol_name']}")
+
+    placed_id = sym.Place(placement["sheet_id"], placement["x"], placement["y"], 0, 1.0, 0)
+
+    print("PLACE RESULT / SYMBOL ID:", placed_id)
+
+    if placed_id == 0:
+        raise Exception(f"Could not place library symbol {job['symbol_name']} at X={placement['x']} Y={placement['y']}")
+
+    sym.SetId(placed_id)
+
+    try:
+        placed_name = sym.GetName()
+    except Exception:
+        placed_name = "UNKNOWN"
+
+    try:
+        symbol_type = sym.GetSymbolType()
+    except Exception:
+        symbol_type = "UNKNOWN"
+
+    try:
+        is_shield = sym.IsShield()
+    except Exception:
+        is_shield = None
+
+    try:
+        is_twisted = sym.IsTwisted()
+    except Exception:
+        is_twisted = None
+
+    try:
+        length_before = float(sym.GetDisplayLength())
+    except Exception:
+        length_before = None
+
+    print("PLACED SYMBOL ID:", placed_id)
+    print("PLACED SYMBOL NAME:", placed_name)
+    print("PLACED SYMBOL TYPE:", symbol_type)
+    print("IS SHIELD:", is_shield)
+    print("IS TWISTED:", is_twisted)
+    print("DISPLAY LENGTH BEFORE:", length_before)
+
+    stretch_result = sym.SetDisplayLength(requested_length)
+
+    print("SET DISPLAY LENGTH RESULT:", stretch_result)
+
+    sym.SetId(placed_id)
+
+    try:
+        length_after = float(sym.GetDisplayLength())
+    except Exception:
+        length_after = None
+
+    print("REQUESTED DISPLAY LENGTH:", requested_length)
+    print("DISPLAY LENGTH AFTER:", length_after)
+
+    if length_after is None:
+        raise Exception(f"Could not verify display length for {job['symbol_name']}")
+
+    if abs(length_after - requested_length) > 0.001:
+        raise Exception(f"{job['symbol_name']} placed but failed to stretch from {length_before} to {requested_length}")
+
+    print("REAL LIBRARY SYMBOL PLACED AND STRETCHED SUCCESSFULLY")
+
+    return placed_id
