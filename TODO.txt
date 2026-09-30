@@ -1,2292 +1,1013 @@
-# ======================================================================
-# V11 - ONE LOGICAL OUTER SHIELD ACROSS CONNECTOR BLOCKS
-#
-# BASE: exact user-provided script that can resize Shield_Demo.
-# SHIELD PLACEMENT ROUTINE IS UNCHANGED.
-#
-# ONLY FUNCTIONAL CHANGE:
-#   blank Excel row gaps between connector blocks no longer split an
-#   outer shield. P1 + P3 + P4 can therefore become ONE outer shield.
-# ======================================================================
-
-import os
-import re
-import statistics
-import time
-import tkinter as tk
-from tkinter import filedialog
-
-import win32com.client as win32
-from openpyxl import load_workbook
-
-
-#====================================================================================================================================
-# EXCEL LAYOUT
-#====================================================================================================================================
-TARGET_SHEET_NAME = None
-DEVICE_NAME_CELL = "B1"
-DATA_FIRST_ROW = 5
-MAX_SCAN_ROWS = 5000
-
-LEFT_TWIST_OFFSET_CELL = "J2"
-RIGHT_TWIST_OFFSET_CELL = "R2"
-
-LEFT_OUTER_SHIELD_COL = "H"
-LEFT_INNER_SHIELD_COL = "I"
-LEFT_TWIST_A_COL = "J"
-LEFT_TWIST_B_COL = "K"
-LEFT_CONNECTOR_COL = "L"
-
-PIN_1_COL = "N"
-PIN_2_COL = "O"
-
-RIGHT_CONNECTOR_COL = "Q"
-RIGHT_TWIST_A_COL = "R"
-RIGHT_TWIST_B_COL = "S"
-RIGHT_INNER_SHIELD_COL = "T"
-RIGHT_OUTER_SHIELD_COL = "U"
-
-
-#====================================================================================================================================
-# E3 CONNECTOR NAMING
-#====================================================================================================================================
-CONNECTOR_ROOT_NAME = "W1"
-
-
-#====================================================================================================================================
-# ZUKEN LIBRARY SYMBOLS
-#====================================================================================================================================
-TWIST_SYMBOL_NAME = "MIL_Twist_ArrowsDown"
-SHIELD_SYMBOL_NAME = "Shield_Demo"
-
-SYMBOL_VERSION = 1
-
-
-#====================================================================================================================================
-# E3 TIMING
-#====================================================================================================================================
-PLACEMENT_DELAY_SECONDS = 0.10
-STRETCH_DELAY_SECONDS = 0.10
-MOVE_DELAY_SECONDS = 0.10
-
-
-#====================================================================================================================================
-# SHIELD FALLBACK STAGING SETTINGS
-#
-# Final placement is attempted first. If E3 rejects the resize there,
-# the same exact Load -> Place -> immediate SetDisplayLength sequence
-# is tried in open staging positions.
-#====================================================================================================================================
-# The known-good standalone stretch test used X=24.0, Y=22.0.
-# Keep X=24 first and choose Y dynamically so long shields remain on-sheet.
-SHIELD_STAGE_X_VALUES = [24.0, 20.0, 28.0, 16.0, 32.0, 12.0, 36.0]
-SHIELD_STAGE_TOP_LIMIT = 32.0
-SHIELD_STAGE_DEFAULT_Y = 22.0
-SHIELD_STAGE_MARGIN = 0.50
-
-
-#====================================================================================================================================
-# SYMBOL LENGTH SETTINGS
-#====================================================================================================================================
-MIN_SYMBOL_LENGTH = 0.10
-
-
-#====================================================================================================================================
-# SHIELD VERTICAL OVERLAP
-#
-# Shield_Demo origin is bottom-center.
-#
-# The symbol extends upward from the insertion point.
-#====================================================================================================================================
-SHIELD_BOTTOM_OVERLAP = 0.125
-SHIELD_TOP_OVERLAP = 0.125
-
-
-#====================================================================================================================================
-# TWIST PLACEMENT
-#
-# TWISTS ARE NOT STRETCHED.
-#
-# E3/database behavior determines the correct display length based on
-# the wires under the twist symbol.
-#====================================================================================================================================
-TWIST_BOTTOM_OVERLAP = 0.00
-
-
-#====================================================================================================================================
-# HORIZONTAL LAYOUT WHEN OFFSET = YES
-#
-# LEFT CONNECTOR EXAMPLE AT X = 1.00:
-#
-# Twist A + Shield A = 1.25
-# Twist B + Shield B = 1.50
-# Outer Shield       = 1.75
-#
-# RIGHT SIDE MIRRORS AUTOMATICALLY.
-#====================================================================================================================================
-OFFSET_YES_TWIST_A = 0.25
-OFFSET_YES_TWIST_B = 0.50
-OFFSET_YES_OUTER_SHIELD = 0.75
-
-
-#====================================================================================================================================
-# HORIZONTAL LAYOUT WHEN OFFSET = NO
-#
-# LEFT CONNECTOR EXAMPLE AT X = 1.00:
-#
-# Twist A + Shield A = 1.25
-# Twist B + Shield B = 1.25
-# Outer Shield       = 1.50
-#
-# RIGHT SIDE MIRRORS AUTOMATICALLY.
-#====================================================================================================================================
-OFFSET_NO_TWIST_LINE = 0.25
-OFFSET_NO_OUTER_SHIELD = 0.50
-
-
-#====================================================================================================================================
-# INNER SHIELD WITHOUT A TWIST
-#====================================================================================================================================
-INNER_SHIELD_ONLY_OFFSET = 0.25
-
-
-#====================================================================================================================================
-# OPTIONS
-#====================================================================================================================================
-DRY_RUN = False
-STRICT_TWIST_VALIDATION = True
-
-SCHEMATIC_MIN_Y_SPAN = 0.05
-COORDINATE_ROUND_DIGITS = 6
-
-
-#====================================================================================================================================
-# FILE PICKER
-#====================================================================================================================================
-def ask_excel_path():
-    root = tk.Tk()
-    root.withdraw()
-    root.attributes("-topmost", True)
-    root.update()
-    selected_path = filedialog.askopenfilename(title="Select Cable Symbol Placement Excel File", filetypes=[("Excel Files", "*.xlsx"), ("Excel Macro Files", "*.xlsm"), ("All Files", "*.*")])
-    root.destroy()
-
-    if not selected_path:
-        return None
-
-    return os.path.abspath(selected_path)
-
-
-#====================================================================================================================================
-# VALUE HELPERS
-#====================================================================================================================================
-def clean_excel_value(value):
-    if value is None:
-        return ""
-
-    if isinstance(value, int):
-        return str(value)
-
-    if isinstance(value, float):
-        if value.is_integer():
-            return str(int(value))
-
-        return str(value).strip()
-
-    return str(value).strip()
-
-
-def normalize_pin_name(value):
-    return clean_excel_value(value).upper()
-
-
-def normalize_connector_token(value):
-    text = clean_excel_value(value).upper().replace(" ", "")
-
-    if text == "":
-        return ""
-
-    root_prefix = CONNECTOR_ROOT_NAME.upper() + "."
-
-    if text.startswith(root_prefix):
-        text = text[len(root_prefix):]
-
-    if "#" in text:
-        text = text.split("#", 1)[0]
-
-    match = re.fullmatch(r"P?0*(\d+)([A-Z]*)", text)
-
-    if match:
-        number = int(match.group(1))
-        suffix = match.group(2)
-        return f"P{number}{suffix}"
-
-    return text
-
-
-def connector_base_name(connector_token):
-    connector = normalize_connector_token(connector_token)
-
-    if connector == "":
-        return ""
-
-    return f"{CONNECTOR_ROOT_NAME}.{connector}"
-
-
-def cell_has_bar(value):
-    return "|" in clean_excel_value(value)
-
-
-#====================================================================================================================================
-# YES / NO SETTING
-#====================================================================================================================================
-def parse_yes_no(value, setting_name):
-    text = clean_excel_value(value).upper()
-
-    if text == "":
-        print("WARNING:", setting_name, "IS BLANK - DEFAULTING TO YES")
-        return True
-
-    if text in ["YES", "Y", "TRUE", "1"]:
-        return True
-
-    if text in ["NO", "N", "FALSE", "0"]:
-        return False
-
-    raise Exception(f"{setting_name} must contain YES or NO. Current value: {value}")
-
-
-#====================================================================================================================================
-# READ TWIST OFFSET SETTINGS
-#
-# J2:K2 merged -> J2
-# R2:S2 merged -> R2
-#====================================================================================================================================
-def read_twist_offset_settings(ws):
-    left_enabled = parse_yes_no(ws[LEFT_TWIST_OFFSET_CELL].value, "LEFT TWIST OFFSET J2:K2")
-    right_enabled = parse_yes_no(ws[RIGHT_TWIST_OFFSET_CELL].value, "RIGHT TWIST OFFSET R2:S2")
-
-    settings = {
-        "LEFT": left_enabled,
-        "RIGHT": right_enabled
-    }
-
-    return settings
-
-
-#====================================================================================================================================
-# FIND LAST DATA ROW
-#====================================================================================================================================
-def get_last_data_row(ws):
-    columns = [LEFT_OUTER_SHIELD_COL, LEFT_INNER_SHIELD_COL, LEFT_TWIST_A_COL, LEFT_TWIST_B_COL, LEFT_CONNECTOR_COL, PIN_1_COL, PIN_2_COL, RIGHT_CONNECTOR_COL, RIGHT_TWIST_A_COL, RIGHT_TWIST_B_COL, RIGHT_INNER_SHIELD_COL, RIGHT_OUTER_SHIELD_COL]
-    scan_end = min(max(ws.max_row, DATA_FIRST_ROW), DATA_FIRST_ROW + MAX_SCAN_ROWS)
-    last_row = DATA_FIRST_ROW - 1
-
-    for row in range(DATA_FIRST_ROW, scan_end + 1):
-        for col in columns:
-            value = clean_excel_value(ws[f"{col}{row}"].value)
-
-            if value != "":
-                last_row = row
-                break
-
-    return last_row
-
-
-#====================================================================================================================================
-# READ LEFT OR RIGHT SIDE
-#====================================================================================================================================
-def read_side_rows(ws, side, last_row):
-    if side == "LEFT":
-        connector_col = LEFT_CONNECTOR_COL
-        pin_col = PIN_1_COL
-        twist_a_col = LEFT_TWIST_A_COL
-        twist_b_col = LEFT_TWIST_B_COL
-        inner_col = LEFT_INNER_SHIELD_COL
-        outer_col = LEFT_OUTER_SHIELD_COL
-    else:
-        connector_col = RIGHT_CONNECTOR_COL
-        pin_col = PIN_2_COL
-        twist_a_col = RIGHT_TWIST_A_COL
-        twist_b_col = RIGHT_TWIST_B_COL
-        inner_col = RIGHT_INNER_SHIELD_COL
-        outer_col = RIGHT_OUTER_SHIELD_COL
-
-    rows = []
-    current_connector = ""
-
-    for excel_row in range(DATA_FIRST_ROW, last_row + 1):
-        connector_value = clean_excel_value(ws[f"{connector_col}{excel_row}"].value)
-        pin_name = normalize_pin_name(ws[f"{pin_col}{excel_row}"].value)
-
-        if connector_value != "":
-            current_connector = normalize_connector_token(connector_value)
-
-        if pin_name == "":
-            continue
-
-        row_info = {
-            "side": side,
-            "excel_row": excel_row,
-            "connector": current_connector,
-            "pin": pin_name,
-            "twist_a": cell_has_bar(ws[f"{twist_a_col}{excel_row}"].value),
-            "twist_b": cell_has_bar(ws[f"{twist_b_col}{excel_row}"].value),
-            "inner_shield": cell_has_bar(ws[f"{inner_col}{excel_row}"].value),
-            "outer_shield": cell_has_bar(ws[f"{outer_col}{excel_row}"].value)
-        }
-
-        rows.append(row_info)
-
-    return rows
-
-
-#====================================================================================================================================
-# SPLIT INTO CONNECTOR SECTIONS
-#====================================================================================================================================
-def split_into_sections(rows):
-    sections = []
-    current = []
-
-    for row in rows:
-        if not current:
-            current = [row]
-            continue
-
-        previous = current[-1]
-        connector_changed = row["connector"] != previous["connector"]
-        row_gap = row["excel_row"] != previous["excel_row"] + 1
-
-        if connector_changed or row_gap:
-            sections.append(current)
-            current = [row]
-        else:
-            current.append(row)
-
-    if current:
-        sections.append(current)
-
-    return sections
-
-
-#====================================================================================================================================
-# CONTIGUOUS MARKED RANGES
-#====================================================================================================================================
-def true_ranges(rows, key):
-    ranges = []
-    start = None
-
-    for index, row in enumerate(rows):
-        marked = bool(row[key])
-
-        if marked and start is None:
-            start = index
-
-        if not marked and start is not None:
-            ranges.append((start, index - 1))
-            start = None
-
-    if start is not None:
-        ranges.append((start, len(rows) - 1))
-
-    return ranges
-
-
-def range_pins(rows, start, end):
-    pins = []
-
-    for index in range(start, end + 1):
-        pins.append(rows[index]["pin"])
-
-    return pins
-
-
-def range_excel_rows(rows, start, end):
-    excel_rows = []
-
-    for index in range(start, end + 1):
-        excel_rows.append(rows[index]["excel_row"])
-
-    return excel_rows
-
-
-
-#====================================================================================================================================
-# BUILD TWIST / INNER-SHIELD JOBS FOR ONE CONNECTOR SECTION
-#
-# INNER SHIELD RULE:
-#   Inner SHLD does NOT create a standalone shield.
-#   It only places Shield_Demo around a twist run when every wire in
-#   that twist run is marked in the inner-SHLD column.
-#
-# OUTER SHIELDS ARE BUILT SEPARATELY ACROSS THE WHOLE SIDE SO THEY MAY
-# CROSS CONNECTOR CHANGES (EXAMPLE: LEFT P1 -> P3 -> P4).
-#====================================================================================================================================
-def build_section_jobs(rows):
-    jobs = []
-    warnings = []
-
-    if not rows:
-        return jobs, warnings
-
-    side = rows[0]["side"]
-    connector = rows[0]["connector"]
-
-    if connector == "":
-        warnings.append(f"{side}: rows {rows[0]['excel_row']}-{rows[-1]['excel_row']} have pins but no connector")
-        return jobs, warnings
-
-    conflicts = []
-
-    for row in rows:
-        if row["twist_a"] and row["twist_b"]:
-            conflicts.append(row["excel_row"])
-
-    if conflicts:
-        message = f"{side} {connector}: same wire marked in both twist columns on Excel rows {conflicts}"
-
-        if STRICT_TWIST_VALIDATION:
-            raise Exception(message)
-
-        warnings.append(message)
-
-    twist_jobs = []
-
-    for key, twist_column in [("twist_a", "A"), ("twist_b", "B")]:
-        ranges = true_ranges(rows, key)
-
-        for start, end in ranges:
-            pins = range_pins(rows, start, end)
-            excel_rows = range_excel_rows(rows, start, end)
-
-            if len(pins) < 2:
-                warnings.append(
-                    f"{side} {connector}: twist {twist_column} only contains one wire "
-                    f"on Excel row {excel_rows[0]}"
-                )
-                continue
-
-            job = {
-                "type": "twist",
-                "side": side,
-                "connector": connector,
-                "twist_column": twist_column,
-                "start": start,
-                "end": end,
-                "pins": pins,
-                "excel_rows": excel_rows,
-                "symbol_name": TWIST_SYMBOL_NAME
-            }
-
-            twist_jobs.append(job)
-            jobs.append(job)
-
-    # Inner SHLD only wraps an existing twist. It never makes its own span.
-    for twist_job in twist_jobs:
-        indexes = list(range(twist_job["start"], twist_job["end"] + 1))
-        inner_marks = [bool(rows[index]["inner_shield"]) for index in indexes]
-
-        if all(inner_marks):
-            jobs.append({
-                "type": "shield_inner",
-                "side": side,
-                "connector": connector,
-                "twist_column": twist_job["twist_column"],
-                "pins": list(twist_job["pins"]),
-                "excel_rows": list(twist_job["excel_rows"]),
-                "symbol_name": SHIELD_SYMBOL_NAME
-            })
-        elif any(inner_marks):
-            warnings.append(
-                f"{side} {connector}: inner SHLD partially covers twist "
-                f"{twist_job['twist_column']} on Excel rows {twist_job['excel_rows']}; "
-                f"inner shield ignored because the full twist must be marked"
-            )
-
-    return jobs, warnings
-
-
-#====================================================================================================================================
-# BUILD OUTER-SHIELD JOBS ACROSS AN ENTIRE SIDE
-#
-# Connector changes DO NOT break an outer shield.
-# Blank Excel row gaps do NOT break it; only an actual unmarked data row does.
-#====================================================================================================================================
-def build_outer_shield_jobs(rows):
-    """
-    Build OUTER shield jobs across an entire cable side.
-
-    CRITICAL FIX:
-    - Connector changes do NOT split an outer shield.
-    - Blank Excel row gaps between connector blocks do NOT split it.
-    - Only an actual DATA ROW with outer_shield == False ends a shield run.
-
-    Example:
-        LEFT P1 rows marked
-        [blank/spacer rows]
-        LEFT P3 rows marked
-        [blank/spacer rows]
-        LEFT P4 rows marked
-
-    becomes ONE outer shield job covering P1 + P3 + P4.
-
-    This is the intended behavior for one overshield spanning all connectors
-    on that side.
-    """
-    jobs = []
-
-    if not rows:
-        return jobs
-
-    side = rows[0]["side"]
-    current_marked_rows = []
-
-    def flush_current():
-        nonlocal current_marked_rows
-
-        if not current_marked_rows:
-            return
-
-        connectors = []
-
-        for row in current_marked_rows:
-            connector = row["connector"]
-
-            if connector and connector not in connectors:
-                connectors.append(connector)
-
-        jobs.append({
-            "type": "shield_outer",
-            "side": side,
-            "connector": "/".join(connectors),
-            "connectors": connectors,
-            "rows": list(current_marked_rows),
-            "pins": [row["pin"] for row in current_marked_rows],
-            "excel_rows": [row["excel_row"] for row in current_marked_rows],
-            "twist_column": None,
-            "symbol_name": SHIELD_SYMBOL_NAME
-        })
-
-        current_marked_rows = []
-
-    for row in rows:
-        if row["outer_shield"]:
-            # IMPORTANT:
-            # Do NOT care whether this row is the next Excel row.
-            # Do NOT care whether connector changed.
-            # If the previous data row was marked and this one is marked,
-            # they belong to the same logical overshield.
-            current_marked_rows.append(row)
-        else:
-            # An actual pin/data row with no outer-shield mark is an
-            # intentional break in the overshield.
-            flush_current()
-
-    flush_current()
-
-    print("")
-    print("============================================================")
-    print("OUTER SHIELD JOB BUILD:", side)
-    print("============================================================")
-    print("OUTER SHIELD JOB COUNT:", len(jobs))
-
-    for index, job in enumerate(jobs, start=1):
-        print(
-            "OUTER JOB",
-            index,
-            "CONNECTORS:",
-            job["connectors"],
-            "FIRST EXCEL ROW:",
-            job["excel_rows"][0],
-            "LAST EXCEL ROW:",
-            job["excel_rows"][-1],
-            "PIN COUNT:",
-            len(job["pins"])
-        )
-
-    return jobs
-
-
-#====================================================================================================================================
-# E3 ID EXTRACTOR
-#====================================================================================================================================
-def extract_e3_ids(result):
-    if result is None:
-        return []
-
-    if isinstance(result, int):
-        if result > 0:
-            return [result]
-
-        return []
-
-    if isinstance(result, list):
-        output = []
-
-        for value in result:
-            if value is not None:
-                try:
-                    if int(value) > 0:
-                        output.append(int(value))
-                except Exception:
-                    pass
-
-        return output
-
-    if not isinstance(result, tuple):
-        return []
-
-    if len(result) == 0:
-        return []
-
-    if len(result) >= 2:
-        values = result[1]
-
-        if values is None:
-            return []
-
-        if isinstance(values, int):
-            if values > 0:
-                return [values]
-
-            return []
-
-        try:
-            return [int(value) for value in values if value is not None and int(value) > 0]
-        except Exception:
-            pass
-
-    output = []
-
-    for value in result:
-        try:
-            if int(value) > 0:
-                output.append(int(value))
-        except Exception:
-            pass
-
-    return output
-
-
-#====================================================================================================================================
-# GET ALL BASE DEVICES
-#====================================================================================================================================
-def get_all_devices(prj, dev):
-    info = prj.GetAllDeviceIds(None)
-    ids = extract_e3_ids(info)
-    records = []
-
-    for device_id in ids:
-        dev.SetId(device_id)
-
-        try:
-            name = clean_excel_value(dev.GetName())
-        except Exception:
-            continue
-
-        records.append({"device_id": device_id, "name": name})
-
-    return records
-
-
-#====================================================================================================================================
-# READ PIN SCHEMATIC LOCATION
-#====================================================================================================================================
-def get_pin_location(pin, pin_id):
-    pin.SetId(pin_id)
-
-    xloc = [0.0]
-    yloc = [0.0]
-    grid = [""]
-    column = [""]
-    row = [""]
-
-    try:
-        result = pin.GetSchemaLocation(xloc, yloc, grid, column, row)
-    except Exception:
-        return None
-
-    if not isinstance(result, tuple):
-        return None
-
-    if len(result) < 3:
-        return None
-
-    try:
-        sheet_id = int(result[0])
-        x = float(result[1])
-        y = float(result[2])
-    except Exception:
-        return None
-
-    if sheet_id <= 0:
-        return None
-
-    return {"sheet_id": sheet_id, "x": x, "y": y}
-
-
-#====================================================================================================================================
-# READ SYMBOL SCHEMATIC LOCATION
-#====================================================================================================================================
-def get_symbol_location(sym, symbol_id):
-    sym.SetId(symbol_id)
-
-    xloc = [0.0]
-    yloc = [0.0]
-    grid = [""]
-    column = [""]
-    row = [""]
-
-    try:
-        result = sym.GetSchemaLocation(xloc, yloc, grid, column, row)
-    except Exception:
-        return None
-
-    if not isinstance(result, tuple):
-        return None
-
-    if len(result) < 3:
-        return None
-
-    try:
-        sheet_id = int(result[0])
-        x = float(result[1])
-        y = float(result[2])
-    except Exception:
-        return None
-
-    if sheet_id <= 0:
-        return None
-
-    return {"sheet_id": sheet_id, "x": x, "y": y}
-
-
-#====================================================================================================================================
-# LOAD DEVICE PIN MAP
-#====================================================================================================================================
-def load_device_pin_map(dev, pin, device_id):
-    dev.SetId(device_id)
-
-    try:
-        info = dev.GetAllPinIds(None)
-    except Exception:
-        return {}
-
-    pin_ids = extract_e3_ids(info)
-    pin_map = {}
-
-    for pin_id in pin_ids:
-        pin.SetId(pin_id)
-
-        try:
-            pin_name = normalize_pin_name(pin.GetName())
-        except Exception:
-            continue
-
-        location = get_pin_location(pin, pin_id)
-
-        if pin_name not in pin_map:
-            pin_map[pin_name] = []
-
-        if location is not None:
-            record = {"pin_id": pin_id, "sheet_id": location["sheet_id"], "x": location["x"], "y": location["y"]}
-            pin_map[pin_name].append(record)
-
-    return pin_map
-
-
-#====================================================================================================================================
-# FIND BASE CONNECTOR
-#====================================================================================================================================
-def find_base_connector_devices(connector_token, all_devices):
-    expected_name = connector_base_name(connector_token)
-    expected_upper = expected_name.upper()
-    matches = []
-
-    for record in all_devices:
-        if record["name"].upper() == expected_upper:
-            matches.append(record)
-
-    return matches
-
-
-#====================================================================================================================================
-# GET VIEW IDS
-#====================================================================================================================================
-def get_device_view_ids(dev, base_device_id):
-    dev.SetId(base_device_id)
-
-    if not hasattr(dev, "GetViewIds"):
-        print("GetViewIds IS NOT AVAILABLE ON THIS E3 DEVICE OBJECT")
-        return []
-
-    try:
-        result = dev.GetViewIds(None)
-    except Exception as error:
-        print("GetViewIds FAILED FOR BASE ID:", base_device_id, "ERROR:", repr(error))
-        return []
-
-    view_ids = extract_e3_ids(result)
-
-    print("BASE DEVICE ID:", base_device_id, "VIEW IDS:", view_ids)
-
-    return view_ids
-
-
-#====================================================================================================================================
-# GET CHILD DEVICE IDS
-#====================================================================================================================================
-def get_child_device_ids(dev, base_device_id):
-    dev.SetId(base_device_id)
-
-    if not hasattr(dev, "GetDeviceIds"):
-        return []
-
-    try:
-        result = dev.GetDeviceIds(None)
-    except Exception:
-        return []
-
-    return extract_e3_ids(result)
-
-
-#====================================================================================================================================
-# GET SAME NAME ASSEMBLY DEVICES
-#====================================================================================================================================
-def get_same_name_assembly_devices(dev, base_device_id, expected_name):
-    found_ids = []
-
-    dev.SetId(base_device_id)
-
-    try:
-        assembly_id = dev.GetAssemblyId()
-    except Exception:
-        return found_ids
-
-    if assembly_id is None:
-        return found_ids
-
-    try:
-        assembly_id = int(assembly_id)
-    except Exception:
-        return found_ids
-
-    if assembly_id <= 0:
-        return found_ids
-
-    dev.SetId(assembly_id)
-
-    try:
-        device_info = dev.GetDeviceIds(None)
-    except Exception:
-        return found_ids
-
-    device_ids = extract_e3_ids(device_info)
-
-    for device_id in device_ids:
-        dev.SetId(device_id)
-
-        try:
-            name = clean_excel_value(dev.GetName())
-        except Exception:
-            continue
-
-        if name.upper() == expected_name.upper():
-            found_ids.append(device_id)
-
-    return found_ids
-
-
-#====================================================================================================================================
-# COLLECT CONNECTOR CANDIDATES
-#====================================================================================================================================
-def collect_connector_candidate_ids(connector_token, all_devices, dev):
-    expected_name = connector_base_name(connector_token)
-    base_records = find_base_connector_devices(connector_token, all_devices)
-
-    if not base_records:
-        raise Exception(f"Could not find base E3 connector {expected_name}")
-
-    candidate_sources = {}
-
-    for record in base_records:
-        base_id = record["device_id"]
-
-        candidate_sources[base_id] = "BASE"
-
-        view_ids = get_device_view_ids(dev, base_id)
-
-        for view_id in view_ids:
-            candidate_sources[view_id] = "VIEW"
-
-        child_ids = get_child_device_ids(dev, base_id)
-
-        for child_id in child_ids:
-            if child_id not in candidate_sources:
-                candidate_sources[child_id] = "CHILD"
-
-        assembly_ids = get_same_name_assembly_devices(dev, base_id, expected_name)
-
-        for assembly_device_id in assembly_ids:
-            if assembly_device_id not in candidate_sources:
-                candidate_sources[assembly_device_id] = "ASSEMBLY"
-
-    return candidate_sources
-
-
-#====================================================================================================================================
-# ANALYZE CANDIDATE VIEW
-#====================================================================================================================================
-def analyze_candidate(required_pins, pin_map):
-    sheets = {}
-
-    for pin_name in required_pins:
-        locations = pin_map.get(pin_name, [])
-
-        for location in locations:
-            sheet_id = location["sheet_id"]
-
-            if sheet_id not in sheets:
-                sheets[sheet_id] = {"pins": set(), "xs": [], "ys": []}
-
-            sheets[sheet_id]["pins"].add(pin_name)
-            sheets[sheet_id]["xs"].append(location["x"])
-            sheets[sheet_id]["ys"].append(location["y"])
-
-    if not sheets:
-        return None
-
-    results = []
-
-    for sheet_id, data in sheets.items():
-        placed_count = len(data["pins"])
-        unique_x_values = set(round(value, COORDINATE_ROUND_DIGITS) for value in data["xs"])
-        unique_y_values = set(round(value, COORDINATE_ROUND_DIGITS) for value in data["ys"])
-        unique_x_count = len(unique_x_values)
-        unique_y_count = len(unique_y_values)
-        x_span = max(data["xs"]) - min(data["xs"]) if data["xs"] else 0.0
-        y_span = max(data["ys"]) - min(data["ys"]) if data["ys"] else 0.0
-        has_real_y_spread = y_span >= SCHEMATIC_MIN_Y_SPAN and unique_y_count > 1
-        result = {"sheet_id": sheet_id, "placed_count": placed_count, "unique_x_count": unique_x_count, "unique_y_count": unique_y_count, "x_span": x_span, "y_span": y_span, "has_real_y_spread": has_real_y_spread}
-
-        results.append(result)
-
-    results.sort(key=lambda item: (item["has_real_y_spread"], item["placed_count"], item["unique_y_count"], item["y_span"]), reverse=True)
-
-    return results[0]
-
-
-#====================================================================================================================================
-# RESOLVE REAL SCHEMATIC VIEW
-#====================================================================================================================================
-def resolve_connector_schematic_view(connector_token, required_pins, all_devices, dev, pin, cache):
-    expected_name = connector_base_name(connector_token)
-    candidate_sources = collect_connector_candidate_ids(connector_token, all_devices, dev)
-    candidates = []
-
-    print("")
-    print("============================================================")
-    print("E3 CANDIDATES FOR:", expected_name)
-    print("============================================================")
-
-    for candidate_id, source in candidate_sources.items():
-        dev.SetId(candidate_id)
-
-        try:
-            candidate_name = clean_excel_value(dev.GetName())
-        except Exception:
-            candidate_name = "UNKNOWN"
-
-        if candidate_id not in cache:
-            try:
-                cache[candidate_id] = load_device_pin_map(dev, pin, candidate_id)
-            except Exception as error:
-                print("CANDIDATE ID:", candidate_id, "SOURCE:", source, "NAME:", candidate_name, "PIN MAP FAILED:", repr(error))
-                continue
-
-        pin_map = cache[candidate_id]
-        analysis = analyze_candidate(required_pins, pin_map)
-
-        if analysis is None:
-            print("CANDIDATE ID:", candidate_id, "SOURCE:", source, "NAME:", candidate_name, "NO PLACED REQUIRED PINS")
-            continue
-
-        print("CANDIDATE ID:", candidate_id, "SOURCE:", source, "NAME:", candidate_name, "SHEET:", analysis["sheet_id"], "PLACED:", analysis["placed_count"], "UNIQUE X:", analysis["unique_x_count"], "UNIQUE Y:", analysis["unique_y_count"], "X SPAN:", analysis["x_span"], "Y SPAN:", analysis["y_span"])
-
-        candidate = {"device_id": candidate_id, "name": candidate_name, "source": source, "pin_map": pin_map, "analysis": analysis}
-
-        candidates.append(candidate)
-
-    if not candidates:
-        raise Exception(f"No usable E3 device/view candidates found for {expected_name}")
-
-    candidates.sort(key=lambda item: (item["analysis"]["has_real_y_spread"], item["analysis"]["placed_count"], item["analysis"]["unique_y_count"], item["analysis"]["y_span"]), reverse=True)
-
-    best = candidates[0]
-
-    if not best["analysis"]["has_real_y_spread"]:
-        raise Exception(f"Could not locate the split schematic view for {expected_name}")
-
-    sheet_id = best["analysis"]["sheet_id"]
-    missing_pins = []
-
-    for pin_name in required_pins:
-        locations = best["pin_map"].get(pin_name, [])
-        found_on_sheet = False
-
-        for location in locations:
-            if location["sheet_id"] == sheet_id:
-                found_on_sheet = True
-                break
-
-        if not found_on_sheet:
-            missing_pins.append(pin_name)
-
-    if missing_pins:
-        raise Exception(f"Selected schematic view for {expected_name} is missing pins on sheet {sheet_id}: {missing_pins}")
-
-    print("")
-    print("SELECTED SCHEMATIC VIEW ID:", best["device_id"])
-    print("SELECTED SOURCE:", best["source"])
-    print("SELECTED NAME:", best["name"])
-    print("SELECTED SHEET:", sheet_id)
-    print("SELECTED PLACED PIN COUNT:", best["analysis"]["placed_count"])
-    print("SELECTED UNIQUE Y COUNT:", best["analysis"]["unique_y_count"])
-    print("SELECTED Y SPAN:", best["analysis"]["y_span"])
-    print("============================================================")
-
-    record = {"device_id": best["device_id"], "name": best["name"]}
-
-    return record, best["pin_map"], sheet_id
-
-
-#====================================================================================================================================
-# PIN LOCATION ON SELECTED SHEET
-#====================================================================================================================================
-def pin_location_on_sheet(pin_map, pin_name, sheet_id):
-    locations = pin_map.get(pin_name, [])
-
-    for location in locations:
-        if location["sheet_id"] == sheet_id:
-            return location
-
-    return None
-
-
-#====================================================================================================================================
-# PRINT PIN LOCATIONS
-#====================================================================================================================================
-def print_section_pin_locations(required_pins, pin_map, sheet_id):
-    print("")
-    print("ACTUAL SCHEMATIC PIN LOCATIONS")
-
-    for pin_name in required_pins:
-        location = pin_location_on_sheet(pin_map, pin_name, sheet_id)
-
-        if location is None:
-            print("PIN:", pin_name, "LOCATION: NOT FOUND")
-            continue
-
-        print("PIN:", pin_name, "X:", location["x"], "Y:", location["y"])
-
-
-#====================================================================================================================================
-# JOB X OFFSET
-#====================================================================================================================================
-def job_offset(job, twist_offset_settings):
-    offset_enabled = twist_offset_settings[job["side"]]
-
-    if job["type"] == "twist":
-        if not offset_enabled:
-            return OFFSET_NO_TWIST_LINE
-
-        if job["twist_column"] == "A":
-            return OFFSET_YES_TWIST_A
-
-        return OFFSET_YES_TWIST_B
-
-    if job["type"] == "shield_inner":
-        if job["twist_column"] is None:
-            return INNER_SHIELD_ONLY_OFFSET
-
-        if not offset_enabled:
-            return OFFSET_NO_TWIST_LINE
-
-        if job["twist_column"] == "A":
-            return OFFSET_YES_TWIST_A
-
-        return OFFSET_YES_TWIST_B
-
-    if not offset_enabled:
-        return OFFSET_NO_OUTER_SHIELD
-
-    return OFFSET_YES_OUTER_SHIELD
-
-
-#====================================================================================================================================
-# DRAW ORDER
-#
-# TWISTS FIRST.
-#
-# Pair shields second.
-# Outer shields last.
-#====================================================================================================================================
-def job_priority(job):
-    # This matches the earlier working dynamic-placement implementation:
-    # shields are created before twists.
-    if job["type"] == "shield_outer":
-        return 0
-
-    if job["type"] == "shield_inner":
-        return 1
-
-    return 2
-
-
-#====================================================================================================================================
-# CALCULATE FINAL SYMBOL PLACEMENT
-#====================================================================================================================================
-def calculate_placement(job, pin_map, sheet_id, twist_offset_settings):
-    locations = []
-
-    for pin_name in job["pins"]:
-        location = pin_location_on_sheet(pin_map, pin_name, sheet_id)
-
-        if location is None:
-            raise Exception(f"{job['side']} {job['connector']}: pin {pin_name} has no schematic location on sheet {sheet_id}")
-
-        locations.append(location)
-
-    x_values = [location["x"] for location in locations]
-    y_values = [location["y"] for location in locations]
-
-    anchor_x = statistics.median(x_values)
-    bottom_y = min(y_values)
-    top_y = max(y_values)
-
-    if top_y - bottom_y < SCHEMATIC_MIN_Y_SPAN and len(job["pins"]) > 1:
-        raise Exception(f"{job['side']} {job['connector']} {job['type']}: pins {job['pins']} all have effectively the same Y coordinate")
-
-    direction = 1.0 if job["side"] == "LEFT" else -1.0
-    offset = job_offset(job, twist_offset_settings)
-    x = anchor_x + direction * offset
-
-    if job["type"] == "twist":
-        y = bottom_y - TWIST_BOTTOM_OVERLAP
-        length = None
-    else:
-        y = bottom_y - SHIELD_BOTTOM_OVERLAP
-        length = top_y - bottom_y + SHIELD_BOTTOM_OVERLAP + SHIELD_TOP_OVERLAP
-
-        if length < MIN_SYMBOL_LENGTH:
-            length = MIN_SYMBOL_LENGTH
-
-    placement = {
-        "sheet_id": sheet_id,
-        "x": x,
-        "y": y,
-        "length": length,
-        "anchor_x": anchor_x,
-        "bottom_y": bottom_y,
-        "top_y": top_y,
-        "direction": direction,
-        "offset_enabled": twist_offset_settings[job["side"]]
-    }
-
-    return placement
-
-
-
-#====================================================================================================================================
-# CALCULATE OUTER SHIELD PLACEMENT ACROSS ONE OR MORE CONNECTORS
-#
-# Each Excel row is resolved through the connector named on that row.
-# This allows one outer shield to span, for example, LEFT P1 + P3 + P4.
-# All covered connector views must resolve to the same E3 sheet.
-#====================================================================================================================================
-def calculate_outer_shield_placement(job, all_devices, dev, pin, cache, twist_offset_settings):
-    resolved_by_connector = {}
-    sheet_ids = set()
-    locations = []
-
-    rows_by_connector = {}
-
-    for row in job["rows"]:
-        connector = row["connector"]
-
-        if connector == "":
-            raise Exception(
-                f"{job['side']} outer shield: Excel row {row['excel_row']} has no connector"
-            )
-
-        rows_by_connector.setdefault(connector, []).append(row)
-
-    for connector, connector_rows in rows_by_connector.items():
-        required_pins = list(dict.fromkeys(row["pin"] for row in connector_rows))
-
-        device_record, pin_map, sheet_id = resolve_connector_schematic_view(
-            connector,
-            required_pins,
-            all_devices,
-            dev,
-            pin,
-            cache
-        )
-
-        resolved_by_connector[connector] = {
-            "device_record": device_record,
-            "pin_map": pin_map,
-            "sheet_id": sheet_id
-        }
-
-        sheet_ids.add(sheet_id)
-
-    if len(sheet_ids) != 1:
-        details = ", ".join(
-            f"{connector}=sheet {data['sheet_id']}"
-            for connector, data in resolved_by_connector.items()
-        )
-        raise Exception(
-            f"{job['side']} outer shield spans connectors on different E3 sheets: {details}"
-        )
-
-    sheet_id = next(iter(sheet_ids))
-
-    for row in job["rows"]:
-        connector = row["connector"]
-        pin_name = row["pin"]
-        pin_map = resolved_by_connector[connector]["pin_map"]
-
-        location = pin_location_on_sheet(pin_map, pin_name, sheet_id)
-
-        if location is None:
-            raise Exception(
-                f"{job['side']} outer shield: {connector} pin {pin_name} "
-                f"has no schematic location on sheet {sheet_id}"
-            )
-
-        locations.append(location)
-
-    if not locations:
-        raise Exception(f"{job['side']} outer shield has no resolved schematic locations")
-
-    x_values = [location["x"] for location in locations]
-    y_values = [location["y"] for location in locations]
-
-    anchor_x = statistics.median(x_values)
-    bottom_y = min(y_values)
-    top_y = max(y_values)
-
-    direction = 1.0 if job["side"] == "LEFT" else -1.0
-
-    if twist_offset_settings[job["side"]]:
-        offset = OFFSET_YES_OUTER_SHIELD
-    else:
-        offset = OFFSET_NO_OUTER_SHIELD
-
-    x = anchor_x + direction * offset
-    y = bottom_y - SHIELD_BOTTOM_OVERLAP
-    length = top_y - bottom_y + SHIELD_BOTTOM_OVERLAP + SHIELD_TOP_OVERLAP
-
-    if length < MIN_SYMBOL_LENGTH:
-        length = MIN_SYMBOL_LENGTH
-
-    return {
-        "sheet_id": sheet_id,
-        "x": x,
-        "y": y,
-        "length": length,
-        "anchor_x": anchor_x,
-        "bottom_y": bottom_y,
-        "top_y": top_y,
-        "direction": direction,
-        "offset_enabled": twist_offset_settings[job["side"]]
-    }
-
-
-#====================================================================================================================================
-# SAFE DISPLAY LENGTH READ
-#====================================================================================================================================
-def get_display_length_safe(sym, symbol_id):
-    sym.SetId(symbol_id)
-
-    try:
-        return float(sym.GetDisplayLength())
-    except Exception:
-        return None
-
-
-#====================================================================================================================================
-# TRY TO SIZE SHIELD AT CURRENT LOCATION
-#====================================================================================================================================
-def try_size_shield(sym, symbol_id, requested_length):
-    # EXACT KNOWN-GOOD E3 SEQUENCE:
-    #   Place -> SetId(placed id) -> GetDisplayLength ->
-    #   SetDisplayLength -> SetId(placed id) -> GetDisplayLength
-    sym.SetId(symbol_id)
-
-    try:
-        before = float(sym.GetDisplayLength())
-    except Exception:
-        before = None
-
-    print("SHIELD LENGTH BEFORE:", before)
-
-    try:
-        stretch_result = sym.SetDisplayLength(float(requested_length))
-    except Exception as error:
-        stretch_result = None
-        print("SHIELD STRETCH EXCEPTION:", repr(error))
-
-    print("SHIELD STRETCH RESULT:", stretch_result)
-
-    # Re-bind exactly like the standalone test that successfully resized.
-    sym.SetId(symbol_id)
-    time.sleep(STRETCH_DELAY_SECONDS)
-
-    try:
-        after = float(sym.GetDisplayLength())
-    except Exception:
-        after = None
-
-    print("SHIELD REQUESTED LENGTH:", requested_length)
-    print("SHIELD LENGTH AFTER:", after)
-
-    return after is not None and abs(after - float(requested_length)) <= 0.001
-
-
-def shield_stage_y_values(requested_length):
-    # Cable Shield grows upward from its insertion point.
-    # 10.0 at Y=22.0 was proven to resize successfully in the earlier test.
-    # For longer shields, lower the staging Y enough to keep the full symbol on-sheet.
-    safe_y = min(
-        SHIELD_STAGE_DEFAULT_Y,
-        SHIELD_STAGE_TOP_LIMIT - float(requested_length) - SHIELD_STAGE_MARGIN
-    )
-    safe_y = max(0.75, safe_y)
-
-    candidates = [
-        safe_y,
-        max(0.75, safe_y - 0.50),
-        min(SHIELD_STAGE_DEFAULT_Y, safe_y + 0.50),
-        max(0.75, safe_y - 1.00),
-        min(SHIELD_STAGE_DEFAULT_Y, safe_y + 1.00),
-    ]
-
-    output = []
-    for value in candidates:
-        value = round(float(value), 3)
-        if value not in output:
-            output.append(value)
-
-    return output
-
-
-#====================================================================================================================================
-# PLACE TWIST
-#
-# NO STRETCH.
-#
-# E3/database decides display length automatically.
-#====================================================================================================================================
-def place_twist(sym, job, placement):
-    load_result = sym.Load(job["symbol_name"], SYMBOL_VERSION)
-
-    print("TWIST LOAD RESULT:", load_result)
-
-    if load_result == 0:
-        raise Exception(f"Could not load library twist {job['symbol_name']}")
-
-    print("TWIST TARGET X:", placement["x"])
-    print("TWIST TARGET Y:", placement["y"])
-
-    placed_id = sym.Place(placement["sheet_id"], placement["x"], placement["y"], 0, 1.0, 0)
-
-    print("TWIST PLACE RESULT:", placed_id)
-
-    if placed_id == 0:
-        raise Exception(f"Could not place library twist {job['symbol_name']} at X={placement['x']} Y={placement['y']}")
-
-    time.sleep(PLACEMENT_DELAY_SECONDS)
-
-    sym.SetId(placed_id)
-
-    try:
-        placed_name = sym.GetName()
-    except Exception:
-        placed_name = "UNKNOWN"
-
-    try:
-        symbol_type = sym.GetSymbolType()
-    except Exception:
-        symbol_type = "UNKNOWN"
-
-    try:
-        automatic_length = float(sym.GetDisplayLength())
-    except Exception:
-        automatic_length = None
-
-    print("TWIST PLACED ID:", placed_id)
-    print("TWIST PLACED NAME:", placed_name)
-    print("TWIST SYMBOL TYPE:", symbol_type)
-    print("TWIST AUTOMATIC DISPLAY LENGTH:", automatic_length)
-    print("TWIST LEFT AT E3 DATABASE AUTO LENGTH")
-
-    return placed_id
-
-
-#====================================================================================================================================
-# PLACE SHIELD
-#
-# PROCESS:
-#
-# 1. Load Cable Shield.
-# 2. Search staging coordinates until the symbol can be placed.
-# 3. Try SetDisplayLength at that staging position.
-# 4. If resize fails, move SAME shield to another staging location.
-# 5. Once correct size is reached, move SAME shield to final cable X/Y.
-#
-# No duplicate shields are intentionally created while searching.
-#====================================================================================================================================
-def place_shield(prj, job, placement):
-    """
-    Place a REAL Shield_Demo symbol and resize it with SetDisplayLength.
-
-    CRITICAL E3 BEHAVIOR:
-    The earlier working test called SetDisplayLength IMMEDIATELY after Place()
-    on the SAME symbol object returned from Load/Place.
-
-    Do NOT call SetId() first.
-    Do NOT call GetDisplayLength() first.
-    Do NOT use PlaceDynamic().
-
-    Calling SetId before SetDisplayLength was the important difference in the
-    later broken versions.
-    """
-    requested_length = float(placement["length"])
-    final_x = float(placement["x"])
-    final_y = float(placement["y"])
-    sheet_id = int(placement["sheet_id"])
-
-    print("")
-    print("SHIELD FINAL X:", final_x)
-    print("SHIELD FINAL Y:", final_y)
-    print("SHIELD REQUESTED LENGTH:", requested_length)
-    print("SHIELD LIBRARY SYMBOL:", job["symbol_name"])
-    print("SHIELD MODE: Load -> Place -> IMMEDIATE SetDisplayLength")
-    print("SHIELD NOTE: NO SetId / GetDisplayLength BEFORE STRETCH")
-
-    # Try the final location first.  If E3 rejects the resize there, try the
-    # same exact sequence in a clear staging area and move the resized shield.
-    attempts = [("FINAL", final_x, final_y)]
-
-    # Pick stage Y values that leave enough room for a long shield.
-    max_stage_y = SHIELD_STAGE_TOP_LIMIT - requested_length - SHIELD_STAGE_MARGIN
-    if max_stage_y < 0.5:
-        max_stage_y = 0.5
-
-    stage_base_y = min(SHIELD_STAGE_DEFAULT_Y, max_stage_y)
-    stage_y_values = [
-        stage_base_y,
-        max(0.5, stage_base_y - 0.5),
-        max(0.5, stage_base_y + 0.5),
-        max(0.5, stage_base_y - 1.0),
-        max(0.5, stage_base_y + 1.0),
-    ]
-
-    seen_stage_y = []
-    for y in stage_y_values:
-        y = round(float(y), 6)
-        if y not in seen_stage_y:
-            seen_stage_y.append(y)
-
-    for stage_y in seen_stage_y:
-        for stage_x in SHIELD_STAGE_X_VALUES:
-            attempts.append(("STAGE", float(stage_x), float(stage_y)))
-
-    for attempt_number, (mode, x, y) in enumerate(attempts, start=1):
-        print("")
-        print("SHIELD ATTEMPT:", attempt_number, "MODE:", mode, "X:", x, "Y:", y)
-
-        # Fresh object for each attempt.
-        shield_sym = prj.CreateSymbolObject()
-
-        load_result = shield_sym.Load(job["symbol_name"], SYMBOL_VERSION)
-        print("SHIELD LOAD RESULT:", load_result)
-
-        if load_result == 0:
-            try:
-                del shield_sym
-            except Exception:
-                pass
-            continue
-
-        placed_id = shield_sym.Place(sheet_id, x, y, 0, 1.0, 0)
-        print("SHIELD PLACE RESULT:", placed_id)
-
-        if placed_id == 0:
-            try:
-                del shield_sym
-            except Exception:
-                pass
-            time.sleep(PLACEMENT_DELAY_SECONDS)
-            continue
-
-        # ================================================================
-        # THIS IS THE KEY FIX.
-        #
-        # The old working test did:
-        #     Load(...)
-        #     Place(...)
-        #     SetDisplayLength(...)
-        #
-        # It did NOT SetId() between Place and SetDisplayLength.
-        # It did NOT read GetDisplayLength() before SetDisplayLength.
-        # ================================================================
-        try:
-            stretch_result = shield_sym.SetDisplayLength(requested_length)
-        except Exception as error:
-            stretch_result = None
-            print("SHIELD IMMEDIATE STRETCH EXCEPTION:", repr(error))
-
-        print("SHIELD IMMEDIATE STRETCH RESULT:", stretch_result)
-
-        time.sleep(STRETCH_DELAY_SECONDS)
-
-        try:
-            immediate_length = float(shield_sym.GetDisplayLength())
-        except Exception:
-            immediate_length = None
-
-        print("SHIELD IMMEDIATE LENGTH AFTER:", immediate_length)
-
-        immediate_success = (
-            immediate_length is not None
-            and abs(immediate_length - requested_length) <= 0.001
-        )
-
-        # Only NOW bind by ID, after the resize attempt is already complete.
-        try:
-            set_id_result = shield_sym.SetId(placed_id)
-            print("SHIELD POST-STRETCH SetId RESULT:", set_id_result)
-        except Exception as error:
-            print("SHIELD POST-STRETCH SetId EXCEPTION:", repr(error))
-
-        try:
-            verified_length = float(shield_sym.GetDisplayLength())
-        except Exception:
-            verified_length = immediate_length
-
-        print("SHIELD VERIFIED LENGTH:", verified_length)
-
-        verified_success = (
-            verified_length is not None
-            and abs(verified_length - requested_length) <= 0.001
-        )
-
-        if immediate_success or verified_success:
-            print("SHIELD RESIZE SUCCESS")
-
-            final_id = placed_id
-
-            # If resized in staging, move that SAME real shield to final X/Y.
-            if mode == "STAGE":
-                time.sleep(MOVE_DELAY_SECONDS)
-
-                try:
-                    shield_sym.SetId(placed_id)
-                except Exception:
-                    pass
-
-                move_result = shield_sym.Place(
-                    sheet_id,
-                    final_x,
-                    final_y,
-                    0,
-                    1.0,
-                    0
-                )
-
-                print("SHIELD FINAL MOVE RESULT:", move_result)
-
-                if move_result == 0:
-                    raise Exception(
-                        f"{job['symbol_name']} resized correctly but could not "
-                        f"move to final X={final_x} Y={final_y}"
-                    )
-
-                final_id = move_result
-                time.sleep(PLACEMENT_DELAY_SECONDS)
-
-            # Final verification.
-            try:
-                shield_sym.SetId(final_id)
-            except Exception:
-                pass
-
-            try:
-                final_length = float(shield_sym.GetDisplayLength())
-            except Exception:
-                final_length = None
-
-            try:
-                final_name = shield_sym.GetName()
-            except Exception:
-                final_name = "UNKNOWN"
-
-            try:
-                final_type = shield_sym.GetSymbolType()
-            except Exception:
-                final_type = "UNKNOWN"
-
-            try:
-                final_is_shield = shield_sym.IsShield()
-            except Exception:
-                final_is_shield = "UNKNOWN"
-
-            final_location = get_symbol_location(shield_sym, final_id)
-
-            print("SHIELD FINAL ID:", final_id)
-            print("SHIELD FINAL NAME:", final_name)
-            print("SHIELD FINAL SYMBOL TYPE:", final_type)
-            print("SHIELD FINAL IS SHIELD:", final_is_shield)
-            print("SHIELD FINAL DISPLAY LENGTH:", final_length)
-
-            if final_location is not None:
-                print("SHIELD FINAL SHEET:", final_location["sheet_id"])
-                print("SHIELD FINAL ACTUAL X:", final_location["x"])
-                print("SHIELD FINAL ACTUAL Y:", final_location["y"])
-
-            if final_length is None or abs(final_length - requested_length) > 0.001:
-                raise Exception(
-                    f"{job['symbol_name']} resized successfully but final length "
-                    f"changed. Expected {requested_length}, actual {final_length}"
-                )
-
-            print("SHIELD REAL SYMBOL + LENGTH VERIFIED")
-            return final_id
-
-        print("SHIELD RESIZE FAILED FOR THIS ATTEMPT")
-
-        # Remove the failed trial before trying another position.
-        try:
-            shield_sym.SetId(placed_id)
-            delete_result = shield_sym.Delete()
-            print("FAILED SHIELD DELETE RESULT:", delete_result)
-        except Exception as error:
-            print("FAILED SHIELD DELETE EXCEPTION:", repr(error))
-
-        try:
-            del shield_sym
-        except Exception:
-            pass
-
-        time.sleep(PLACEMENT_DELAY_SECONDS)
-
-    raise Exception(
-        f"{job['symbol_name']} could not resize to {requested_length}. "
-        f"All attempts used Load -> Place -> immediate SetDisplayLength "
-        f"without SetId before the stretch."
-    )
-
-
-#====================================================================================================================================
-# PLACE ONE JOB
-#====================================================================================================================================
-def place_job(prj, sym, job, placement):
-    print("")
-    print("------------------------------------------------------------")
-    print("TYPE:", job["type"])
-    print("SIDE:", job["side"])
-    print("TWIST OFFSET ENABLED:", placement["offset_enabled"])
-    print("CONNECTOR:", job["connector"])
-    print("TWIST COLUMN:", job.get("twist_column"))
-    print("PINS:", job["pins"])
-    print("EXCEL ROWS:", job["excel_rows"])
-    print("LIBRARY SYMBOL:", job["symbol_name"])
-    print("SHEET:", placement["sheet_id"])
-    print("CONNECTOR PIN X:", placement["anchor_x"])
-    print("FINAL SYMBOL X:", placement["x"])
-    print("BOTTOM WIRE Y:", placement["bottom_y"])
-    print("TOP WIRE Y:", placement["top_y"])
-    print("FINAL SYMBOL Y:", placement["y"])
-
-    if placement["length"] is None:
-        print("REQUESTED SYMBOL LENGTH: AUTO")
-    else:
-        print("REQUESTED SYMBOL LENGTH:", placement["length"])
-
-    if DRY_RUN:
-        print("DRY RUN - NOT PLACED")
-        return None
-
-    if job["type"] == "twist":
-        return place_twist(sym, job, placement)
-
-    return place_shield(prj, job, placement)
-
-
-#====================================================================================================================================
-# MAIN
-#====================================================================================================================================
-
-#====================================================================================================================================
-# DIAGNOSTIC HELPERS
-#====================================================================================================================================
-def diagnostic_delete_symbol(prj, symbol_id):
-    if not symbol_id:
-        return
-
-    sym = prj.CreateSymbolObject()
-
-    try:
-        sym.SetId(symbol_id)
-    except Exception:
-        pass
-
-    try:
-        result = sym.Delete()
-        print("DIAGNOSTIC DELETE:", symbol_id, "RESULT:", result)
-    except Exception as error:
-        print("DIAGNOSTIC DELETE ERROR:", symbol_id, repr(error))
-
-
-def diagnostic_exact_shield_test(prj, placement, label, keep_on_success=False):
-    """
-    EXACT resize order from the v11 shield routine:
-
-        fresh CreateSymbolObject
-        Load(Shield_Demo)
-        Place(...)
-        IMMEDIATELY SetDisplayLength(...)
-        sleep
-        GetDisplayLength()
-        SetId()
-        GetDisplayLength()
-
-    There is intentionally NO SetId/GetDisplayLength between Place and
-    SetDisplayLength.
-    """
-    requested_length = float(placement["length"])
-    x = float(placement["x"])
-    y = float(placement["y"])
-    sheet_id = int(placement["sheet_id"])
-
-    print("")
-    print("################################################################")
-    print("EXACT SHIELD TEST:", label)
-    print("################################################################")
-    print("SYMBOL:", SHIELD_SYMBOL_NAME)
-    print("SHEET:", sheet_id)
-    print("X:", x)
-    print("Y:", y)
-    print("REQUESTED LENGTH:", requested_length)
-
-    sym = prj.CreateSymbolObject()
-
-    load_result = sym.Load(SHIELD_SYMBOL_NAME, SYMBOL_VERSION)
-    print("1 LOAD RESULT:", load_result)
-
-    if load_result == 0:
-        print("TEST STATUS: LOAD_FAIL")
-        return {"status": "LOAD_FAIL", "id": None}
-
-    placed_id = sym.Place(sheet_id, x, y, 0, 1.0, 0)
-    print("2 PLACE RESULT:", placed_id)
-
-    if placed_id == 0:
-        print("TEST STATUS: PLACE_FAIL")
-        return {"status": "PLACE_FAIL", "id": None}
-
-    # EXACT critical ordering.
-    try:
-        set_length_result = sym.SetDisplayLength(requested_length)
-    except Exception as error:
-        set_length_result = None
-        print("3 SetDisplayLength EXCEPTION:", repr(error))
-
-    print("3 SetDisplayLength RESULT:", set_length_result)
-
-    time.sleep(STRETCH_DELAY_SECONDS)
-
-    try:
-        immediate_length = float(sym.GetDisplayLength())
-    except Exception:
-        immediate_length = None
-
-    print("4 IMMEDIATE LENGTH:", immediate_length)
-
-    try:
-        set_id_result = sym.SetId(placed_id)
-    except Exception as error:
-        set_id_result = None
-        print("5 SetId EXCEPTION:", repr(error))
-
-    print("5 SetId RESULT:", set_id_result)
-
-    try:
-        verified_length = float(sym.GetDisplayLength())
-    except Exception:
-        verified_length = None
-
-    try:
-        symbol_type = sym.GetSymbolType()
-    except Exception:
-        symbol_type = "UNKNOWN"
-
-    try:
-        is_shield = sym.IsShield()
-    except Exception:
-        is_shield = "UNKNOWN"
-
-    print("6 VERIFIED LENGTH:", verified_length)
-    print("6 SYMBOL TYPE:", symbol_type)
-    print("6 IS SHIELD:", is_shield)
-
-    success = (
-        verified_length is not None
-        and abs(verified_length - requested_length) <= 0.001
-    )
-
-    status = "PASS" if success else "FAIL_RESIZE"
-    print("TEST STATUS:", status)
-
-    if success and keep_on_success:
-        print("KEEPING SUCCESSFUL TEST SHIELD:", placed_id)
-        return {"status": status, "id": placed_id}
-
-    diagnostic_delete_symbol(prj, placed_id)
-    return {"status": status, "id": None}
-
-
-def diagnostic_staging_placement(placement):
-    requested_length = float(placement["length"])
-
-    max_stage_y = (
-        SHIELD_STAGE_TOP_LIMIT
-        - requested_length
-        - SHIELD_STAGE_MARGIN
-    )
-
-    if max_stage_y < 0.5:
-        max_stage_y = 0.5
-
-    stage_y = min(SHIELD_STAGE_DEFAULT_Y, max_stage_y)
-
-    return {
-        "sheet_id": placement["sheet_id"],
-        "anchor_x": 24.0,
-        "x": 24.0,
-        "bottom_y": stage_y,
-        "top_y": stage_y + requested_length,
-        "y": stage_y,
-        "length": requested_length
-    }
-
-
-def diagnostic_collect_cases(
-    packages,
-    outer_jobs,
-    all_devices,
-    dev,
-    pin,
-    pin_map_cache,
-    twist_offset_settings
-):
-    outer_cases = []
-    inner_cases = []
-    twist_cases = []
-
-    for index, job in enumerate(outer_jobs, start=1):
-        placement = calculate_outer_shield_placement(
-            job,
-            all_devices,
-            dev,
-            pin,
-            pin_map_cache,
-            twist_offset_settings
-        )
-
-        outer_cases.append({
-            "label": (
-                f"OUTER {index} {job['side']} "
-                f"CONNECTORS={job['connectors']}"
-            ),
-            "job": job,
-            "placement": placement
-        })
-
-    for package_index, package in enumerate(packages, start=1):
-        section_rows = package["rows"]
-        jobs = package["jobs"]
-
-        side = section_rows[0]["side"]
-        connector = section_rows[0]["connector"]
-        required_pins = list(dict.fromkeys(row["pin"] for row in section_rows))
-
-        device_record, pin_map, sheet_id = resolve_connector_schematic_view(
-            connector,
-            required_pins,
-            all_devices,
-            dev,
-            pin,
-            pin_map_cache
-        )
-
-        for job_index, job in enumerate(jobs, start=1):
-            placement = calculate_placement(
-                job,
-                pin_map,
-                sheet_id,
-                twist_offset_settings
-            )
-
-            case = {
-                "label": (
-                    f"PKG={package_index} JOB={job_index} "
-                    f"{job['type']} {side} {connector} "
-                    f"ROWS={job['excel_rows']}"
-                ),
-                "job": job,
-                "placement": placement
-            }
-
-            if job["type"] == "twist":
-                twist_cases.append(case)
-            elif job["type"] == "shield_inner":
-                inner_cases.append(case)
-
-    return outer_cases, inner_cases, twist_cases
-
-
-def diagnostic_print_case_summary(outer_cases, inner_cases, twist_cases):
-    print("")
-    print("================================================================")
-    print("CURRENT SPREADSHEET JOB / PLACEMENT SUMMARY")
-    print("================================================================")
-    print("SHIELD SYMBOL:", SHIELD_SYMBOL_NAME)
-    print("OUTER SHIELD COUNT:", len(outer_cases))
-    print("INNER SHIELD COUNT:", len(inner_cases))
-    print("TWIST COUNT:", len(twist_cases))
-
-    print("")
-    print("OUTER SHIELDS")
-    for case in outer_cases:
-        job = case["job"]
-        p = case["placement"]
-        print(
-            case["label"],
-            "| X=", p["x"],
-            "| Y=", p["y"],
-            "| LENGTH=", p["length"],
-            "| ROWS=", job["excel_rows"][0], "TO", job["excel_rows"][-1],
-            "| CONNECTORS=", job.get("connectors")
-        )
-
-    print("")
-    print("INNER SHIELDS")
-    for case in inner_cases:
-        p = case["placement"]
-        print(
-            case["label"],
-            "| X=", p["x"],
-            "| Y=", p["y"],
-            "| LENGTH=", p["length"]
-        )
-
-    print("================================================================")
-
-
-def diagnostic_place_all_twists(prj, twist_cases):
-    ids = []
-    sym = prj.CreateSymbolObject()
-
-    print("")
-    print("================================================================")
-    print("TEMPORARILY PLACING ALL TWISTS")
-    print("================================================================")
-
-    for case in twist_cases:
-        try:
-            placed_id = place_twist(sym, case["job"], case["placement"])
-
-            if placed_id:
-                ids.append(placed_id)
-        except Exception as error:
-            print("TWIST TEST ERROR:", case["label"], repr(error))
-
-    print("TEMP TWIST COUNT:", len(ids))
-    return ids
-
-
-def diagnostic_cleanup_ids(prj, ids):
-    for symbol_id in reversed(ids):
-        diagnostic_delete_symbol(prj, symbol_id)
-
-
-#====================================================================================================================================
-# DIAGNOSTIC MAIN
-#====================================================================================================================================
-def main():
-    excel_path = ask_excel_path()
-
-    if excel_path is None:
-        raise Exception("No Excel file selected")
-
-    workbook = load_workbook(excel_path, data_only=True, read_only=False)
-
-    if TARGET_SHEET_NAME is None:
-        ws = workbook.active
-    else:
-        if TARGET_SHEET_NAME not in workbook.sheetnames:
-            raise Exception(f"Worksheet {TARGET_SHEET_NAME} was not found")
-        ws = workbook[TARGET_SHEET_NAME]
-
-    twist_offset_settings = read_twist_offset_settings(ws)
-    last_row = get_last_data_row(ws)
-
-    left_rows = read_side_rows(ws, "LEFT", last_row)
-    right_rows = read_side_rows(ws, "RIGHT", last_row)
-
-    sections = (
-        split_into_sections(left_rows)
-        + split_into_sections(right_rows)
-    )
-
-    packages = []
-
-    for section_rows in sections:
-        jobs, warnings = build_section_jobs(section_rows)
-
-        if jobs:
-            packages.append({
-                "rows": section_rows,
-                "jobs": jobs
-            })
-
-    outer_jobs = (
-        build_outer_shield_jobs(left_rows)
-        + build_outer_shield_jobs(right_rows)
-    )
-
-    print("")
-    print("================================================================")
-    print("CURRENT-SPREADSHEET SHIELD DIAGNOSTIC")
-    print("================================================================")
-    print("EXCEL:", excel_path)
-    print("WORKSHEET:", ws.title)
-    print("SHIELD SYMBOL:", SHIELD_SYMBOL_NAME)
-    print("IMPORTANT: THIS DIAGNOSTIC USES THE EXACT V11 SHIELD SYMBOL")
-    print("NO Shield_DemoA SUBSTITUTION")
-    print("================================================================")
-
-    app = win32.gencache.EnsureDispatch("CT.Application")
-    prj = app.CreateJobObject()
-    dev = prj.CreateDeviceObject()
-    pin = prj.CreatePinObject()
-
-    all_devices = get_all_devices(prj, dev)
-    pin_map_cache = {}
-
-    outer_cases, inner_cases, twist_cases = diagnostic_collect_cases(
-        packages,
-        outer_jobs,
-        all_devices,
-        dev,
-        pin,
-        pin_map_cache,
-        twist_offset_settings
-    )
-
-    diagnostic_print_case_summary(
-        outer_cases,
-        inner_cases,
-        twist_cases
-    )
-
-    results = []
-
-    # ================================================================
-    # PHASE 1
-    # Each current OUTER shield by itself at its actual calculated location.
-    # Nothing else is placed by this diagnostic.
-    # ================================================================
-    print("")
-    print("")
-    print("================================================================")
-    print("PHASE 1 - EACH OUTER SHIELD ALONE AT ACTUAL FINAL LOCATION")
-    print("================================================================")
-
-    for case in outer_cases:
-        result = diagnostic_exact_shield_test(
-            prj,
-            case["placement"],
-            "PHASE1 " + case["label"],
-            keep_on_success=False
-        )
-
-        results.append(("PHASE1_FINAL", case["label"], result["status"]))
-
-    # ================================================================
-    # PHASE 2
-    # Same OUTER shield length, but at known blank staging X=24.
-    # This separates bad final coordinates from bad length/job data.
-    # ================================================================
-    print("")
-    print("")
-    print("================================================================")
-    print("PHASE 2 - EACH OUTER SHIELD ALONE AT STAGING X=24")
-    print("================================================================")
-
-    for case in outer_cases:
-        stage = diagnostic_staging_placement(case["placement"])
-
-        result = diagnostic_exact_shield_test(
-            prj,
-            stage,
-            "PHASE2 STAGING " + case["label"],
-            keep_on_success=False
-        )
-
-        results.append(("PHASE2_STAGE", case["label"], result["status"]))
-
-    # ================================================================
-    # PHASE 3
-    # Every INNER shield by itself at its actual final location.
-    # This tells us whether the spreadsheet's random twist/inner pattern
-    # generates any individually invalid shield placement.
-    # ================================================================
-    print("")
-    print("")
-    print("================================================================")
-    print("PHASE 3 - EACH INNER SHIELD ALONE AT ACTUAL FINAL LOCATION")
-    print("================================================================")
-
-    for case in inner_cases:
-        result = diagnostic_exact_shield_test(
-            prj,
-            case["placement"],
-            "PHASE3 " + case["label"],
-            keep_on_success=False
-        )
-
-        results.append(("PHASE3_INNER", case["label"], result["status"]))
-
-    # ================================================================
-    # PHASE 4
-    # Keep both outer shields at the same time.
-    # If each passes alone but the second fails here, the shields are
-    # interfering with one another.
-    # ================================================================
-    print("")
-    print("")
-    print("================================================================")
-    print("PHASE 4 - KEEP ALL OUTER SHIELDS SIMULTANEOUSLY")
-    print("================================================================")
-
-    kept_outer_ids = []
-
-    for case in outer_cases:
-        result = diagnostic_exact_shield_test(
-            prj,
-            case["placement"],
-            "PHASE4 KEEP " + case["label"],
-            keep_on_success=True
-        )
-
-        results.append(("PHASE4_KEEP_OUTERS", case["label"], result["status"]))
-
-        if result["id"]:
-            kept_outer_ids.append(result["id"])
-
-    diagnostic_cleanup_ids(prj, kept_outer_ids)
-
-    # ================================================================
-    # PHASE 5
-    # Place all twists first, then test the current outer shields.
-    # If Phase 1 fails but Phase 5 passes, operation order is the cause.
-    # If Phase 1 passes but Phase 5 fails, twist geometry is interfering.
-    # ================================================================
-    print("")
-    print("")
-    print("================================================================")
-    print("PHASE 5 - PLACE ALL TWISTS FIRST, THEN TEST OUTER SHIELDS")
-    print("================================================================")
-
-    temp_twist_ids = diagnostic_place_all_twists(prj, twist_cases)
-
-    for case in outer_cases:
-        result = diagnostic_exact_shield_test(
-            prj,
-            case["placement"],
-            "PHASE5 AFTER TWISTS " + case["label"],
-            keep_on_success=False
-        )
-
-        results.append(("PHASE5_AFTER_TWISTS", case["label"], result["status"]))
-
-    diagnostic_cleanup_ids(prj, temp_twist_ids)
-
-    # ================================================================
-    # PHASE 6
-    # Mimic v11's shield-first behavior just for shields:
-    # keep outers, then try inners while outers remain.
-    # This reveals nested-shield interference.
-    # ================================================================
-    print("")
-    print("")
-    print("================================================================")
-    print("PHASE 6 - KEEP OUTERS, THEN TEST INNER SHIELDS")
-    print("================================================================")
-
-    phase6_ids = []
-
-    for case in outer_cases:
-        result = diagnostic_exact_shield_test(
-            prj,
-            case["placement"],
-            "PHASE6 OUTER " + case["label"],
-            keep_on_success=True
-        )
-
-        results.append(("PHASE6_OUTER", case["label"], result["status"]))
-
-        if result["id"]:
-            phase6_ids.append(result["id"])
-
-    for case in inner_cases:
-        result = diagnostic_exact_shield_test(
-            prj,
-            case["placement"],
-            "PHASE6 INNER WITH OUTERS PRESENT " + case["label"],
-            keep_on_success=False
-        )
-
-        results.append(("PHASE6_INNER_WITH_OUTER", case["label"], result["status"]))
-
-    diagnostic_cleanup_ids(prj, phase6_ids)
-
-    print("")
-    print("")
-    print("================================================================")
-    print("FINAL DIAGNOSTIC SUMMARY")
-    print("================================================================")
-
-    for phase, label, status in results:
-        print(phase, "|", status, "|", label)
-
-    print("================================================================")
-    print("COPY THIS ENTIRE FINAL DIAGNOSTIC SUMMARY BACK TO CHAT.")
-    print("ALSO COPY THE CURRENT SPREADSHEET JOB / PLACEMENT SUMMARY.")
-    print("================================================================")
-
-    workbook.close()
-
-    del pin
-    del dev
-    del prj
-    del app
-
-
-if __name__ == "__main__":
-    main()
+################################################################
+SYMBOL: Shield_Demo
+SHEET: 204828
+X: 24.0
+Y: 6.75
+REQUESTED LENGTH: 24.75
+1 LOAD RESULT: 147946
+2 PLACE RESULT: 279015
+3 SetDisplayLength RESULT: 0
+4 IMMEDIATE LENGTH: 1.25
+5 SetId RESULT: 279015
+6 VERIFIED LENGTH: 1.25
+6 SYMBOL TYPE: 17
+6 IS SHIELD: 1
+TEST STATUS: FAIL_RESIZE
+DIAGNOSTIC DELETE: 279015 RESULT: 0
+
+################################################################
+EXACT SHIELD TEST: PHASE2 STAGING OUTER 2 RIGHT CONNECTORS=['P2']
+################################################################
+SYMBOL: Shield_Demo
+SHEET: 204828
+X: 24.0
+Y: 6.75
+REQUESTED LENGTH: 24.75
+1 LOAD RESULT: 147946
+2 PLACE RESULT: 278720
+3 SetDisplayLength RESULT: 0
+4 IMMEDIATE LENGTH: 1.25
+5 SetId RESULT: 278720
+6 VERIFIED LENGTH: 1.25
+6 SYMBOL TYPE: 17
+6 IS SHIELD: 1
+TEST STATUS: FAIL_RESIZE
+DIAGNOSTIC DELETE: 278720 RESULT: 0
+
+
+================================================================
+PHASE 3 - EACH INNER SHIELD ALONE AT ACTUAL FINAL LOCATION
+================================================================
+
+################################################################
+EXACT SHIELD TEST: PHASE3 PKG=1 JOB=19 shield_inner LEFT P1 ROWS=[5, 6]
+################################################################
+SYMBOL: Shield_Demo
+SHEET: 204828
+X: 1.25
+Y: 29.125
+REQUESTED LENGTH: 0.5
+1 LOAD RESULT: 147946
+2 PLACE RESULT: 278425
+3 SetDisplayLength RESULT: 0
+4 IMMEDIATE LENGTH: 1.25
+5 SetId RESULT: 278425
+6 VERIFIED LENGTH: 1.25
+6 SYMBOL TYPE: 17
+6 IS SHIELD: 1
+TEST STATUS: FAIL_RESIZE
+DIAGNOSTIC DELETE: 278425 RESULT: 0
+
+################################################################
+EXACT SHIELD TEST: PHASE3 PKG=1 JOB=20 shield_inner LEFT P1 ROWS=[9, 10]
+################################################################
+SYMBOL: Shield_Demo
+SHEET: 204828
+X: 1.25
+Y: 28.125
+REQUESTED LENGTH: 0.5
+1 LOAD RESULT: 147946
+2 PLACE RESULT: 278192
+3 SetDisplayLength RESULT: 0
+4 IMMEDIATE LENGTH: 1.25
+5 SetId RESULT: 278192
+6 VERIFIED LENGTH: 1.25
+6 SYMBOL TYPE: 17
+6 IS SHIELD: 1
+TEST STATUS: FAIL_RESIZE
+DIAGNOSTIC DELETE: 278192 RESULT: 0
+
+################################################################
+EXACT SHIELD TEST: PHASE3 PKG=1 JOB=21 shield_inner LEFT P1 ROWS=[13, 14]
+################################################################
+SYMBOL: Shield_Demo
+SHEET: 204828
+X: 1.25
+Y: 27.125
+REQUESTED LENGTH: 0.5
+1 LOAD RESULT: 147946
+2 PLACE RESULT: 277957
+3 SetDisplayLength RESULT: 0
+4 IMMEDIATE LENGTH: 1.25
+5 SetId RESULT: 277957
+6 VERIFIED LENGTH: 1.25
+6 SYMBOL TYPE: 17
+6 IS SHIELD: 1
+TEST STATUS: FAIL_RESIZE
+DIAGNOSTIC DELETE: 277957 RESULT: 0
+
+################################################################
+EXACT SHIELD TEST: PHASE3 PKG=1 JOB=22 shield_inner LEFT P1 ROWS=[7, 8]
+################################################################
+SYMBOL: Shield_Demo
+SHEET: 204828
+X: 1.5
+Y: 28.625
+REQUESTED LENGTH: 0.5
+1 LOAD RESULT: 147946
+2 PLACE RESULT: 277722
+3 SetDisplayLength RESULT: 0
+4 IMMEDIATE LENGTH: 1.25
+5 SetId RESULT: 277722
+6 VERIFIED LENGTH: 1.25
+6 SYMBOL TYPE: 17
+6 IS SHIELD: 1
+TEST STATUS: FAIL_RESIZE
+DIAGNOSTIC DELETE: 277722 RESULT: 0
+
+################################################################
+EXACT SHIELD TEST: PHASE3 PKG=1 JOB=23 shield_inner LEFT P1 ROWS=[11, 12]
+################################################################
+SYMBOL: Shield_Demo
+SHEET: 204828
+X: 1.5
+Y: 27.625
+REQUESTED LENGTH: 0.5
+1 LOAD RESULT: 147946
+2 PLACE RESULT: 277487
+3 SetDisplayLength RESULT: 0
+4 IMMEDIATE LENGTH: 1.25
+5 SetId RESULT: 277487
+6 VERIFIED LENGTH: 1.25
+6 SYMBOL TYPE: 17
+6 IS SHIELD: 1
+TEST STATUS: FAIL_RESIZE
+DIAGNOSTIC DELETE: 277487 RESULT: 0
+
+################################################################
+EXACT SHIELD TEST: PHASE3 PKG=1 JOB=24 shield_inner LEFT P1 ROWS=[15, 16]
+################################################################
+SYMBOL: Shield_Demo
+SHEET: 204828
+X: 1.5
+Y: 26.625
+REQUESTED LENGTH: 0.5
+1 LOAD RESULT: 147946
+2 PLACE RESULT: 277252
+3 SetDisplayLength RESULT: 0
+4 IMMEDIATE LENGTH: 1.25
+5 SetId RESULT: 277252
+6 VERIFIED LENGTH: 1.25
+6 SYMBOL TYPE: 17
+6 IS SHIELD: 1
+TEST STATUS: FAIL_RESIZE
+DIAGNOSTIC DELETE: 277252 RESULT: 0
+
+
+================================================================
+PHASE 4 - KEEP ALL OUTER SHIELDS SIMULTANEOUSLY
+================================================================
+
+################################################################
+EXACT SHIELD TEST: PHASE4 KEEP OUTER 1 LEFT CONNECTORS=['P1', 'P3', 'P4']
+################################################################
+SYMBOL: Shield_Demo
+SHEET: 204828
+X: 1.75
+Y: 4.875
+REQUESTED LENGTH: 24.75
+1 LOAD RESULT: 147946
+2 PLACE RESULT: 277017
+3 SetDisplayLength RESULT: 0
+4 IMMEDIATE LENGTH: 1.25
+5 SetId RESULT: 277017
+6 VERIFIED LENGTH: 1.25
+6 SYMBOL TYPE: 17
+6 IS SHIELD: 1
+TEST STATUS: FAIL_RESIZE
+DIAGNOSTIC DELETE: 277017 RESULT: 0
+
+################################################################
+EXACT SHIELD TEST: PHASE4 KEEP OUTER 2 RIGHT CONNECTORS=['P2']
+################################################################
+SYMBOL: Shield_Demo
+SHEET: 204828
+X: 3.25
+Y: 4.875
+REQUESTED LENGTH: 24.75
+1 LOAD RESULT: 147946
+2 PLACE RESULT: 276728
+3 SetDisplayLength RESULT: 0
+4 IMMEDIATE LENGTH: 1.25
+5 SetId RESULT: 276728
+6 VERIFIED LENGTH: 1.25
+6 SYMBOL TYPE: 17
+6 IS SHIELD: 1
+TEST STATUS: FAIL_RESIZE
+DIAGNOSTIC DELETE: 276728 RESULT: 0
+
+
+================================================================
+PHASE 5 - PLACE ALL TWISTS FIRST, THEN TEST OUTER SHIELDS
+================================================================
+
+================================================================
+TEMPORARILY PLACING ALL TWISTS
+================================================================
+TWIST LOAD RESULT: 149035
+TWIST TARGET X: 1.25
+TWIST TARGET Y: 29.25
+TWIST PLACE RESULT: 276438
+TWIST PLACED ID: 276438
+TWIST PLACED NAME: 175
+TWIST SYMBOL TYPE: 21
+TWIST AUTOMATIC DISPLAY LENGTH: 0.35000000000000214
+TWIST LEFT AT E3 DATABASE AUTO LENGTH
+TWIST LOAD RESULT: 149035
+TWIST TARGET X: 1.25
+TWIST TARGET Y: 28.25
+TWIST PLACE RESULT: 276232
+TWIST PLACED ID: 276232
+TWIST PLACED NAME: 176
+TWIST SYMBOL TYPE: 21
+TWIST AUTOMATIC DISPLAY LENGTH: 0.35000000000000214
+TWIST LEFT AT E3 DATABASE AUTO LENGTH
+TWIST LOAD RESULT: 149035
+TWIST TARGET X: 1.25
+TWIST TARGET Y: 27.25
+TWIST PLACE RESULT: 276024
+TWIST PLACED ID: 276024
+TWIST PLACED NAME: 177
+TWIST SYMBOL TYPE: 21
+TWIST AUTOMATIC DISPLAY LENGTH: 0.35000000000000214
+TWIST LEFT AT E3 DATABASE AUTO LENGTH
+TWIST LOAD RESULT: 149035
+TWIST TARGET X: 1.25
+TWIST TARGET Y: 26.25
+TWIST PLACE RESULT: 275816
+TWIST PLACED ID: 275816
+TWIST PLACED NAME: 178
+TWIST SYMBOL TYPE: 21
+TWIST AUTOMATIC DISPLAY LENGTH: 0.35000000000000214
+TWIST LEFT AT E3 DATABASE AUTO LENGTH
+TWIST LOAD RESULT: 149035
+TWIST TARGET X: 1.25
+TWIST TARGET Y: 25.25
+TWIST PLACE RESULT: 275608
+TWIST PLACED ID: 275608
+TWIST PLACED NAME: 179
+TWIST SYMBOL TYPE: 21
+TWIST AUTOMATIC DISPLAY LENGTH: 0.35000000000000214
+TWIST LEFT AT E3 DATABASE AUTO LENGTH
+TWIST LOAD RESULT: 149035
+TWIST TARGET X: 1.25
+TWIST TARGET Y: 24.25
+TWIST PLACE RESULT: 275400
+TWIST PLACED ID: 275400
+TWIST PLACED NAME: 180
+TWIST SYMBOL TYPE: 21
+TWIST AUTOMATIC DISPLAY LENGTH: 0.35000000000000214
+TWIST LEFT AT E3 DATABASE AUTO LENGTH
+TWIST LOAD RESULT: 149035
+TWIST TARGET X: 1.25
+TWIST TARGET Y: 23.25
+TWIST PLACE RESULT: 275192
+TWIST PLACED ID: 275192
+TWIST PLACED NAME: 181
+TWIST SYMBOL TYPE: 21
+TWIST AUTOMATIC DISPLAY LENGTH: 0.35000000000000214
+TWIST LEFT AT E3 DATABASE AUTO LENGTH
+TWIST LOAD RESULT: 149035
+TWIST TARGET X: 1.25
+TWIST TARGET Y: 22.25
+TWIST PLACE RESULT: 274984
+TWIST PLACED ID: 274984
+TWIST PLACED NAME: 182
+TWIST SYMBOL TYPE: 21
+TWIST AUTOMATIC DISPLAY LENGTH: 0.35000000000000214
+TWIST LEFT AT E3 DATABASE AUTO LENGTH
+TWIST LOAD RESULT: 149035
+TWIST TARGET X: 1.25
+TWIST TARGET Y: 21.25
+TWIST PLACE RESULT: 274776
+TWIST PLACED ID: 274776
+TWIST PLACED NAME: 183
+TWIST SYMBOL TYPE: 21
+TWIST AUTOMATIC DISPLAY LENGTH: 0.35000000000000214
+TWIST LEFT AT E3 DATABASE AUTO LENGTH
+TWIST LOAD RESULT: 149035
+TWIST TARGET X: 1.5
+TWIST TARGET Y: 28.75
+TWIST PLACE RESULT: 274568
+TWIST PLACED ID: 274568
+TWIST PLACED NAME: 184
+TWIST SYMBOL TYPE: 21
+TWIST AUTOMATIC DISPLAY LENGTH: 0.35000000000000214
+TWIST LEFT AT E3 DATABASE AUTO LENGTH
+TWIST LOAD RESULT: 149035
+TWIST TARGET X: 1.5
+TWIST TARGET Y: 27.75
+TWIST PLACE RESULT: 274360
+TWIST PLACED ID: 274360
+TWIST PLACED NAME: 185
+TWIST SYMBOL TYPE: 21
+TWIST AUTOMATIC DISPLAY LENGTH: 0.35000000000000214
+TWIST LEFT AT E3 DATABASE AUTO LENGTH
+TWIST LOAD RESULT: 149035
+TWIST TARGET X: 1.5
+TWIST TARGET Y: 26.75
+TWIST PLACE RESULT: 274152
+TWIST PLACED ID: 274152
+TWIST PLACED NAME: 186
+TWIST SYMBOL TYPE: 21
+TWIST AUTOMATIC DISPLAY LENGTH: 0.35000000000000214
+TWIST LEFT AT E3 DATABASE AUTO LENGTH
+TWIST LOAD RESULT: 149035
+TWIST TARGET X: 1.5
+TWIST TARGET Y: 25.75
+TWIST PLACE RESULT: 273944
+TWIST PLACED ID: 273944
+TWIST PLACED NAME: 187
+TWIST SYMBOL TYPE: 21
+TWIST AUTOMATIC DISPLAY LENGTH: 0.35000000000000214
+TWIST LEFT AT E3 DATABASE AUTO LENGTH
+TWIST LOAD RESULT: 149035
+TWIST TARGET X: 1.5
+TWIST TARGET Y: 24.75
+TWIST PLACE RESULT: 273720
+TWIST PLACED ID: 273720
+TWIST PLACED NAME: 188
+TWIST SYMBOL TYPE: 21
+TWIST AUTOMATIC DISPLAY LENGTH: 0.35000000000000214
+TWIST LEFT AT E3 DATABASE AUTO LENGTH
+TWIST LOAD RESULT: 149035
+TWIST TARGET X: 1.5
+TWIST TARGET Y: 23.75
+TWIST PLACE RESULT: 273496
+TWIST PLACED ID: 273496
+TWIST PLACED NAME: 189
+TWIST SYMBOL TYPE: 21
+TWIST AUTOMATIC DISPLAY LENGTH: 0.35000000000000214
+TWIST LEFT AT E3 DATABASE AUTO LENGTH
+TWIST LOAD RESULT: 149035
+TWIST TARGET X: 1.5
+TWIST TARGET Y: 22.75
+TWIST PLACE RESULT: 273272
+TWIST PLACED ID: 273272
+TWIST PLACED NAME: 190
+TWIST SYMBOL TYPE: 21
+TWIST AUTOMATIC DISPLAY LENGTH: 0.35000000000000214
+TWIST LEFT AT E3 DATABASE AUTO LENGTH
+TWIST LOAD RESULT: 149035
+TWIST TARGET X: 1.5
+TWIST TARGET Y: 21.75
+TWIST PLACE RESULT: 273042
+TWIST PLACED ID: 273042
+TWIST PLACED NAME: 191
+TWIST SYMBOL TYPE: 21
+TWIST AUTOMATIC DISPLAY LENGTH: 0.35000000000000214
+TWIST LEFT AT E3 DATABASE AUTO LENGTH
+TWIST LOAD RESULT: 149035
+TWIST TARGET X: 1.5
+TWIST TARGET Y: 20.75
+TWIST PLACE RESULT: 272816
+TWIST PLACED ID: 272816
+TWIST PLACED NAME: 192
+TWIST SYMBOL TYPE: 21
+TWIST AUTOMATIC DISPLAY LENGTH: 0.35000000000000214
+TWIST LEFT AT E3 DATABASE AUTO LENGTH
+TWIST LOAD RESULT: 149035
+TWIST TARGET X: 1.25
+TWIST TARGET Y: 17.75
+TWIST PLACE RESULT: 272592
+TWIST PLACED ID: 272592
+TWIST PLACED NAME: 193
+TWIST SYMBOL TYPE: 21
+TWIST AUTOMATIC DISPLAY LENGTH: 0.35000000000000214
+TWIST LEFT AT E3 DATABASE AUTO LENGTH
+TWIST LOAD RESULT: 149035
+TWIST TARGET X: 1.25
+TWIST TARGET Y: 16.75
+TWIST PLACE RESULT: 272368
+TWIST PLACED ID: 272368
+TWIST PLACED NAME: 194
+TWIST SYMBOL TYPE: 21
+TWIST AUTOMATIC DISPLAY LENGTH: 0.35000000000000214
+TWIST LEFT AT E3 DATABASE AUTO LENGTH
+TWIST LOAD RESULT: 149035
+TWIST TARGET X: 1.25
+TWIST TARGET Y: 15.75
+TWIST PLACE RESULT: 272138
+TWIST PLACED ID: 272138
+TWIST PLACED NAME: 195
+TWIST SYMBOL TYPE: 21
+TWIST AUTOMATIC DISPLAY LENGTH: 0.35000000000000037
+TWIST LEFT AT E3 DATABASE AUTO LENGTH
+TWIST LOAD RESULT: 149035
+TWIST TARGET X: 1.25
+TWIST TARGET Y: 13.25
+TWIST PLACE RESULT: 271912
+TWIST PLACED ID: 271912
+TWIST PLACED NAME: 196
+TWIST SYMBOL TYPE: 21
+TWIST AUTOMATIC DISPLAY LENGTH: 0.35000000000000037
+TWIST LEFT AT E3 DATABASE AUTO LENGTH
+TWIST LOAD RESULT: 149035
+TWIST TARGET X: 1.25
+TWIST TARGET Y: 12.25
+TWIST PLACE RESULT: 271688
+TWIST PLACED ID: 271688
+TWIST PLACED NAME: 197
+TWIST SYMBOL TYPE: 21
+TWIST AUTOMATIC DISPLAY LENGTH: 0.35000000000000037
+TWIST LEFT AT E3 DATABASE AUTO LENGTH
+TWIST LOAD RESULT: 149035
+TWIST TARGET X: 1.5
+TWIST TARGET Y: 17.25
+TWIST PLACE RESULT: 271456
+TWIST PLACED ID: 271456
+TWIST PLACED NAME: 198
+TWIST SYMBOL TYPE: 21
+TWIST AUTOMATIC DISPLAY LENGTH: 0.35000000000000214
+TWIST LEFT AT E3 DATABASE AUTO LENGTH
+TWIST LOAD RESULT: 149035
+TWIST TARGET X: 1.5
+TWIST TARGET Y: 16.25
+TWIST PLACE RESULT: 271232
+TWIST PLACED ID: 271232
+TWIST PLACED NAME: 199
+TWIST SYMBOL TYPE: 21
+TWIST AUTOMATIC DISPLAY LENGTH: 0.35000000000000214
+TWIST LEFT AT E3 DATABASE AUTO LENGTH
+TWIST LOAD RESULT: 149035
+TWIST TARGET X: 1.5
+TWIST TARGET Y: 12.75
+TWIST PLACE RESULT: 271008
+TWIST PLACED ID: 271008
+TWIST PLACED NAME: 200
+TWIST SYMBOL TYPE: 21
+TWIST AUTOMATIC DISPLAY LENGTH: 0.35000000000000037
+TWIST LEFT AT E3 DATABASE AUTO LENGTH
+TWIST LOAD RESULT: 149035
+TWIST TARGET X: 1.25
+TWIST TARGET Y: 11.0
+TWIST PLACE RESULT: 270784
+TWIST PLACED ID: 270784
+TWIST PLACED NAME: 201
+TWIST SYMBOL TYPE: 21
+TWIST AUTOMATIC DISPLAY LENGTH: 0.35000000000000037
+TWIST LEFT AT E3 DATABASE AUTO LENGTH
+TWIST LOAD RESULT: 149035
+TWIST TARGET X: 1.25
+TWIST TARGET Y: 10.0
+TWIST PLACE RESULT: 270560
+TWIST PLACED ID: 270560
+TWIST PLACED NAME: 202
+TWIST SYMBOL TYPE: 21
+TWIST AUTOMATIC DISPLAY LENGTH: 0.35000000000000037
+TWIST LEFT AT E3 DATABASE AUTO LENGTH
+TWIST LOAD RESULT: 149035
+TWIST TARGET X: 1.5
+TWIST TARGET Y: 10.5
+TWIST PLACE RESULT: 270336
+TWIST PLACED ID: 270336
+TWIST PLACED NAME: 203
+TWIST SYMBOL TYPE: 21
+TWIST AUTOMATIC DISPLAY LENGTH: 0.35000000000000037
+TWIST LEFT AT E3 DATABASE AUTO LENGTH
+TWIST LOAD RESULT: 149035
+TWIST TARGET X: 3.75
+TWIST TARGET Y: 29.25
+TWIST PLACE RESULT: 270109
+TWIST PLACED ID: 270109
+TWIST PLACED NAME: 204
+TWIST SYMBOL TYPE: 21
+TWIST AUTOMATIC DISPLAY LENGTH: 0.35000000000000214
+TWIST LEFT AT E3 DATABASE AUTO LENGTH
+TWIST LOAD RESULT: 149035
+TWIST TARGET X: 3.75
+TWIST TARGET Y: 28.25
+TWIST PLACE RESULT: 269877
+TWIST PLACED ID: 269877
+TWIST PLACED NAME: 205
+TWIST SYMBOL TYPE: 21
+TWIST AUTOMATIC DISPLAY LENGTH: 0.35000000000000214
+TWIST LEFT AT E3 DATABASE AUTO LENGTH
+TWIST LOAD RESULT: 149035
+TWIST TARGET X: 3.75
+TWIST TARGET Y: 27.25
+TWIST PLACE RESULT: 269650
+TWIST PLACED ID: 269650
+TWIST PLACED NAME: 206
+TWIST SYMBOL TYPE: 21
+TWIST AUTOMATIC DISPLAY LENGTH: 0.35000000000000214
+TWIST LEFT AT E3 DATABASE AUTO LENGTH
+TWIST LOAD RESULT: 149035
+TWIST TARGET X: 3.75
+TWIST TARGET Y: 26.25
+TWIST PLACE RESULT: 269423
+TWIST PLACED ID: 269423
+TWIST PLACED NAME: 207
+TWIST SYMBOL TYPE: 21
+TWIST AUTOMATIC DISPLAY LENGTH: 0.35000000000000214
+TWIST LEFT AT E3 DATABASE AUTO LENGTH
+TWIST LOAD RESULT: 149035
+TWIST TARGET X: 3.75
+TWIST TARGET Y: 25.25
+TWIST PLACE RESULT: 269190
+TWIST PLACED ID: 269190
+TWIST PLACED NAME: 208
+TWIST SYMBOL TYPE: 21
+TWIST AUTOMATIC DISPLAY LENGTH: 0.35000000000000214
+TWIST LEFT AT E3 DATABASE AUTO LENGTH
+TWIST LOAD RESULT: 149035
+TWIST TARGET X: 3.75
+TWIST TARGET Y: 24.25
+TWIST PLACE RESULT: 268961
+TWIST PLACED ID: 268961
+TWIST PLACED NAME: 209
+TWIST SYMBOL TYPE: 21
+TWIST AUTOMATIC DISPLAY LENGTH: 0.35000000000000214
+TWIST LEFT AT E3 DATABASE AUTO LENGTH
+TWIST LOAD RESULT: 149035
+TWIST TARGET X: 3.75
+TWIST TARGET Y: 23.25
+TWIST PLACE RESULT: 268726
+TWIST PLACED ID: 268726
+TWIST PLACED NAME: 210
+TWIST SYMBOL TYPE: 21
+TWIST AUTOMATIC DISPLAY LENGTH: 0.35000000000000214
+TWIST LEFT AT E3 DATABASE AUTO LENGTH
+TWIST LOAD RESULT: 149035
+TWIST TARGET X: 3.75
+TWIST TARGET Y: 22.25
+TWIST PLACE RESULT: 268499
+TWIST PLACED ID: 268499
+TWIST PLACED NAME: 211
+TWIST SYMBOL TYPE: 21
+TWIST AUTOMATIC DISPLAY LENGTH: 0.35000000000000214
+TWIST LEFT AT E3 DATABASE AUTO LENGTH
+TWIST LOAD RESULT: 149035
+TWIST TARGET X: 3.75
+TWIST TARGET Y: 21.25
+TWIST PLACE RESULT: 268272
+TWIST PLACED ID: 268272
+TWIST PLACED NAME: 212
+TWIST SYMBOL TYPE: 21
+TWIST AUTOMATIC DISPLAY LENGTH: 0.35000000000000214
+TWIST LEFT AT E3 DATABASE AUTO LENGTH
+TWIST LOAD RESULT: 149035
+TWIST TARGET X: 3.75
+TWIST TARGET Y: 17.75
+TWIST PLACE RESULT: 268045
+TWIST PLACED ID: 268045
+TWIST PLACED NAME: 213
+TWIST SYMBOL TYPE: 21
+TWIST AUTOMATIC DISPLAY LENGTH: 0.35000000000000214
+TWIST LEFT AT E3 DATABASE AUTO LENGTH
+TWIST LOAD RESULT: 149035
+TWIST TARGET X: 3.75
+TWIST TARGET Y: 16.75
+TWIST PLACE RESULT: 267818
+TWIST PLACED ID: 267818
+TWIST PLACED NAME: 214
+TWIST SYMBOL TYPE: 21
+TWIST AUTOMATIC DISPLAY LENGTH: 0.35000000000000214
+TWIST LEFT AT E3 DATABASE AUTO LENGTH
+TWIST LOAD RESULT: 149035
+TWIST TARGET X: 3.75
+TWIST TARGET Y: 15.75
+TWIST PLACE RESULT: 267591
+TWIST PLACED ID: 267591
+TWIST PLACED NAME: 215
+TWIST SYMBOL TYPE: 21
+TWIST AUTOMATIC DISPLAY LENGTH: 0.35000000000000037
+TWIST LEFT AT E3 DATABASE AUTO LENGTH
+TWIST LOAD RESULT: 149035
+TWIST TARGET X: 3.75
+TWIST TARGET Y: 13.25
+TWIST PLACE RESULT: 267346
+TWIST PLACED ID: 267346
+TWIST PLACED NAME: 216
+TWIST SYMBOL TYPE: 21
+TWIST AUTOMATIC DISPLAY LENGTH: 0.35000000000000037
+TWIST LEFT AT E3 DATABASE AUTO LENGTH
+TWIST LOAD RESULT: 149035
+TWIST TARGET X: 3.75
+TWIST TARGET Y: 12.25
+TWIST PLACE RESULT: 267111
+TWIST PLACED ID: 267111
+TWIST PLACED NAME: 217
+TWIST SYMBOL TYPE: 21
+TWIST AUTOMATIC DISPLAY LENGTH: 0.35000000000000037
+TWIST LEFT AT E3 DATABASE AUTO LENGTH
+TWIST LOAD RESULT: 149035
+TWIST TARGET X: 3.75
+TWIST TARGET Y: 11.0
+TWIST PLACE RESULT: 266878
+TWIST PLACED ID: 266878
+TWIST PLACED NAME: 218
+TWIST SYMBOL TYPE: 21
+TWIST AUTOMATIC DISPLAY LENGTH: 0.35000000000000037
+TWIST LEFT AT E3 DATABASE AUTO LENGTH
+TWIST LOAD RESULT: 149035
+TWIST TARGET X: 3.75
+TWIST TARGET Y: 10.0
+TWIST PLACE RESULT: 266645
+TWIST PLACED ID: 266645
+TWIST PLACED NAME: 219
+TWIST SYMBOL TYPE: 21
+TWIST AUTOMATIC DISPLAY LENGTH: 0.35000000000000037
+TWIST LEFT AT E3 DATABASE AUTO LENGTH
+TWIST LOAD RESULT: 149035
+TWIST TARGET X: 3.5
+TWIST TARGET Y: 28.75
+TWIST PLACE RESULT: 266412
+TWIST PLACED ID: 266412
+TWIST PLACED NAME: 220
+TWIST SYMBOL TYPE: 21
+TWIST AUTOMATIC DISPLAY LENGTH: 0.35000000000000214
+TWIST LEFT AT E3 DATABASE AUTO LENGTH
+TWIST LOAD RESULT: 149035
+TWIST TARGET X: 3.5
+TWIST TARGET Y: 27.75
+TWIST PLACE RESULT: 266171
+TWIST PLACED ID: 266171
+TWIST PLACED NAME: 221
+TWIST SYMBOL TYPE: 21
+TWIST AUTOMATIC DISPLAY LENGTH: 0.35000000000000214
+TWIST LEFT AT E3 DATABASE AUTO LENGTH
+TWIST LOAD RESULT: 149035
+TWIST TARGET X: 3.5
+TWIST TARGET Y: 26.75
+TWIST PLACE RESULT: 265930
+TWIST PLACED ID: 265930
+TWIST PLACED NAME: 222
+TWIST SYMBOL TYPE: 21
+TWIST AUTOMATIC DISPLAY LENGTH: 0.35000000000000214
+TWIST LEFT AT E3 DATABASE AUTO LENGTH
+TWIST LOAD RESULT: 149035
+TWIST TARGET X: 3.5
+TWIST TARGET Y: 25.75
+TWIST PLACE RESULT: 265697
+TWIST PLACED ID: 265697
+TWIST PLACED NAME: 223
+TWIST SYMBOL TYPE: 21
+TWIST AUTOMATIC DISPLAY LENGTH: 0.35000000000000214
+TWIST LEFT AT E3 DATABASE AUTO LENGTH
+TWIST LOAD RESULT: 149035
+TWIST TARGET X: 3.5
+TWIST TARGET Y: 24.75
+TWIST PLACE RESULT: 265461
+TWIST PLACED ID: 265461
+TWIST PLACED NAME: 224
+TWIST SYMBOL TYPE: 21
+TWIST AUTOMATIC DISPLAY LENGTH: 0.35000000000000214
+TWIST LEFT AT E3 DATABASE AUTO LENGTH
+TWIST LOAD RESULT: 149035
+TWIST TARGET X: 3.5
+TWIST TARGET Y: 23.75
+TWIST PLACE RESULT: 265213
+TWIST PLACED ID: 265213
+TWIST PLACED NAME: 225
+TWIST SYMBOL TYPE: 21
+TWIST AUTOMATIC DISPLAY LENGTH: 0.35000000000000214
+TWIST LEFT AT E3 DATABASE AUTO LENGTH
+TWIST LOAD RESULT: 149035
+TWIST TARGET X: 3.5
+TWIST TARGET Y: 22.75
+TWIST PLACE RESULT: 264881
+TWIST PLACED ID: 264881
+TWIST PLACED NAME: 226
+TWIST SYMBOL TYPE: 21
+TWIST AUTOMATIC DISPLAY LENGTH: 0.35000000000000214
+TWIST LEFT AT E3 DATABASE AUTO LENGTH
+TWIST LOAD RESULT: 149035
+TWIST TARGET X: 3.5
+TWIST TARGET Y: 21.75
+TWIST PLACE RESULT: 264242
+TWIST PLACED ID: 264242
+TWIST PLACED NAME: 227
+TWIST SYMBOL TYPE: 21
+TWIST AUTOMATIC DISPLAY LENGTH: 0.35000000000000214
+TWIST LEFT AT E3 DATABASE AUTO LENGTH
+TWIST LOAD RESULT: 149035
+TWIST TARGET X: 3.5
+TWIST TARGET Y: 20.75
+TWIST PLACE RESULT: 263960
+TWIST PLACED ID: 263960
+TWIST PLACED NAME: 228
+TWIST SYMBOL TYPE: 21
+TWIST AUTOMATIC DISPLAY LENGTH: 0.35000000000000214
+TWIST LEFT AT E3 DATABASE AUTO LENGTH
+TWIST LOAD RESULT: 149035
+TWIST TARGET X: 3.5
+TWIST TARGET Y: 17.25
+TWIST PLACE RESULT: 263709
+TWIST PLACED ID: 263709
+TWIST PLACED NAME: 229
+TWIST SYMBOL TYPE: 21
+TWIST AUTOMATIC DISPLAY LENGTH: 0.35000000000000214
+TWIST LEFT AT E3 DATABASE AUTO LENGTH
+TWIST LOAD RESULT: 149035
+TWIST TARGET X: 3.5
+TWIST TARGET Y: 16.25
+TWIST PLACE RESULT: 263464
+TWIST PLACED ID: 263464
+TWIST PLACED NAME: 230
+TWIST SYMBOL TYPE: 21
+TWIST AUTOMATIC DISPLAY LENGTH: 0.35000000000000214
+TWIST LEFT AT E3 DATABASE AUTO LENGTH
+TWIST LOAD RESULT: 149035
+TWIST TARGET X: 3.5
+TWIST TARGET Y: 12.75
+TWIST PLACE RESULT: 263219
+TWIST PLACED ID: 263219
+TWIST PLACED NAME: 231
+TWIST SYMBOL TYPE: 21
+TWIST AUTOMATIC DISPLAY LENGTH: 0.35000000000000037
+TWIST LEFT AT E3 DATABASE AUTO LENGTH
+TWIST LOAD RESULT: 149035
+TWIST TARGET X: 3.5
+TWIST TARGET Y: 10.5
+TWIST PLACE RESULT: 262975
+TWIST PLACED ID: 262975
+TWIST PLACED NAME: 232
+TWIST SYMBOL TYPE: 21
+TWIST AUTOMATIC DISPLAY LENGTH: 0.35000000000000037
+TWIST LEFT AT E3 DATABASE AUTO LENGTH
+TEMP TWIST COUNT: 58
+
+################################################################
+EXACT SHIELD TEST: PHASE5 AFTER TWISTS OUTER 1 LEFT CONNECTORS=['P1', 'P3', 'P4']
+################################################################
+SYMBOL: Shield_Demo
+SHEET: 204828
+X: 1.75
+Y: 4.875
+REQUESTED LENGTH: 24.75
+1 LOAD RESULT: 147946
+2 PLACE RESULT: 262712
+3 SetDisplayLength RESULT: 0
+4 IMMEDIATE LENGTH: 1.25
+5 SetId RESULT: 262712
+6 VERIFIED LENGTH: 1.25
+6 SYMBOL TYPE: 17
+6 IS SHIELD: 1
+TEST STATUS: FAIL_RESIZE
+DIAGNOSTIC DELETE: 262712 RESULT: 0
+
+################################################################
+EXACT SHIELD TEST: PHASE5 AFTER TWISTS OUTER 2 RIGHT CONNECTORS=['P2']
+################################################################
+SYMBOL: Shield_Demo
+SHEET: 204828
+X: 3.25
+Y: 4.875
+REQUESTED LENGTH: 24.75
+1 LOAD RESULT: 147946
+2 PLACE RESULT: 262313
+3 SetDisplayLength RESULT: 0
+4 IMMEDIATE LENGTH: 1.25
+5 SetId RESULT: 262313
+6 VERIFIED LENGTH: 1.25
+6 SYMBOL TYPE: 17
+6 IS SHIELD: 1
+TEST STATUS: FAIL_RESIZE
+DIAGNOSTIC DELETE: 262313 RESULT: 0
+DIAGNOSTIC DELETE: 262975 RESULT: 0
+DIAGNOSTIC DELETE: 263219 RESULT: 0
+DIAGNOSTIC DELETE: 263464 RESULT: 0
+DIAGNOSTIC DELETE: 263709 RESULT: 0
+DIAGNOSTIC DELETE: 263960 RESULT: 0
+DIAGNOSTIC DELETE: 264242 RESULT: 0
+DIAGNOSTIC DELETE: 264881 RESULT: 0
+DIAGNOSTIC DELETE: 265213 RESULT: 0
+DIAGNOSTIC DELETE: 265461 RESULT: 0
+DIAGNOSTIC DELETE: 265697 RESULT: 0
+DIAGNOSTIC DELETE: 265930 RESULT: 0
+DIAGNOSTIC DELETE: 266171 RESULT: 0
+DIAGNOSTIC DELETE: 266412 RESULT: 0
+DIAGNOSTIC DELETE: 266645 RESULT: 0
+DIAGNOSTIC DELETE: 266878 RESULT: 0
+DIAGNOSTIC DELETE: 267111 RESULT: 0
+DIAGNOSTIC DELETE: 267346 RESULT: 0
+DIAGNOSTIC DELETE: 267591 RESULT: 0
+DIAGNOSTIC DELETE: 267818 RESULT: 0
+DIAGNOSTIC DELETE: 268045 RESULT: 0
+DIAGNOSTIC DELETE: 268272 RESULT: 0
+DIAGNOSTIC DELETE: 268499 RESULT: 0
+DIAGNOSTIC DELETE: 268726 RESULT: 0
+DIAGNOSTIC DELETE: 268961 RESULT: 0
+DIAGNOSTIC DELETE: 269190 RESULT: 0
+DIAGNOSTIC DELETE: 269423 RESULT: 0
+DIAGNOSTIC DELETE: 269650 RESULT: 0
+DIAGNOSTIC DELETE: 269877 RESULT: 0
+DIAGNOSTIC DELETE: 270109 RESULT: 0
+DIAGNOSTIC DELETE: 270336 RESULT: 0
+DIAGNOSTIC DELETE: 270560 RESULT: 0
+DIAGNOSTIC DELETE: 270784 RESULT: 0
+DIAGNOSTIC DELETE: 271008 RESULT: 0
+DIAGNOSTIC DELETE: 271232 RESULT: 0
+DIAGNOSTIC DELETE: 271456 RESULT: 0
+DIAGNOSTIC DELETE: 271688 RESULT: 0
+DIAGNOSTIC DELETE: 271912 RESULT: 0
+DIAGNOSTIC DELETE: 272138 RESULT: 0
+DIAGNOSTIC DELETE: 272368 RESULT: 0
+DIAGNOSTIC DELETE: 272592 RESULT: 0
+DIAGNOSTIC DELETE: 272816 RESULT: 0
+DIAGNOSTIC DELETE: 273042 RESULT: 0
+DIAGNOSTIC DELETE: 273272 RESULT: 0
+DIAGNOSTIC DELETE: 273496 RESULT: 0
+DIAGNOSTIC DELETE: 273720 RESULT: 0
+DIAGNOSTIC DELETE: 273944 RESULT: 0
+DIAGNOSTIC DELETE: 274152 RESULT: 0
+DIAGNOSTIC DELETE: 274360 RESULT: 0
+DIAGNOSTIC DELETE: 274568 RESULT: 0
+DIAGNOSTIC DELETE: 274776 RESULT: 0
+DIAGNOSTIC DELETE: 274984 RESULT: 0
+DIAGNOSTIC DELETE: 275192 RESULT: 0
+DIAGNOSTIC DELETE: 275400 RESULT: 0
+DIAGNOSTIC DELETE: 275608 RESULT: 0
+DIAGNOSTIC DELETE: 275816 RESULT: 0
+DIAGNOSTIC DELETE: 276024 RESULT: 0
+DIAGNOSTIC DELETE: 276232 RESULT: 0
+DIAGNOSTIC DELETE: 276438 RESULT: 0
+
+
+================================================================
+PHASE 6 - KEEP OUTERS, THEN TEST INNER SHIELDS
+================================================================
+
+################################################################
+EXACT SHIELD TEST: PHASE6 OUTER OUTER 1 LEFT CONNECTORS=['P1', 'P3', 'P4']
+################################################################
+SYMBOL: Shield_Demo
+SHEET: 204828
+X: 1.75
+Y: 4.875
+REQUESTED LENGTH: 24.75
+1 LOAD RESULT: 147946
+2 PLACE RESULT: 259057
+3 SetDisplayLength RESULT: 0
+4 IMMEDIATE LENGTH: 1.25
+5 SetId RESULT: 259057
+6 VERIFIED LENGTH: 1.25
+6 SYMBOL TYPE: 17
+6 IS SHIELD: 1
+TEST STATUS: FAIL_RESIZE
+DIAGNOSTIC DELETE: 259057 RESULT: 0
+
+################################################################
+EXACT SHIELD TEST: PHASE6 OUTER OUTER 2 RIGHT CONNECTORS=['P2']
+################################################################
+SYMBOL: Shield_Demo
+SHEET: 204828
+X: 3.25
+Y: 4.875
+REQUESTED LENGTH: 24.75
+1 LOAD RESULT: 147946
+2 PLACE RESULT: 258768
+3 SetDisplayLength RESULT: 0
+4 IMMEDIATE LENGTH: 1.25
+5 SetId RESULT: 258768
+6 VERIFIED LENGTH: 1.25
+6 SYMBOL TYPE: 17
+6 IS SHIELD: 1
+TEST STATUS: FAIL_RESIZE
+DIAGNOSTIC DELETE: 258768 RESULT: 0
+
+################################################################
+EXACT SHIELD TEST: PHASE6 INNER WITH OUTERS PRESENT PKG=1 JOB=19 shield_inner LEFT P1 ROWS=[5, 6]
+################################################################
+SYMBOL: Shield_Demo
+SHEET: 204828
+X: 1.25
+Y: 29.125
+REQUESTED LENGTH: 0.5
+1 LOAD RESULT: 147946
+2 PLACE RESULT: 258432
+3 SetDisplayLength RESULT: 0
+4 IMMEDIATE LENGTH: 1.25
+5 SetId RESULT: 258432
+6 VERIFIED LENGTH: 1.25
+6 SYMBOL TYPE: 17
+6 IS SHIELD: 1
+TEST STATUS: FAIL_RESIZE
+DIAGNOSTIC DELETE: 258432 RESULT: 0
+
+################################################################
+EXACT SHIELD TEST: PHASE6 INNER WITH OUTERS PRESENT PKG=1 JOB=20 shield_inner LEFT P1 ROWS=[9, 10]
+################################################################
+SYMBOL: Shield_Demo
+SHEET: 204828
+X: 1.25
+Y: 28.125
+REQUESTED LENGTH: 0.5
+1 LOAD RESULT: 147946
+2 PLACE RESULT: 258199
+3 SetDisplayLength RESULT: 0
+4 IMMEDIATE LENGTH: 1.25
+5 SetId RESULT: 258199
+6 VERIFIED LENGTH: 1.25
+6 SYMBOL TYPE: 17
+6 IS SHIELD: 1
+TEST STATUS: FAIL_RESIZE
+DIAGNOSTIC DELETE: 258199 RESULT: 0
+
+################################################################
+EXACT SHIELD TEST: PHASE6 INNER WITH OUTERS PRESENT PKG=1 JOB=21 shield_inner LEFT P1 ROWS=[13, 14]
+################################################################
+SYMBOL: Shield_Demo
+SHEET: 204828
+X: 1.25
+Y: 27.125
+REQUESTED LENGTH: 0.5
+1 LOAD RESULT: 147946
+2 PLACE RESULT: 257964
+3 SetDisplayLength RESULT: 0
+4 IMMEDIATE LENGTH: 1.25
+5 SetId RESULT: 257964
+6 VERIFIED LENGTH: 1.25
+6 SYMBOL TYPE: 17
+6 IS SHIELD: 1
+TEST STATUS: FAIL_RESIZE
+DIAGNOSTIC DELETE: 257964 RESULT: 0
+
+################################################################
+EXACT SHIELD TEST: PHASE6 INNER WITH OUTERS PRESENT PKG=1 JOB=22 shield_inner LEFT P1 ROWS=[7, 8]
+################################################################
+SYMBOL: Shield_Demo
+SHEET: 204828
+X: 1.5
+Y: 28.625
+REQUESTED LENGTH: 0.5
+1 LOAD RESULT: 147946
+2 PLACE RESULT: 257729
+3 SetDisplayLength RESULT: 0
+4 IMMEDIATE LENGTH: 1.25
+5 SetId RESULT: 257729
+6 VERIFIED LENGTH: 1.25
+6 SYMBOL TYPE: 17
+6 IS SHIELD: 1
+TEST STATUS: FAIL_RESIZE
+DIAGNOSTIC DELETE: 257729 RESULT: 0
+
+################################################################
+EXACT SHIELD TEST: PHASE6 INNER WITH OUTERS PRESENT PKG=1 JOB=23 shield_inner LEFT P1 ROWS=[11, 12]
+################################################################
+SYMBOL: Shield_Demo
+SHEET: 204828
+X: 1.5
+Y: 27.625
+REQUESTED LENGTH: 0.5
+1 LOAD RESULT: 147946
+2 PLACE RESULT: 257494
+3 SetDisplayLength RESULT: 0
+4 IMMEDIATE LENGTH: 1.25
+5 SetId RESULT: 257494
+6 VERIFIED LENGTH: 1.25
+6 SYMBOL TYPE: 17
+6 IS SHIELD: 1
+TEST STATUS: FAIL_RESIZE
+DIAGNOSTIC DELETE: 257494 RESULT: 0
+
+################################################################
+EXACT SHIELD TEST: PHASE6 INNER WITH OUTERS PRESENT PKG=1 JOB=24 shield_inner LEFT P1 ROWS=[15, 16]
+################################################################
+SYMBOL: Shield_Demo
+SHEET: 204828
+X: 1.5
+Y: 26.625
+REQUESTED LENGTH: 0.5
+1 LOAD RESULT: 147946
+2 PLACE RESULT: 257257
+3 SetDisplayLength RESULT: 0
+4 IMMEDIATE LENGTH: 1.25
+5 SetId RESULT: 257257
+6 VERIFIED LENGTH: 1.25
+6 SYMBOL TYPE: 17
+6 IS SHIELD: 1
+TEST STATUS: FAIL_RESIZE
+DIAGNOSTIC DELETE: 257257 RESULT: 0
+
+
+================================================================
+FINAL DIAGNOSTIC SUMMARY
+================================================================
+PHASE1_FINAL | FAIL_RESIZE | OUTER 1 LEFT CONNECTORS=['P1', 'P3', 'P4']
+PHASE1_FINAL | FAIL_RESIZE | OUTER 2 RIGHT CONNECTORS=['P2']
+PHASE2_STAGE | FAIL_RESIZE | OUTER 1 LEFT CONNECTORS=['P1', 'P3', 'P4']
+PHASE2_STAGE | FAIL_RESIZE | OUTER 2 RIGHT CONNECTORS=['P2']
+PHASE3_INNER | FAIL_RESIZE | PKG=1 JOB=19 shield_inner LEFT P1 ROWS=[5, 6]
+PHASE3_INNER | FAIL_RESIZE | PKG=1 JOB=20 shield_inner LEFT P1 ROWS=[9, 10]
+PHASE3_INNER | FAIL_RESIZE | PKG=1 JOB=21 shield_inner LEFT P1 ROWS=[13, 14]
+PHASE3_INNER | FAIL_RESIZE | PKG=1 JOB=22 shield_inner LEFT P1 ROWS=[7, 8]
+PHASE3_INNER | FAIL_RESIZE | PKG=1 JOB=23 shield_inner LEFT P1 ROWS=[11, 12]
+PHASE3_INNER | FAIL_RESIZE | PKG=1 JOB=24 shield_inner LEFT P1 ROWS=[15, 16]
+PHASE4_KEEP_OUTERS | FAIL_RESIZE | OUTER 1 LEFT CONNECTORS=['P1', 'P3', 'P4']
+PHASE4_KEEP_OUTERS | FAIL_RESIZE | OUTER 2 RIGHT CONNECTORS=['P2']
+PHASE5_AFTER_TWISTS | FAIL_RESIZE | OUTER 1 LEFT CONNECTORS=['P1', 'P3', 'P4']
+PHASE5_AFTER_TWISTS | FAIL_RESIZE | OUTER 2 RIGHT CONNECTORS=['P2']
+PHASE6_OUTER | FAIL_RESIZE | OUTER 1 LEFT CONNECTORS=['P1', 'P3', 'P4']
+PHASE6_OUTER | FAIL_RESIZE | OUTER 2 RIGHT CONNECTORS=['P2']
+PHASE6_INNER_WITH_OUTER | FAIL_RESIZE | PKG=1 JOB=19 shield_inner LEFT P1 ROWS=[5, 6]
+PHASE6_INNER_WITH_OUTER | FAIL_RESIZE | PKG=1 JOB=20 shield_inner LEFT P1 ROWS=[9, 10]
+PHASE6_INNER_WITH_OUTER | FAIL_RESIZE | PKG=1 JOB=21 shield_inner LEFT P1 ROWS=[13, 14]
+PHASE6_INNER_WITH_OUTER | FAIL_RESIZE | PKG=1 JOB=22 shield_inner LEFT P1 ROWS=[7, 8]
+PHASE6_INNER_WITH_OUTER | FAIL_RESIZE | PKG=1 JOB=23 shield_inner LEFT P1 ROWS=[11, 12]
+PHASE6_INNER_WITH_OUTER | FAIL_RESIZE | PKG=1 JOB=24 shield_inner LEFT P1 ROWS=[15, 16]
+================================================================
+COPY THIS ENTIRE FINAL DIAGNOSTIC SUMMARY BACK TO CHAT.
+ALSO COPY THE CURRENT SPREADSHEET JOB / PLACEMENT SUMMARY.
+================================================================
