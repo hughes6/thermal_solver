@@ -1,17 +1,4 @@
 # ======================================================================
-# V12 - ROOT-CAUSE FIX
-#
-# The successful exact-sequence matrix test used Shield_DemoA.
-# The failing main script was still loading Shield_Demo.
-#
-# This version:
-#   - uses Shield_DemoA
-#   - keeps the proven Load -> Place -> immediate SetDisplayLength sequence
-#   - creates exactly ONE outer shield per side
-#   - does NOT use PlaceDynamic
-# ======================================================================
-
-# ======================================================================
 # V11 - ONE LOGICAL OUTER SHIELD ACROSS CONNECTOR BLOCKS
 #
 # BASE: exact user-provided script that can resize Shield_Demo.
@@ -70,7 +57,7 @@ CONNECTOR_ROOT_NAME = "W1"
 # ZUKEN LIBRARY SYMBOLS
 #====================================================================================================================================
 TWIST_SYMBOL_NAME = "MIL_Twist_ArrowsDown"
-SHIELD_SYMBOL_NAME = "Shield_DemoA"
+SHIELD_SYMBOL_NAME = "Shield_Demo"
 
 SYMBOL_VERSION = 1
 
@@ -527,13 +514,24 @@ def build_section_jobs(rows):
 #====================================================================================================================================
 def build_outer_shield_jobs(rows):
     """
-    Build exactly ONE OUTER shield job per cable side.
+    Build OUTER shield jobs across an entire cable side.
 
-    The outer shield is the cable overshield, so connector changes and
-    spreadsheet gaps do NOT create separate outer shields.
+    CRITICAL FIX:
+    - Connector changes do NOT split an outer shield.
+    - Blank Excel row gaps between connector blocks do NOT split it.
+    - Only an actual DATA ROW with outer_shield == False ends a shield run.
 
-    If at least one data row on this side is marked for outer shield,
-    every marked row contributes to ONE side-wide outer shield.
+    Example:
+        LEFT P1 rows marked
+        [blank/spacer rows]
+        LEFT P3 rows marked
+        [blank/spacer rows]
+        LEFT P4 rows marked
+
+    becomes ONE outer shield job covering P1 + P3 + P4.
+
+    This is the intended behavior for one overshield spanning all connectors
+    on that side.
     """
     jobs = []
 
@@ -541,45 +539,70 @@ def build_outer_shield_jobs(rows):
         return jobs
 
     side = rows[0]["side"]
-    marked_rows = [row for row in rows if row["outer_shield"]]
+    current_marked_rows = []
 
-    if not marked_rows:
-        print("")
-        print("OUTER SHIELD BUILD:", side, "-> 0 jobs")
-        return jobs
+    def flush_current():
+        nonlocal current_marked_rows
 
-    connectors = []
+        if not current_marked_rows:
+            return
 
-    for row in marked_rows:
-        connector = row["connector"]
+        connectors = []
 
-        if connector and connector not in connectors:
-            connectors.append(connector)
+        for row in current_marked_rows:
+            connector = row["connector"]
 
-    job = {
-        "type": "shield_outer",
-        "side": side,
-        "connector": "/".join(connectors),
-        "connectors": connectors,
-        "rows": marked_rows,
-        "pins": [row["pin"] for row in marked_rows],
-        "excel_rows": [row["excel_row"] for row in marked_rows],
-        "twist_column": None,
-        "symbol_name": SHIELD_SYMBOL_NAME
-    }
+            if connector and connector not in connectors:
+                connectors.append(connector)
 
-    jobs.append(job)
+        jobs.append({
+            "type": "shield_outer",
+            "side": side,
+            "connector": "/".join(connectors),
+            "connectors": connectors,
+            "rows": list(current_marked_rows),
+            "pins": [row["pin"] for row in current_marked_rows],
+            "excel_rows": [row["excel_row"] for row in current_marked_rows],
+            "twist_column": None,
+            "symbol_name": SHIELD_SYMBOL_NAME
+        })
+
+        current_marked_rows = []
+
+    for row in rows:
+        if row["outer_shield"]:
+            # IMPORTANT:
+            # Do NOT care whether this row is the next Excel row.
+            # Do NOT care whether connector changed.
+            # If the previous data row was marked and this one is marked,
+            # they belong to the same logical overshield.
+            current_marked_rows.append(row)
+        else:
+            # An actual pin/data row with no outer-shield mark is an
+            # intentional break in the overshield.
+            flush_current()
+
+    flush_current()
 
     print("")
     print("============================================================")
-    print("OUTER SHIELD BUILD:", side)
+    print("OUTER SHIELD JOB BUILD:", side)
     print("============================================================")
-    print("OUTER SHIELD JOB COUNT: 1")
-    print("CONNECTORS:", connectors)
-    print("FIRST MARKED EXCEL ROW:", job["excel_rows"][0])
-    print("LAST MARKED EXCEL ROW:", job["excel_rows"][-1])
-    print("MARKED PIN COUNT:", len(job["pins"]))
-    print("LIBRARY SYMBOL:", job["symbol_name"])
+    print("OUTER SHIELD JOB COUNT:", len(jobs))
+
+    for index, job in enumerate(jobs, start=1):
+        print(
+            "OUTER JOB",
+            index,
+            "CONNECTORS:",
+            job["connectors"],
+            "FIRST EXCEL ROW:",
+            job["excel_rows"][0],
+            "LAST EXCEL ROW:",
+            job["excel_rows"][-1],
+            "PIN COUNT:",
+            len(job["pins"])
+        )
 
     return jobs
 
@@ -1706,6 +1729,304 @@ def place_job(prj, sym, job, placement):
 #====================================================================================================================================
 # MAIN
 #====================================================================================================================================
+
+#====================================================================================================================================
+# DIAGNOSTIC HELPERS
+#====================================================================================================================================
+def diagnostic_delete_symbol(prj, symbol_id):
+    if not symbol_id:
+        return
+
+    sym = prj.CreateSymbolObject()
+
+    try:
+        sym.SetId(symbol_id)
+    except Exception:
+        pass
+
+    try:
+        result = sym.Delete()
+        print("DIAGNOSTIC DELETE:", symbol_id, "RESULT:", result)
+    except Exception as error:
+        print("DIAGNOSTIC DELETE ERROR:", symbol_id, repr(error))
+
+
+def diagnostic_exact_shield_test(prj, placement, label, keep_on_success=False):
+    """
+    EXACT resize order from the v11 shield routine:
+
+        fresh CreateSymbolObject
+        Load(Shield_Demo)
+        Place(...)
+        IMMEDIATELY SetDisplayLength(...)
+        sleep
+        GetDisplayLength()
+        SetId()
+        GetDisplayLength()
+
+    There is intentionally NO SetId/GetDisplayLength between Place and
+    SetDisplayLength.
+    """
+    requested_length = float(placement["length"])
+    x = float(placement["x"])
+    y = float(placement["y"])
+    sheet_id = int(placement["sheet_id"])
+
+    print("")
+    print("################################################################")
+    print("EXACT SHIELD TEST:", label)
+    print("################################################################")
+    print("SYMBOL:", SHIELD_SYMBOL_NAME)
+    print("SHEET:", sheet_id)
+    print("X:", x)
+    print("Y:", y)
+    print("REQUESTED LENGTH:", requested_length)
+
+    sym = prj.CreateSymbolObject()
+
+    load_result = sym.Load(SHIELD_SYMBOL_NAME, SYMBOL_VERSION)
+    print("1 LOAD RESULT:", load_result)
+
+    if load_result == 0:
+        print("TEST STATUS: LOAD_FAIL")
+        return {"status": "LOAD_FAIL", "id": None}
+
+    placed_id = sym.Place(sheet_id, x, y, 0, 1.0, 0)
+    print("2 PLACE RESULT:", placed_id)
+
+    if placed_id == 0:
+        print("TEST STATUS: PLACE_FAIL")
+        return {"status": "PLACE_FAIL", "id": None}
+
+    # EXACT critical ordering.
+    try:
+        set_length_result = sym.SetDisplayLength(requested_length)
+    except Exception as error:
+        set_length_result = None
+        print("3 SetDisplayLength EXCEPTION:", repr(error))
+
+    print("3 SetDisplayLength RESULT:", set_length_result)
+
+    time.sleep(STRETCH_DELAY_SECONDS)
+
+    try:
+        immediate_length = float(sym.GetDisplayLength())
+    except Exception:
+        immediate_length = None
+
+    print("4 IMMEDIATE LENGTH:", immediate_length)
+
+    try:
+        set_id_result = sym.SetId(placed_id)
+    except Exception as error:
+        set_id_result = None
+        print("5 SetId EXCEPTION:", repr(error))
+
+    print("5 SetId RESULT:", set_id_result)
+
+    try:
+        verified_length = float(sym.GetDisplayLength())
+    except Exception:
+        verified_length = None
+
+    try:
+        symbol_type = sym.GetSymbolType()
+    except Exception:
+        symbol_type = "UNKNOWN"
+
+    try:
+        is_shield = sym.IsShield()
+    except Exception:
+        is_shield = "UNKNOWN"
+
+    print("6 VERIFIED LENGTH:", verified_length)
+    print("6 SYMBOL TYPE:", symbol_type)
+    print("6 IS SHIELD:", is_shield)
+
+    success = (
+        verified_length is not None
+        and abs(verified_length - requested_length) <= 0.001
+    )
+
+    status = "PASS" if success else "FAIL_RESIZE"
+    print("TEST STATUS:", status)
+
+    if success and keep_on_success:
+        print("KEEPING SUCCESSFUL TEST SHIELD:", placed_id)
+        return {"status": status, "id": placed_id}
+
+    diagnostic_delete_symbol(prj, placed_id)
+    return {"status": status, "id": None}
+
+
+def diagnostic_staging_placement(placement):
+    requested_length = float(placement["length"])
+
+    max_stage_y = (
+        SHIELD_STAGE_TOP_LIMIT
+        - requested_length
+        - SHIELD_STAGE_MARGIN
+    )
+
+    if max_stage_y < 0.5:
+        max_stage_y = 0.5
+
+    stage_y = min(SHIELD_STAGE_DEFAULT_Y, max_stage_y)
+
+    return {
+        "sheet_id": placement["sheet_id"],
+        "anchor_x": 24.0,
+        "x": 24.0,
+        "bottom_y": stage_y,
+        "top_y": stage_y + requested_length,
+        "y": stage_y,
+        "length": requested_length
+    }
+
+
+def diagnostic_collect_cases(
+    packages,
+    outer_jobs,
+    all_devices,
+    dev,
+    pin,
+    pin_map_cache,
+    twist_offset_settings
+):
+    outer_cases = []
+    inner_cases = []
+    twist_cases = []
+
+    for index, job in enumerate(outer_jobs, start=1):
+        placement = calculate_outer_shield_placement(
+            job,
+            all_devices,
+            dev,
+            pin,
+            pin_map_cache,
+            twist_offset_settings
+        )
+
+        outer_cases.append({
+            "label": (
+                f"OUTER {index} {job['side']} "
+                f"CONNECTORS={job['connectors']}"
+            ),
+            "job": job,
+            "placement": placement
+        })
+
+    for package_index, package in enumerate(packages, start=1):
+        section_rows = package["rows"]
+        jobs = package["jobs"]
+
+        side = section_rows[0]["side"]
+        connector = section_rows[0]["connector"]
+        required_pins = list(dict.fromkeys(row["pin"] for row in section_rows))
+
+        device_record, pin_map, sheet_id = resolve_connector_schematic_view(
+            connector,
+            required_pins,
+            all_devices,
+            dev,
+            pin,
+            pin_map_cache
+        )
+
+        for job_index, job in enumerate(jobs, start=1):
+            placement = calculate_placement(
+                job,
+                pin_map,
+                sheet_id,
+                twist_offset_settings
+            )
+
+            case = {
+                "label": (
+                    f"PKG={package_index} JOB={job_index} "
+                    f"{job['type']} {side} {connector} "
+                    f"ROWS={job['excel_rows']}"
+                ),
+                "job": job,
+                "placement": placement
+            }
+
+            if job["type"] == "twist":
+                twist_cases.append(case)
+            elif job["type"] == "shield_inner":
+                inner_cases.append(case)
+
+    return outer_cases, inner_cases, twist_cases
+
+
+def diagnostic_print_case_summary(outer_cases, inner_cases, twist_cases):
+    print("")
+    print("================================================================")
+    print("CURRENT SPREADSHEET JOB / PLACEMENT SUMMARY")
+    print("================================================================")
+    print("SHIELD SYMBOL:", SHIELD_SYMBOL_NAME)
+    print("OUTER SHIELD COUNT:", len(outer_cases))
+    print("INNER SHIELD COUNT:", len(inner_cases))
+    print("TWIST COUNT:", len(twist_cases))
+
+    print("")
+    print("OUTER SHIELDS")
+    for case in outer_cases:
+        job = case["job"]
+        p = case["placement"]
+        print(
+            case["label"],
+            "| X=", p["x"],
+            "| Y=", p["y"],
+            "| LENGTH=", p["length"],
+            "| ROWS=", job["excel_rows"][0], "TO", job["excel_rows"][-1],
+            "| CONNECTORS=", job.get("connectors")
+        )
+
+    print("")
+    print("INNER SHIELDS")
+    for case in inner_cases:
+        p = case["placement"]
+        print(
+            case["label"],
+            "| X=", p["x"],
+            "| Y=", p["y"],
+            "| LENGTH=", p["length"]
+        )
+
+    print("================================================================")
+
+
+def diagnostic_place_all_twists(prj, twist_cases):
+    ids = []
+    sym = prj.CreateSymbolObject()
+
+    print("")
+    print("================================================================")
+    print("TEMPORARILY PLACING ALL TWISTS")
+    print("================================================================")
+
+    for case in twist_cases:
+        try:
+            placed_id = place_twist(sym, case["job"], case["placement"])
+
+            if placed_id:
+                ids.append(placed_id)
+        except Exception as error:
+            print("TWIST TEST ERROR:", case["label"], repr(error))
+
+    print("TEMP TWIST COUNT:", len(ids))
+    return ids
+
+
+def diagnostic_cleanup_ids(prj, ids):
+    for symbol_id in reversed(ids):
+        diagnostic_delete_symbol(prj, symbol_id)
+
+
+#====================================================================================================================================
+# DIAGNOSTIC MAIN
+#====================================================================================================================================
 def main():
     excel_path = ask_excel_path()
 
@@ -1719,208 +2040,248 @@ def main():
     else:
         if TARGET_SHEET_NAME not in workbook.sheetnames:
             raise Exception(f"Worksheet {TARGET_SHEET_NAME} was not found")
-
         ws = workbook[TARGET_SHEET_NAME]
 
-    sheet_device_reference = clean_excel_value(ws[DEVICE_NAME_CELL].value)
     twist_offset_settings = read_twist_offset_settings(ws)
     last_row = get_last_data_row(ws)
-
-    if last_row < DATA_FIRST_ROW:
-        raise Exception("No cable overlay data found")
-
-    print("")
-    print("============================================================")
-    print("ZUKEN CABLE SHIELD / TWIST OVERLAY")
-    print("============================================================")
-    print("EXCEL:", excel_path)
-    print("WORKSHEET:", ws.title)
-    print("DEVICE REFERENCE FROM B1:", sheet_device_reference)
-    print("CONNECTOR ROOT:", CONNECTOR_ROOT_NAME)
-    print("SHIELD SYMBOL:", SHIELD_SYMBOL_NAME)
-    print("IMPORTANT: THIS SCRIPT MUST SHOW Shield_DemoA HERE")
-    print("TWIST SYMBOL:", TWIST_SYMBOL_NAME)
-    print("LEFT TWIST OFFSET J2:K2:", "YES" if twist_offset_settings["LEFT"] else "NO")
-    print("RIGHT TWIST OFFSET R2:S2:", "YES" if twist_offset_settings["RIGHT"] else "NO")
-    print("PLACEMENT DELAY:", PLACEMENT_DELAY_SECONDS)
-    print("TWIST STRETCHING: DISABLED")
-    print("SHIELD MODE: REAL Shield_Demo -> Place -> immediate SetDisplayLength")
-    print("DATA ROWS:", DATA_FIRST_ROW, "TO", last_row)
 
     left_rows = read_side_rows(ws, "LEFT", last_row)
     right_rows = read_side_rows(ws, "RIGHT", last_row)
 
-    left_sections = split_into_sections(left_rows)
-    right_sections = split_into_sections(right_rows)
-
-    sections = left_sections + right_sections
-
-    packages = []
-    warnings = []
-
-    # Twists and inner shields are connector-specific.
-    for section_rows in sections:
-        jobs, section_warnings = build_section_jobs(section_rows)
-
-        if jobs:
-            packages.append({"rows": section_rows, "jobs": jobs})
-
-        warnings.extend(section_warnings)
-
-    # Outer shields are side-wide and may cross connector changes.
-    outer_jobs = (
-        build_outer_shield_jobs(left_rows) +
-        build_outer_shield_jobs(right_rows)
+    sections = (
+        split_into_sections(left_rows)
+        + split_into_sections(right_rows)
     )
 
-    # HARD SAFETY CHECK: there must be at most one outer shield per side.
-    for side_name in ["LEFT", "RIGHT"]:
-        side_outer_jobs = [job for job in outer_jobs if job["side"] == side_name]
+    packages = []
 
-        if len(side_outer_jobs) > 1:
-            raise Exception(
-                f"BUG: {side_name} generated {len(side_outer_jobs)} outer shields. "
-                f"Expected at most 1."
-            )
+    for section_rows in sections:
+        jobs, warnings = build_section_jobs(section_rows)
 
-    print("")
-    print("============================================================")
-    print("OUTER SHIELD PRE-PLACEMENT CHECK")
-    print("============================================================")
-    for side_name in ["LEFT", "RIGHT"]:
-        side_jobs = [job for job in outer_jobs if job["side"] == side_name]
-        print(side_name, "OUTER SHIELD COUNT:", len(side_jobs))
-        for index, job in enumerate(side_jobs, start=1):
-            print(
-                side_name,
-                "OUTER",
-                index,
-                "CONNECTORS:",
-                job["connectors"],
-                "ROWS:",
-                job["excel_rows"][0],
-                "TO",
-                job["excel_rows"][-1],
-                "PINS:",
-                len(job["pins"])
-            )
-    print("============================================================")
+        if jobs:
+            packages.append({
+                "rows": section_rows,
+                "jobs": jobs
+            })
+
+    outer_jobs = (
+        build_outer_shield_jobs(left_rows)
+        + build_outer_shield_jobs(right_rows)
+    )
 
     print("")
-    print("CONNECTOR SECTIONS WITH TWIST / INNER-SHIELD SYMBOLS:", len(packages))
-    print("SIDE-WIDE OUTER SHIELD JOBS:", len(outer_jobs))
-
-    if warnings:
-        print("")
-        print("============================================================")
-        print("EXCEL WARNINGS")
-        print("============================================================")
-
-        for warning in warnings:
-            print("WARNING:", warning)
+    print("================================================================")
+    print("CURRENT-SPREADSHEET SHIELD DIAGNOSTIC")
+    print("================================================================")
+    print("EXCEL:", excel_path)
+    print("WORKSHEET:", ws.title)
+    print("SHIELD SYMBOL:", SHIELD_SYMBOL_NAME)
+    print("IMPORTANT: THIS DIAGNOSTIC USES THE EXACT V11 SHIELD SYMBOL")
+    print("NO Shield_DemoA SUBSTITUTION")
+    print("================================================================")
 
     app = win32.gencache.EnsureDispatch("CT.Application")
     prj = app.CreateJobObject()
     dev = prj.CreateDeviceObject()
     pin = prj.CreatePinObject()
-    sym = prj.CreateSymbolObject()
-
-    app.PutMessage("Starting Cable Shield / Twist Overlay Script")
 
     all_devices = get_all_devices(prj, dev)
-
-    print("")
-    print("E3 BASE DEVICE ID COUNT:", len(all_devices))
-
     pin_map_cache = {}
-    placed_ids = []
 
-    # Place side-wide outer shields FIRST. This matches the earlier working dynamic-placement ordering.
-    for job in outer_jobs:
-        try:
-            print("")
-            print("============================================================")
-            print("PROCESSING SIDE-WIDE OUTER SHIELD")
-            print("============================================================")
-            print("SIDE:", job["side"])
-            print("CONNECTORS:", job["connectors"])
-            print("EXCEL ROWS:", job["excel_rows"][0], "TO", job["excel_rows"][-1])
+    outer_cases, inner_cases, twist_cases = diagnostic_collect_cases(
+        packages,
+        outer_jobs,
+        all_devices,
+        dev,
+        pin,
+        pin_map_cache,
+        twist_offset_settings
+    )
 
-            placement = calculate_outer_shield_placement(
-                job,
-                all_devices,
-                dev,
-                pin,
-                pin_map_cache,
-                twist_offset_settings
-            )
+    diagnostic_print_case_summary(
+        outer_cases,
+        inner_cases,
+        twist_cases
+    )
 
-            placed_id = place_job(prj, sym, job, placement)
+    results = []
 
-            if placed_id is not None:
-                placed_ids.append(placed_id)
+    # ================================================================
+    # PHASE 1
+    # Each current OUTER shield by itself at its actual calculated location.
+    # Nothing else is placed by this diagnostic.
+    # ================================================================
+    print("")
+    print("")
+    print("================================================================")
+    print("PHASE 1 - EACH OUTER SHIELD ALONE AT ACTUAL FINAL LOCATION")
+    print("================================================================")
 
-        except Exception as error:
-            print("ERROR:", str(error))
-            app.PutMessage(f"Cable overlay warning: {error}")
+    for case in outer_cases:
+        result = diagnostic_exact_shield_test(
+            prj,
+            case["placement"],
+            "PHASE1 " + case["label"],
+            keep_on_success=False
+        )
 
-        time.sleep(PLACEMENT_DELAY_SECONDS)
+        results.append(("PHASE1_FINAL", case["label"], result["status"]))
 
+    # ================================================================
+    # PHASE 2
+    # Same OUTER shield length, but at known blank staging X=24.
+    # This separates bad final coordinates from bad length/job data.
+    # ================================================================
+    print("")
+    print("")
+    print("================================================================")
+    print("PHASE 2 - EACH OUTER SHIELD ALONE AT STAGING X=24")
+    print("================================================================")
 
-    for package in packages:
-        section_rows = package["rows"]
-        jobs = package["jobs"]
+    for case in outer_cases:
+        stage = diagnostic_staging_placement(case["placement"])
 
-        side = section_rows[0]["side"]
-        connector = section_rows[0]["connector"]
+        result = diagnostic_exact_shield_test(
+            prj,
+            stage,
+            "PHASE2 STAGING " + case["label"],
+            keep_on_success=False
+        )
 
-        required_pins = list(dict.fromkeys(row["pin"] for row in section_rows))
+        results.append(("PHASE2_STAGE", case["label"], result["status"]))
 
-        print("")
-        print("============================================================")
-        print("PROCESSING CONNECTOR SECTION")
-        print("============================================================")
-        print("SIDE:", side)
-        print("TWIST OFFSET ENABLED:", "YES" if twist_offset_settings[side] else "NO")
-        print("EXCEL CONNECTOR:", connector)
-        print("EXPECTED E3 CONNECTOR:", connector_base_name(connector))
-        print("EXCEL ROWS:", section_rows[0]["excel_row"], "TO", section_rows[-1]["excel_row"])
-        print("REQUIRED PINS:", required_pins)
+    # ================================================================
+    # PHASE 3
+    # Every INNER shield by itself at its actual final location.
+    # This tells us whether the spreadsheet's random twist/inner pattern
+    # generates any individually invalid shield placement.
+    # ================================================================
+    print("")
+    print("")
+    print("================================================================")
+    print("PHASE 3 - EACH INNER SHIELD ALONE AT ACTUAL FINAL LOCATION")
+    print("================================================================")
 
-        device_record, pin_map, sheet_id = resolve_connector_schematic_view(connector, required_pins, all_devices, dev, pin, pin_map_cache)
+    for case in inner_cases:
+        result = diagnostic_exact_shield_test(
+            prj,
+            case["placement"],
+            "PHASE3 " + case["label"],
+            keep_on_success=False
+        )
 
-        print_section_pin_locations(required_pins, pin_map, sheet_id)
+        results.append(("PHASE3_INNER", case["label"], result["status"]))
 
-        # Inner shields are placed before twists, matching the earlier working dynamic-placement script.
-        jobs = sorted(jobs, key=job_priority)
+    # ================================================================
+    # PHASE 4
+    # Keep both outer shields at the same time.
+    # If each passes alone but the second fails here, the shields are
+    # interfering with one another.
+    # ================================================================
+    print("")
+    print("")
+    print("================================================================")
+    print("PHASE 4 - KEEP ALL OUTER SHIELDS SIMULTANEOUSLY")
+    print("================================================================")
 
-        for job in jobs:
-            try:
-                placement = calculate_placement(job, pin_map, sheet_id, twist_offset_settings)
-                placed_id = place_job(prj, sym, job, placement)
+    kept_outer_ids = []
 
-                if placed_id is not None:
-                    placed_ids.append(placed_id)
+    for case in outer_cases:
+        result = diagnostic_exact_shield_test(
+            prj,
+            case["placement"],
+            "PHASE4 KEEP " + case["label"],
+            keep_on_success=True
+        )
 
-            except Exception as error:
-                print("ERROR:", str(error))
-                app.PutMessage(f"Cable overlay warning: {error}")
+        results.append(("PHASE4_KEEP_OUTERS", case["label"], result["status"]))
 
-            time.sleep(PLACEMENT_DELAY_SECONDS)
+        if result["id"]:
+            kept_outer_ids.append(result["id"])
+
+    diagnostic_cleanup_ids(prj, kept_outer_ids)
+
+    # ================================================================
+    # PHASE 5
+    # Place all twists first, then test the current outer shields.
+    # If Phase 1 fails but Phase 5 passes, operation order is the cause.
+    # If Phase 1 passes but Phase 5 fails, twist geometry is interfering.
+    # ================================================================
+    print("")
+    print("")
+    print("================================================================")
+    print("PHASE 5 - PLACE ALL TWISTS FIRST, THEN TEST OUTER SHIELDS")
+    print("================================================================")
+
+    temp_twist_ids = diagnostic_place_all_twists(prj, twist_cases)
+
+    for case in outer_cases:
+        result = diagnostic_exact_shield_test(
+            prj,
+            case["placement"],
+            "PHASE5 AFTER TWISTS " + case["label"],
+            keep_on_success=False
+        )
+
+        results.append(("PHASE5_AFTER_TWISTS", case["label"], result["status"]))
+
+    diagnostic_cleanup_ids(prj, temp_twist_ids)
+
+    # ================================================================
+    # PHASE 6
+    # Mimic v11's shield-first behavior just for shields:
+    # keep outers, then try inners while outers remain.
+    # This reveals nested-shield interference.
+    # ================================================================
+    print("")
+    print("")
+    print("================================================================")
+    print("PHASE 6 - KEEP OUTERS, THEN TEST INNER SHIELDS")
+    print("================================================================")
+
+    phase6_ids = []
+
+    for case in outer_cases:
+        result = diagnostic_exact_shield_test(
+            prj,
+            case["placement"],
+            "PHASE6 OUTER " + case["label"],
+            keep_on_success=True
+        )
+
+        results.append(("PHASE6_OUTER", case["label"], result["status"]))
+
+        if result["id"]:
+            phase6_ids.append(result["id"])
+
+    for case in inner_cases:
+        result = diagnostic_exact_shield_test(
+            prj,
+            case["placement"],
+            "PHASE6 INNER WITH OUTERS PRESENT " + case["label"],
+            keep_on_success=False
+        )
+
+        results.append(("PHASE6_INNER_WITH_OUTER", case["label"], result["status"]))
+
+    diagnostic_cleanup_ids(prj, phase6_ids)
 
     print("")
-    print("============================================================")
-    print("OVERLAY COMPLETE")
-    print("============================================================")
-    print("PLACED SYMBOL COUNT:", len(placed_ids))
-    print("PLACED SYMBOL IDS:", placed_ids)
-    print("============================================================")
+    print("")
+    print("================================================================")
+    print("FINAL DIAGNOSTIC SUMMARY")
+    print("================================================================")
 
-    app.PutMessage(f"Cable Shield / Twist Overlay complete. Placed {len(placed_ids)} symbols.")
+    for phase, label, status in results:
+        print(phase, "|", status, "|", label)
+
+    print("================================================================")
+    print("COPY THIS ENTIRE FINAL DIAGNOSTIC SUMMARY BACK TO CHAT.")
+    print("ALSO COPY THE CURRENT SPREADSHEET JOB / PLACEMENT SUMMARY.")
+    print("================================================================")
 
     workbook.close()
 
-    del sym
     del pin
     del dev
     del prj
