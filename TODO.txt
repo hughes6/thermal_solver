@@ -1,578 +1,321 @@
-import time
-import win32com.client as win32
-
-# ============================================================
-# Shield_Demo EXACT WORKING-SEQUENCE MATRIX TEST
-#
-# This test intentionally copies the shield order of operations
-# from the script that previously worked:
-#
-#   1. Create fresh symbol object
-#   2. Load("Shield_Demo", 1)
-#   3. Place(sheet, x, y, 0, 1.0, 0)
-#   4. IMMEDIATELY SetDisplayLength(requested_length)
-#      - NO SetId before this
-#      - NO GetDisplayLength before this
-#   5. Sleep 0.10
-#   6. GetDisplayLength()
-#   7. SetId(placed_id)
-#   8. GetDisplayLength() again
-#   9. If requested, move SAME shield with Place(...)
-#
-# We vary only:
-#   - requested length
-#   - blank/staging vs actual cable location
-#   - whether the already-sized shield is moved afterward
-#
-# All test shields are deleted after measurement so the sheet
-# is not left covered in test symbols.
-# ============================================================
-
-SHIELD_NAME = "Shield_Demo"
-VERSION = 1
-
-PLACEMENT_DELAY_SECONDS = 0.10
-STRETCH_DELAY_SECONDS = 0.10
-MOVE_DELAY_SECONDS = 0.10
-TOL = 0.001
-
-# Set False only if you want successful test shields left visible.
-CLEANUP_AFTER_TEST = True
-
-
-def extract_ids(result):
-    if result is None:
-        return []
-
-    if isinstance(result, int):
-        return [result] if result > 0 else []
-
-    if isinstance(result, list):
-        out = []
-        for value in result:
-            try:
-                value = int(value)
-                if value > 0:
-                    out.append(value)
-            except Exception:
-                pass
-        return out
-
-    if isinstance(result, tuple):
-        if len(result) >= 2:
-            values = result[1]
-
-            if isinstance(values, int):
-                return [values] if values > 0 else []
-
-            if values is not None:
-                try:
-                    return [int(v) for v in values if v is not None and int(v) > 0]
-                except Exception:
-                    pass
-
-        out = []
-        for value in result:
-            try:
-                value = int(value)
-                if value > 0:
-                    out.append(value)
-            except Exception:
-                pass
-        return out
-
-    try:
-        return [int(v) for v in result if v is not None and int(v) > 0]
-    except Exception:
-        return []
-
-
-def get_sheet_1(prj):
-    sht = prj.CreateSheetObject()
-    sheet_ids = extract_ids(prj.GetAllSheetIds(None))
-
-    if not sheet_ids:
-        raise Exception("No schematic sheets found.")
-
-    for sheet_id in sheet_ids:
-        sht.SetId(sheet_id)
-
-        try:
-            name = str(sht.GetName()).strip()
-        except Exception:
-            name = ""
-
-        if name == "1":
-            return sheet_id, name
-
-    sheet_id = sheet_ids[0]
-    sht.SetId(sheet_id)
-
-    try:
-        name = str(sht.GetName()).strip()
-    except Exception:
-        name = "UNKNOWN"
-
-    return sheet_id, name
-
-
-def safe_delete(sym, symbol_id):
-    if not CLEANUP_AFTER_TEST or not symbol_id:
-        return
-
-    try:
-        sym.SetId(symbol_id)
-    except Exception:
-        pass
-
-    try:
-        result = sym.Delete()
-        print("CLEANUP DELETE RESULT:", result)
-    except Exception as error:
-        print("CLEANUP DELETE EXCEPTION:", repr(error))
-
-
-def read_metadata(sym):
-    data = {}
-
-    try:
-        data["name"] = sym.GetName()
-    except Exception:
-        data["name"] = "UNKNOWN"
-
-    try:
-        data["type"] = sym.GetSymbolType()
-    except Exception:
-        data["type"] = "UNKNOWN"
-
-    try:
-        data["is_shield"] = sym.IsShield()
-    except Exception:
-        data["is_shield"] = "UNKNOWN"
-
-    try:
-        data["length"] = float(sym.GetDisplayLength())
-    except Exception:
-        data["length"] = None
-
-    try:
-        data["width"] = float(sym.GetDisplayWidth())
-    except Exception:
-        data["width"] = None
-
-    return data
-
-
-def run_exact_test(prj, sheet_id, test_name, x, y, requested_length,
-                   move_after=False, move_x=None, move_y=None):
-    """
-    IMPORTANT:
-    The sequence between Place() and SetDisplayLength() is copied exactly
-    from the user-confirmed working script:
-        Place -> immediate SetDisplayLength
-    There is intentionally NO SetId and NO GetDisplayLength before stretch.
-    """
-    print("")
-    print("")
-    print("################################################################")
-    print("TEST:", test_name)
-    print("################################################################")
-    print("START X:", x)
-    print("START Y:", y)
-    print("REQUESTED LENGTH:", requested_length)
-    print("MOVE AFTER SUCCESS:", move_after)
-
-    sym = prj.CreateSymbolObject()
-
-    load_result = sym.Load(SHIELD_NAME, VERSION)
-    print("1 LOAD RESULT:", load_result)
-
-    if load_result == 0:
-        print("FINAL TEST STATUS: LOAD_FAIL")
-        return {
-            "test": test_name,
-            "status": "LOAD_FAIL",
-            "requested": requested_length,
-            "immediate_after": None,
-            "verified_after": None,
-            "move_after": None,
-        }
-
-    placed_id = sym.Place(
-        sheet_id,
-        float(x),
-        float(y),
-        0,
-        1.0,
-        0
-    )
-
-    print("2 PLACE RESULT:", placed_id)
-
-    if placed_id == 0:
-        print("FINAL TEST STATUS: PLACE_FAIL")
-        return {
-            "test": test_name,
-            "status": "PLACE_FAIL",
-            "requested": requested_length,
-            "immediate_after": None,
-            "verified_after": None,
-            "move_after": None,
-        }
-
-    # ============================================================
-    # EXACT WORKING SCRIPT ORDER STARTS HERE
-    # NO SetId
-    # NO GetDisplayLength
-    # ============================================================
-    try:
-        stretch_result = sym.SetDisplayLength(float(requested_length))
-    except Exception as error:
-        stretch_result = None
-        print("3 IMMEDIATE SetDisplayLength EXCEPTION:", repr(error))
-
-    print("3 IMMEDIATE SetDisplayLength RESULT:", stretch_result)
-
-    time.sleep(STRETCH_DELAY_SECONDS)
-
-    try:
-        immediate_after = float(sym.GetDisplayLength())
-    except Exception as error:
-        immediate_after = None
-        print("4 IMMEDIATE GetDisplayLength EXCEPTION:", repr(error))
-
-    print("4 IMMEDIATE LENGTH AFTER:", immediate_after)
-
-    try:
-        setid_result = sym.SetId(placed_id)
-    except Exception as error:
-        setid_result = None
-        print("5 POST-STRETCH SetId EXCEPTION:", repr(error))
-
-    print("5 POST-STRETCH SetId RESULT:", setid_result)
-
-    meta = read_metadata(sym)
-
-    print("6 VERIFIED LENGTH AFTER SetId:", meta["length"])
-    print("6 SYMBOL NAME:", meta["name"])
-    print("6 SYMBOL TYPE:", meta["type"])
-    print("6 IS SHIELD:", meta["is_shield"])
-    print("6 DISPLAY WIDTH:", meta["width"])
-    # ============================================================
-    # EXACT WORKING SCRIPT ORDER ENDS HERE
-    # ============================================================
-
-    immediate_ok = (
-        immediate_after is not None
-        and abs(immediate_after - requested_length) <= TOL
-    )
-
-    verified_ok = (
-        meta["length"] is not None
-        and abs(meta["length"] - requested_length) <= TOL
-    )
-
-    resize_ok = immediate_ok or verified_ok
-
-    moved_length = None
-    move_result = None
-
-    if resize_ok and move_after:
-        if move_x is None or move_y is None:
-            raise Exception("move_after=True requires move_x and move_y")
-
-        time.sleep(MOVE_DELAY_SECONDS)
-
-        sym.SetId(placed_id)
-
-        move_result = sym.Place(
-            sheet_id,
-            float(move_x),
-            float(move_y),
-            0,
-            1.0,
-            0
-        )
-
-        print("7 MOVE SAME SHIELD RESULT:", move_result)
-
-        if move_result != 0:
-            time.sleep(PLACEMENT_DELAY_SECONDS)
-            sym.SetId(move_result)
-
-            try:
-                moved_length = float(sym.GetDisplayLength())
-            except Exception:
-                moved_length = None
-
-            print("8 LENGTH AFTER MOVE:", moved_length)
-        else:
-            print("8 LENGTH AFTER MOVE: MOVE FAILED")
-
-    if resize_ok:
-        if move_after:
-            if (
-                move_result != 0
-                and moved_length is not None
-                and abs(moved_length - requested_length) <= TOL
-            ):
-                status = "PASS_RESIZE_AND_MOVE"
-            else:
-                status = "PASS_RESIZE_BUT_MOVE_CHANGED_OR_FAILED"
-        else:
-            status = "PASS_RESIZE"
-    else:
-        status = "FAIL_RESIZE"
-
-    print("FINAL TEST STATUS:", status)
-
-    cleanup_id = move_result if move_result not in (None, 0) else placed_id
-    safe_delete(sym, cleanup_id)
-
-    return {
-        "test": test_name,
-        "status": status,
-        "requested": requested_length,
-        "set_length_result": stretch_result,
-        "immediate_after": immediate_after,
-        "verified_after": meta["length"],
-        "type": meta["type"],
-        "is_shield": meta["is_shield"],
-        "width": meta["width"],
-        "move_result": move_result,
-        "move_after_length": moved_length,
-    }
-
-
-def run_native_baseline(prj, sheet_id):
-    """
-    Baseline only. This intentionally does NOT call SetDisplayLength.
-    It tells us what a normal Shield_Demo looks like when simply loaded
-    and placed.
-    """
-    print("")
-    print("")
-    print("################################################################")
-    print("TEST: BASELINE_NATIVE_PLACE_ONLY")
-    print("################################################################")
-
-    sym = prj.CreateSymbolObject()
-
-    load_result = sym.Load(SHIELD_NAME, VERSION)
-    print("LOAD RESULT:", load_result)
-
-    if load_result == 0:
-        return {"test": "BASELINE_NATIVE_PLACE_ONLY", "status": "LOAD_FAIL"}
-
-    placed_id = sym.Place(sheet_id, 36.0, 2.0, 0, 1.0, 0)
-    print("PLACE RESULT:", placed_id)
-
-    if placed_id == 0:
-        return {"test": "BASELINE_NATIVE_PLACE_ONLY", "status": "PLACE_FAIL"}
-
-    time.sleep(PLACEMENT_DELAY_SECONDS)
-    sym.SetId(placed_id)
-    meta = read_metadata(sym)
-
-    print("NATIVE LENGTH:", meta["length"])
-    print("NATIVE WIDTH:", meta["width"])
-    print("SYMBOL TYPE:", meta["type"])
-    print("IS SHIELD:", meta["is_shield"])
-    print("FINAL TEST STATUS: PASS_BASELINE")
-
-    safe_delete(sym, placed_id)
-
-    return {
-        "test": "BASELINE_NATIVE_PLACE_ONLY",
-        "status": "PASS_BASELINE",
-        "requested": None,
-        "set_length_result": None,
-        "immediate_after": None,
-        "verified_after": meta["length"],
-        "type": meta["type"],
-        "is_shield": meta["is_shield"],
-        "width": meta["width"],
-        "move_result": None,
-        "move_after_length": None,
-    }
-
-
-def main():
-    app = win32.gencache.EnsureDispatch("CT.Application")
-    prj = app.CreateJobObject()
-
-    sheet_id, sheet_name = get_sheet_1(prj)
-
-    print("")
-    print("================================================================")
-    print("Shield_Demo EXACT WORKING-SEQUENCE MATRIX TEST")
-    print("================================================================")
-    print("SHEET ID:", sheet_id)
-    print("SHEET NAME:", sheet_name)
-    print("SYMBOL:", SHIELD_NAME)
-    print("CLEANUP AFTER TEST:", CLEANUP_AFTER_TEST)
-    print("")
-    print("CRITICAL SEQUENCE USED FOR EVERY RESIZE TEST:")
-    print("CreateSymbolObject -> Load -> Place -> IMMEDIATE SetDisplayLength")
-    print("-> sleep -> GetDisplayLength -> SetId -> GetDisplayLength")
-    print("")
-    print("NO SetId/GetDisplayLength occurs before SetDisplayLength.")
-    print("================================================================")
-
-    results = []
-
-    # ------------------------------------------------------------
-    # BASELINE
-    # ------------------------------------------------------------
-    results.append(run_native_baseline(prj, sheet_id))
-
-    # ------------------------------------------------------------
-    # GROUP 1:
-    # Same exact blank/staging location. ONLY requested length changes.
-    # This identifies the length behavior with all other variables fixed.
-    # ------------------------------------------------------------
-    for requested in [1.00, 0.50, 1.50, 2.00, 5.00, 10.00]:
-        results.append(
-            run_exact_test(
-                prj,
-                sheet_id,
-                f"BLANK_X24_Y22_LENGTH_{requested:.2f}",
-                24.0,
-                22.0,
-                requested
-            )
-        )
-
-    # ------------------------------------------------------------
-    # GROUP 2:
-    # Lengths/locations taken directly from the layouts we have been
-    # debugging. Same exact placement/stretch sequence.
-    # ------------------------------------------------------------
-    results.append(
-        run_exact_test(
-            prj,
-            sheet_id,
-            "EARLIER_LEFT_OUTER_11.75_AT_FINAL_LOCATION",
-            1.75,
-            18.875,
-            11.75
-        )
-    )
-
-    results.append(
-        run_exact_test(
-            prj,
-            sheet_id,
-            "EARLIER_RIGHT_OUTER_10.25_AT_FINAL_LOCATION",
-            3.25,
-            20.375,
-            10.25
-        )
-    )
-
-    results.append(
-        run_exact_test(
-            prj,
-            sheet_id,
-            "CURRENT_LEFT_OUTER_24.75_AT_FINAL_LOCATION",
-            1.75,
-            4.875,
-            24.75
-        )
-    )
-
-    results.append(
-        run_exact_test(
-            prj,
-            sheet_id,
-            "CURRENT_RIGHT_OUTER_24.75_AT_FINAL_LOCATION",
-            3.25,
-            4.875,
-            24.75
-        )
-    )
-
-    # Long-shield staging position from the working script formula:
-    # top limit 32.0 - 24.75 - 0.50 margin = 6.75
-    results.append(
-        run_exact_test(
-            prj,
-            sheet_id,
-            "CURRENT_24.75_AT_BLANK_STAGING_X24_Y6.75",
-            24.0,
-            6.75,
-            24.75
-        )
-    )
-
-    # ------------------------------------------------------------
-    # GROUP 3:
-    # Does moving an already-successfully-sized shield destroy/reset it?
-    # These only proceed to the move if the resize itself succeeds.
-    # ------------------------------------------------------------
-    results.append(
-        run_exact_test(
-            prj,
-            sheet_id,
-            "RESIZE_1.00_THEN_MOVE_SAME_SHIELD",
-            24.0,
-            22.0,
-            1.00,
-            move_after=True,
-            move_x=20.0,
-            move_y=22.0
-        )
-    )
-
-    results.append(
-        run_exact_test(
-            prj,
-            sheet_id,
-            "RESIZE_10.00_THEN_MOVE_SAME_SHIELD",
-            24.0,
-            22.0,
-            10.00,
-            move_after=True,
-            move_x=20.0,
-            move_y=22.0
-        )
-    )
-
-    print("")
-    print("")
-    print("================================================================")
-    print("FINAL COMPARISON TABLE")
-    print("================================================================")
-    print(
-        "TEST | STATUS | REQUESTED | SET_RESULT | "
-        "IMMEDIATE_AFTER | VERIFIED_AFTER | TYPE | IS_SHIELD | MOVE_AFTER"
-    )
-    print("----------------------------------------------------------------")
-
-    for r in results:
-        print(
-            f"{r.get('test')} | "
-            f"{r.get('status')} | "
-            f"{r.get('requested')} | "
-            f"{r.get('set_length_result')} | "
-            f"{r.get('immediate_after')} | "
-            f"{r.get('verified_after')} | "
-            f"{r.get('type')} | "
-            f"{r.get('is_shield')} | "
-            f"{r.get('move_after_length')}"
-        )
-
-    print("================================================================")
-    print("COPY THE ENTIRE FINAL COMPARISON TABLE BACK TO CHAT.")
-    print("If convenient, also include any 'W - Modify direction not valid'")
-    print("messages that appear immediately before/after a specific test.")
-    print("================================================================")
-
-    try:
-        app.PutMessage("Shield_Demo exact-sequence matrix test complete.")
-    except Exception:
-        pass
-
-
-if __name__ == "__main__":
-    main()
+================================================================
+Shield_Demo EXACT WORKING-SEQUENCE MATRIX TEST
+================================================================
+SHEET ID: 204828
+SHEET NAME: 1
+SYMBOL: Shield_Demo
+CLEANUP AFTER TEST: True
+
+CRITICAL SEQUENCE USED FOR EVERY RESIZE TEST:
+CreateSymbolObject -> Load -> Place -> IMMEDIATE SetDisplayLength
+-> sleep -> GetDisplayLength -> SetId -> GetDisplayLength
+
+NO SetId/GetDisplayLength occurs before SetDisplayLength.
+================================================================
+
+
+################################################################
+TEST: BASELINE_NATIVE_PLACE_ONLY
+################################################################
+LOAD RESULT: 147946
+PLACE RESULT: 148316
+NATIVE LENGTH: 1.2499999999999996
+NATIVE WIDTH: 0.0
+SYMBOL TYPE: 17
+IS SHIELD: 1
+FINAL TEST STATUS: PASS_BASELINE
+CLEANUP DELETE RESULT: 0
+
+
+################################################################
+TEST: BLANK_X24_Y22_LENGTH_1.00
+################################################################
+START X: 24.0
+START Y: 22.0
+REQUESTED LENGTH: 1.0
+MOVE AFTER SUCCESS: False
+1 LOAD RESULT: 147946
+2 PLACE RESULT: 147399
+3 IMMEDIATE SetDisplayLength RESULT: 1
+4 IMMEDIATE LENGTH AFTER: 1.0
+5 POST-STRETCH SetId RESULT: 147399
+6 VERIFIED LENGTH AFTER SetId: 1.0
+6 SYMBOL NAME: SY3
+6 SYMBOL TYPE: 17
+6 IS SHIELD: 1
+6 DISPLAY WIDTH: 0.0
+FINAL TEST STATUS: PASS_RESIZE
+CLEANUP DELETE RESULT: 0
+
+
+################################################################
+TEST: BLANK_X24_Y22_LENGTH_0.50
+################################################################
+START X: 24.0
+START Y: 22.0
+REQUESTED LENGTH: 0.5
+MOVE AFTER SUCCESS: False
+1 LOAD RESULT: 147946
+2 PLACE RESULT: 146877
+3 IMMEDIATE SetDisplayLength RESULT: 1
+4 IMMEDIATE LENGTH AFTER: 0.5
+5 POST-STRETCH SetId RESULT: 146877
+6 VERIFIED LENGTH AFTER SetId: 0.5
+6 SYMBOL NAME: SY3
+6 SYMBOL TYPE: 17
+6 IS SHIELD: 1
+6 DISPLAY WIDTH: 0.0
+FINAL TEST STATUS: PASS_RESIZE
+CLEANUP DELETE RESULT: 0
+
+
+################################################################
+TEST: BLANK_X24_Y22_LENGTH_1.50
+################################################################
+START X: 24.0
+START Y: 22.0
+REQUESTED LENGTH: 1.5
+MOVE AFTER SUCCESS: False
+1 LOAD RESULT: 147946
+2 PLACE RESULT: 146328
+3 IMMEDIATE SetDisplayLength RESULT: 1
+4 IMMEDIATE LENGTH AFTER: 1.5
+5 POST-STRETCH SetId RESULT: 146328
+6 VERIFIED LENGTH AFTER SetId: 1.5
+6 SYMBOL NAME: SY3
+6 SYMBOL TYPE: 17
+6 IS SHIELD: 1
+6 DISPLAY WIDTH: 0.0
+FINAL TEST STATUS: PASS_RESIZE
+CLEANUP DELETE RESULT: 0
+
+
+################################################################
+TEST: BLANK_X24_Y22_LENGTH_2.00
+################################################################
+START X: 24.0
+START Y: 22.0
+REQUESTED LENGTH: 2.0
+MOVE AFTER SUCCESS: False
+1 LOAD RESULT: 147946
+2 PLACE RESULT: 145758
+3 IMMEDIATE SetDisplayLength RESULT: 1
+4 IMMEDIATE LENGTH AFTER: 2.0
+5 POST-STRETCH SetId RESULT: 145758
+6 VERIFIED LENGTH AFTER SetId: 2.0
+6 SYMBOL NAME: SY3
+6 SYMBOL TYPE: 17
+6 IS SHIELD: 1
+6 DISPLAY WIDTH: 0.0
+FINAL TEST STATUS: PASS_RESIZE
+CLEANUP DELETE RESULT: 0
+
+
+################################################################
+TEST: BLANK_X24_Y22_LENGTH_5.00
+################################################################
+START X: 24.0
+START Y: 22.0
+REQUESTED LENGTH: 5.0
+MOVE AFTER SUCCESS: False
+1 LOAD RESULT: 147946
+2 PLACE RESULT: 145384
+3 IMMEDIATE SetDisplayLength RESULT: 1
+4 IMMEDIATE LENGTH AFTER: 5.0
+5 POST-STRETCH SetId RESULT: 145384
+6 VERIFIED LENGTH AFTER SetId: 5.0
+6 SYMBOL NAME: SY3
+6 SYMBOL TYPE: 17
+6 IS SHIELD: 1
+6 DISPLAY WIDTH: 0.0
+FINAL TEST STATUS: PASS_RESIZE
+CLEANUP DELETE RESULT: 0
+
+
+################################################################
+TEST: BLANK_X24_Y22_LENGTH_10.00
+################################################################
+START X: 24.0
+START Y: 22.0
+REQUESTED LENGTH: 10.0
+MOVE AFTER SUCCESS: False
+1 LOAD RESULT: 147946
+2 PLACE RESULT: 145013
+3 IMMEDIATE SetDisplayLength RESULT: 1
+4 IMMEDIATE LENGTH AFTER: 10.0
+5 POST-STRETCH SetId RESULT: 145013
+6 VERIFIED LENGTH AFTER SetId: 10.0
+6 SYMBOL NAME: SY3
+6 SYMBOL TYPE: 17
+6 IS SHIELD: 1
+6 DISPLAY WIDTH: 0.0
+FINAL TEST STATUS: PASS_RESIZE
+CLEANUP DELETE RESULT: 0
+
+
+################################################################
+TEST: EARLIER_LEFT_OUTER_11.75_AT_FINAL_LOCATION
+################################################################
+START X: 1.75
+START Y: 18.875
+REQUESTED LENGTH: 11.75
+MOVE AFTER SUCCESS: False
+1 LOAD RESULT: 147946
+2 PLACE RESULT: 0
+FINAL TEST STATUS: PLACE_FAIL
+
+
+################################################################
+TEST: EARLIER_RIGHT_OUTER_10.25_AT_FINAL_LOCATION
+################################################################
+START X: 3.25
+START Y: 20.375
+REQUESTED LENGTH: 10.25
+MOVE AFTER SUCCESS: False
+1 LOAD RESULT: 147946
+2 PLACE RESULT: 144563
+3 IMMEDIATE SetDisplayLength RESULT: 0
+4 IMMEDIATE LENGTH AFTER: 1.25
+5 POST-STRETCH SetId RESULT: 144563
+6 VERIFIED LENGTH AFTER SetId: 1.25
+6 SYMBOL NAME: SY3
+6 SYMBOL TYPE: 17
+6 IS SHIELD: 1
+6 DISPLAY WIDTH: 0.0
+FINAL TEST STATUS: FAIL_RESIZE
+CLEANUP DELETE RESULT: 0
+
+
+################################################################
+TEST: CURRENT_LEFT_OUTER_24.75_AT_FINAL_LOCATION
+################################################################
+START X: 1.75
+START Y: 4.875
+REQUESTED LENGTH: 24.75
+MOVE AFTER SUCCESS: False
+1 LOAD RESULT: 147946
+2 PLACE RESULT: 144299
+3 IMMEDIATE SetDisplayLength RESULT: 1
+4 IMMEDIATE LENGTH AFTER: 24.75
+5 POST-STRETCH SetId RESULT: 144299
+6 VERIFIED LENGTH AFTER SetId: 24.75
+6 SYMBOL NAME: SY3
+6 SYMBOL TYPE: 17
+6 IS SHIELD: 1
+6 DISPLAY WIDTH: 0.0
+FINAL TEST STATUS: PASS_RESIZE
+CLEANUP DELETE RESULT: 0
+
+
+################################################################
+TEST: CURRENT_RIGHT_OUTER_24.75_AT_FINAL_LOCATION
+################################################################
+START X: 3.25
+START Y: 4.875
+REQUESTED LENGTH: 24.75
+MOVE AFTER SUCCESS: False
+1 LOAD RESULT: 147946
+2 PLACE RESULT: 143962
+3 IMMEDIATE SetDisplayLength RESULT: 1
+4 IMMEDIATE LENGTH AFTER: 24.75
+5 POST-STRETCH SetId RESULT: 143962
+6 VERIFIED LENGTH AFTER SetId: 24.75
+6 SYMBOL NAME: SY3
+6 SYMBOL TYPE: 17
+6 IS SHIELD: 1
+6 DISPLAY WIDTH: 0.0
+FINAL TEST STATUS: PASS_RESIZE
+CLEANUP DELETE RESULT: 0
+
+
+################################################################
+TEST: CURRENT_24.75_AT_BLANK_STAGING_X24_Y6.75
+################################################################
+START X: 24.0
+START Y: 6.75
+REQUESTED LENGTH: 24.75
+MOVE AFTER SUCCESS: False
+1 LOAD RESULT: 147946
+2 PLACE RESULT: 143640
+3 IMMEDIATE SetDisplayLength RESULT: 1
+4 IMMEDIATE LENGTH AFTER: 24.75
+5 POST-STRETCH SetId RESULT: 143640
+6 VERIFIED LENGTH AFTER SetId: 24.75
+6 SYMBOL NAME: SY3
+6 SYMBOL TYPE: 17
+6 IS SHIELD: 1
+6 DISPLAY WIDTH: 0.0
+FINAL TEST STATUS: PASS_RESIZE
+CLEANUP DELETE RESULT: 0
+
+
+################################################################
+TEST: RESIZE_1.00_THEN_MOVE_SAME_SHIELD
+################################################################
+START X: 24.0
+START Y: 22.0
+REQUESTED LENGTH: 1.0
+MOVE AFTER SUCCESS: True
+1 LOAD RESULT: 147946
+2 PLACE RESULT: 143321
+3 IMMEDIATE SetDisplayLength RESULT: 1
+4 IMMEDIATE LENGTH AFTER: 1.0
+5 POST-STRETCH SetId RESULT: 143321
+6 VERIFIED LENGTH AFTER SetId: 1.0
+6 SYMBOL NAME: SY3
+6 SYMBOL TYPE: 17
+6 IS SHIELD: 1
+6 DISPLAY WIDTH: 0.0
+7 MOVE SAME SHIELD RESULT: 143321
+8 LENGTH AFTER MOVE: 1.0
+FINAL TEST STATUS: PASS_RESIZE_AND_MOVE
+CLEANUP DELETE RESULT: 0
+
+
+################################################################
+TEST: RESIZE_10.00_THEN_MOVE_SAME_SHIELD
+################################################################
+START X: 24.0
+START Y: 22.0
+REQUESTED LENGTH: 10.0
+MOVE AFTER SUCCESS: True
+1 LOAD RESULT: 147946
+2 PLACE RESULT: 142578
+3 IMMEDIATE SetDisplayLength RESULT: 1
+4 IMMEDIATE LENGTH AFTER: 10.0
+5 POST-STRETCH SetId RESULT: 142578
+6 VERIFIED LENGTH AFTER SetId: 10.0
+6 SYMBOL NAME: SY3
+6 SYMBOL TYPE: 17
+6 IS SHIELD: 1
+6 DISPLAY WIDTH: 0.0
+7 MOVE SAME SHIELD RESULT: 142578
+8 LENGTH AFTER MOVE: 10.0
+FINAL TEST STATUS: PASS_RESIZE_AND_MOVE
+CLEANUP DELETE RESULT: 0
+
+
+================================================================
+FINAL COMPARISON TABLE
+================================================================
+TEST | STATUS | REQUESTED | SET_RESULT | IMMEDIATE_AFTER | VERIFIED_AFTER | TYPE | IS_SHIELD | MOVE_AFTER
+----------------------------------------------------------------
+BASELINE_NATIVE_PLACE_ONLY | PASS_BASELINE | None | None | None | 1.2499999999999996 | 17 | 1 | None
+BLANK_X24_Y22_LENGTH_1.00 | PASS_RESIZE | 1.0 | 1 | 1.0 | 1.0 | 17 | 1 | None
+BLANK_X24_Y22_LENGTH_0.50 | PASS_RESIZE | 0.5 | 1 | 0.5 | 0.5 | 17 | 1 | None
+BLANK_X24_Y22_LENGTH_1.50 | PASS_RESIZE | 1.5 | 1 | 1.5 | 1.5 | 17 | 1 | None
+BLANK_X24_Y22_LENGTH_2.00 | PASS_RESIZE | 2.0 | 1 | 2.0 | 2.0 | 17 | 1 | None
+BLANK_X24_Y22_LENGTH_5.00 | PASS_RESIZE | 5.0 | 1 | 5.0 | 5.0 | 17 | 1 | None
+BLANK_X24_Y22_LENGTH_10.00 | PASS_RESIZE | 10.0 | 1 | 10.0 | 10.0 | 17 | 1 | None
+EARLIER_LEFT_OUTER_11.75_AT_FINAL_LOCATION | PLACE_FAIL | 11.75 | None | None | None | None | None | None
+EARLIER_RIGHT_OUTER_10.25_AT_FINAL_LOCATION | FAIL_RESIZE | 10.25 | 0 | 1.25 | 1.25 | 17 | 1 | None
+CURRENT_LEFT_OUTER_24.75_AT_FINAL_LOCATION | PASS_RESIZE | 24.75 | 1 | 24.75 | 24.75 | 17 | 1 | None
+CURRENT_RIGHT_OUTER_24.75_AT_FINAL_LOCATION | PASS_RESIZE | 24.75 | 1 | 24.75 | 24.75 | 17 | 1 | None
+CURRENT_24.75_AT_BLANK_STAGING_X24_Y6.75 | PASS_RESIZE | 24.75 | 1 | 24.75 | 24.75 | 17 | 1 | None
+RESIZE_1.00_THEN_MOVE_SAME_SHIELD | PASS_RESIZE_AND_MOVE | 1.0 | 1 | 1.0 | 1.0 | 17 | 1 | 1.0
+RESIZE_10.00_THEN_MOVE_SAME_SHIELD | PASS_RESIZE_AND_MOVE | 10.0 | 1 | 10.0 | 10.0 | 17 | 1 | 10.0
+================================================================
+COPY THE ENTIRE FINAL COMPARISON TABLE BACK TO CHAT.
+If convenient, also include any 'W - Modify direction not valid'
+messages that appear immediately before/after a specific test.
+================================================================
