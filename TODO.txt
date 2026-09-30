@@ -1,207 +1,68 @@
-import win32com.client as win32
 
-# ============================================================
-# Shield_Demo resize diagnostic
-#
-# This intentionally uses the EXACT sequence from the earlier
-# working version:
-#
-#   Load
-#   Place
-#   SetId
-#   GetDisplayLength
-#   SetDisplayLength
-#   SetId
-#   GetDisplayLength
-#
-# It tests whether the failure is caused by:
-#   - the API sequence,
-#   - the Y/location on the sheet,
-#   - or the very long requested length.
-# ============================================================
-
-SYMBOL_NAME = "Shield_Demo"
-VERSION = 1
-TOL = 0.001
+============================================================
+Shield_Demo EXACT-SEQUENCE DIAGNOSTIC
+============================================================
+SHEET ID: 204828
 
 
-def extract_ids(result):
-    if result is None:
-        return []
+============================================================
+TEST A - OLD KNOWN-GOOD LOCATION / 10.0 LENGTH
+============================================================
+X: 24.0
+Y: 22.0
+REQUESTED LENGTH: 10.0
+LOAD RESULT: 147946
+PLACE RESULT: 279128
+SETID BEFORE RESULT: 279128
+DISPLAY LENGTH BEFORE: 1.25
+SETDISPLAYLENGTH RESULT: 0
+SETID AFTER RESULT: 279128
+DISPLAY LENGTH AFTER: 1.25
+SYMBOL TYPE: 17
+IS SHIELD: 1
+TEST RESULT: FAIL
+PLACED SYMBOL ID: 279128
 
-    if isinstance(result, int):
-        return [result] if result > 0 else []
+============================================================
+TEST B - LOW Y / SAME 10.0 LENGTH
+============================================================
+X: 28.0
+Y: 1.0
+REQUESTED LENGTH: 10.0
+LOAD RESULT: 147946
+PLACE RESULT: 279434
+SETID BEFORE RESULT: 279434
+DISPLAY LENGTH BEFORE: 1.2499999999999996
+SETDISPLAYLENGTH RESULT: 0
+SETID AFTER RESULT: 279434
+DISPLAY LENGTH AFTER: 1.2499999999999996
+SYMBOL TYPE: 17
+IS SHIELD: 1
+TEST RESULT: FAIL
+PLACED SYMBOL ID: 279434
 
-    if isinstance(result, tuple) and len(result) >= 2:
-        values = result[1]
+============================================================
+TEST C - LOW Y / 24.75 LENGTH
+============================================================
+X: 32.0
+Y: 1.0
+REQUESTED LENGTH: 24.75
+LOAD RESULT: 147946
+PLACE RESULT: 279173
+SETID BEFORE RESULT: 279173
+DISPLAY LENGTH BEFORE: 1.2499999999999996
+SETDISPLAYLENGTH RESULT: 0
+SETID AFTER RESULT: 279173
+DISPLAY LENGTH AFTER: 1.2499999999999996
+SYMBOL TYPE: 17
+IS SHIELD: 1
+TEST RESULT: FAIL
+PLACED SYMBOL ID: 279173
 
-        if values is None:
-            return []
-
-        if isinstance(values, int):
-            return [values] if values > 0 else []
-
-        try:
-            return [int(v) for v in values if v is not None and int(v) > 0]
-        except Exception:
-            return []
-
-    try:
-        return [int(v) for v in result if v is not None and int(v) > 0]
-    except Exception:
-        return []
-
-
-def get_sheet_1(prj):
-    sht = prj.CreateSheetObject()
-    ids = extract_ids(prj.GetAllSheetIds(None))
-
-    for sheet_id in ids:
-        sht.SetId(sheet_id)
-
-        try:
-            if str(sht.GetName()).strip() == "1":
-                return sheet_id
-        except Exception:
-            pass
-
-    if ids:
-        return ids[0]
-
-    raise Exception("No schematic sheet found.")
-
-
-def run_test(prj, sheet_id, label, x, y, requested):
-    print("")
-    print("============================================================")
-    print(label)
-    print("============================================================")
-    print("X:", x)
-    print("Y:", y)
-    print("REQUESTED LENGTH:", requested)
-
-    sym = prj.CreateSymbolObject()
-
-    load_result = sym.Load(SYMBOL_NAME, VERSION)
-    print("LOAD RESULT:", load_result)
-
-    if load_result == 0:
-        print("TEST RESULT: LOAD FAILED")
-        return
-
-    placed_id = sym.Place(sheet_id, float(x), float(y), 0, 1.0, 0)
-    print("PLACE RESULT:", placed_id)
-
-    if placed_id == 0:
-        print("TEST RESULT: PLACE FAILED")
-        return
-
-    # EXACT OLD SEQUENCE
-    setid_before = sym.SetId(placed_id)
-    print("SETID BEFORE RESULT:", setid_before)
-
-    try:
-        before = float(sym.GetDisplayLength())
-    except Exception as error:
-        before = None
-        print("GET LENGTH BEFORE EXCEPTION:", repr(error))
-
-    print("DISPLAY LENGTH BEFORE:", before)
-
-    try:
-        stretch_result = sym.SetDisplayLength(float(requested))
-    except Exception as error:
-        stretch_result = None
-        print("SETDISPLAYLENGTH EXCEPTION:", repr(error))
-
-    print("SETDISPLAYLENGTH RESULT:", stretch_result)
-
-    setid_after = sym.SetId(placed_id)
-    print("SETID AFTER RESULT:", setid_after)
-
-    try:
-        after = float(sym.GetDisplayLength())
-    except Exception as error:
-        after = None
-        print("GET LENGTH AFTER EXCEPTION:", repr(error))
-
-    print("DISPLAY LENGTH AFTER:", after)
-
-    try:
-        symbol_type = sym.GetSymbolType()
-    except Exception:
-        symbol_type = "UNKNOWN"
-
-    try:
-        is_shield = sym.IsShield()
-    except Exception:
-        is_shield = "UNKNOWN"
-
-    print("SYMBOL TYPE:", symbol_type)
-    print("IS SHIELD:", is_shield)
-
-    success = (
-        after is not None
-        and abs(after - float(requested)) <= TOL
-    )
-
-    print("TEST RESULT:", "PASS" if success else "FAIL")
-    print("PLACED SYMBOL ID:", placed_id)
-
-
-def main():
-    app = win32.gencache.EnsureDispatch("CT.Application")
-    prj = app.CreateJobObject()
-    sheet_id = get_sheet_1(prj)
-
-    print("")
-    print("============================================================")
-    print("Shield_Demo EXACT-SEQUENCE DIAGNOSTIC")
-    print("============================================================")
-    print("SHEET ID:", sheet_id)
-    print("")
-
-    # Test A reproduces the position/length that the earlier script
-    # specifically documented as working.
-    run_test(
-        prj,
-        sheet_id,
-        "TEST A - OLD KNOWN-GOOD LOCATION / 10.0 LENGTH",
-        24.0,
-        22.0,
-        10.0
-    )
-
-    # Test B changes only the Y position.
-    run_test(
-        prj,
-        sheet_id,
-        "TEST B - LOW Y / SAME 10.0 LENGTH",
-        28.0,
-        1.0,
-        10.0
-    )
-
-    # Test C keeps the low Y and asks for the problem cable length.
-    run_test(
-        prj,
-        sheet_id,
-        "TEST C - LOW Y / 24.75 LENGTH",
-        32.0,
-        1.0,
-        24.75
-    )
-
-    print("")
-    print("============================================================")
-    print("DONE")
-    print("============================================================")
-    print("COPY THE FULL OUTPUT BACK TO CHAT.")
-    print("The three test shields are intentionally left on the sheet.")
-    print("Undo/delete them after the test.")
-    print("============================================================")
-
-
-if __name__ == "__main__":
-    main()
-v
+============================================================
+DONE
+============================================================
+COPY THE FULL OUTPUT BACK TO CHAT.
+The three test shields are intentionally left on the sheet.
+Undo/delete them after the test.
+============================================================
