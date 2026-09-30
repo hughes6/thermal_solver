@@ -1,4 +1,4 @@
-import os
+\import os
 import re
 import statistics
 import time
@@ -70,8 +70,12 @@ MOVE_DELAY_SECONDS = 0.10
 # Once the requested length is successfully obtained, the same shield
 # is moved to its final cable position.
 #====================================================================================================================================
-SHIELD_STAGE_X_VALUES = [35.0, 30.0, 25.0, 20.0, 15.0, 10.0]
-SHIELD_STAGE_Y_VALUES = [1.0, 3.0, 5.0, 8.0, 10.0, 12.0]
+# The known-good standalone stretch test used X=24.0, Y=22.0.
+# Keep X=24 first and choose Y dynamically so long shields remain on-sheet.
+SHIELD_STAGE_X_VALUES = [24.0, 20.0, 28.0, 16.0, 32.0, 12.0, 36.0]
+SHIELD_STAGE_TOP_LIMIT = 32.0
+SHIELD_STAGE_DEFAULT_Y = 22.0
+SHIELD_STAGE_MARGIN = 0.50
 
 
 #====================================================================================================================================
@@ -1262,34 +1266,66 @@ def get_display_length_safe(sym, symbol_id):
 # TRY TO SIZE SHIELD AT CURRENT LOCATION
 #====================================================================================================================================
 def try_size_shield(sym, symbol_id, requested_length):
+    # EXACT KNOWN-GOOD E3 SEQUENCE:
+    #   Place -> SetId(placed id) -> GetDisplayLength ->
+    #   SetDisplayLength -> SetId(placed id) -> GetDisplayLength
     sym.SetId(symbol_id)
 
-    before = get_display_length_safe(sym, symbol_id)
+    try:
+        before = float(sym.GetDisplayLength())
+    except Exception:
+        before = None
 
     print("SHIELD LENGTH BEFORE:", before)
 
     try:
-        stretch_result = sym.SetDisplayLength(requested_length)
+        stretch_result = sym.SetDisplayLength(float(requested_length))
     except Exception as error:
         stretch_result = None
         print("SHIELD STRETCH EXCEPTION:", repr(error))
 
     print("SHIELD STRETCH RESULT:", stretch_result)
 
+    # Re-bind exactly like the standalone test that successfully resized.
+    sym.SetId(symbol_id)
     time.sleep(STRETCH_DELAY_SECONDS)
 
-    after = get_display_length_safe(sym, symbol_id)
+    try:
+        after = float(sym.GetDisplayLength())
+    except Exception:
+        after = None
 
     print("SHIELD REQUESTED LENGTH:", requested_length)
     print("SHIELD LENGTH AFTER:", after)
 
-    if after is None:
-        return False
+    return after is not None and abs(after - float(requested_length)) <= 0.001
 
-    if abs(after - requested_length) <= 0.001:
-        return True
 
-    return False
+def shield_stage_y_values(requested_length):
+    # Shield_Demo grows upward from its insertion point.
+    # 10.0 at Y=22.0 was proven to resize successfully in the earlier test.
+    # For longer shields, lower the staging Y enough to keep the full symbol on-sheet.
+    safe_y = min(
+        SHIELD_STAGE_DEFAULT_Y,
+        SHIELD_STAGE_TOP_LIMIT - float(requested_length) - SHIELD_STAGE_MARGIN
+    )
+    safe_y = max(0.75, safe_y)
+
+    candidates = [
+        safe_y,
+        max(0.75, safe_y - 0.50),
+        min(SHIELD_STAGE_DEFAULT_Y, safe_y + 0.50),
+        max(0.75, safe_y - 1.00),
+        min(SHIELD_STAGE_DEFAULT_Y, safe_y + 1.00),
+    ]
+
+    output = []
+    for value in candidates:
+        value = round(float(value), 3)
+        if value not in output:
+            output.append(value)
+
+    return output
 
 
 #====================================================================================================================================
@@ -1358,103 +1394,122 @@ def place_twist(sym, job, placement):
 #
 # No duplicate shields are intentionally created while searching.
 #====================================================================================================================================
-def place_shield(sym, job, placement):
+def place_shield(prj, job, placement):
     requested_length = float(placement["length"])
     final_x = float(placement["x"])
     final_y = float(placement["y"])
-    staged_id = None
-    stage_found = False
-    successful_stage_x = None
-    successful_stage_y = None
 
     print("SHIELD FINAL X:", final_x)
     print("SHIELD FINAL Y:", final_y)
     print("SHIELD REQUESTED LENGTH:", requested_length)
 
-    load_result = sym.Load(job["symbol_name"], SYMBOL_VERSION)
+    stage_y_values = shield_stage_y_values(requested_length)
+    print("SHIELD STAGE X SEARCH:", SHIELD_STAGE_X_VALUES)
+    print("SHIELD STAGE Y SEARCH:", stage_y_values)
 
-    print("SHIELD LOAD RESULT:", load_result)
+    successful_sym = None
+    successful_id = None
+    successful_stage_x = None
+    successful_stage_y = None
 
-    if load_result == 0:
-        raise Exception(f"Could not load library shield {job['symbol_name']}")
-
-    for stage_y in SHIELD_STAGE_Y_VALUES:
-        if stage_found:
+    # IMPORTANT: create a FRESH E3 symbol object for every shield attempt.
+    # This reproduces the earlier standalone test rather than reusing the
+    # symbol object that just loaded/placed twist symbols.
+    for stage_y in stage_y_values:
+        if successful_id is not None:
             break
 
         for stage_x in SHIELD_STAGE_X_VALUES:
             print("")
             print("TRYING SHIELD STAGE X:", stage_x, "Y:", stage_y)
 
-            if staged_id is None:
-                staged_id = sym.Place(placement["sheet_id"], stage_x, stage_y, 0, 1.0, 0)
+            shield_sym = prj.CreateSymbolObject()
 
-                print("INITIAL SHIELD STAGE PLACE RESULT:", staged_id)
+            load_result = shield_sym.Load(job["symbol_name"], SYMBOL_VERSION)
+            print("SHIELD LOAD RESULT:", load_result)
 
-                if staged_id == 0:
-                    staged_id = None
-                    time.sleep(PLACEMENT_DELAY_SECONDS)
-                    continue
-            else:
-                sym.SetId(staged_id)
+            if load_result == 0:
+                try:
+                    del shield_sym
+                except Exception:
+                    pass
+                continue
 
-                move_result = sym.Place(placement["sheet_id"], stage_x, stage_y, 0, 1.0, 0)
+            # Exact working sequence: LOAD -> PLACE -> SETID -> STRETCH.
+            placed_id = shield_sym.Place(
+                placement["sheet_id"],
+                float(stage_x),
+                float(stage_y),
+                0,
+                1.0,
+                0
+            )
 
-                print("SHIELD STAGE MOVE RESULT:", move_result)
+            print("SHIELD STAGE PLACE RESULT:", placed_id)
 
-                if move_result == 0:
-                    time.sleep(PLACEMENT_DELAY_SECONDS)
-                    continue
-
-                staged_id = move_result
+            if placed_id == 0:
+                try:
+                    del shield_sym
+                except Exception:
+                    pass
+                time.sleep(PLACEMENT_DELAY_SECONDS)
+                continue
 
             time.sleep(PLACEMENT_DELAY_SECONDS)
 
-            current_length = get_display_length_safe(sym, staged_id)
+            set_id_result = shield_sym.SetId(placed_id)
+            print("SHIELD SET ID RESULT:", set_id_result)
+            print("SHIELD STAGED ID:", placed_id)
 
-            print("CURRENT STAGED SHIELD ID:", staged_id)
-            print("CURRENT STAGED LENGTH:", current_length)
-
-            if current_length is not None and abs(current_length - requested_length) <= 0.001:
-                print("SHIELD ALREADY HAS REQUESTED LENGTH")
+            if try_size_shield(shield_sym, placed_id, requested_length):
+                successful_sym = shield_sym
+                successful_id = placed_id
                 successful_stage_x = stage_x
                 successful_stage_y = stage_y
-                stage_found = True
+                print("SHIELD RESIZE SUCCESS")
                 break
 
-            size_success = try_size_shield(sym, staged_id, requested_length)
+            print("SHIELD RESIZE FAILED AT THIS STAGE")
 
-            if size_success:
-                print("VALID SHIELD STAGING AREA FOUND")
-                print("VALID STAGE X:", stage_x)
-                print("VALID STAGE Y:", stage_y)
-                successful_stage_x = stage_x
-                successful_stage_y = stage_y
-                stage_found = True
-                break
+            # Remove the failed test symbol before trying again.
+            try:
+                shield_sym.SetId(placed_id)
+                delete_result = shield_sym.Delete()
+                print("FAILED STAGE SHIELD DELETE RESULT:", delete_result)
+            except Exception as error:
+                print("FAILED STAGE SHIELD DELETE EXCEPTION:", repr(error))
 
-            print("STAGING AREA REJECTED SHIELD RESIZE")
+            try:
+                del shield_sym
+            except Exception:
+                pass
 
-    if staged_id is None:
-        raise Exception(f"Could not place staged shield {job['symbol_name']} anywhere in staging search")
+            time.sleep(PLACEMENT_DELAY_SECONDS)
 
-    if not stage_found:
-        raise Exception(f"Could not find a staging area where {job['symbol_name']} could resize to {requested_length}")
-
-    staged_length = get_display_length_safe(sym, staged_id)
+    if successful_id is None or successful_sym is None:
+        raise Exception(
+            f"{job['symbol_name']} could not resize to {requested_length}. "
+            f"The script used the same Load -> Place -> SetId -> SetDisplayLength "
+            f"sequence as the earlier working E3 test."
+        )
 
     print("")
     print("SHIELD STAGING COMPLETE")
-    print("SHIELD STAGED ID:", staged_id)
+    print("SHIELD STAGED ID:", successful_id)
     print("SHIELD STAGED X:", successful_stage_x)
     print("SHIELD STAGED Y:", successful_stage_y)
-    print("SHIELD STAGED LENGTH:", staged_length)
+    print("SHIELD STAGED LENGTH:", successful_sym.GetDisplayLength())
 
-    time.sleep(MOVE_DELAY_SECONDS)
-
-    sym.SetId(staged_id)
-
-    final_move_result = sym.Place(placement["sheet_id"], final_x, final_y, 0, 1.0, 0)
+    # Move the already-sized placed symbol to the final cable location.
+    successful_sym.SetId(successful_id)
+    final_move_result = successful_sym.Place(
+        placement["sheet_id"],
+        final_x,
+        final_y,
+        0,
+        1.0,
+        0
+    )
 
     print("SHIELD FINAL MOVE RESULT:", final_move_result)
 
@@ -1462,11 +1517,11 @@ def place_shield(sym, job, placement):
         raise Exception(f"Could not move sized shield to final X={final_x} Y={final_y}")
 
     final_id = final_move_result
+    time.sleep(MOVE_DELAY_SECONDS)
 
-    time.sleep(PLACEMENT_DELAY_SECONDS)
-
-    final_length = get_display_length_safe(sym, final_id)
-    final_location = get_symbol_location(sym, final_id)
+    successful_sym.SetId(final_id)
+    final_length = float(successful_sym.GetDisplayLength())
+    final_location = get_symbol_location(successful_sym, final_id)
 
     print("SHIELD FINAL ID:", final_id)
     print("SHIELD FINAL LENGTH:", final_length)
@@ -1476,14 +1531,18 @@ def place_shield(sym, job, placement):
         print("SHIELD FINAL ACTUAL X:", final_location["x"])
         print("SHIELD FINAL ACTUAL Y:", final_location["y"])
 
-    if final_length is None:
-        raise Exception(f"Could not verify final shield {final_id}")
-
+    # If E3 changed the length during the move, immediately re-apply it
+    # while bound to the final placed ID using the same proven sequence.
     if abs(final_length - requested_length) > 0.001:
-        raise Exception(f"Shield changed length after final move. Expected {requested_length}, actual {final_length}")
+        print("SHIELD LENGTH CHANGED DURING MOVE - REAPPLYING AT FINAL LOCATION")
+        if not try_size_shield(successful_sym, final_id, requested_length):
+            raise Exception(
+                f"Shield changed length after final move. "
+                f"Expected {requested_length}, actual {successful_sym.GetDisplayLength()}"
+            )
 
     print("SHIELD FINAL LENGTH VERIFIED")
-    print("SHIELD STAGED, SIZED, AND MOVED SUCCESSFULLY")
+    print("SHIELD PLACED AND RESIZED SUCCESSFULLY")
 
     return final_id
 
@@ -1491,7 +1550,7 @@ def place_shield(sym, job, placement):
 #====================================================================================================================================
 # PLACE ONE JOB
 #====================================================================================================================================
-def place_job(sym, job, placement):
+def place_job(prj, sym, job, placement):
     print("")
     print("------------------------------------------------------------")
     print("TYPE:", job["type"])
@@ -1521,7 +1580,7 @@ def place_job(sym, job, placement):
     if job["type"] == "twist":
         return place_twist(sym, job, placement)
 
-    return place_shield(sym, job, placement)
+    return place_shield(prj, job, placement)
 
 
 #====================================================================================================================================
@@ -1651,7 +1710,7 @@ def main():
         for job in jobs:
             try:
                 placement = calculate_placement(job, pin_map, sheet_id, twist_offset_settings)
-                placed_id = place_job(sym, job, placement)
+                placed_id = place_job(prj, sym, job, placement)
 
                 if placed_id is not None:
                     placed_ids.append(placed_id)
@@ -1682,7 +1741,7 @@ def main():
                 twist_offset_settings
             )
 
-            placed_id = place_job(sym, job, placement)
+            placed_id = place_job(prj, sym, job, placement)
 
             if placed_id is not None:
                 placed_ids.append(placed_id)
