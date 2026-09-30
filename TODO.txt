@@ -1,34 +1,293 @@
-============================================================
-ZUKEN CABLE SHIELD / TWIST OVERLAY
-============================================================
-EXCEL: C:\Users\conner.hughes\Downloads\Cable Generator.xlsx
-WORKSHEET: Selection
-DEVICE REFERENCE FROM B1: TEST_FOR_SYMBOLS
-CONNECTOR ROOT: W1
-DATA ROWS: 5 TO 108
+#====================================================================================================================================
+# EXTRACT IDS FROM E3 ARRAY RETURN
+#====================================================================================================================================
+def extract_e3_ids(result):
+    if result is None:
+        return []
 
-CONNECTOR SECTIONS WITH SYMBOLS: 1
+    if isinstance(result, int):
+        if result > 0:
+            return [result]
 
-E3 DEVICE ID COUNT: 30
+        return []
 
-============================================================
-PROCESSING CONNECTOR SECTION
-============================================================
-SIDE: LEFT
-EXCEL CONNECTOR: P1
-EXPECTED E3 CONNECTOR: W1.P1
-EXCEL ROWS: 5 TO 30
-REQUIRED PINS: ['1', '10', '2', '11', '19', '20', '3', '12', '4', '13', '21', '22', '5', '14', '6', '15', '23', '24', '7', '16', '8', '17', '9', '18', '25', '26']
+    if not isinstance(result, tuple):
+        return []
 
-E3 CANDIDATES FOR: W1.P1
-CANDIDATE ID: 143921 NAME: W1.P1 SHEET: 204828 PLACED: 26 UNIQUE Y: 1 Y SPAN: 0.0 X SPAN: 0.0
-Traceback (most recent call last):
-  File "C:\Users\conner.hughes\OneDrive - BAE Systems Inc\Documents\Python\Cable Symbol Placer\main.py", line 928, in <module>
-    main()
-    ~~~~^^
-  File "C:\Users\conner.hughes\OneDrive - BAE Systems Inc\Documents\Python\Cable Symbol Placer\main.py", line 892, in main
-    device_record, pin_map, sheet_id = resolve_connector_schematic_view(connector, required_pins, all_devices, dev, pin, pin_map_cache)
-                                       ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "C:\Users\conner.hughes\OneDrive - BAE Systems Inc\Documents\Python\Cable Symbol Placer\main.py", line 638, in resolve_connector_schematic_view
-    raise Exception(f"Found {expected_name}, but every candidate has all pins at the same Y. The split schematic view was not found")
-Exception: Found W1.P1, but every candidate has all pins at the same Y. The split schematic view was not found
+    if len(result) < 2:
+        return []
+
+    values = result[1]
+
+    if values is None:
+        return []
+
+    if isinstance(values, int):
+        if values > 0:
+            return [values]
+
+        return []
+
+    try:
+        return [value for value in values if value is not None and int(value) > 0]
+    except Exception:
+        return []
+
+
+#====================================================================================================================================
+# FIND BASE DEVICE IDS FOR CONNECTOR
+#
+# Example:
+#
+# P1 -> W1.P1
+#
+# We only use GetAllDeviceIds here to find the BASE logical connector.
+# The schematic view itself is found with GetViewIds.
+#====================================================================================================================================
+def find_base_connector_devices(connector_token, all_devices):
+    expected_name = connector_base_name(connector_token)
+    expected_upper = expected_name.upper()
+    matches = []
+
+    for record in all_devices:
+        if record["name"].upper() == expected_upper:
+            matches.append(record)
+
+    return matches
+
+
+#====================================================================================================================================
+# GET ALL EXISTING VIEW IDS FROM ONE BASE DEVICE
+#====================================================================================================================================
+def get_device_view_ids(dev, base_device_id):
+    dev.SetId(base_device_id)
+
+    try:
+        result = dev.GetViewIds(None)
+    except Exception as error:
+        print("GetViewIds FAILED FOR BASE ID:", base_device_id, "ERROR:", repr(error))
+        return []
+
+    view_ids = extract_e3_ids(result)
+
+    print("BASE DEVICE ID:", base_device_id, "VIEW IDS:", view_ids)
+
+    return view_ids
+
+
+#====================================================================================================================================
+# ALSO FIND SAME-NAME DEVICES THROUGH THE ASSEMBLY
+#
+# This is the same general hierarchy approach used in the block work.
+# It gives us another way of discovering view/device IDs that may not
+# appear directly in GetAllDeviceIds.
+#====================================================================================================================================
+def get_same_name_assembly_devices(dev, base_device_id, expected_name):
+    found_ids = []
+
+    dev.SetId(base_device_id)
+
+    try:
+        assembly_id = dev.GetAssemblyId()
+    except Exception:
+        return found_ids
+
+    if assembly_id is None or assembly_id == 0:
+        return found_ids
+
+    dev.SetId(assembly_id)
+
+    try:
+        device_info = dev.GetDeviceIds(None)
+    except Exception:
+        return found_ids
+
+    device_ids = extract_e3_ids(device_info)
+
+    for device_id in device_ids:
+        dev.SetId(device_id)
+
+        try:
+            name = clean_excel_value(dev.GetName())
+        except Exception:
+            continue
+
+        if name.upper() == expected_name.upper():
+            found_ids.append(device_id)
+
+    return found_ids
+
+
+#====================================================================================================================================
+# COLLECT EVERY POSSIBLE DEVICE / VIEW ID FOR W1.P#
+#
+# We deliberately do NOT depend on the name having "#".
+#
+# A schematic view ID may still return:
+#
+#     W1.P1
+#
+# from GetName().
+#====================================================================================================================================
+def collect_connector_candidate_ids(connector_token, all_devices, dev):
+    expected_name = connector_base_name(connector_token)
+    base_records = find_base_connector_devices(connector_token, all_devices)
+
+    if not base_records:
+        raise Exception(f"Could not find base E3 connector {expected_name}")
+
+    candidate_sources = {}
+
+    for record in base_records:
+        base_id = record["device_id"]
+        candidate_sources[base_id] = "BASE"
+
+        view_ids = get_device_view_ids(dev, base_id)
+
+        for view_id in view_ids:
+            candidate_sources[view_id] = "VIEW"
+
+        assembly_ids = get_same_name_assembly_devices(dev, base_id, expected_name)
+
+        for assembly_device_id in assembly_ids:
+            if assembly_device_id not in candidate_sources:
+                candidate_sources[assembly_device_id] = "ASSEMBLY"
+
+    return candidate_sources
+
+
+#====================================================================================================================================
+# ANALYZE ONE CANDIDATE DEVICE / VIEW
+#
+# The real schematic view should have:
+#
+#     multiple unique Y values
+#     a real Y span
+#     most or all required pins
+#====================================================================================================================================
+def analyze_candidate(required_pins, pin_map):
+    sheets = {}
+
+    for pin_name in required_pins:
+        locations = pin_map.get(pin_name, [])
+
+        for location in locations:
+            sheet_id = location["sheet_id"]
+
+            if sheet_id not in sheets:
+                sheets[sheet_id] = {"pins": set(), "xs": [], "ys": []}
+
+            sheets[sheet_id]["pins"].add(pin_name)
+            sheets[sheet_id]["xs"].append(location["x"])
+            sheets[sheet_id]["ys"].append(location["y"])
+
+    if not sheets:
+        return None
+
+    results = []
+
+    for sheet_id, data in sheets.items():
+        placed_count = len(data["pins"])
+        unique_x_values = set(round(value, COORDINATE_ROUND_DIGITS) for value in data["xs"])
+        unique_y_values = set(round(value, COORDINATE_ROUND_DIGITS) for value in data["ys"])
+        unique_x_count = len(unique_x_values)
+        unique_y_count = len(unique_y_values)
+        x_span = max(data["xs"]) - min(data["xs"]) if data["xs"] else 0.0
+        y_span = max(data["ys"]) - min(data["ys"]) if data["ys"] else 0.0
+        has_real_y_spread = y_span >= SCHEMATIC_MIN_Y_SPAN and unique_y_count > 1
+        result = {"sheet_id": sheet_id, "placed_count": placed_count, "unique_x_count": unique_x_count, "unique_y_count": unique_y_count, "x_span": x_span, "y_span": y_span, "has_real_y_spread": has_real_y_spread}
+        results.append(result)
+
+    results.sort(key=lambda item: (item["has_real_y_spread"], item["placed_count"], item["unique_y_count"], item["y_span"]), reverse=True)
+
+    return results[0]
+
+
+#====================================================================================================================================
+# RESOLVE REAL SCHEMATIC VIEW
+#
+# THIS REPLACES THE OLD resolve_connector_schematic_view().
+#====================================================================================================================================
+def resolve_connector_schematic_view(connector_token, required_pins, all_devices, dev, pin, cache):
+    expected_name = connector_base_name(connector_token)
+    candidate_sources = collect_connector_candidate_ids(connector_token, all_devices, dev)
+    candidates = []
+
+    print("")
+    print("============================================================")
+    print("E3 CANDIDATES FOR:", expected_name)
+    print("============================================================")
+
+    for candidate_id, source in candidate_sources.items():
+        dev.SetId(candidate_id)
+
+        try:
+            candidate_name = clean_excel_value(dev.GetName())
+        except Exception:
+            candidate_name = "UNKNOWN"
+
+        if candidate_id not in cache:
+            try:
+                cache[candidate_id] = load_device_pin_map(dev, pin, candidate_id)
+            except Exception as error:
+                print("CANDIDATE ID:", candidate_id, "SOURCE:", source, "NAME:", candidate_name, "PIN MAP FAILED:", repr(error))
+                continue
+
+        pin_map = cache[candidate_id]
+        analysis = analyze_candidate(required_pins, pin_map)
+
+        if analysis is None:
+            print("CANDIDATE ID:", candidate_id, "SOURCE:", source, "NAME:", candidate_name, "NO PLACED REQUIRED PINS")
+            continue
+
+        print("CANDIDATE ID:", candidate_id, "SOURCE:", source, "NAME:", candidate_name, "SHEET:", analysis["sheet_id"], "PLACED:", analysis["placed_count"], "UNIQUE X:", analysis["unique_x_count"], "UNIQUE Y:", analysis["unique_y_count"], "X SPAN:", analysis["x_span"], "Y SPAN:", analysis["y_span"])
+
+        candidate = {"device_id": candidate_id, "name": candidate_name, "source": source, "pin_map": pin_map, "analysis": analysis}
+        candidates.append(candidate)
+
+    if not candidates:
+        raise Exception(f"No usable E3 device/view candidates found for {expected_name}")
+
+    candidates.sort(key=lambda item: (item["analysis"]["has_real_y_spread"], item["analysis"]["placed_count"], item["analysis"]["unique_y_count"], item["analysis"]["y_span"]), reverse=True)
+
+    best = candidates[0]
+
+    if not best["analysis"]["has_real_y_spread"]:
+        print("")
+        print("NO VALID SCHEMATIC VIEW FOUND")
+        print("EXPECTED:", expected_name)
+        print("BASE DEVICE WAS FOUND BUT ITS PINS ARE NOT SPLIT VERTICALLY")
+        print("VIEW IDS DISCOVERED:", [candidate_id for candidate_id, source in candidate_sources.items() if source == "VIEW"])
+        raise Exception(f"Could not locate the split schematic view for {expected_name}")
+
+    sheet_id = best["analysis"]["sheet_id"]
+    missing_pins = []
+
+    for pin_name in required_pins:
+        locations = best["pin_map"].get(pin_name, [])
+        found_on_sheet = False
+
+        for location in locations:
+            if location["sheet_id"] == sheet_id:
+                found_on_sheet = True
+                break
+
+        if not found_on_sheet:
+            missing_pins.append(pin_name)
+
+    if missing_pins:
+        raise Exception(f"Selected schematic view for {expected_name} is missing pins on sheet {sheet_id}: {missing_pins}")
+
+    print("")
+    print("SELECTED SCHEMATIC VIEW ID:", best["device_id"])
+    print("SELECTED SOURCE:", best["source"])
+    print("SELECTED NAME:", best["name"])
+    print("SELECTED SHEET:", sheet_id)
+    print("SELECTED PLACED PIN COUNT:", best["analysis"]["placed_count"])
+    print("SELECTED UNIQUE Y COUNT:", best["analysis"]["unique_y_count"])
+    print("SELECTED Y SPAN:", best["analysis"]["y_span"])
+    print("============================================================")
+
+    record = {"device_id": best["device_id"], "name": best["name"]}
+
+    return record, best["pin_map"], sheet_id
