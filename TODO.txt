@@ -1,305 +1,378 @@
+import time
+import win32com.client as win32
 
-############################################################
-Shield_Demo PRIME / STATE TEST
-############################################################
-SHEET ID: 204828
-SYMBOL: Shield_Demo
-############################################################
-
-============================================================
-A - NO PRIME / 24.75
-============================================================
-X: 24.0
-Y: 6.75
-REQUESTED: 24.75
-LOAD RESULT: 147946
-PLACE RESULT: 279603
-SetDisplayLength RESULT: 0
-IMMEDIATE LENGTH: 1.25
-SetId RESULT: 279603
-VERIFIED LENGTH: 1.25
-STATUS: FAIL
-DELETE RESULT: 0
-
-============================================================
-PRIME Shield_Demo STATE
-============================================================
-PRIME LOAD RESULT: 147946
-PRIME PLACE RESULT: 279307
-PRIME SetId RESULT: 279307
-PRIME NAME: SY1
-PRIME TYPE: 17
-PRIME IS SHIELD: 1
-PRIME LENGTH: 1.2499999999999996
-PRIME WIDTH: 0.0
-DELETE RESULT: 0
-PRIME STATUS: COMPLETE
-
-============================================================
-B - AFTER PRIME / 24.75
-============================================================
-X: 24.0
-Y: 6.75
-REQUESTED: 24.75
-LOAD RESULT: 147946
-PLACE RESULT: 279108
-SetDisplayLength RESULT: 0
-IMMEDIATE LENGTH: 1.25
-SetId RESULT: 279108
-VERIFIED LENGTH: 1.25
-STATUS: FAIL
-DELETE RESULT: 0
-
-============================================================
-C - SAME PRIME / 0.50
-============================================================
-X: 24.0
-Y: 22.0
-REQUESTED: 0.5
-LOAD RESULT: 147946
-PLACE RESULT: 278809
-SetDisplayLength RESULT: 0
-IMMEDIATE LENGTH: 1.25
-SetId RESULT: 278809
-VERIFIED LENGTH: 1.25
-STATUS: FAIL
-DELETE RESULT: 0
-
-============================================================
-PRIME Shield_Demo STATE
-============================================================
-PRIME LOAD RESULT: 147946
-PRIME PLACE RESULT: 278580
-PRIME SetId RESULT: 278580
-PRIME NAME: SY1
-PRIME TYPE: 17
-PRIME IS SHIELD: 1
-PRIME LENGTH: 1.2499999999999996
-PRIME WIDTH: 0.0
-DELETE RESULT: 0
-PRIME STATUS: COMPLETE
-
-============================================================
-DEVICE/PIN STATE PROBE
-============================================================
-DEVICE COUNT: 72
-DEVICE SetId RESULT: 136529
-FIRST DEVICE PIN COUNT: 0
-DEVICE/PIN STATE PROBE COMPLETE
-
-============================================================
-D - PRIME -> DEVICE/PIN OBJECTS -> 24.75
-============================================================
-X: 24.0
-Y: 6.75
-REQUESTED: 24.75
-LOAD RESULT: 147946
-PLACE RESULT: 278385
-SetDisplayLength RESULT: 0
-IMMEDIATE LENGTH: 1.25
-SetId RESULT: 278385
-VERIFIED LENGTH: 1.25
-STATUS: FAIL
-DELETE RESULT: 0
-
-============================================================
-PRIME Shield_Demo STATE
-============================================================
-PRIME LOAD RESULT: 147946
-PRIME PLACE RESULT: 278088
-PRIME SetId RESULT: 278088
-PRIME NAME: SY1
-PRIME TYPE: 17
-PRIME IS SHIELD: 1
-PRIME LENGTH: 1.2499999999999996
-PRIME WIDTH: 0.0
-DELETE RESULT: 0
-PRIME STATUS: COMPLETE
-
-============================================================
-E - RE-PRIME AFTER DEVICE/PIN -> 24.75
-============================================================
-X: 24.0
-Y: 6.75
-REQUESTED: 24.75
-LOAD RESULT: 147946
-PLACE RESULT: 277893
-SetDisplayLength RESULT: 0
-IMMEDIATE LENGTH: 1.25
-SetId RESULT: 277893
-VERIFIED LENGTH: 1.25
-STATUS: FAIL
-DELETE RESULT: 0
+SHIELD_NAME = "Shield_Demo"
+VERSION = 1
+TOL = 0.001
+DELAY = 0.10
 
 
-############################################################
-FINAL PRIME/STATE RESULTS
-############################################################
-A_NO_PRIME_24.75 => FAIL
-B_AFTER_PRIME_24.75 => FAIL
-C_SAME_PRIME_0.50 => FAIL
-D_PRIME_THEN_DEVICE_PIN_24.75 => FAIL
-E_REPRIME_AFTER_DEVICE_PIN_24.75 => FAIL
-############################################################
+def extract_ids(result):
+    if result is None:
+        return []
 
-Interpretation:
-- If A fails and B passes: the missing baseline PRIME is the cause.
-- If B passes and C passes: one PRIME persists across multiple shields.
-- If D fails but E passes: device/pin reads poison the shield modify state,
-  so the real script must PRIME immediately after geometry lookup and
-  before placing shields.
-- If D passes too: device/pin reads are not the poison; PRIME alone is enough.
-############################################################
-PS C:\Users\conner.hughes\OneDrive - BAE Systems Inc\Documents\Python\Cable Symbol Placer> python .\main.py
+    if isinstance(result, int):
+        return [result] if result > 0 else []
 
-############################################################
-Shield_Demo PRIME / STATE TEST
-############################################################
-SHEET ID: 204828
-SYMBOL: Shield_Demo
-############################################################
+    if isinstance(result, list):
+        out = []
+        for value in result:
+            try:
+                value = int(value)
+                if value > 0:
+                    out.append(value)
+            except Exception:
+                pass
+        return out
 
-============================================================
-A - NO PRIME / 24.75
-============================================================
-X: 24.0
-Y: 6.75
-REQUESTED: 24.75
-LOAD RESULT: 147946
-PLACE RESULT: 279603
-SetDisplayLength RESULT: 0
-IMMEDIATE LENGTH: 1.25
-SetId RESULT: 279603
-VERIFIED LENGTH: 1.25
-STATUS: FAIL
-DELETE RESULT: 0
+    if isinstance(result, tuple):
+        if len(result) >= 2:
+            values = result[1]
 
-============================================================
-PRIME Shield_Demo STATE
-============================================================
-PRIME LOAD RESULT: 147946
-PRIME PLACE RESULT: 279307
-PRIME SetId RESULT: 279307
-PRIME NAME: SY1
-PRIME TYPE: 17
-PRIME IS SHIELD: 1
-PRIME LENGTH: 1.2499999999999996
-PRIME WIDTH: 0.0
-DELETE RESULT: 0
-PRIME STATUS: COMPLETE
+            if isinstance(values, int):
+                return [values] if values > 0 else []
 
-============================================================
-B - AFTER PRIME / 24.75
-============================================================
-X: 24.0
-Y: 6.75
-REQUESTED: 24.75
-LOAD RESULT: 147946
-PLACE RESULT: 279108
-SetDisplayLength RESULT: 0
-IMMEDIATE LENGTH: 1.25
-SetId RESULT: 279108
-VERIFIED LENGTH: 1.25
-STATUS: FAIL
-DELETE RESULT: 0
+            if values is not None:
+                try:
+                    return [int(v) for v in values if v is not None and int(v) > 0]
+                except Exception:
+                    pass
 
-============================================================
-C - SAME PRIME / 0.50
-============================================================
-X: 24.0
-Y: 22.0
-REQUESTED: 0.5
-LOAD RESULT: 147946
-PLACE RESULT: 278809
-SetDisplayLength RESULT: 0
-IMMEDIATE LENGTH: 1.25
-SetId RESULT: 278809
-VERIFIED LENGTH: 1.25
-STATUS: FAIL
-DELETE RESULT: 0
+        out = []
+        for value in result:
+            try:
+                value = int(value)
+                if value > 0:
+                    out.append(value)
+            except Exception:
+                pass
+        return out
 
-============================================================
-PRIME Shield_Demo STATE
-============================================================
-PRIME LOAD RESULT: 147946
-PRIME PLACE RESULT: 278580
-PRIME SetId RESULT: 278580
-PRIME NAME: SY1
-PRIME TYPE: 17
-PRIME IS SHIELD: 1
-PRIME LENGTH: 1.2499999999999996
-PRIME WIDTH: 0.0
-DELETE RESULT: 0
-PRIME STATUS: COMPLETE
-
-============================================================
-DEVICE/PIN STATE PROBE
-============================================================
-DEVICE COUNT: 72
-DEVICE SetId RESULT: 136529
-FIRST DEVICE PIN COUNT: 0
-DEVICE/PIN STATE PROBE COMPLETE
-
-============================================================
-D - PRIME -> DEVICE/PIN OBJECTS -> 24.75
-============================================================
-X: 24.0
-Y: 6.75
-REQUESTED: 24.75
-LOAD RESULT: 147946
-PLACE RESULT: 278385
-SetDisplayLength RESULT: 0
-IMMEDIATE LENGTH: 1.25
-SetId RESULT: 278385
-VERIFIED LENGTH: 1.25
-STATUS: FAIL
-DELETE RESULT: 0
-
-============================================================
-PRIME Shield_Demo STATE
-============================================================
-PRIME LOAD RESULT: 147946
-PRIME PLACE RESULT: 278088
-PRIME SetId RESULT: 278088
-PRIME NAME: SY1
-PRIME TYPE: 17
-PRIME IS SHIELD: 1
-PRIME LENGTH: 1.2499999999999996
-PRIME WIDTH: 0.0
-DELETE RESULT: 0
-PRIME STATUS: COMPLETE
-
-============================================================
-E - RE-PRIME AFTER DEVICE/PIN -> 24.75
-============================================================
-X: 24.0
-Y: 6.75
-REQUESTED: 24.75
-LOAD RESULT: 147946
-PLACE RESULT: 277893
-SetDisplayLength RESULT: 0
-IMMEDIATE LENGTH: 1.25
-SetId RESULT: 277893
-VERIFIED LENGTH: 1.25
-STATUS: FAIL
-DELETE RESULT: 0
+    try:
+        return [int(v) for v in result if v is not None and int(v) > 0]
+    except Exception:
+        return []
 
 
-############################################################
-FINAL PRIME/STATE RESULTS
-############################################################
-A_NO_PRIME_24.75 => FAIL
-B_AFTER_PRIME_24.75 => FAIL
-C_SAME_PRIME_0.50 => FAIL
-D_PRIME_THEN_DEVICE_PIN_24.75 => FAIL
-E_REPRIME_AFTER_DEVICE_PIN_24.75 => FAIL
-############################################################
+def get_sheet_1(prj):
+    sht = prj.CreateSheetObject()
+    sheet_ids = extract_ids(prj.GetAllSheetIds(None))
 
-Interpretation:
-- If A fails and B passes: the missing baseline PRIME is the cause.
-- If B passes and C passes: one PRIME persists across multiple shields.
-- If D fails but E passes: device/pin reads poison the shield modify state,
-  so the real script must PRIME immediately after geometry lookup and
-  before placing shields.
-- If D passes too: device/pin reads are not the poison; PRIME alone is enough.
-############################################################
+    if not sheet_ids:
+        raise Exception("No schematic sheets found.")
+
+    for sheet_id in sheet_ids:
+        sht.SetId(sheet_id)
+
+        try:
+            name = str(sht.GetName()).strip()
+        except Exception:
+            name = ""
+
+        if name == "1":
+            return sheet_id, name
+
+    sheet_id = sheet_ids[0]
+    sht.SetId(sheet_id)
+
+    try:
+        name = str(sht.GetName()).strip()
+    except Exception:
+        name = "UNKNOWN"
+
+    return sheet_id, name
+
+
+def safe_delete_same_object(sym, symbol_id):
+    """
+    EXACT cleanup style from the successful matrix:
+    delete with the SAME symbol object that placed/resized it.
+    """
+    if not symbol_id:
+        return
+
+    try:
+        sym.SetId(symbol_id)
+    except Exception:
+        pass
+
+    try:
+        result = sym.Delete()
+        print("DELETE SAME OBJECT RESULT:", result)
+    except Exception as error:
+        print("DELETE SAME OBJECT EXCEPTION:", repr(error))
+
+
+def exact_matrix_resize(prj, sheet_id, label, x, y, requested):
+    """
+    This is intentionally the successful matrix sequence:
+
+        sym = CreateSymbolObject()
+        Load
+        Place
+        IMMEDIATE SetDisplayLength
+        sleep
+        GetDisplayLength
+        SetId
+        GetDisplayLength
+        read metadata
+        Delete using SAME sym object
+    """
+    print("")
+    print("################################################################")
+    print(label)
+    print("################################################################")
+    print("SYMBOL:", SHIELD_NAME)
+    print("X:", x)
+    print("Y:", y)
+    print("REQUESTED:", requested)
+
+    sym = prj.CreateSymbolObject()
+
+    load_result = sym.Load(SHIELD_NAME, VERSION)
+    print("1 LOAD RESULT:", load_result)
+
+    if load_result == 0:
+        print("STATUS: LOAD_FAIL")
+        return False
+
+    placed_id = sym.Place(
+        sheet_id,
+        float(x),
+        float(y),
+        0,
+        1.0,
+        0
+    )
+
+    print("2 PLACE RESULT:", placed_id)
+
+    if placed_id == 0:
+        print("STATUS: PLACE_FAIL")
+        return False
+
+    # Nothing is allowed between Place and SetDisplayLength.
+    try:
+        stretch_result = sym.SetDisplayLength(float(requested))
+    except Exception as error:
+        stretch_result = None
+        print("3 SetDisplayLength EXCEPTION:", repr(error))
+
+    print("3 SetDisplayLength RESULT:", stretch_result)
+
+    time.sleep(DELAY)
+
+    try:
+        immediate = float(sym.GetDisplayLength())
+    except Exception:
+        immediate = None
+
+    print("4 IMMEDIATE LENGTH:", immediate)
+
+    try:
+        setid_result = sym.SetId(placed_id)
+    except Exception as error:
+        setid_result = None
+        print("5 SetId EXCEPTION:", repr(error))
+
+    print("5 SetId RESULT:", setid_result)
+
+    try:
+        verified = float(sym.GetDisplayLength())
+    except Exception:
+        verified = None
+
+    try:
+        name = sym.GetName()
+    except Exception:
+        name = "UNKNOWN"
+
+    try:
+        symbol_type = sym.GetSymbolType()
+    except Exception:
+        symbol_type = "UNKNOWN"
+
+    try:
+        is_shield = sym.IsShield()
+    except Exception:
+        is_shield = "UNKNOWN"
+
+    try:
+        width = float(sym.GetDisplayWidth())
+    except Exception:
+        width = None
+
+    print("6 VERIFIED LENGTH:", verified)
+    print("6 NAME:", name)
+    print("6 TYPE:", symbol_type)
+    print("6 IS SHIELD:", is_shield)
+    print("6 WIDTH:", width)
+
+    passed = (
+        verified is not None
+        and abs(verified - float(requested)) <= TOL
+    )
+
+    print("STATUS:", "PASS" if passed else "FAIL")
+
+    # CRITICAL: same-object deletion, exactly like successful matrix.
+    safe_delete_same_object(sym, placed_id)
+
+    # Let this COM wrapper die before creating the next one.
+    try:
+        del sym
+    except Exception:
+        pass
+
+    time.sleep(DELAY)
+
+    return passed
+
+
+def main():
+    app = win32.gencache.EnsureDispatch("CT.Application")
+    prj = app.CreateJobObject()
+
+    sheet_id, sheet_name = get_sheet_1(prj)
+
+    print("")
+    print("================================================================")
+    print("Shield_Demo WARM-UP / RAMP DIAGNOSTIC")
+    print("================================================================")
+    print("SHEET ID:", sheet_id)
+    print("SHEET NAME:", sheet_name)
+    print("SYMBOL:", SHIELD_NAME)
+    print("")
+    print("This test uses the SAME resize + SAME-object-delete pattern")
+    print("from the matrix run that successfully resized every length.")
+    print("================================================================")
+
+    results = []
+
+    # ================================================================
+    # TEST 1:
+    # The successful matrix's FIRST actual resize was 1.00.
+    # If this fails, the old successful matrix is no longer reproducible
+    # in the current E3 state.
+    # ================================================================
+    one_ok = exact_matrix_resize(
+        prj,
+        sheet_id,
+        "TEST 1 - FIRST RESIZE = 1.00 (EXACT SUCCESSFUL MATRIX START)",
+        24.0,
+        22.0,
+        1.00
+    )
+    results.append(("FIRST_1.00", one_ok))
+
+    # ================================================================
+    # TEST 2:
+    # Immediately jump to current long shield after the 1.00 warm-up.
+    # ================================================================
+    long_after_one = exact_matrix_resize(
+        prj,
+        sheet_id,
+        "TEST 2 - 24.75 IMMEDIATELY AFTER 1.00",
+        24.0,
+        6.75,
+        24.75
+    )
+    results.append(("24.75_AFTER_1.00", long_after_one))
+
+    # ================================================================
+    # If the minimal warm-up did not work, reproduce the FULL successful
+    # matrix ramp before retrying 24.75.
+    # ================================================================
+    if not long_after_one:
+        print("")
+        print("================================================================")
+        print("MINIMAL WARM-UP DID NOT PRODUCE 24.75.")
+        print("RUNNING FULL SUCCESSFUL MATRIX RAMP.")
+        print("================================================================")
+
+        for requested in [0.50, 1.50, 2.00, 5.00, 10.00]:
+            ok = exact_matrix_resize(
+                prj,
+                sheet_id,
+                f"RAMP - LENGTH {requested:.2f}",
+                24.0,
+                22.0,
+                requested
+            )
+            results.append((f"RAMP_{requested:.2f}", ok))
+
+        ramp_long = exact_matrix_resize(
+            prj,
+            sheet_id,
+            "TEST 3 - 24.75 AFTER FULL RAMP",
+            24.0,
+            6.75,
+            24.75
+        )
+        results.append(("24.75_AFTER_FULL_RAMP", ramp_long))
+    else:
+        ramp_long = True
+
+    # ================================================================
+    # If long shield now works, test the ACTUAL final left/right positions.
+    # ================================================================
+    if long_after_one or ramp_long:
+        left_ok = exact_matrix_resize(
+            prj,
+            sheet_id,
+            "TEST 4 - CURRENT LEFT FINAL X=1.75 Y=4.875 LENGTH=24.75",
+            1.75,
+            4.875,
+            24.75
+        )
+        results.append(("CURRENT_LEFT_FINAL", left_ok))
+
+        right_ok = exact_matrix_resize(
+            prj,
+            sheet_id,
+            "TEST 5 - CURRENT RIGHT FINAL X=3.25 Y=4.875 LENGTH=24.75",
+            3.25,
+            4.875,
+            24.75
+        )
+        results.append(("CURRENT_RIGHT_FINAL", right_ok))
+
+        inner_ok = exact_matrix_resize(
+            prj,
+            sheet_id,
+            "TEST 6 - CURRENT INNER LENGTH=0.50",
+            24.0,
+            22.0,
+            0.50
+        )
+        results.append(("CURRENT_INNER_0.50", inner_ok))
+
+    print("")
+    print("")
+    print("================================================================")
+    print("FINAL WARM-UP / RAMP RESULTS")
+    print("================================================================")
+
+    for name, passed in results:
+        print(name, "=>", "PASS" if passed else "FAIL")
+
+    print("================================================================")
+    print("")
+    print("WHAT THIS MEANS:")
+    print("")
+    print("1) FIRST_1.00 PASS and 24.75_AFTER_1.00 PASS")
+    print("   => E3 requires a successful small resize before the long resize.")
+    print("")
+    print("2) FIRST_1.00 PASS, 24.75_AFTER_1.00 FAIL,")
+    print("   but 24.75_AFTER_FULL_RAMP PASS")
+    print("   => E3 requires the progressive resize ramp/state sequence.")
+    print("")
+    print("3) FIRST_1.00 FAIL")
+    print("   => the previously successful matrix behavior is NOT currently")
+    print("      reproducible, even with its exact first operation and cleanup.")
+    print("      Then the cause is outside spreadsheet job generation/order.")
+    print("================================================================")
+
+
+if __name__ == "__main__":
+    main()
