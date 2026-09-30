@@ -1,52 +1,89 @@
-============================================================
-E3 SYMBOL MOVE / POSITION METHOD PROBE
-============================================================
+import inspect
+import win32com.client as win32
 
-METHOD: GetPlacedArea
-DOC: method GetPlacedArea
 
-METHOD: GetPlacedPolygon
-DOC: None
+app = win32.gencache.EnsureDispatch("CT.Application")
+prj = app.CreateJobObject()
+sym = prj.CreateSymbolObject()
 
-METHOD: GetSchemaLocation
-DOC: method GetSchemaLocation
 
-METHOD: GetSchemaLocationShared
-DOC: None
+print("")
+print("============================================================")
+print("E3 SYMBOL METHOD SIGNATURE PROBE")
+print("============================================================")
 
-METHOD: GetSchematicTypes
-DOC: method GetSchematicTypes
 
-METHOD: Place
-DOC: method Place
+method_names = [
+    "SetDeviceLocation",
+    "GetSchemaLocation",
+    "Place",
+    "SetDisplayLength",
+    "GetDisplayLength"
+]
 
-METHOD: PlaceAsGraphic
-DOC: method PlaceAsGraphic
 
-METHOD: PlaceBlock
-DOC: method PlaceBlock
+for method_name in method_names:
+    print("")
+    print("============================================================")
+    print("METHOD:", method_name)
+    print("============================================================")
 
-METHOD: PlaceDynamic
-DOC: method PlaceDynamic
+    if not hasattr(sym, method_name):
+        print("METHOD NOT AVAILABLE")
+        continue
 
-METHOD: PlaceInteractively
-DOC: method PlaceInteractively
+    method = getattr(sym, method_name)
 
-METHOD: PlacePinView
-DOC: method PlacePinView
+    print("BOUND METHOD:", method)
 
-METHOD: PlacePins
-DOC: method PlacePins
+    try:
+        signature = inspect.signature(method)
+        print("BOUND SIGNATURE:", signature)
+    except Exception as error:
+        print("BOUND SIGNATURE ERROR:", repr(error))
 
-METHOD: PlaceTable
-DOC: method PlaceTable
+    try:
+        class_method = getattr(type(sym), method_name)
+        print("CLASS METHOD:", class_method)
+    except Exception as error:
+        print("CLASS METHOD ERROR:", repr(error))
+        class_method = None
 
-METHOD: RemoveFromSheetReference
-DOC: None
+    if class_method is not None:
+        try:
+            class_signature = inspect.signature(class_method)
+            print("CLASS SIGNATURE:", class_signature)
+        except Exception as error:
+            print("CLASS SIGNATURE ERROR:", repr(error))
 
-METHOD: SetDeviceLocation
-DOC: method SetDeviceLocation
+        try:
+            source = inspect.getsource(class_method)
+            print("CLASS SOURCE:")
+            print(source)
+        except Exception as error:
+            print("CLASS SOURCE ERROR:", repr(error))
 
-============================================================
-DONE
-============================================================
+
+print("")
+print("============================================================")
+print("OBJECT INFORMATION")
+print("============================================================")
+print("OBJECT TYPE:", type(sym))
+print("OBJECT MODULE:", type(sym).__module__)
+
+
+try:
+    print("CLSID:", sym.CLSID)
+except Exception as error:
+    print("CLSID ERROR:", repr(error))
+
+
+print("")
+print("============================================================")
+print("DONE")
+print("============================================================")
+
+
+del sym
+del prj
+del app
