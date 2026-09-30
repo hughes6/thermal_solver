@@ -1,217 +1,32 @@
-]import win32com.client as win32
+============================================================
+Shield_Demo MAX LENGTH TEST
+============================================================
+SHEET ID: 204828
+SHEET NAME: 1
+TEST X: 24.0
+TEST Y: 1.0
+STEP: 0.25
+TEST MAX: 30.0
+============================================================
+LOAD RESULT: 147946
+PLACE RESULT: 279134
+PLACED SYMBOL ID: 279134
+SYMBOL TYPE: 17
+IS SHIELD: 1
+STARTING DISPLAY LENGTH: 1.2499999999999996
 
-# ============================================================
-# Shield_Demo maximum-length test
-#
-# Purpose:
-#   Find the largest display length Shield_Demo will accept when
-#   stretched GRADUALLY on one real shield instance.
-#
-# IMPORTANT:
-#   The test leaves the shield on the sheet at the last successful
-#   length so you can visually confirm it. Delete/undo it afterward.
-# ============================================================
+REQUESTED | RESULT | ACTUAL | STATUS
+------------------------------------
+    1.25 |      0 | 1.2499999999999996 | PASS
+    1.50 |      0 | 1.2499999999999996 | FAIL
 
-SHIELD_NAME = "Shield_Demo"
-SHIELD_VERSION = 1
+============================================================
+TEST RESULT
+============================================================
+MAX VERIFIED LENGTH: 1.2499999999999996
+FIRST FAILED LENGTH: 1.5
+SHIELD LEFT ON SHEET AT LENGTH: 1.2499999999999996
+PLACED SYMBOL ID: 279134
+============================================================
 
-TEST_X = 24.0
-TEST_Y = 1.0
-
-STEP = 0.25
-TEST_MAX = 30.0
-TOLERANCE = 0.001
-
-
-def extract_ids(result):
-    if result is None:
-        return []
-
-    if isinstance(result, int):
-        return [result] if result > 0 else []
-
-    if isinstance(result, tuple):
-        if len(result) >= 2:
-            values = result[1]
-            if values is None:
-                return []
-            if isinstance(values, int):
-                return [values] if values > 0 else []
-            try:
-                return [int(v) for v in values if v is not None and int(v) > 0]
-            except Exception:
-                pass
-
-    try:
-        return [int(v) for v in result if v is not None and int(v) > 0]
-    except Exception:
-        return []
-
-
-def get_test_sheet(prj):
-    sht = prj.CreateSheetObject()
-    sheet_ids = extract_ids(prj.GetAllSheetIds(None))
-
-    if not sheet_ids:
-        raise Exception("No schematic sheets found.")
-
-    # Prefer sheet named "1" because that is what the cable generator uses.
-    for sheet_id in sheet_ids:
-        sht.SetId(sheet_id)
-
-        try:
-            name = str(sht.GetName()).strip()
-        except Exception:
-            name = ""
-
-        if name == "1":
-            return sheet_id, name
-
-    # Otherwise use the first existing sheet. Do NOT delete any sheets.
-    sheet_id = sheet_ids[0]
-    sht.SetId(sheet_id)
-
-    try:
-        name = str(sht.GetName()).strip()
-    except Exception:
-        name = "UNKNOWN"
-
-    return sheet_id, name
-
-
-def main():
-    app = win32.gencache.EnsureDispatch("CT.Application")
-    prj = app.CreateJobObject()
-    sym = prj.CreateSymbolObject()
-
-    sheet_id, sheet_name = get_test_sheet(prj)
-
-    print("")
-    print("============================================================")
-    print("Shield_Demo MAX LENGTH TEST")
-    print("============================================================")
-    print("SHEET ID:", sheet_id)
-    print("SHEET NAME:", sheet_name)
-    print("TEST X:", TEST_X)
-    print("TEST Y:", TEST_Y)
-    print("STEP:", STEP)
-    print("TEST MAX:", TEST_MAX)
-    print("============================================================")
-
-    load_result = sym.Load(SHIELD_NAME, SHIELD_VERSION)
-    print("LOAD RESULT:", load_result)
-
-    if load_result == 0:
-        raise Exception("Could not load Shield_Demo.")
-
-    placed_id = sym.Place(sheet_id, TEST_X, TEST_Y, 0, 1.0, 0)
-    print("PLACE RESULT:", placed_id)
-
-    if placed_id == 0:
-        raise Exception(
-            f"Could not place Shield_Demo at X={TEST_X}, Y={TEST_Y}. "
-            "Change TEST_X/TEST_Y to an empty area and run again."
-        )
-
-    # Do not SetId before testing. Keep using the exact object that was loaded
-    # and placed.
-    try:
-        symbol_type = sym.GetSymbolType()
-    except Exception:
-        symbol_type = "UNKNOWN"
-
-    try:
-        is_shield = sym.IsShield()
-    except Exception:
-        is_shield = "UNKNOWN"
-
-    try:
-        starting_length = float(sym.GetDisplayLength())
-    except Exception as error:
-        raise Exception(f"Could not read starting display length: {error}")
-
-    print("PLACED SYMBOL ID:", placed_id)
-    print("SYMBOL TYPE:", symbol_type)
-    print("IS SHIELD:", is_shield)
-    print("STARTING DISPLAY LENGTH:", starting_length)
-    print("")
-    print("REQUESTED | RESULT | ACTUAL | STATUS")
-    print("------------------------------------")
-
-    max_success = starting_length
-    first_failure = None
-
-    # Start at the next 0.25 increment above the actual starting length.
-    requested = round(
-        (int(starting_length / STEP) + 1) * STEP,
-        6
-    )
-
-    while requested <= TEST_MAX + TOLERANCE:
-        try:
-            result = sym.SetDisplayLength(float(requested))
-        except Exception as error:
-            result = f"EXCEPTION: {repr(error)}"
-
-        try:
-            actual = float(sym.GetDisplayLength())
-        except Exception:
-            actual = None
-
-        success = (
-            actual is not None
-            and abs(actual - requested) <= TOLERANCE
-        )
-
-        status = "PASS" if success else "FAIL"
-
-        print(
-            f"{requested:8.2f} | "
-            f"{str(result):>6} | "
-            f"{str(actual):>18} | "
-            f"{status}"
-        )
-
-        if success:
-            max_success = actual
-        else:
-            first_failure = requested
-            break
-
-        requested = round(requested + STEP, 6)
-
-    print("")
-    print("============================================================")
-    print("TEST RESULT")
-    print("============================================================")
-    print("MAX VERIFIED LENGTH:", max_success)
-
-    if first_failure is None:
-        print("FIRST FAILED LENGTH: NONE")
-        print("NOTE: Shield_Demo reached TEST_MAX.")
-        print("If needed, increase TEST_MAX and rerun.")
-    else:
-        print("FIRST FAILED LENGTH:", first_failure)
-
-    try:
-        final_actual = float(sym.GetDisplayLength())
-    except Exception:
-        final_actual = None
-
-    print("SHIELD LEFT ON SHEET AT LENGTH:", final_actual)
-    print("PLACED SYMBOL ID:", placed_id)
-    print("============================================================")
-    print("")
-    print("COPY ALL OF THIS OUTPUT BACK TO CHAT.")
-
-    try:
-        app.PutMessage(
-            f"Shield_Demo max-length test complete. "
-            f"Max verified={max_success}, first failure={first_failure}"
-        )
-    except Exception:
-        pass
-
-
-if __name__ == "__main__":
-    main()
+COPY ALL OF THIS OUTPUT BACK TO CHAT.
