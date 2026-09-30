@@ -1,377 +1,305 @@
-import time
-import win32com.client as win32
-
-SHIELD_NAME = "Shield_Demo"
-VERSION = 1
-TOL = 0.001
-
-PLACEMENT_DELAY_SECONDS = 0.10
-STRETCH_DELAY_SECONDS = 0.10
-
-# Known current-sheet test points from the failing spreadsheet.
-SHEET_NAME = "1"
 
-OUTER_TEST_X = 24.0
-OUTER_TEST_Y = 6.75
-OUTER_TEST_LENGTH = 24.75
-
-INNER_TEST_X = 24.0
-INNER_TEST_Y = 22.0
-INNER_TEST_LENGTH = 0.50
-
-PRIME_X = 36.0
-PRIME_Y = 2.0
-
-
-def extract_ids(result):
-    if result is None:
-        return []
-
-    if isinstance(result, int):
-        return [result] if result > 0 else []
-
-    if isinstance(result, tuple) and len(result) >= 2:
-        values = result[1]
-    else:
-        values = result
-
-    if isinstance(values, int):
-        return [values] if values > 0 else []
-
-    try:
-        return [int(v) for v in values if v is not None and int(v) > 0]
-    except Exception:
-        return []
-
-
-def get_sheet(prj):
-    sht = prj.CreateSheetObject()
-    ids = extract_ids(prj.GetAllSheetIds(None))
-
-    if not ids:
-        raise Exception("No sheets found.")
-
-    for sheet_id in ids:
-        sht.SetId(sheet_id)
-        try:
-            if str(sht.GetName()).strip() == SHEET_NAME:
-                return sheet_id
-        except Exception:
-            pass
-
-    return ids[0]
-
-
-def delete_symbol(prj, symbol_id):
-    if not symbol_id:
-        return
-
-    sym = prj.CreateSymbolObject()
-
-    try:
-        sym.SetId(symbol_id)
-    except Exception:
-        pass
-
-    try:
-        result = sym.Delete()
-        print("DELETE RESULT:", result)
-    except Exception as error:
-        print("DELETE EXCEPTION:", repr(error))
-
-
-def exact_resize_test(prj, sheet_id, label, x, y, requested):
-    """
-    Exact working order:
-      CreateSymbolObject
-      Load
-      Place
-      IMMEDIATE SetDisplayLength
-      sleep
-      GetDisplayLength
-      SetId
-      GetDisplayLength
-    """
-    print("")
-    print("============================================================")
-    print(label)
-    print("============================================================")
-    print("X:", x)
-    print("Y:", y)
-    print("REQUESTED:", requested)
-
-    sym = prj.CreateSymbolObject()
-
-    load_result = sym.Load(SHIELD_NAME, VERSION)
-    print("LOAD RESULT:", load_result)
-
-    if load_result == 0:
-        print("STATUS: LOAD_FAIL")
-        return False
-
-    placed_id = sym.Place(sheet_id, float(x), float(y), 0, 1.0, 0)
-    print("PLACE RESULT:", placed_id)
-
-    if placed_id == 0:
-        print("STATUS: PLACE_FAIL")
-        return False
-
-    # EXACT critical ordering: nothing between Place and SetDisplayLength.
-    try:
-        set_result = sym.SetDisplayLength(float(requested))
-    except Exception as error:
-        set_result = None
-        print("SetDisplayLength EXCEPTION:", repr(error))
-
-    print("SetDisplayLength RESULT:", set_result)
-
-    time.sleep(STRETCH_DELAY_SECONDS)
-
-    try:
-        immediate = float(sym.GetDisplayLength())
-    except Exception:
-        immediate = None
-
-    print("IMMEDIATE LENGTH:", immediate)
-
-    try:
-        setid_result = sym.SetId(placed_id)
-    except Exception as error:
-        setid_result = None
-        print("SetId EXCEPTION:", repr(error))
-
-    print("SetId RESULT:", setid_result)
-
-    try:
-        verified = float(sym.GetDisplayLength())
-    except Exception:
-        verified = None
-
-    print("VERIFIED LENGTH:", verified)
-
-    passed = (
-        verified is not None
-        and abs(verified - float(requested)) <= TOL
-    )
-
-    print("STATUS:", "PASS" if passed else "FAIL")
-
-    delete_symbol(prj, placed_id)
-    return passed
-
-
-def prime_shield_state(prj, sheet_id):
-    """
-    This is copied from the BASELINE_NATIVE_PLACE_ONLY step that ran
-    immediately before every successful matrix resize test.
-
-    Crucial difference from the failing diagnostics:
-      - place one native Shield_Demo
-      - wait
-      - SetId
-      - read ALL metadata including length/width/type/IsShield/name
-      - delete it
-    """
-    print("")
-    print("============================================================")
-    print("PRIME Shield_Demo STATE")
-    print("============================================================")
-
-    sym = prj.CreateSymbolObject()
-
-    load_result = sym.Load(SHIELD_NAME, VERSION)
-    print("PRIME LOAD RESULT:", load_result)
-
-    if load_result == 0:
-        print("PRIME STATUS: LOAD_FAIL")
-        return False
-
-    placed_id = sym.Place(sheet_id, PRIME_X, PRIME_Y, 0, 1.0, 0)
-    print("PRIME PLACE RESULT:", placed_id)
-
-    if placed_id == 0:
-        print("PRIME STATUS: PLACE_FAIL")
-        return False
-
-    time.sleep(PLACEMENT_DELAY_SECONDS)
-
-    try:
-        print("PRIME SetId RESULT:", sym.SetId(placed_id))
-    except Exception as error:
-        print("PRIME SetId EXCEPTION:", repr(error))
-
-    # Read exactly the metadata the successful matrix baseline read.
-    try:
-        name = sym.GetName()
-    except Exception:
-        name = "UNKNOWN"
-
-    try:
-        symbol_type = sym.GetSymbolType()
-    except Exception:
-        symbol_type = "UNKNOWN"
-
-    try:
-        is_shield = sym.IsShield()
-    except Exception:
-        is_shield = "UNKNOWN"
-
-    try:
-        length = float(sym.GetDisplayLength())
-    except Exception:
-        length = None
-
-    try:
-        width = float(sym.GetDisplayWidth())
-    except Exception:
-        width = None
-
-    print("PRIME NAME:", name)
-    print("PRIME TYPE:", symbol_type)
-    print("PRIME IS SHIELD:", is_shield)
-    print("PRIME LENGTH:", length)
-    print("PRIME WIDTH:", width)
-
-    delete_symbol(prj, placed_id)
-
-    print("PRIME STATUS: COMPLETE")
-    return True
-
-
-def touch_device_pin_objects(prj):
-    """
-    Minimal probe for whether device/pin object use changes the global
-    modify state after priming.
-    """
-    print("")
-    print("============================================================")
-    print("DEVICE/PIN STATE PROBE")
-    print("============================================================")
-
-    dev = prj.CreateDeviceObject()
-    pin = prj.CreatePinObject()
-
-    try:
-        all_ids = extract_ids(prj.GetAllDeviceIds(None))
-        print("DEVICE COUNT:", len(all_ids))
-
-        if all_ids:
-            try:
-                print("DEVICE SetId RESULT:", dev.SetId(all_ids[0]))
-            except Exception as error:
-                print("DEVICE SetId EXCEPTION:", repr(error))
-
-            try:
-                pin_ids = extract_ids(dev.GetPinIds())
-                print("FIRST DEVICE PIN COUNT:", len(pin_ids))
-            except Exception as error:
-                pin_ids = []
-                print("GetPinIds EXCEPTION:", repr(error))
-
-            if pin_ids:
-                try:
-                    print("PIN SetId RESULT:", pin.SetId(pin_ids[0]))
-                except Exception as error:
-                    print("PIN SetId EXCEPTION:", repr(error))
-    finally:
-        del pin
-        del dev
-
-    print("DEVICE/PIN STATE PROBE COMPLETE")
-
-
-def main():
-    app = win32.gencache.EnsureDispatch("CT.Application")
-    prj = app.CreateJobObject()
-    sheet_id = get_sheet(prj)
-
-    print("")
-    print("############################################################")
-    print("Shield_Demo PRIME / STATE TEST")
-    print("############################################################")
-    print("SHEET ID:", sheet_id)
-    print("SYMBOL:", SHIELD_NAME)
-    print("############################################################")
-
-    results = []
-
-    # A. This reproduces the current failing behavior before any prime.
-    results.append((
-        "A_NO_PRIME_24.75",
-        exact_resize_test(
-            prj, sheet_id,
-            "A - NO PRIME / 24.75",
-            OUTER_TEST_X, OUTER_TEST_Y, OUTER_TEST_LENGTH
-        )
-    ))
-
-    # B. Run the exact baseline step from the successful matrix.
-    prime_shield_state(prj, sheet_id)
-
-    results.append((
-        "B_AFTER_PRIME_24.75",
-        exact_resize_test(
-            prj, sheet_id,
-            "B - AFTER PRIME / 24.75",
-            OUTER_TEST_X, OUTER_TEST_Y, OUTER_TEST_LENGTH
-        )
-    ))
-
-    # C. Without another prime, test a short shield too.
-    results.append((
-        "C_SAME_PRIME_0.50",
-        exact_resize_test(
-            prj, sheet_id,
-            "C - SAME PRIME / 0.50",
-            INNER_TEST_X, INNER_TEST_Y, INNER_TEST_LENGTH
-        )
-    ))
-
-    # D. Re-prime, then touch device/pin COM objects, then retest.
-    prime_shield_state(prj, sheet_id)
-    touch_device_pin_objects(prj)
-
-    results.append((
-        "D_PRIME_THEN_DEVICE_PIN_24.75",
-        exact_resize_test(
-            prj, sheet_id,
-            "D - PRIME -> DEVICE/PIN OBJECTS -> 24.75",
-            OUTER_TEST_X, OUTER_TEST_Y, OUTER_TEST_LENGTH
-        )
-    ))
-
-    # E. If D fails, immediately re-prime AFTER device/pin usage and retry.
-    prime_shield_state(prj, sheet_id)
-
-    results.append((
-        "E_REPRIME_AFTER_DEVICE_PIN_24.75",
-        exact_resize_test(
-            prj, sheet_id,
-            "E - RE-PRIME AFTER DEVICE/PIN -> 24.75",
-            OUTER_TEST_X, OUTER_TEST_Y, OUTER_TEST_LENGTH
-        )
-    ))
-
-    print("")
-    print("")
-    print("############################################################")
-    print("FINAL PRIME/STATE RESULTS")
-    print("############################################################")
-
-    for name, passed in results:
-        print(name, "=>", "PASS" if passed else "FAIL")
-
-    print("############################################################")
-    print("")
-    print("Interpretation:")
-    print("- If A fails and B passes: the missing baseline PRIME is the cause.")
-    print("- If B passes and C passes: one PRIME persists across multiple shields.")
-    print("- If D fails but E passes: device/pin reads poison the shield modify state,")
-    print("  so the real script must PRIME immediately after geometry lookup and")
-    print("  before placing shields.")
-    print("- If D passes too: device/pin reads are not the poison; PRIME alone is enough.")
-    print("############################################################")
-
-
-if __name__ == "__main__":
-    main()
+############################################################
+Shield_Demo PRIME / STATE TEST
+############################################################
+SHEET ID: 204828
+SYMBOL: Shield_Demo
+############################################################
+
+============================================================
+A - NO PRIME / 24.75
+============================================================
+X: 24.0
+Y: 6.75
+REQUESTED: 24.75
+LOAD RESULT: 147946
+PLACE RESULT: 279603
+SetDisplayLength RESULT: 0
+IMMEDIATE LENGTH: 1.25
+SetId RESULT: 279603
+VERIFIED LENGTH: 1.25
+STATUS: FAIL
+DELETE RESULT: 0
+
+============================================================
+PRIME Shield_Demo STATE
+============================================================
+PRIME LOAD RESULT: 147946
+PRIME PLACE RESULT: 279307
+PRIME SetId RESULT: 279307
+PRIME NAME: SY1
+PRIME TYPE: 17
+PRIME IS SHIELD: 1
+PRIME LENGTH: 1.2499999999999996
+PRIME WIDTH: 0.0
+DELETE RESULT: 0
+PRIME STATUS: COMPLETE
+
+============================================================
+B - AFTER PRIME / 24.75
+============================================================
+X: 24.0
+Y: 6.75
+REQUESTED: 24.75
+LOAD RESULT: 147946
+PLACE RESULT: 279108
+SetDisplayLength RESULT: 0
+IMMEDIATE LENGTH: 1.25
+SetId RESULT: 279108
+VERIFIED LENGTH: 1.25
+STATUS: FAIL
+DELETE RESULT: 0
+
+============================================================
+C - SAME PRIME / 0.50
+============================================================
+X: 24.0
+Y: 22.0
+REQUESTED: 0.5
+LOAD RESULT: 147946
+PLACE RESULT: 278809
+SetDisplayLength RESULT: 0
+IMMEDIATE LENGTH: 1.25
+SetId RESULT: 278809
+VERIFIED LENGTH: 1.25
+STATUS: FAIL
+DELETE RESULT: 0
+
+============================================================
+PRIME Shield_Demo STATE
+============================================================
+PRIME LOAD RESULT: 147946
+PRIME PLACE RESULT: 278580
+PRIME SetId RESULT: 278580
+PRIME NAME: SY1
+PRIME TYPE: 17
+PRIME IS SHIELD: 1
+PRIME LENGTH: 1.2499999999999996
+PRIME WIDTH: 0.0
+DELETE RESULT: 0
+PRIME STATUS: COMPLETE
+
+============================================================
+DEVICE/PIN STATE PROBE
+============================================================
+DEVICE COUNT: 72
+DEVICE SetId RESULT: 136529
+FIRST DEVICE PIN COUNT: 0
+DEVICE/PIN STATE PROBE COMPLETE
+
+============================================================
+D - PRIME -> DEVICE/PIN OBJECTS -> 24.75
+============================================================
+X: 24.0
+Y: 6.75
+REQUESTED: 24.75
+LOAD RESULT: 147946
+PLACE RESULT: 278385
+SetDisplayLength RESULT: 0
+IMMEDIATE LENGTH: 1.25
+SetId RESULT: 278385
+VERIFIED LENGTH: 1.25
+STATUS: FAIL
+DELETE RESULT: 0
+
+============================================================
+PRIME Shield_Demo STATE
+============================================================
+PRIME LOAD RESULT: 147946
+PRIME PLACE RESULT: 278088
+PRIME SetId RESULT: 278088
+PRIME NAME: SY1
+PRIME TYPE: 17
+PRIME IS SHIELD: 1
+PRIME LENGTH: 1.2499999999999996
+PRIME WIDTH: 0.0
+DELETE RESULT: 0
+PRIME STATUS: COMPLETE
+
+============================================================
+E - RE-PRIME AFTER DEVICE/PIN -> 24.75
+============================================================
+X: 24.0
+Y: 6.75
+REQUESTED: 24.75
+LOAD RESULT: 147946
+PLACE RESULT: 277893
+SetDisplayLength RESULT: 0
+IMMEDIATE LENGTH: 1.25
+SetId RESULT: 277893
+VERIFIED LENGTH: 1.25
+STATUS: FAIL
+DELETE RESULT: 0
+
+
+############################################################
+FINAL PRIME/STATE RESULTS
+############################################################
+A_NO_PRIME_24.75 => FAIL
+B_AFTER_PRIME_24.75 => FAIL
+C_SAME_PRIME_0.50 => FAIL
+D_PRIME_THEN_DEVICE_PIN_24.75 => FAIL
+E_REPRIME_AFTER_DEVICE_PIN_24.75 => FAIL
+############################################################
+
+Interpretation:
+- If A fails and B passes: the missing baseline PRIME is the cause.
+- If B passes and C passes: one PRIME persists across multiple shields.
+- If D fails but E passes: device/pin reads poison the shield modify state,
+  so the real script must PRIME immediately after geometry lookup and
+  before placing shields.
+- If D passes too: device/pin reads are not the poison; PRIME alone is enough.
+############################################################
+PS C:\Users\conner.hughes\OneDrive - BAE Systems Inc\Documents\Python\Cable Symbol Placer> python .\main.py
+
+############################################################
+Shield_Demo PRIME / STATE TEST
+############################################################
+SHEET ID: 204828
+SYMBOL: Shield_Demo
+############################################################
+
+============================================================
+A - NO PRIME / 24.75
+============================================================
+X: 24.0
+Y: 6.75
+REQUESTED: 24.75
+LOAD RESULT: 147946
+PLACE RESULT: 279603
+SetDisplayLength RESULT: 0
+IMMEDIATE LENGTH: 1.25
+SetId RESULT: 279603
+VERIFIED LENGTH: 1.25
+STATUS: FAIL
+DELETE RESULT: 0
+
+============================================================
+PRIME Shield_Demo STATE
+============================================================
+PRIME LOAD RESULT: 147946
+PRIME PLACE RESULT: 279307
+PRIME SetId RESULT: 279307
+PRIME NAME: SY1
+PRIME TYPE: 17
+PRIME IS SHIELD: 1
+PRIME LENGTH: 1.2499999999999996
+PRIME WIDTH: 0.0
+DELETE RESULT: 0
+PRIME STATUS: COMPLETE
+
+============================================================
+B - AFTER PRIME / 24.75
+============================================================
+X: 24.0
+Y: 6.75
+REQUESTED: 24.75
+LOAD RESULT: 147946
+PLACE RESULT: 279108
+SetDisplayLength RESULT: 0
+IMMEDIATE LENGTH: 1.25
+SetId RESULT: 279108
+VERIFIED LENGTH: 1.25
+STATUS: FAIL
+DELETE RESULT: 0
+
+============================================================
+C - SAME PRIME / 0.50
+============================================================
+X: 24.0
+Y: 22.0
+REQUESTED: 0.5
+LOAD RESULT: 147946
+PLACE RESULT: 278809
+SetDisplayLength RESULT: 0
+IMMEDIATE LENGTH: 1.25
+SetId RESULT: 278809
+VERIFIED LENGTH: 1.25
+STATUS: FAIL
+DELETE RESULT: 0
+
+============================================================
+PRIME Shield_Demo STATE
+============================================================
+PRIME LOAD RESULT: 147946
+PRIME PLACE RESULT: 278580
+PRIME SetId RESULT: 278580
+PRIME NAME: SY1
+PRIME TYPE: 17
+PRIME IS SHIELD: 1
+PRIME LENGTH: 1.2499999999999996
+PRIME WIDTH: 0.0
+DELETE RESULT: 0
+PRIME STATUS: COMPLETE
+
+============================================================
+DEVICE/PIN STATE PROBE
+============================================================
+DEVICE COUNT: 72
+DEVICE SetId RESULT: 136529
+FIRST DEVICE PIN COUNT: 0
+DEVICE/PIN STATE PROBE COMPLETE
+
+============================================================
+D - PRIME -> DEVICE/PIN OBJECTS -> 24.75
+============================================================
+X: 24.0
+Y: 6.75
+REQUESTED: 24.75
+LOAD RESULT: 147946
+PLACE RESULT: 278385
+SetDisplayLength RESULT: 0
+IMMEDIATE LENGTH: 1.25
+SetId RESULT: 278385
+VERIFIED LENGTH: 1.25
+STATUS: FAIL
+DELETE RESULT: 0
+
+============================================================
+PRIME Shield_Demo STATE
+============================================================
+PRIME LOAD RESULT: 147946
+PRIME PLACE RESULT: 278088
+PRIME SetId RESULT: 278088
+PRIME NAME: SY1
+PRIME TYPE: 17
+PRIME IS SHIELD: 1
+PRIME LENGTH: 1.2499999999999996
+PRIME WIDTH: 0.0
+DELETE RESULT: 0
+PRIME STATUS: COMPLETE
+
+============================================================
+E - RE-PRIME AFTER DEVICE/PIN -> 24.75
+============================================================
+X: 24.0
+Y: 6.75
+REQUESTED: 24.75
+LOAD RESULT: 147946
+PLACE RESULT: 277893
+SetDisplayLength RESULT: 0
+IMMEDIATE LENGTH: 1.25
+SetId RESULT: 277893
+VERIFIED LENGTH: 1.25
+STATUS: FAIL
+DELETE RESULT: 0
+
+
+############################################################
+FINAL PRIME/STATE RESULTS
+############################################################
+A_NO_PRIME_24.75 => FAIL
+B_AFTER_PRIME_24.75 => FAIL
+C_SAME_PRIME_0.50 => FAIL
+D_PRIME_THEN_DEVICE_PIN_24.75 => FAIL
+E_REPRIME_AFTER_DEVICE_PIN_24.75 => FAIL
+############################################################
+
+Interpretation:
+- If A fails and B passes: the missing baseline PRIME is the cause.
+- If B passes and C passes: one PRIME persists across multiple shields.
+- If D fails but E passes: device/pin reads poison the shield modify state,
+  so the real script must PRIME immediately after geometry lookup and
+  before placing shields.
+- If D passes too: device/pin reads are not the poison; PRIME alone is enough.
+############################################################
