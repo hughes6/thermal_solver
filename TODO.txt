@@ -79,6 +79,16 @@ SHIELD_STAGE_MARGIN = 0.50
 #====================================================================================================================================
 MIN_SYMBOL_LENGTH = 0.10
 
+# Long Shield_Demo fallback:
+# the failing 3-left / 1-right sheet asks for ~24.75 in shields,
+# while the smaller working layout is roughly 10-12 in.
+# If a direct resize fails, seed the real Shield_Demo at a larger
+# placement scale, then SHRINK it to the exact requested length.
+SHIELD_RESIZE_TOLERANCE = 0.001
+SHIELD_WIDTH_TOLERANCE = 0.001
+LONG_SHIELD_SEED_EXTRA_LENGTH = 0.50
+LONG_SHIELD_SCALE_MULTIPLIERS = [1.0, 1.05, 1.10, 1.25]
+
 
 #====================================================================================================================================
 # SHIELD VERTICAL OVERLAP
@@ -1392,20 +1402,198 @@ def place_twist(sym, job, placement):
 #
 # No duplicate shields are intentionally created while searching.
 #====================================================================================================================================
+def _safe_delete_symbol(sym, symbol_id):
+    try:
+        sym.SetId(symbol_id)
+    except Exception:
+        pass
+
+    try:
+        result = sym.Delete()
+        print("DELETE RESULT:", result)
+    except Exception as error:
+        print("DELETE EXCEPTION:", repr(error))
+
+
+def _shield_final_info(sym, symbol_id):
+    try:
+        sym.SetId(symbol_id)
+    except Exception:
+        pass
+
+    info = {
+        "length": None,
+        "width": None,
+        "name": "UNKNOWN",
+        "type": "UNKNOWN",
+        "is_shield": "UNKNOWN",
+        "location": None,
+    }
+
+    try:
+        info["length"] = float(sym.GetDisplayLength())
+    except Exception:
+        pass
+
+    try:
+        info["width"] = float(sym.GetDisplayWidth())
+    except Exception:
+        pass
+
+    try:
+        info["name"] = sym.GetName()
+    except Exception:
+        pass
+
+    try:
+        info["type"] = sym.GetSymbolType()
+    except Exception:
+        pass
+
+    try:
+        info["is_shield"] = sym.IsShield()
+    except Exception:
+        pass
+
+    info["location"] = get_symbol_location(sym, symbol_id)
+    return info
+
+
+def _verify_real_shield(sym, symbol_id, requested_length, expected_width=None):
+    info = _shield_final_info(sym, symbol_id)
+
+    print("SHIELD VERIFY ID:", symbol_id)
+    print("SHIELD VERIFY NAME:", info["name"])
+    print("SHIELD VERIFY TYPE:", info["type"])
+    print("SHIELD VERIFY IS SHIELD:", info["is_shield"])
+    print("SHIELD VERIFY LENGTH:", info["length"])
+    print("SHIELD VERIFY WIDTH:", info["width"])
+
+    if info["location"] is not None:
+        print("SHIELD VERIFY SHEET:", info["location"]["sheet_id"])
+        print("SHIELD VERIFY X:", info["location"]["x"])
+        print("SHIELD VERIFY Y:", info["location"]["y"])
+
+    length_ok = (
+        info["length"] is not None
+        and abs(info["length"] - requested_length) <= SHIELD_RESIZE_TOLERANCE
+    )
+
+    width_ok = True
+    if expected_width is not None and info["width"] is not None:
+        width_ok = abs(info["width"] - expected_width) <= SHIELD_WIDTH_TOLERANCE
+
+    # E3's real shield symbol is type 17 and IsShield() == 1 in the
+    # successful/known Shield_Demo tests.  Keep the check permissive if
+    # a particular API build does not expose one of those methods.
+    shield_type_ok = info["type"] in ("UNKNOWN", 17)
+    shield_flag_ok = info["is_shield"] in ("UNKNOWN", 1, True)
+
+    return length_ok and width_ok and shield_type_ok and shield_flag_ok, info
+
+
+def _get_shield_base_dimensions(prj, sheet_id):
+    """
+    Measure Shield_Demo at scale 1.0 using a disposable real shield.
+    This does NOT touch the shield that will ultimately be kept.
+    """
+    for stage_y in [2.0, 4.0, 6.0]:
+        for stage_x in SHIELD_STAGE_X_VALUES:
+            sym = prj.CreateSymbolObject()
+            load_result = sym.Load(SHIELD_SYMBOL_NAME, SYMBOL_VERSION)
+            if load_result == 0:
+                continue
+
+            placed_id = sym.Place(sheet_id, float(stage_x), float(stage_y), 0, 1.0, 0)
+            if placed_id == 0:
+                continue
+
+            try:
+                base_length = float(sym.GetDisplayLength())
+            except Exception:
+                base_length = None
+
+            try:
+                base_width = float(sym.GetDisplayWidth())
+            except Exception:
+                base_width = None
+
+            print("SHIELD BASE CALIBRATION ID:", placed_id)
+            print("SHIELD BASE LENGTH:", base_length)
+            print("SHIELD BASE WIDTH:", base_width)
+
+            _safe_delete_symbol(sym, placed_id)
+
+            if base_length is not None and base_length > 0:
+                return base_length, base_width
+
+    return None, None
+
+
+def _move_resized_real_shield(sym, symbol_id, sheet_id, final_x, final_y, seed_scale,
+                              requested_length, base_width):
+    """
+    Move the SAME real Shield_Demo.  Use the same seed scale that made the
+    long shield legal, then immediately re-apply exact length/width.
+    """
+    try:
+        sym.SetId(symbol_id)
+    except Exception:
+        pass
+
+    move_result = sym.Place(
+        sheet_id,
+        float(final_x),
+        float(final_y),
+        0,
+        float(seed_scale),
+        0
+    )
+    print("SHIELD FINAL MOVE RESULT:", move_result)
+
+    if move_result == 0:
+        return None
+
+    # Re-apply exact dimensions after the move because E3 may recalculate
+    # display geometry when Place() is called on an existing symbol.
+    try:
+        length_result = sym.SetDisplayLength(float(requested_length))
+    except Exception as error:
+        length_result = None
+        print("SHIELD FINAL LENGTH REAPPLY EXCEPTION:", repr(error))
+
+    print("SHIELD FINAL LENGTH REAPPLY RESULT:", length_result)
+
+    if base_width is not None:
+        try:
+            width_result = sym.SetDisplayWidth(float(base_width))
+        except Exception as error:
+            width_result = None
+            print("SHIELD FINAL WIDTH REAPPLY EXCEPTION:", repr(error))
+
+        print("SHIELD FINAL WIDTH REAPPLY RESULT:", width_result)
+
+    time.sleep(STRETCH_DELAY_SECONDS)
+    return move_result
+
+
 def place_shield(prj, job, placement):
     """
-    Place a REAL Shield_Demo symbol and resize it with SetDisplayLength.
+    Place a REAL Shield_Demo.
 
-    CRITICAL E3 BEHAVIOR:
-    The earlier working test called SetDisplayLength IMMEDIATELY after Place()
-    on the SAME symbol object returned from Load/Place.
+    Strategy 1:
+        Load -> Place(scale=1) -> immediate SetDisplayLength
 
-    Do NOT call SetId() first.
-    Do NOT call GetDisplayLength() first.
-    Do NOT use PlaceDynamic().
+    Strategy 2 for long shields:
+        Measure Shield_Demo's normal length/width.
+        Place the SAME REAL Shield_Demo at a larger scale so its initial
+        length is slightly LONGER than the requested length.
+        Immediately SHRINK with SetDisplayLength(requested_length).
+        Restore its normal width with SetDisplayWidth().
+        No PlaceDynamic is used.
 
-    Calling SetId before SetDisplayLength was the important difference in the
-    later broken versions.
+    This specifically targets the 24.75-in shield case where the normal
+    1.25-in Shield_Demo refuses a direct jump to the requested length.
     """
     requested_length = float(placement["length"])
     final_x = float(placement["x"])
@@ -1417,14 +1605,13 @@ def place_shield(prj, job, placement):
     print("SHIELD FINAL Y:", final_y)
     print("SHIELD REQUESTED LENGTH:", requested_length)
     print("SHIELD LIBRARY SYMBOL:", job["symbol_name"])
-    print("SHIELD MODE: Load -> Place -> IMMEDIATE SetDisplayLength")
-    print("SHIELD NOTE: NO SetId / GetDisplayLength BEFORE STRETCH")
+    print("SHIELD MODE: REAL Shield_Demo / direct resize, then scaled-seed fallback")
 
-    # Try the final location first.  If E3 rejects the resize there, try the
-    # same exact sequence in a clear staging area and move the resized shield.
-    attempts = [("FINAL", final_x, final_y)]
+    # ------------------------------------------------------------------
+    # STRATEGY 1 - NORMAL REAL-SHIELD RESIZE
+    # ------------------------------------------------------------------
+    normal_attempts = [("FINAL", final_x, final_y)]
 
-    # Pick stage Y values that leave enough room for a long shield.
     max_stage_y = SHIELD_STAGE_TOP_LIMIT - requested_length - SHIELD_STAGE_MARGIN
     if max_stage_y < 0.5:
         max_stage_y = 0.5
@@ -1434,8 +1621,6 @@ def place_shield(prj, job, placement):
         stage_base_y,
         max(0.5, stage_base_y - 0.5),
         max(0.5, stage_base_y + 0.5),
-        max(0.5, stage_base_y - 1.0),
-        max(0.5, stage_base_y + 1.0),
     ]
 
     seen_stage_y = []
@@ -1446,191 +1631,226 @@ def place_shield(prj, job, placement):
 
     for stage_y in seen_stage_y:
         for stage_x in SHIELD_STAGE_X_VALUES:
-            attempts.append(("STAGE", float(stage_x), float(stage_y)))
+            normal_attempts.append(("STAGE", float(stage_x), float(stage_y)))
 
-    for attempt_number, (mode, x, y) in enumerate(attempts, start=1):
+    for attempt_number, (mode, x, y) in enumerate(normal_attempts, start=1):
         print("")
-        print("SHIELD ATTEMPT:", attempt_number, "MODE:", mode, "X:", x, "Y:", y)
+        print("NORMAL SHIELD ATTEMPT:", attempt_number, "MODE:", mode, "X:", x, "Y:", y)
 
-        # Fresh object for each attempt.
-        shield_sym = prj.CreateSymbolObject()
-
-        load_result = shield_sym.Load(job["symbol_name"], SYMBOL_VERSION)
+        sym = prj.CreateSymbolObject()
+        load_result = sym.Load(job["symbol_name"], SYMBOL_VERSION)
         print("SHIELD LOAD RESULT:", load_result)
 
         if load_result == 0:
-            try:
-                del shield_sym
-            except Exception:
-                pass
             continue
 
-        placed_id = shield_sym.Place(sheet_id, x, y, 0, 1.0, 0)
+        placed_id = sym.Place(sheet_id, x, y, 0, 1.0, 0)
         print("SHIELD PLACE RESULT:", placed_id)
 
         if placed_id == 0:
-            try:
-                del shield_sym
-            except Exception:
-                pass
-            time.sleep(PLACEMENT_DELAY_SECONDS)
             continue
 
-        # ================================================================
-        # THIS IS THE KEY FIX.
-        #
-        # The old working test did:
-        #     Load(...)
-        #     Place(...)
-        #     SetDisplayLength(...)
-        #
-        # It did NOT SetId() between Place and SetDisplayLength.
-        # It did NOT read GetDisplayLength() before SetDisplayLength.
-        # ================================================================
+        # Keep the known-good ordering: SetDisplayLength immediately after Place.
         try:
-            stretch_result = shield_sym.SetDisplayLength(requested_length)
+            stretch_result = sym.SetDisplayLength(requested_length)
         except Exception as error:
             stretch_result = None
-            print("SHIELD IMMEDIATE STRETCH EXCEPTION:", repr(error))
+            print("SHIELD DIRECT STRETCH EXCEPTION:", repr(error))
 
-        print("SHIELD IMMEDIATE STRETCH RESULT:", stretch_result)
-
+        print("SHIELD DIRECT STRETCH RESULT:", stretch_result)
         time.sleep(STRETCH_DELAY_SECONDS)
 
-        try:
-            immediate_length = float(shield_sym.GetDisplayLength())
-        except Exception:
-            immediate_length = None
+        ok, info = _verify_real_shield(sym, placed_id, requested_length)
 
-        print("SHIELD IMMEDIATE LENGTH AFTER:", immediate_length)
-
-        immediate_success = (
-            immediate_length is not None
-            and abs(immediate_length - requested_length) <= 0.001
-        )
-
-        # Only NOW bind by ID, after the resize attempt is already complete.
-        try:
-            set_id_result = shield_sym.SetId(placed_id)
-            print("SHIELD POST-STRETCH SetId RESULT:", set_id_result)
-        except Exception as error:
-            print("SHIELD POST-STRETCH SetId EXCEPTION:", repr(error))
-
-        try:
-            verified_length = float(shield_sym.GetDisplayLength())
-        except Exception:
-            verified_length = immediate_length
-
-        print("SHIELD VERIFIED LENGTH:", verified_length)
-
-        verified_success = (
-            verified_length is not None
-            and abs(verified_length - requested_length) <= 0.001
-        )
-
-        if immediate_success or verified_success:
-            print("SHIELD RESIZE SUCCESS")
+        if ok:
+            print("SHIELD DIRECT RESIZE SUCCESS")
 
             final_id = placed_id
-
-            # If resized in staging, move that SAME real shield to final X/Y.
             if mode == "STAGE":
-                time.sleep(MOVE_DELAY_SECONDS)
-
-                try:
-                    shield_sym.SetId(placed_id)
-                except Exception:
-                    pass
-
-                move_result = shield_sym.Place(
+                moved = _move_resized_real_shield(
+                    sym,
+                    placed_id,
                     sheet_id,
                     final_x,
                     final_y,
-                    0,
                     1.0,
-                    0
+                    requested_length,
+                    info["width"]
                 )
+                if moved is None:
+                    _safe_delete_symbol(sym, placed_id)
+                    continue
+                final_id = moved
 
-                print("SHIELD FINAL MOVE RESULT:", move_result)
+            final_ok, final_info = _verify_real_shield(
+                sym, final_id, requested_length, info["width"]
+            )
 
-                if move_result == 0:
-                    raise Exception(
-                        f"{job['symbol_name']} resized correctly but could not "
-                        f"move to final X={final_x} Y={final_y}"
-                    )
+            if final_ok:
+                print("SHIELD REAL SYMBOL + LENGTH VERIFIED")
+                return final_id
 
-                final_id = move_result
-                time.sleep(PLACEMENT_DELAY_SECONDS)
-
-            # Final verification.
-            try:
-                shield_sym.SetId(final_id)
-            except Exception:
-                pass
-
-            try:
-                final_length = float(shield_sym.GetDisplayLength())
-            except Exception:
-                final_length = None
-
-            try:
-                final_name = shield_sym.GetName()
-            except Exception:
-                final_name = "UNKNOWN"
-
-            try:
-                final_type = shield_sym.GetSymbolType()
-            except Exception:
-                final_type = "UNKNOWN"
-
-            try:
-                final_is_shield = shield_sym.IsShield()
-            except Exception:
-                final_is_shield = "UNKNOWN"
-
-            final_location = get_symbol_location(shield_sym, final_id)
-
-            print("SHIELD FINAL ID:", final_id)
-            print("SHIELD FINAL NAME:", final_name)
-            print("SHIELD FINAL SYMBOL TYPE:", final_type)
-            print("SHIELD FINAL IS SHIELD:", final_is_shield)
-            print("SHIELD FINAL DISPLAY LENGTH:", final_length)
-
-            if final_location is not None:
-                print("SHIELD FINAL SHEET:", final_location["sheet_id"])
-                print("SHIELD FINAL ACTUAL X:", final_location["x"])
-                print("SHIELD FINAL ACTUAL Y:", final_location["y"])
-
-            if final_length is None or abs(final_length - requested_length) > 0.001:
-                raise Exception(
-                    f"{job['symbol_name']} resized successfully but final length "
-                    f"changed. Expected {requested_length}, actual {final_length}"
-                )
-
-            print("SHIELD REAL SYMBOL + LENGTH VERIFIED")
-            return final_id
-
-        print("SHIELD RESIZE FAILED FOR THIS ATTEMPT")
-
-        # Remove the failed trial before trying another position.
-        try:
-            shield_sym.SetId(placed_id)
-            delete_result = shield_sym.Delete()
-            print("FAILED SHIELD DELETE RESULT:", delete_result)
-        except Exception as error:
-            print("FAILED SHIELD DELETE EXCEPTION:", repr(error))
-
-        try:
-            del shield_sym
-        except Exception:
-            pass
-
+        print("SHIELD DIRECT RESIZE FAILED")
+        _safe_delete_symbol(sym, placed_id)
         time.sleep(PLACEMENT_DELAY_SECONDS)
+
+    # ------------------------------------------------------------------
+    # STRATEGY 2 - SCALED SEED FOR LONG Shield_Demo
+    # ------------------------------------------------------------------
+    print("")
+    print("============================================================")
+    print("DIRECT RESIZE FAILED - TRYING LONG-SHIELD SCALED SEED")
+    print("============================================================")
+
+    base_length, base_width = _get_shield_base_dimensions(prj, sheet_id)
+
+    if base_length is None or base_length <= 0:
+        raise Exception("Could not measure Shield_Demo base display length")
+
+    print("BASE Shield_Demo LENGTH:", base_length)
+    print("BASE Shield_Demo WIDTH:", base_width)
+
+    # Seed just above the requested length so SetDisplayLength becomes a
+    # shrink operation instead of a huge 1.25 -> 24.75 growth operation.
+    ideal_scale = (requested_length + LONG_SHIELD_SEED_EXTRA_LENGTH) / base_length
+    ideal_scale = max(1.0, ideal_scale)
+
+    scale_candidates = []
+    for multiplier in LONG_SHIELD_SCALE_MULTIPLIERS:
+        value = round(ideal_scale * multiplier, 6)
+        if value not in scale_candidates:
+            scale_candidates.append(value)
+
+    print("LONG SHIELD IDEAL SEED SCALE:", ideal_scale)
+    print("LONG SHIELD SCALE CANDIDATES:", scale_candidates)
+
+    # Try final location first, then clear staging positions.
+    long_attempts = [("FINAL", final_x, final_y)]
+
+    seed_height_max = base_length * max(scale_candidates)
+    max_seed_stage_y = SHIELD_STAGE_TOP_LIMIT - seed_height_max - SHIELD_STAGE_MARGIN
+    if max_seed_stage_y < 0.5:
+        max_seed_stage_y = 0.5
+
+    long_stage_y_values = [
+        max_seed_stage_y,
+        max(0.5, max_seed_stage_y - 0.5),
+        max(0.5, max_seed_stage_y + 0.5),
+    ]
+
+    seen_long_y = []
+    for y in long_stage_y_values:
+        y = round(float(y), 6)
+        if y not in seen_long_y:
+            seen_long_y.append(y)
+
+    for y in seen_long_y:
+        for x in SHIELD_STAGE_X_VALUES:
+            long_attempts.append(("STAGE", float(x), float(y)))
+
+    for seed_scale in scale_candidates:
+        print("")
+        print("------------------------------------------------------------")
+        print("TRYING LONG SHIELD SEED SCALE:", seed_scale)
+        print("ESTIMATED INITIAL LENGTH:", base_length * seed_scale)
+
+        for mode, x, y in long_attempts:
+            print("LONG SHIELD ATTEMPT MODE:", mode, "X:", x, "Y:", y)
+
+            sym = prj.CreateSymbolObject()
+            load_result = sym.Load(job["symbol_name"], SYMBOL_VERSION)
+            print("LONG SHIELD LOAD RESULT:", load_result)
+
+            if load_result == 0:
+                continue
+
+            placed_id = sym.Place(
+                sheet_id,
+                x,
+                y,
+                0,
+                float(seed_scale),
+                0
+            )
+            print("LONG SHIELD PLACE RESULT:", placed_id)
+
+            if placed_id == 0:
+                continue
+
+            # IMPORTANT: immediately shrink length before SetId/GetDisplayLength.
+            try:
+                shrink_result = sym.SetDisplayLength(requested_length)
+            except Exception as error:
+                shrink_result = None
+                print("LONG SHIELD LENGTH SHRINK EXCEPTION:", repr(error))
+
+            print("LONG SHIELD LENGTH SHRINK RESULT:", shrink_result)
+
+            # Restore the normal Shield_Demo width.  Because the placed scale
+            # is >1, this is also a shrink operation.
+            if base_width is not None:
+                try:
+                    width_result = sym.SetDisplayWidth(base_width)
+                except Exception as error:
+                    width_result = None
+                    print("LONG SHIELD WIDTH RESTORE EXCEPTION:", repr(error))
+
+                print("LONG SHIELD WIDTH RESTORE RESULT:", width_result)
+
+            time.sleep(STRETCH_DELAY_SECONDS)
+
+            ok, info = _verify_real_shield(
+                sym,
+                placed_id,
+                requested_length,
+                base_width
+            )
+
+            if not ok:
+                print("LONG SHIELD SCALED-SEED RESIZE FAILED")
+                _safe_delete_symbol(sym, placed_id)
+                continue
+
+            print("LONG SHIELD SCALED-SEED RESIZE SUCCESS")
+
+            final_id = placed_id
+
+            if mode == "STAGE":
+                moved = _move_resized_real_shield(
+                    sym,
+                    placed_id,
+                    sheet_id,
+                    final_x,
+                    final_y,
+                    seed_scale,
+                    requested_length,
+                    base_width
+                )
+
+                if moved is None:
+                    _safe_delete_symbol(sym, placed_id)
+                    continue
+
+                final_id = moved
+
+            final_ok, final_info = _verify_real_shield(
+                sym,
+                final_id,
+                requested_length,
+                base_width
+            )
+
+            if final_ok:
+                print("LONG SHIELD REAL Shield_Demo VERIFIED")
+                return final_id
+
+            print("LONG SHIELD FAILED FINAL VERIFICATION")
+            _safe_delete_symbol(sym, final_id)
 
     raise Exception(
         f"{job['symbol_name']} could not resize to {requested_length}. "
-        f"All attempts used Load -> Place -> immediate SetDisplayLength "
-        f"without SetId before the stretch."
+        f"Direct real-shield resize failed, and the scaled-seed real-shield "
+        f"fallback also failed."
     )
 
 
@@ -1710,7 +1930,7 @@ def main():
     print("RIGHT TWIST OFFSET R2:S2:", "YES" if twist_offset_settings["RIGHT"] else "NO")
     print("PLACEMENT DELAY:", PLACEMENT_DELAY_SECONDS)
     print("TWIST STRETCHING: DISABLED")
-    print("SHIELD MODE: REAL Shield_Demo -> Place -> immediate SetDisplayLength")
+    print("SHIELD MODE: REAL Shield_Demo -> direct resize + scaled-seed long-shield fallback")
     print("DATA ROWS:", DATA_FIRST_ROW, "TO", last_row)
 
     left_rows = read_side_rows(ws, "LEFT", last_row)
