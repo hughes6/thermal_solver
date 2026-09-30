@@ -16,6 +16,9 @@ DEVICE_NAME_CELL = "B1"
 DATA_FIRST_ROW = 5
 MAX_SCAN_ROWS = 5000
 
+LEFT_TWIST_OFFSET_CELL = "J2"
+RIGHT_TWIST_OFFSET_CELL = "R2"
+
 LEFT_OUTER_SHIELD_COL = "H"
 LEFT_INNER_SHIELD_COL = "I"
 LEFT_TWIST_A_COL = "J"
@@ -55,20 +58,6 @@ MIN_SYMBOL_LENGTH = 0.10
 
 #====================================================================================================================================
 # SHIELD VERTICAL OVERLAP
-#
-# Shield_Demo insertion point is bottom-center and grows upward.
-#
-# For a pair:
-#
-# Wire 1 Y = 31.50
-# Wire 2 Y = 31.25
-#
-# Shield:
-#
-# Bottom = 31.125
-# Top    = 31.625
-#
-# Twist stays exactly between 31.25 and 31.50.
 #====================================================================================================================================
 SHIELD_BOTTOM_OVERLAP = 0.125
 SHIELD_TOP_OVERLAP = 0.125
@@ -78,11 +67,7 @@ TWIST_TOP_OVERLAP = 0.00
 
 
 #====================================================================================================================================
-# HORIZONTAL LAYOUT
-#
-# IMPORTANT:
-#
-# The twist and its matching inner shield use THE SAME X coordinate.
+# HORIZONTAL LAYOUT WHEN OFFSET = YES
 #
 # LEFT CONNECTOR AT X = 1.00:
 #
@@ -90,31 +75,41 @@ TWIST_TOP_OVERLAP = 0.00
 # Twist B + Shield B = 1.50
 # Outer Shield       = 1.75
 #
-# RIGHT CONNECTOR AT X = 4.00:
-#
-# Twist A + Shield A = 3.75
-# Twist B + Shield B = 3.50
-# Outer Shield       = 3.25
-#
-# This gives the staggered arrangement shown in the desired example.
+# RIGHT SIDE MIRRORS AUTOMATICALLY.
 #====================================================================================================================================
-TWIST_A_OFFSET = 0.25
-TWIST_B_OFFSET = 0.50
+OFFSET_YES_TWIST_A = 0.25
+OFFSET_YES_TWIST_B = 0.50
+OFFSET_YES_OUTER_SHIELD = 0.75
 
-INNER_SHIELD_TWIST_A_OFFSET = 0.25
-INNER_SHIELD_TWIST_B_OFFSET = 0.50
 
+#====================================================================================================================================
+# HORIZONTAL LAYOUT WHEN OFFSET = NO
+#
+# Both twist columns occupy the SAME vertical line.
+#
+# LEFT CONNECTOR AT X = 1.00:
+#
+# Twist A + Shield A = 1.25
+# Twist B + Shield B = 1.25
+# Outer Shield       = 1.50
+#
+# The 0.25 separation between the pair symbols and outer shield is
+# preserved.
+#
+# RIGHT SIDE MIRRORS AUTOMATICALLY.
+#====================================================================================================================================
+OFFSET_NO_TWIST_LINE = 0.25
+OFFSET_NO_OUTER_SHIELD = 0.50
+
+
+#====================================================================================================================================
+# INNER SHIELD WITHOUT A TWIST
+#====================================================================================================================================
 INNER_SHIELD_ONLY_OFFSET = 0.25
-
-OUTER_SHIELD_OFFSET = 0.75
 
 
 #====================================================================================================================================
 # SHIELD X SEARCH
-#
-# Normally the requested X should work.
-#
-# If E3 rejects the requested area, walk farther inside the cable.
 #====================================================================================================================================
 SHIELD_X_SEARCH_STEP = 0.05
 SHIELD_X_SEARCH_DISTANCE = 0.75
@@ -205,6 +200,58 @@ def connector_base_name(connector_token):
 
 def cell_has_bar(value):
     return "|" in clean_excel_value(value)
+
+
+#====================================================================================================================================
+# YES / NO SETTING
+#
+# Accept:
+#
+# YES
+# Y
+# TRUE
+# 1
+#
+# NO
+# N
+# FALSE
+# 0
+#
+# Blank defaults to YES so an older spreadsheet behaves exactly like
+# the current working script.
+#====================================================================================================================================
+def parse_yes_no(value, setting_name):
+    text = clean_excel_value(value).upper()
+
+    if text == "":
+        print("WARNING:", setting_name, "IS BLANK - DEFAULTING TO YES")
+        return True
+
+    if text in ["YES", "Y", "TRUE", "1"]:
+        return True
+
+    if text in ["NO", "N", "FALSE", "0"]:
+        return False
+
+    raise Exception(f"{setting_name} must contain YES or NO. Current value: {value}")
+
+
+#====================================================================================================================================
+# READ TWIST OFFSET SETTINGS
+#
+# J2:K2 is merged, so value is read from J2.
+# R2:S2 is merged, so value is read from R2.
+#====================================================================================================================================
+def read_twist_offset_settings(ws):
+    left_enabled = parse_yes_no(ws[LEFT_TWIST_OFFSET_CELL].value, "LEFT TWIST OFFSET J2:K2")
+    right_enabled = parse_yes_no(ws[RIGHT_TWIST_OFFSET_CELL].value, "RIGHT TWIST OFFSET R2:S2")
+
+    settings = {
+        "LEFT": left_enabled,
+        "RIGHT": right_enabled
+    }
+
+    return settings
 
 
 #====================================================================================================================================
@@ -904,37 +951,57 @@ def print_section_pin_locations(required_pins, pin_map, sheet_id):
 #====================================================================================================================================
 # JOB X OFFSET
 #
-# This is the important nesting logic.
+# OFFSET = YES:
 #
-# Twist A and Shield A return the SAME offset.
+# A pair = 0.25
+# B pair = 0.50
+# outer  = 0.75
 #
-# Twist B and Shield B return the SAME offset.
+#
+# OFFSET = NO:
+#
+# A pair = 0.25
+# B pair = 0.25
+# outer  = 0.50
+#
+#
+# The side setting comes from:
+#
+# LEFT  = J2:K2
+# RIGHT = R2:S2
 #====================================================================================================================================
-def job_offset(job):
-    if job["type"] == "twist":
-        if job["twist_column"] == "A":
-            return TWIST_A_OFFSET
+def job_offset(job, twist_offset_settings):
+    offset_enabled = twist_offset_settings[job["side"]]
 
-        return TWIST_B_OFFSET
+    if job["type"] == "twist":
+        if not offset_enabled:
+            return OFFSET_NO_TWIST_LINE
+
+        if job["twist_column"] == "A":
+            return OFFSET_YES_TWIST_A
+
+        return OFFSET_YES_TWIST_B
 
     if job["type"] == "shield_inner":
+        if job["twist_column"] is None:
+            return INNER_SHIELD_ONLY_OFFSET
+
+        if not offset_enabled:
+            return OFFSET_NO_TWIST_LINE
+
         if job["twist_column"] == "A":
-            return INNER_SHIELD_TWIST_A_OFFSET
+            return OFFSET_YES_TWIST_A
 
-        if job["twist_column"] == "B":
-            return INNER_SHIELD_TWIST_B_OFFSET
+        return OFFSET_YES_TWIST_B
 
-        return INNER_SHIELD_ONLY_OFFSET
+    if not offset_enabled:
+        return OFFSET_NO_OUTER_SHIELD
 
-    return OUTER_SHIELD_OFFSET
+    return OFFSET_YES_OUTER_SHIELD
 
 
 #====================================================================================================================================
 # DRAW ORDER
-#
-# Pair shields first.
-# Outer shield second.
-# Twists last so arrows appear inside pair shields.
 #====================================================================================================================================
 def job_priority(job):
     if job["type"] == "shield_inner":
@@ -949,7 +1016,7 @@ def job_priority(job):
 #====================================================================================================================================
 # CALCULATE PLACEMENT
 #====================================================================================================================================
-def calculate_placement(job, pin_map, sheet_id):
+def calculate_placement(job, pin_map, sheet_id, twist_offset_settings):
     locations = []
 
     for pin_name in job["pins"]:
@@ -971,7 +1038,7 @@ def calculate_placement(job, pin_map, sheet_id):
         raise Exception(f"{job['side']} {job['connector']} {job['type']}: pins {job['pins']} all have effectively the same Y coordinate")
 
     direction = 1.0 if job["side"] == "LEFT" else -1.0
-    offset = job_offset(job)
+    offset = job_offset(job, twist_offset_settings)
     x = anchor_x + direction * offset
 
     if job["type"] == "twist":
@@ -992,7 +1059,8 @@ def calculate_placement(job, pin_map, sheet_id):
         "anchor_x": anchor_x,
         "bottom_y": bottom_y,
         "top_y": top_y,
-        "direction": direction
+        "direction": direction,
+        "offset_enabled": twist_offset_settings[job["side"]]
     }
 
     return placement
@@ -1172,6 +1240,7 @@ def place_job(sym, job, placement):
     print("------------------------------------------------------------")
     print("TYPE:", job["type"])
     print("SIDE:", job["side"])
+    print("TWIST OFFSET ENABLED:", placement["offset_enabled"])
     print("CONNECTOR:", job["connector"])
     print("TWIST COLUMN:", job.get("twist_column"))
     print("PINS:", job["pins"])
@@ -1215,6 +1284,7 @@ def main():
         ws = workbook[TARGET_SHEET_NAME]
 
     sheet_device_reference = clean_excel_value(ws[DEVICE_NAME_CELL].value)
+    twist_offset_settings = read_twist_offset_settings(ws)
     last_row = get_last_data_row(ws)
 
     if last_row < DATA_FIRST_ROW:
@@ -1230,9 +1300,8 @@ def main():
     print("CONNECTOR ROOT:", CONNECTOR_ROOT_NAME)
     print("SHIELD SYMBOL:", SHIELD_SYMBOL_NAME)
     print("TWIST SYMBOL:", TWIST_SYMBOL_NAME)
-    print("TWIST A / SHIELD A OFFSET:", TWIST_A_OFFSET)
-    print("TWIST B / SHIELD B OFFSET:", TWIST_B_OFFSET)
-    print("OUTER SHIELD OFFSET:", OUTER_SHIELD_OFFSET)
+    print("LEFT TWIST OFFSET J2:K2:", "YES" if twist_offset_settings["LEFT"] else "NO")
+    print("RIGHT TWIST OFFSET R2:S2:", "YES" if twist_offset_settings["RIGHT"] else "NO")
     print("DATA ROWS:", DATA_FIRST_ROW, "TO", last_row)
 
     left_rows = read_side_rows(ws, "LEFT", last_row)
@@ -1296,6 +1365,7 @@ def main():
         print("PROCESSING CONNECTOR SECTION")
         print("============================================================")
         print("SIDE:", side)
+        print("TWIST OFFSET ENABLED:", "YES" if twist_offset_settings[side] else "NO")
         print("EXCEL CONNECTOR:", connector)
         print("EXPECTED E3 CONNECTOR:", connector_base_name(connector))
         print("EXCEL ROWS:", section_rows[0]["excel_row"], "TO", section_rows[-1]["excel_row"])
@@ -1309,7 +1379,7 @@ def main():
 
         for job in jobs:
             try:
-                placement = calculate_placement(job, pin_map, sheet_id)
+                placement = calculate_placement(job, pin_map, sheet_id, twist_offset_settings)
                 placed_id = place_job(sym, job, placement)
 
                 if placed_id is not None:
