@@ -1,2544 +1,1017 @@
+from openpyxl import load_workbook
+import time
+import pyodbc
+import win32com.client as win32
 import tkinter as tk
-from tkinter import scrolledtext
-from tkinter import ttk
-import csv
-import io
-import re
+import gc
+import json
+import os
 
 
-current_count = 0
-detected_table = []
-detected_column_count = 0
+# ================================================
+# HELPER FXN
+# ================================================
+def ask_save_path(default_full_path=""):
+    import os
+    import tkinter as tk
+    from tkinter import filedialog
 
+    default_folder = os.path.dirname(default_full_path)
 
-# =========================================
-# NUMBER FORMATTER
-# =========================================
-
-def convert():
-    global current_count
-
-    input_text = input_box.get("1.0", "end-1c")
-
-    values = input_text.split()
-    values = [x for x in values if x.isdigit()]
-
-    output_text = "\n".join(values)
-
-    output_box.delete("1.0", tk.END)
-    output_box.insert(tk.END, output_text)
-
-    current_count = len(values)
-
-    count_label.config(text=f"Items: {current_count}")
-    status_label.config(text="Number conversion complete.")
-
-
-# =========================================
-# BASIC TABLE HELPERS
-# =========================================
-
-def get_manual_column_count():
-    value = column_count_entry.get().strip()
-
-    if value == "":
-        return None
+    # Create Tk root
+    root = tk.Tk()
+    root.withdraw()
+    root.attributes("-topmost", True)
+    root.update()
 
     try:
-        column_count = int(value)
-    except ValueError:
+        # Let user PICK an existing Excel file
+        selected_path = filedialog.askopenfilename(
+            initialdir=default_folder,
+            filetypes=[("Excel Files", "*.xlsm"), ("All Files", "*.*")]
+        )
+    except Exception:
         return None
 
-    if column_count <= 0:
+    # Cancel or X
+    if not selected_path:
+        root.destroy()
         return None
+    root.destroy()
+    # Return ONLY the file name (not full path)
+    return os.path.abspath(selected_path)
 
-    return column_count
+def generate_master_schematic_layout(PIN_SIGNAL_INFO,x_block,main_block_width):
+    SHEET_DICT = {1:sheet_1_id}
+
+    # PAGE BOUNDS
+    TOP_OF_PAGE = 32.9
+    BOTTOM_OF_PAGE = 0.0
+    LEFT_OF_PAGE = 0.0
+    RIGHT_OF_PAGE = 42.9
+
+    # PAGE MARGINS
+    TOP_MARGIN = 1.0
+    BOTTOM_MARGIN = 1.0
+    LEFT_MARGIN = 1.0
+    RIGHT_MARGIN = 1.0
+
+    # BLOCK SPACING
+    BLOCK_X_SPACING = 1.0
+    BLOCK_Y_SPACING = 1.0
+    SCHEMATIC_BLOCK_WIDTH = 3.0
+    PIN_SPACING = 0.25
+    PIN_START_OFFSET = 2.25
+
+    # USABLE PAGE LIMITS
+    PAGE_TOP = TOP_OF_PAGE - TOP_MARGIN
+    PAGE_BOTTOM = BOTTOM_OF_PAGE + BOTTOM_MARGIN
+    PAGE_LEFT = LEFT_OF_PAGE + LEFT_MARGIN
+    PAGE_RIGHT = RIGHT_OF_PAGE - RIGHT_MARGIN
+    USABLE_PAGE_HEIGHT = PAGE_TOP - PAGE_BOTTOM
+
+    # OUTPUT
+    SPACING_DICT = []
+    sheet = 1
+    # On sheet 1, start to the RIGHT of the main block
+    current_x = (x_block + main_block_width + BLOCK_X_SPACING)
+
+    # Current Y is the TOP edge available for placement
+    current_top_y = PAGE_TOP
+    # Tracks widest block in current column
+    current_column_width = 0.0
+
+    # ================================================
+    # BUILD LAYOUT
+    # ================================================
+    for i in range(len(PIN_SIGNAL_INFO)):
+        connector_name = (PIN_SIGNAL_INFO[i][0]["connector name"])
+        number_of_pins = (PIN_SIGNAL_INFO[i][0]["number of pins"])
+        width = SCHEMATIC_BLOCK_WIDTH
+        height = (PIN_START_OFFSET + (PIN_SPACING * number_of_pins))
+
+        # --------------------------------------------
+        # SAFETY CHECK:
+        # Block cannot physically fit on ANY page
+        # --------------------------------------------
+        if height > USABLE_PAGE_HEIGHT:
+            raise Exception(f"Schematic block for {connector_name} is too tall for a page. Height = {height}, usable page height = {USABLE_PAGE_HEIGHT}")
+
+        # CALCULATE BOTTOM Y IF PLACED HERE
+        candidate_y = current_top_y - height
+
+        # DOES IT FIT VERTICALLY?
+        if candidate_y < PAGE_BOTTOM:
+            next_x = (current_x + current_column_width + BLOCK_X_SPACING)
+
+            # DOES NEXT COLUMN FIT ON THIS PAGE?
+            if next_x + width <= PAGE_RIGHT:
+                current_x = next_x
+                current_top_y = PAGE_TOP
+                current_column_width = 0.0
+
+            else:
+                # PAGE IS FULL -> NEW PAGE
+                sheet += 1
+                sheet_symbol = "ANSI Size E - BAE"
+                res = sht.Create(0, str(sheet), sheet_symbol, 0, 0)
+                if res == 0:
+                    app.PutMessage("failed to create new sheet")
+                    raise Exception("failed to create new sheet")
+                SHEET_DICT[sheet] = res
+                current_x = PAGE_LEFT
+                current_top_y = PAGE_TOP
+                current_column_width = 0.0
+
+            # Recalculate Y at new column/page
+            candidate_y = current_top_y - height
+
+        # CHECK HORIZONTAL FIT
+        if current_x + width > PAGE_RIGHT:
+            sheet += 1
+            res = sht.Create(0, sheet, "DINA3", 0)
+            if res == 0:
+                app.PutMessage("failed to create new sheet")
+                raise Exception("failed to create new sheet")
+            SHEET_DICT[sheet] = res
+            current_x = PAGE_LEFT
+            current_top_y = PAGE_TOP
+            current_column_width = 0.0
+            candidate_y = current_top_y - height
+
+        # SAVE PLACEMENT
+        x_start = current_x
+        y_start = candidate_y
+        SPACING_DICT.append({"connector name": connector_name, "connector index": i, "sheet": sheet, "x start": x_start, "y start": y_start, "x end": x_start + width, "y end": y_start + height, "height": height, "width": width, "number of pins": number_of_pins})
+        # UPDATE CURSOR FOR NEXT BLOCK
+        current_top_y = (y_start - BLOCK_Y_SPACING)
+        current_column_width = max(current_column_width, width)
+
+    return SPACING_DICT, SHEET_DICT
 
 
-def normalize_pdf_line(line):
-    line = line.replace("\t", " ")
-    line = re.sub(r"\s+", " ", line)
 
-    return line.strip()
+def generate_schematic_pin_map(connector_info,newpindict,layout,pin_spacing=0.25,pin_start_offset=2.0,edge_offset=0.3):
+    x=layout["x start"]+layout["width"]-0.3
+    y_start=layout["y start"]+layout["height"]-pin_start_offset
+    pin_map=[]
+    for pos,pin_data in enumerate(connector_info[1:]):
+        pin_name=str(pin_data[0])
+        if pin_name not in newpindict: raise Exception(f"Pin {pin_name} not found in new view for {connector_info[0]['connector name']}")
+        pin_map.append({"pin name":pin_name,"pin id":newpindict[pin_name],"x":x,"y":y_start-(pos*pin_spacing),"flip":"/1"})
+    return pin_map
 
+def recreate_e3_objects():
+    app = win32.gencache.EnsureDispatch('CT.Application')
+    prj = app.CreateJobObject()
+    text = prj.CreateTextObject()
+    comp = prj.CreateComponentObject()
+    dev = prj.CreateDeviceObject()
+    sym = prj.CreateSymbolObject()
+    pin = prj.CreatePinObject()
+    attr = prj.CreateAttributeObject()
+    sht = prj.CreateSheetObject()
+    return app, prj, text, comp, dev, sym, pin, attr, sht
 
-def is_integer_value(value):
-    value = normalize_pdf_line(value)
+def display_main_block_attributes(device_view_id):
+    dev.SetId(device_view_id)
+    syminfo = dev.GetSymbolIds(None)
+    symids = [x for x in syminfo[1] if x is not None]
 
-    return re.fullmatch(r"\d+", value) is not None
+    for sym_id in symids:
+        sym.SetId(sym_id)
 
+        res = sym.AddAttributeValue("Equipment Identifacation", ADDITIONAL_PART_ID)
 
-# =========================================
-# PDF CONNECTOR PINOUT TABLE DETECTION
-#
-# Handles copied PDF tables such as:
-#
-# Ref
-# Des Pin Signal Name Direction Type Description
-# J1R
-# 1 NC NC NC No Connect
-# 11 GND - GND Secondary ground
-# 12 P5_1000BT_D4- Input BASE-T BUS ... pair 4/D, negative
-#
-# The important detail is that "Ref Des" is often a merged cell in the PDF,
-# so the connector designator appears once and the following data rows begin
-# with the pin number. Descriptions are allowed to contain commas.
-# =========================================
+        if res == -1:
+            print("Equipment Identification already exists or failed on symbol:", sym_id)
+            attrinfo = sym.GetAttributeIds(None)
+            attrids = [x for x in attrinfo[1] if x is not None]
 
-PINOUT_HEADERS = [
-    "REF DES",
-    "PIN",
-    "SIGNAL NAME",
-    "DIRECTION",
-    "TYPE",
-    "DESCRIPTION"
-]
+            for attr_id in attrids:
+                attr.SetId(attr_id)
 
+                if attr.GetName() == "Equipment Identifacation":
+                    res = attr_id
+                    break
 
-def get_nonempty_normalized_lines(input_text):
-    lines = []
-
-    for raw_line in input_text.split("\n"):
-        line = normalize_pdf_line(raw_line)
-
-        if line != "":
-            lines.append(line)
-
-    return lines
-
+        if res != -1:
+            attr.SetId(res)
+            display_result = attr.DisplayAttribute()
+            print("DISPLAY ATTRIBUTE:", device_view_id, "SYMBOL:", sym_id, "ATTR:", res, "RESULT:", display_result)
 
 
+def format_main_block_view(device_view_id, x, y, width, height):
+    print("FORMATTING DEVICE VIEW:", device_view_id)
 
-# =========================================
-# PDF 3-COLUMN PIN / DESCRIPTION / FIGURE TABLE
-#
-# Handles tables such as:
-#   Pin Number | Description | Figure
-#
-# Some tagged PDFs copy this table in a staggered order.  A typical clipboard
-# stream looks like:
-#
-#   Pin
-#   Number
-#   Description
-#   1
-#   Figure
-#   19 -
-#   Chassis GND
-#   36 Figure 5, Figure 8
-#   TEMP (Thermistor)
-#
-# In that form the NEXT pin is emitted on the same line as the PREVIOUS row's
-# Figure cell, and the previous row's Description follows on the next line(s).
-# The parser below reconstructs the rows instead of treating every newline as a
-# new spreadsheet row.
-# =========================================
+    x_center = x + (width / 2.0)
 
-FIGURE_PINOUT_HEADERS = [
-    "PIN NUMBER",
-    "DESCRIPTION",
-    "FIGURE"
-]
+    dev.SetId(device_view_id)
+    syminfo = dev.GetSymbolIds(None)
+    symids = [s for s in syminfo[1] if s is not None]
+
+    for sym_id in symids:
+        sym.SetId(sym_id)
+
+        sym.SetBlockHatchColour(58)
+        sym.SetBlockOutlineColour(0)
+
+        #=========================================
+        # NORMAL SYMBOL TEXT
+        #=========================================
+        textinfo = sym.GetTextIds(None)
+        textids = [t for t in textinfo[1] if t is not None]
+
+        for text_id in textids:
+            text.SetId(text_id)
+            txt = str(text.GetText()).strip()
+
+            print("SYMBOL TEXT:", "VIEW:", device_view_id, "SYM:", sym_id, "TEXT ID:", text_id, "VALUE:", repr(txt))
+
+            if txt == "BxRxUx":
+                text.SetColour(0)
+                text.SetMode(1)
+                text.SetAlignment(2)
+                text.SetStyle(1)
+                text.SetHeight(0.2)
+                text.SetSchemaLocation(x_center, y + height - 0.3)
+
+            elif txt == str(DEVICE_DESIGNATION).strip() or str(DEVICE_DESIGNATION).strip() in txt:
+                text.SetColour(0)
+                text.SetMode(1)
+                text.SetAlignment(2)
+                text.SetStyle(1)
+                text.SetHeight(0.2)
+                text.SetSchemaLocation(x_center, y + height - 0.7)
+
+                print("MOVED DEVICE DESIGNATION:", repr(txt), "TO:", x_center, y + height - 0.7)
+
+            elif DEVICE_FUNCTION is not None and txt == str(DEVICE_FUNCTION).strip():
+                text.SetVisibility(0)
+
+        #=========================================
+        # ATTRIBUTE TEXT
+        #=========================================
+        attrinfo = sym.GetAttributeIds(None)
+        attrids = [a for a in attrinfo[1] if a is not None]
+
+        for attr_id in attrids:
+            attr.SetId(attr_id)
+            attr_name = str(attr.GetName()).strip()
+
+            print("ATTRIBUTE:", "VIEW:", device_view_id, "SYM:", sym_id, "ATTR ID:", attr_id, "NAME:", repr(attr_name))
+
+            if attr_name == "Equipment Identifacation":
+                attrtextinfo = attr.GetTextIds(None)
+                attrtextids = [t for t in attrtextinfo[1] if t is not None]
+
+                print("EQUIPMENT IDENTIFICATION TEXT IDS:", attrtextids)
+
+                for text_id in attrtextids:
+                    text.SetId(text_id)
+                    txt = str(text.GetText()).strip()
+
+                    print("ATTRIBUTE TEXT:", "ID:", text_id, "VALUE:", repr(txt))
+
+                    text.SetVisibility(1)
+                    text.SetColour(0)
+                    text.SetMode(1)
+                    text.SetAlignment(2)
+                    text.SetStyle(1)
+                    text.SetHeight(0.2)
+                    text.SetSchemaLocation(x_center, y + height - 1.1)
+
+                    print("MOVED EQUIPMENT IDENTIFICATION:", repr(txt), "TO:", x_center, y + height - 1.1)
 
 
-def is_figure_cell_text(value):
-    text = normalize_pdf_line(value)
-    if text == "":
-        return False
-    if text == "-":
-        return True
-    return re.match(r"^FIGURE\b", text, re.IGNORECASE) is not None
+# ================================================
+# PARSE EXCEL
+# ================================================
+BLOCK_OFFSET = 5
+output_path = ask_save_path()
+wb = load_workbook(output_path, data_only=True)
+ws = wb.active
+
+ASSY_NAME = ws["C1"].value
+VERSION = ws["C2"].value
+ADDITIONAL_PART_ID = ws["C3"].value
+DEVICE_DESIGNATION = ws["D3"].value
+DEVICE_DESIGNATION = DEVICE_DESIGNATION.strip()
+DEVICE_FUNCTION = ws["C4"].value
+NUMBER_OF_CONNECTORS = ws["C5"].value
+
+CONNECTORS = {}
+for row in ws.iter_rows(min_row=7, max_row=7+NUMBER_OF_CONNECTORS):
+    connector_name = row[1].value
+    connector_type = row[2].value
+    CONNECTORS[connector_name] = connector_type
+
+CONNECTORS = {k: v for k, v in CONNECTORS.items() if v is not None}
+
+MODEL_CHECK = ws["G8"].value
+TITLE_CHECK = ws["E2"].value
+CONNECTOR_MODEL_CHECK = ws["G2"].value
+DUPLICATE_CHECK = ws["G4"].value
+if MODEL_CHECK != "Pass":
+    raise Exception("Model check is failing, fix it")
+if TITLE_CHECK != "Pass":
+    raise Exception("Title check is failing, fix it")
+if CONNECTOR_MODEL_CHECK != "Pass":
+    raise Exception("Connector model check is failing, fix it")
+if DUPLICATE_CHECK != "Pass":
+    raise Exception("Duplicate pin check is failing, fix it")
+
+PIN_SIGNAL_INFO = []
+for i in range(NUMBER_OF_CONNECTORS):
+    pin_col = 9 + (i * BLOCK_OFFSET)
+    signal_col = pin_col + 1
+    in_out_col = pin_col + 2
+    number_of_pins = ws.cell(row=5, column=signal_col).value
+    connector_name = ws.cell(row=6, column=signal_col).value
+    if number_of_pins is None:
+        number_of_pins = 0
+    number_of_pins = int(number_of_pins)
+    connector_type = CONNECTORS[connector_name]
+    temp = [{'connector name': connector_name, 'connector type': connector_type, 'number of pins' : number_of_pins}]
+    end_row = 8 + number_of_pins - 1
+    for r in range(8, end_row + 1):
+        pin = ws.cell(row=r, column=pin_col).value
+        signal = ws.cell(row=r, column=signal_col).value
+        if signal is None:
+            signal = "SPARE"
+        in_out = ws.cell(row=r, column=in_out_col).value
+        if in_out is None:
+            in_out = "NONE"
+        temp.append([pin, signal, in_out])
+    PIN_SIGNAL_INFO.append(temp)
+
+wb.close()
 
 
-def is_figure_table_header_fragment(value):
-    upper = normalize_pdf_line(value).upper()
-    if upper in {"PIN", "NUMBER", "PIN NUMBER", "DESCRIPTION", "FIGURE"}:
-        return True
-    if upper.startswith("TABLE ") and ("PIN" in upper or "CONNECTOR" in upper):
-        return True
-    if re.fullmatch(r"PAGE\s+\d+\s+OF\s+\d+", upper):
-        return True
-    if re.fullmatch(r"\d+\s+OF\s+\d+", upper):
-        return True
-    return False
+# ================================================
+# CONNECT TO DB
+# ================================================
+CONNECTION_STRING = (
+    "DRIVER={SQL Server};"
+    "SERVER=sql-zuken-prd;"
+    "DATABASE=Zuken_E3Library;"
+    "Trusted_Connection=yes;"
+)
+
+conn = pyodbc.connect(CONNECTION_STRING, autocommit=True)
+cur = conn.cursor()
+
+# set objects
+#====================================================================================================================================
+app = win32.gencache.EnsureDispatch('CT.Application')
+prj = app.CreateJobObject()
+text = prj.CreateTextObject()
+comp = prj.CreateComponentObject()
+dev = prj.CreateDeviceObject()
+sym = prj.CreateSymbolObject()
+pin = prj.CreatePinObject()
+attr = prj.CreateAttributeObject()
+#====================================================================================================================================
+# more setup
+#====================================================================================================================================
+app.PutMessage("\n Starting Block Making Scrpit")
+
+sht = prj.CreateSheetObject()
+sheet_info = prj.GetAllSheetIds(None)
+sheet_count = sheet_info[0]
+sheet_ids = sheet_info[1]
+sheet_ids = [x for x in sheet_ids if x is not None]
+
+for id in sheet_ids:
+    sht.SetId(id)
+    if sht.GetName() != "1":
+        sht.Delete()
+    else:
+        sheet_1_id = id
+
+sheet1 = sht.SetId(sheet_1_id)
+
+symbol_name = "CABBLOCK"
+symbol_version = 1
+isLoaded = sym.Load(symbol_name, symbol_version)
+if not isLoaded:
+    app.PutMessage("failed to load symbol.")
+else:
+    app.PutMessage("Symbol loaded successfully.")
+
+PIN_VIEW_SPACING = 0.75
+TOP_OF_PAGE = 32.9
+TOP_MARIGIN = 1.0
+LEFT_OF_PAGE = 0.0
+LEFT_MARIGIN = 1.0
+left_target = LEFT_OF_PAGE + LEFT_MARIGIN
+top_target = TOP_OF_PAGE - TOP_MARIGIN
+
+HALF_NUMBER_OF_CONNECTORS = int(NUMBER_OF_CONNECTORS/2.0) + 1
+block_width = 3.0
+if NUMBER_OF_CONNECTORS < 6:
+    block_height = 1.75 + (PIN_VIEW_SPACING * NUMBER_OF_CONNECTORS)
+else:
+    block_height = 1.75 + (PIN_VIEW_SPACING * HALF_NUMBER_OF_CONNECTORS)    
+
+x_block = left_target
+y_block = top_target - (block_height)
+x_block_center = x_block + block_width/2.0
+res = sym.PlaceBlock(sheet_1_id, x_block, y_block, block_width, block_height)
+
+if DEVICE_FUNCTION is not None:
+    y_start = y_block + block_height - 2.25
+    block_height += 0.5
+else:
+    y_start = y_block + block_height - 2.0
+
+# CREATE MAPPING HERE
+CONNECTOR_MAP = []
+if NUMBER_OF_CONNECTORS < 6:
+    for i, connector in enumerate(PIN_SIGNAL_INFO):
+        connector_name = connector[0]['connector name']
+        CONNECTOR_MAP.append({'connector name' : connector_name, 'connector position' : i, 'connector flip' : 0})
+else:
+    left_count = (NUMBER_OF_CONNECTORS + 1) // 2
+    for i, connector in enumerate(PIN_SIGNAL_INFO):
+        connector_name = connector[0]['connector name']
+        if i < left_count: 
+            connector_position = i
+            connector_flip = 0
+        else:
+            connector_position = i - left_count
+            connector_flip = 1
+
+        CONNECTOR_MAP.append({'connector name' : connector_name, 'connector position' : connector_position, 'connector flip' : connector_flip})
+
+if res == 0:
+    app.PutMessage(f"Place block failed: {res}")
+    raise Exception(f"place block failed: {res}")
+else:
+    app.PutMessage(f"Placed block: {res}")
+
+if DEVICE_FUNCTION is not None:
+    function_spacing = 0.5
+else:
+    function_spacing = 0.0
+
+devinfo = prj.GetAllDeviceIds(None)
+devids = [x for x in devinfo[1] if x is not None]
+for dev_id in devids:
+    dev.SetId(dev_id)
+    if dev.GetName() == "A1":
+        res = dev.SetName(DEVICE_DESIGNATION)
+        if res == 0:
+            app.PutMessage("failed to set name")
+
+        res = dev.SetLocation("BxRxUx")
+        if res == 0:
+            app.PutMessage("failed to set location")
+
+        res = dev.AddAttributeValue("Additional Part ID", ADDITIONAL_PART_ID)
+        if res == -1:
+            app.PutMessage("failed to add Additional Part ID")
+        else:
+            attr.SetId(res)
+            attr.DisplayAttribute()
+        if DEVICE_FUNCTION is not None:
+            res = dev.AddAttributeValue("Device Function", DEVICE_FUNCTION)
+            if res == -1:
+                app.PutMessage("failed to add Device Function")
 
 
-def get_figure_pinout_header_window(input_text):
-    lines = get_nonempty_normalized_lines(input_text)
-    if len(lines) < 5:
-        return lines, None
+        attrinfo = dev.GetAttributeIds(None)    
+        attrids = [x for x in attrinfo[1] if x is not None]
+        for att_id in attrids:
+            attr.SetId(att_id)
+            textinfo = attr.GetTextIds(None)
+            textids = [x for x in textinfo[1] if x is not None]
+            for text_id in textids:
+                text.SetId(text_id)
+                if text.GetText() == ADDITIONAL_PART_ID:
+                    text.SetColour(0)
+                    text.SetMode(1)
+                    text.SetAlignment(2)
+                    text.SetStyle(1)
+                    text.SetHeight(0.2)
+                    xloc = [0.0]
+                    yloc = [0.0]
+                    grid = [""]
+                    column = [""]
+                    row = [""]
+                    result = text.GetSchemaLocation(xloc, yloc, grid,  column, row)
+                    new_x = x_block_center
+                    new_y = y_block + block_height - 1.1 - function_spacing
+                    text.SetSchemaLocation(new_x, new_y)
+                if text.GetText() == DEVICE_FUNCTION:
+                    text.SetColour(0)
+                    text.SetMode(1)
+                    text.SetAlignment(2)
+                    text.SetStyle(1)
+                    text.SetHeight(0.2)
+                    xloc = [0.0]
+                    yloc = [0.0]
+                    grid = [""]
+                    column = [""]
+                    row = [""]
+                    result = text.GetSchemaLocation(xloc, yloc, grid,  column, row)
+                    new_x = x_block_center
+                    new_y = y_block + block_height - 1.5 - function_spacing
+                    text.SetSchemaLocation(new_x, new_y)
+                    
+        syminfo = dev.GetSymbolIds(None)
+        symids = [x for x in syminfo[1] if x is not None]
+        for sym_id in symids:
+            sym.SetId(sym_id)
+            sym.SetBlockHatchColour(58)
+            textinfo = sym.GetTextIds(None)
+            textids = [x for x in textinfo[1] if x is not None]
+            for text_id in textids:
+                text.SetId(text_id)
+                if text.GetText() == "BxRxUx":
+                    text.SetColour(0)
+                    text.SetMode(1)
+                    text.SetAlignment(2)
+                    text.SetStyle(1)
+                    text.SetHeight(0.2)
+                    xloc = [0.0]
+                    yloc = [0.0]
+                    grid = [""]
+                    column = [""]
+                    row = [""]
+                    result = text.GetSchemaLocation(xloc, yloc, grid,  column, row)
+                    new_x = x_block_center
+                    new_y = y_block + block_height - 0.3 - function_spacing
+                    text.SetSchemaLocation(new_x, new_y)
+                if text.GetText() == DEVICE_DESIGNATION:
+                    text.SetColour(0)
+                    text.SetMode(1)
+                    text.SetAlignment(2)
+                    text.SetStyle(1)
+                    text.SetHeight(0.2) 
+                    text.SetAlignment(2)
+                    xloc = [0.0]
+                    yloc = [0.0]
+                    grid = [""]
+                    column = [""]
+                    row = [""]
+                    result = text.GetSchemaLocation(xloc, yloc, grid,  column, row)
+                    new_x = x_block_center
+                    new_y = y_block + block_height - 0.7 - function_spacing
+                    text.SetSchemaLocation(new_x, new_y)         
+          
+# front side green - 58
+# back side green  - 74
+sym.SetBlockHatchPattern(1, 45.0, 135.0)
+sym.SetBlockHatchStyle(0)
+sym.SetBlockHatchWidth(0.25)
+sym.SetBlockHatchDistance(1.0)
+sym.SetBlockHatchColour(58)
 
-    search_limit = min(len(lines), 30)
-    upper_lines = [line.upper() for line in lines[:search_limit]]
 
-    pin_seen = False
-    number_seen = False
-    description_seen = False
-    figure_seen = False
-    first_header_index = None
-    last_header_index = None
+res = sym.SetBlockOutlineColour(0)
+if res != -1:
+    app.PutMessage("failed to set block hatch outline color")
+time.sleep(0.25)
 
-    for index, upper in enumerate(upper_lines):
-        compact = re.sub(r"\s+", " ", upper).strip()
+# print('pin signal info: ', PIN_SIGNAL_INFO)
+# print('\n connectors: ', CONNECTORS)
+# print('n connector map: ', CONNECTOR_MAP)
+CONNECTOR_DEVICE_IDS = {}
+#====================================================================================================================================
+# LOAD AND PLACE CONNECTOR LOOP
+#====================================================================================================================================
+for i in range(len(PIN_SIGNAL_INFO)):
+    # step 1 - get the component from the database
+    conn_type = PIN_SIGNAL_INFO[i][0]['connector type']
+    conn_name = PIN_SIGNAL_INFO[i][0]['connector name']
+    ver = 1
+    res = app.GetDatabaseTableSelectedComponents(conn_type, ver)
+    if(res[0] != 0):
+        app.PutMessage(f"step 1 did not work, Result: {res}\n")
+        raise Exception(f"Step 1 failed. No device found in database with name: {conn_type}.\n")
+    else:
+        app.PutMessage(f"Step 1 success. Device found in database. Result: {res}")
 
-        if compact == "PIN" or compact.startswith("PIN NUMBER") or "PIN NUMBER" in compact:
-            pin_seen = True
-            first_header_index = index if first_header_index is None else first_header_index
-            last_header_index = index
+    # step 2 - place the component from the library into the device tree
+    # print(f'Placing connector name: {conn_name} type: {conn_type} into device tree\n')
+    res = dev.Create(conn_name, "", "", conn_type, ver, 0)
+    if(res == 0):
+        app.PutMessage(f"step 2 did not work, Result: {res}\n")
+        raise Exception("Step 2 failed. Device failed to be added to device tree.\n")
+    else:
+        app.PutMessage(f"Step 2 success. Device added to device tree. Result: {res}")
 
-        if compact == "NUMBER" or "PIN NUMBER" in compact:
-            number_seen = True
-            first_header_index = index if first_header_index is None else first_header_index
-            last_header_index = index
 
-        if re.search(r"\bDESCRIPTION\b", compact):
-            description_seen = True
-            first_header_index = index if first_header_index is None else first_header_index
-            last_header_index = index
+    # step 3 - get the device, and pin info from tree and order it
+    devinfo = prj.GetAllDeviceIds(None)
+    devcount = devinfo[0]
+    devids   = devinfo[1]
+    devids   = [x for x in devids if x is not None]
+    dev_total = len(devids)
 
-        if re.search(r"\bFIGURE\b", compact):
-            figure_seen = True
-            first_header_index = index if first_header_index is None else first_header_index
-            last_header_index = index
+    CURRENT_CONNECTOR_ID = None
+    for id in devids:
+        dev.SetId(id)
+        name = dev.GetName()
+        if name == PIN_SIGNAL_INFO[i][0]['connector name']:
+            CURRENT_CONNECTOR_ID = id
+            break
+    CONNECTOR_DEVICE_IDS[conn_name] = CURRENT_CONNECTOR_ID
+    # assign signal name
+    dev.SetId(CURRENT_CONNECTOR_ID)
+    pininfo = dev.GetPinIds(None)
+    pindids = [x for x in pininfo[1] if x is not None]
+    PINDICT = []
+    pins = []
+    for pin_id in pindids:
+        pin.SetId(pin_id)
+        name = pin.GetName()
+        pins.append(pin_id)
+        current_pin_info = None
+        for pin_data in PIN_SIGNAL_INFO[i][1:]:
+            if str(pin_data[0]) == str(name):
+                current_pin_info = pin_data
+                break
+        if current_pin_info[1] is not None:
+            signal = current_pin_info[1]
+        else:
+            signal = ""
+        if current_pin_info[2] is not None:
+            in_out = current_pin_info[2]
+        else:
+            in_out = ""
+        pin.SetAttributeValue("Local Signal Name", signal)
+        pin.SetAttributeValue("Signal Types", in_out)
+        attrinfo = pin.GetAttributeIds(None)
+        attids = [x for x in attrinfo[1] if x is not None]
+        for att_id in attids:
+            attr.SetId(att_id)
+            if attr.GetName() == "Local Signal Name" or attr.GetName() == "Signal Types":
+                attr.DisplayAttribute()
+        PINDICT.append(pin_id)
 
-        # Do not scan forever into the data.  Once every required header has
-        # appeared, the window is known even if Figure was emitted after pin 1.
-        if pin_seen and number_seen and description_seen and figure_seen:
+    # step 4 - create the pin # view
+    devinfo = prj.GetAllDeviceIds(None)
+    dev_ids = [x for x in devinfo[1] if x is not None]
+    for id in dev_ids:
+        dev.SetId(id)
+        if dev.GetName() == PIN_SIGNAL_INFO[i][0]['connector name']:
+            device_id = id
             break
 
-    if not (pin_seen and number_seen and description_seen and figure_seen):
-        return lines, None
-
-    return lines, {
-        "first": first_header_index,
-        "last": last_header_index
-    }
-
-
-def split_pin_description_figure_payload(payload):
-    payload = normalize_pdf_line(payload)
-    if payload == "":
-        return "", ""
-
-    figure_match = re.search(r"\bFIGURE\b", payload, re.IGNORECASE)
-    if figure_match is not None:
-        description = payload[:figure_match.start()].strip()
-        figure = payload[figure_match.start():].strip()
-        return description, figure
-
-    # A dash is a legitimate Figure-column value in this table family.
-    dash_match = re.search(r"(?:^|\s)-(?:\s*)$", payload)
-    if dash_match is not None:
-        description = payload[:dash_match.start()].strip()
-        return description, "-"
-
-    return payload, ""
-
-
-def parse_normal_pin_description_figure_rows(lines):
-    rows = []
-
-    for line in lines:
-        if is_figure_table_header_fragment(line):
-            continue
-
-        match = re.match(r"^(\d+)\s+(.+)$", line)
-        if match is None:
-            continue
-
-        pin = match.group(1)
-        payload = match.group(2).strip()
-        description, figure = split_pin_description_figure_payload(payload)
-
-        # A line such as "19 -" or "36 Figure 5, Figure 8" is the staggered
-        # form's transition marker, not a complete normal row.
-        if description == "":
-            continue
-
-        rows.append([pin, description, figure])
-
-    return rows
-
-
-def get_staggered_figure_markers(lines, start_index):
-    markers = []
-
-    for index in range(start_index, len(lines)):
-        line = lines[index]
-
-        if is_figure_table_header_fragment(line):
-            continue
-
-        exact_pin = re.fullmatch(r"\d+", line)
-        if exact_pin is not None:
-            markers.append({"index": index, "pin": exact_pin.group(0), "figure": ""})
-            continue
-
-        match = re.match(r"^(\d+)\s+(.+)$", line)
-        if match is None:
-            continue
-
-        remainder = normalize_pdf_line(match.group(2))
-        if is_figure_cell_text(remainder):
-            markers.append({
-                "index": index,
-                "pin": match.group(1),
-                "figure": remainder
-            })
-
-    return markers
-
-
-def clean_figure_description_lines(values):
-    cleaned = []
-    for value in values:
-        text = normalize_pdf_line(value)
-        if text == "" or is_figure_table_header_fragment(text):
-            continue
-        cleaned.append(text)
-    return " ".join(cleaned).strip()
-
-
-def extract_figure_cells_from_text(value):
-    """
-    Split one clipboard line into Figure-column cells without confusing a
-    multi-reference cell such as "Figure 5, Figure 8" with two rows.
-
-    Examples:
-        "-"                                  -> ["-"]
-        "Figure 8"                           -> ["Figure 8"]
-        "Figure 5, Figure 8"                 -> ["Figure 5, Figure 8"]
-        "Figure 8 Figure 8"                  -> ["Figure 8", "Figure 8"]
-        "Figure 5, Figure 8 Figure 5, Figure 8"
-                                              -> two cells
-    """
-    text = normalize_pdf_line(value)
-    if text == "":
-        return []
-
-    if text == "-":
-        return ["-"]
-
-    # A comma joins references that belong to ONE Figure cell.  A new Figure
-    # token not introduced by a comma starts the next cell.
-    pattern = re.compile(
-        r"Figure\s+\d+(?:\s*,\s*Figure\s+\d+)*",
-        re.IGNORECASE
-    )
-    matches = [normalize_pdf_line(match.group(0)) for match in pattern.finditer(text)]
-    return matches
-
-
-def description_start_positions(text):
-    """
-    Return strong candidate starts of a second Description cell on a line.
-
-    Some tagged PDFs collapse TWO description cells onto one clipboard line.
-    We only split at signal-like all-caps identifiers, and only use this as a
-    recovery step when there are fewer description cells than pin numbers.
-    """
-    positions = []
-
-    # Signal-like identifiers seen in connector tables.  Require either an
-    # underscore-containing identifier or TEMP/TEMP_RTN so ordinary prose is
-    # not split merely because it contains a capitalized word.
-    pattern = re.compile(
-        r"(?<!\S)(?:[A-Z][A-Z0-9]*_[A-Z0-9_+\-./]+|TEMP(?:_RTN)?)(?=\s|$|\()"
-    )
-
-    for match in pattern.finditer(text):
-        if match.start() > 0:
-            positions.append(match.start())
-
-    return positions
-
-
-def split_merged_description_cell(value):
-    text = normalize_pdf_line(value)
-    if text == "":
-        return []
-
-    positions = description_start_positions(text)
-    if not positions:
-        return [text]
-
-    # Split at every strong later signal start.  The first chunk remains intact
-    # (e.g. "Chassis GND"), then each following signal begins a new cell.
-    parts = []
-    start = 0
-    for position in positions:
-        part = text[start:position].strip()
-        if part:
-            parts.append(part)
-        start = position
-
-    tail = text[start:].strip()
-    if tail:
-        parts.append(tail)
-
-    return parts if parts else [text]
-
-
-def parse_stream_pin_description_figure_rows(lines, header_info):
-    """
-    Reconstruct the 3-column table as THREE ORDERED STREAMS instead of trying
-    to infer rows from newline adjacency.
-
-    This is the important fix for this PDF.  Its clipboard order can look like:
-
-        Pin
-        Number
-        Description
-        1
-        Figure
-        19 -
-        Chassis GND
-        36 Figure 5, Figure 8
-        TEMP (Thermistor)
-        2 Figure 5, Figure 8
-        TEMP_RTN (Thermistor)
-        ...
-
-    The numeric values are the pin stream.  The text values are the Description
-    stream.  The '-' / Figure values are the Figure stream.  Their internal
-    order is preserved even though the three streams are interleaved by the PDF.
-    """
-    pins = []
-    descriptions = []
-    figures = []
-
-    start_index = max(0, header_info["first"])
-
-    for line_index in range(start_index, len(lines)):
-        line = normalize_pdf_line(lines[line_index])
-        if line == "":
-            continue
-
-        upper = line.upper()
-
-        # Skip header fragments.  In this PDF the standalone "Figure" header
-        # can appear AFTER the first data pin, so it must be ignored wherever it
-        # occurs rather than used as the start of the data region.
-        if is_figure_table_header_fragment(line):
-            continue
-
-        # A pin may be alone, or may carry a Figure value for the PREVIOUS row:
-        #     19 -
-        #     36 Figure 5, Figure 8
-        pin_match = re.match(r"^(\d+)(?:\s+(.*))?$", line)
-        if pin_match is not None:
-            pins.append(pin_match.group(1))
-            remainder = normalize_pdf_line(pin_match.group(2) or "")
-
-            if remainder != "":
-                figure_cells = extract_figure_cells_from_text(remainder)
-
-                if figure_cells:
-                    figures.extend(figure_cells)
-                elif remainder == "-":
-                    figures.append("-")
-                else:
-                    # Normal row-wise copy: "1 Chassis GND -" or
-                    # "19 TEMP (Thermistor) Figure 5, Figure 8".
-                    description, figure = split_pin_description_figure_payload(remainder)
-                    if description:
-                        descriptions.append(description)
-                    if figure:
-                        figures.extend(extract_figure_cells_from_text(figure) or [figure])
-            continue
-
-        # Standalone Figure-column content.
-        figure_cells = extract_figure_cells_from_text(line)
-        if figure_cells:
-            figures.extend(figure_cells)
-            continue
-
-        if line == "-":
-            figures.append("-")
-            continue
-
-        # Anything else in the data stream is Description-column content.
-        descriptions.append(line)
-
-    if not pins:
-        return []
-
-    # If Acrobat merged multiple Description cells onto a single physical line,
-    # split only as much as necessary to reach the pin count.  This avoids
-    # over-splitting ordinary prose in PDFs that paste cleanly.
-    if len(descriptions) < len(pins):
-        expanded = []
-        for description in descriptions:
-            parts = split_merged_description_cell(description)
-            expanded.extend(parts)
-        if len(expanded) >= len(descriptions):
-            descriptions = expanded
-
-    # A final conservative recovery for lines like:
-    #   "L1_ENET GND L1_ENET_B+"
-    # where the first signal contains a space and the second signal has an
-    # underscore.  Re-run only while we still need more Description cells.
-    if len(descriptions) < len(pins):
-        recovered = []
-        for description in descriptions:
-            if len(recovered) >= len(pins):
-                break
-            parts = split_merged_description_cell(description)
-            recovered.extend(parts)
-        descriptions = recovered
-
-    # Do not let footer text become phantom table rows.  Pin count is the hard
-    # row count for this table family.
-    descriptions = descriptions[:len(pins)]
-    figures = figures[:len(pins)]
-
-    while len(descriptions) < len(pins):
-        descriptions.append("")
-    while len(figures) < len(pins):
-        figures.append("")
-
-    rows = []
-    for index, pin in enumerate(pins):
-        rows.append([
-            pin,
-            descriptions[index],
-            figures[index]
-        ])
-
-    return rows
-
-
-def parse_staggered_pin_description_figure_rows(lines, header_info):
-    """Legacy adjacency parser retained only as a fallback."""
-    start_index = max(0, header_info["first"])
-    markers = get_staggered_figure_markers(lines, start_index)
-
-    if len(markers) < 2:
-        return []
-
-    rows = []
-
-    for marker_index in range(1, len(markers)):
-        previous_marker = markers[marker_index - 1]
-        current_marker = markers[marker_index]
-        next_line_index = markers[marker_index + 1]["index"] if marker_index + 1 < len(markers) else len(lines)
-        description_slice = lines[current_marker["index"] + 1:next_line_index]
-
-        terminal_figure_offset = None
-        if marker_index == len(markers) - 1:
-            for offset, value in enumerate(description_slice):
-                if is_figure_cell_text(value):
-                    terminal_figure_offset = offset
-                    break
-
-        if terminal_figure_offset is None:
-            previous_description_lines = description_slice
-        else:
-            previous_description_lines = description_slice[:terminal_figure_offset]
-
-        description = clean_figure_description_lines(previous_description_lines)
-        figure = current_marker["figure"]
-
-        if description != "":
-            rows.append([previous_marker["pin"], description, figure])
-
-        if marker_index == len(markers) - 1 and terminal_figure_offset is not None:
-            terminal_figure = normalize_pdf_line(description_slice[terminal_figure_offset])
-            terminal_description = clean_figure_description_lines(description_slice[terminal_figure_offset + 1:])
-            if terminal_description != "":
-                rows.append([current_marker["pin"], terminal_description, terminal_figure])
-
-    return rows
-
-
-def looks_like_pdf_pin_description_figure_table(input_text):
-    lines, header_info = get_figure_pinout_header_window(input_text)
-    if header_info is None:
-        return False
-
-    data_candidates = 0
-    for line in lines[header_info["first"] + 1:]:
-        if re.match(r"^\d+(?:\s|$)", line):
-            data_candidates += 1
-
-    return data_candidates >= 2
-
-
-def parse_pdf_pin_description_figure_table(input_text):
-    lines, header_info = get_figure_pinout_header_window(input_text)
-    rows = [list(FIGURE_PINOUT_HEADERS)]
-
-    if header_info is None:
-        return rows
-
-    normal_rows = parse_normal_pin_description_figure_rows(lines[header_info["first"]:])
-    stream_rows = parse_stream_pin_description_figure_rows(lines, header_info)
-    legacy_rows = parse_staggered_pin_description_figure_rows(lines, header_info)
-
-    # Prefer stream reconstruction whenever it found the same or more rows than
-    # the alternatives.  It is specifically designed for PDFs whose clipboard
-    # tags interleave the three physical columns.
-    candidates = [normal_rows, legacy_rows, stream_rows]
-    selected_rows = max(
-        candidates,
-        key=lambda candidate: (
-            len(candidate),
-            sum(1 for row in candidate if len(row) >= 2 and str(row[1]).strip() != ""),
-            1 if candidate is stream_rows else 0
-        )
-    )
-
-    rows.extend(selected_rows)
-    return rows
-
-
-# =========================================
-# PDF 4-COLUMN POWER / SIMPLE PINOUT TABLE DETECTION
-#
-# Handles copied PDF tables such as:
-#
-# TABLE 5 - POWER CONNECTOR PINOUT
-# Pin #   Signal Name   Signal Type   Signal Description
-# 1       VBUS          Power         22-36Vdc Power Input
-# 2       VBUS          Power         22-36Vdc Power Input
-# 3       INHIBIT       Power         Enable
-# 4       BUS_RTN       Power         Board Ground
-#
-# This table family has NO Ref Des column and NO Direction column.  It is
-# intentionally detected before the 6-column pinout parser so the words
-# "Signal Type" / "Signal Description" cannot be mistaken for that format.
-# =========================================
-
-SIMPLE_PINOUT_HEADERS = [
-    "PIN #",
-    "SIGNAL NAME",
-    "SIGNAL TYPE",
-    "SIGNAL DESCRIPTION"
-]
-
-
-def get_flat_pdf_tokens(input_text):
-    """Return a whitespace token stream regardless of how Acrobat inserted newlines."""
-    tokens = []
-
-    for raw_line in input_text.replace("\r\n", "\n").replace("\r", "\n").split("\n"):
-        line = normalize_pdf_line(raw_line)
-
-        if line == "":
-            continue
-
-        tokens.extend(line.split())
-
-    return tokens
-
-
-def normalized_header_token(value):
-    value = str(value or "").strip().upper()
-    value = value.replace("–", "-").replace("—", "-")
-    return value.strip(":")
-
-
-def find_token_pair(tokens, first, second, start=0, stop=None):
-    upper_tokens = [normalized_header_token(token) for token in tokens]
-    if stop is None:
-        stop = len(tokens)
-
-    for index in range(max(0, start), min(stop, len(tokens) - 1)):
-        if upper_tokens[index] == first and upper_tokens[index + 1] == second:
-            return index
-
-    return None
-
-
-def find_simple_pinout_header_end(tokens):
-    """
-    Find the end of:
-        Pin # | Signal Name | Signal Type | Signal Description
-
-    This works whether those headers arrive as four normal lines, individual
-    cells on separate lines, or literally one word per line.
-    """
-    upper_tokens = [normalized_header_token(token) for token in tokens]
-    search_stop = min(len(tokens), 120)
-
-    for description_index in range(search_stop - 1):
-        if not (
-            upper_tokens[description_index] == "SIGNAL"
-            and upper_tokens[description_index + 1] == "DESCRIPTION"
-        ):
-            continue
-
-        before = upper_tokens[max(0, description_index - 20):description_index]
-        before_text = " ".join(before)
-
-        if "SIGNAL NAME" not in before_text:
-            continue
-
-        if "SIGNAL TYPE" not in before_text:
-            continue
-
-        if "PIN" not in before:
-            continue
-
-        return description_index + 2
-
-    return None
-
-
-def find_connector_pinout_header_end(tokens):
-    """
-    Find the end of:
-        Ref Des | Pin | Signal Name | Direction | Type | Description
-
-    The header can be split at arbitrary newline boundaries.
-    """
-    upper_tokens = [normalized_header_token(token) for token in tokens]
-    search_stop = min(len(tokens), 140)
-
-    for description_index in range(search_stop):
-        if upper_tokens[description_index] != "DESCRIPTION":
-            continue
-
-        before = upper_tokens[max(0, description_index - 24):description_index]
-        before_text = " ".join(before)
-
-        if "SIGNAL NAME" not in before_text:
-            continue
-
-        if "DIRECTION" not in before:
-            continue
-
-        if "TYPE" not in before:
-            continue
-
-        if "PIN" not in before:
-            continue
-
-        if "REF" not in before or "DES" not in before:
-            continue
-
-        # A 4-column table has the phrase SIGNAL TYPE.  Do not steal it.
-        if "SIGNAL TYPE" in before_text:
-            continue
-
-        return description_index + 1
-
-    return None
-
-
-def looks_highly_verticalized(input_text):
-    """Heuristic used only for the status text, not for deciding correctness."""
-    lines = get_nonempty_normalized_lines(input_text)
-
-    if len(lines) < 6:
-        return False
-
-    short_lines = sum(1 for line in lines if len(line.split()) <= 1)
-    return short_lines / len(lines) >= 0.55
-
-
-def select_pin_token_indices(tokens, data_start, minimum_payload_tokens):
-    """
-    Pick the most plausible increasing pin-number sequence from a flattened PDF
-    token stream.  This prevents an isolated numeric value in a description from
-    normally being mistaken for a new pin row.
-    """
-    candidates = []
-
-    for index in range(data_start, len(tokens)):
-        value = tokens[index]
-
-        if not is_integer_value(value):
-            continue
-
-        candidates.append((index, int(value)))
-
-    if not candidates:
-        return []
-
-    # DP state: best path ending at each candidate.  Prefer more rows first,
-    # then consecutive pin numbering, then a smaller first pin number.
-    states = []
-
-    for candidate_index, (token_index, pin_number) in enumerate(candidates):
-        best_path = [candidate_index]
-        best_count = 1
-        best_consecutive = 0
-        best_first_pin = pin_number
-
-        for previous_candidate_index in range(candidate_index):
-            previous_token_index, previous_pin_number = candidates[previous_candidate_index]
-
-            if pin_number <= previous_pin_number:
-                continue
-
-            payload_end = token_index
-
-            # If a connector designator sits immediately before this pin, it
-            # belongs to this row, not the previous row's Description.
-            if token_index - 1 > previous_token_index:
-                possible_ref = tokens[token_index - 1]
-                if is_pinout_ref_designator(possible_ref):
-                    payload_end -= 1
-
-            payload_count = payload_end - previous_token_index - 1
-
-            if payload_count < minimum_payload_tokens:
-                continue
-
-            previous_state = states[previous_candidate_index]
-            path = previous_state["path"] + [candidate_index]
-            count = previous_state["count"] + 1
-            consecutive = previous_state["consecutive"] + (1 if pin_number == previous_pin_number + 1 else 0)
-            first_pin = previous_state["first_pin"]
-
-            score = (count, consecutive, 1 if first_pin == 1 else 0, -first_pin)
-            best_score = (best_count, best_consecutive, 1 if best_first_pin == 1 else 0, -best_first_pin)
-
-            if score > best_score:
-                best_path = path
-                best_count = count
-                best_consecutive = consecutive
-                best_first_pin = first_pin
-
-        states.append({
-            "path": best_path,
-            "count": best_count,
-            "consecutive": best_consecutive,
-            "first_pin": best_first_pin
-        })
-
-    valid_states = []
-
-    for state in states:
-        last_candidate_index = state["path"][-1]
-        last_token_index = candidates[last_candidate_index][0]
-        remaining_payload = len(tokens) - last_token_index - 1
-
-        if remaining_payload >= minimum_payload_tokens:
-            valid_states.append(state)
-
-    if not valid_states:
-        valid_states = states
-
-    valid_states.sort(
-        key=lambda state: (
-            state["count"],
-            state["consecutive"],
-            1 if state["first_pin"] == 1 else 0,
-            -state["first_pin"]
-        ),
-        reverse=True
-    )
-
-    selected = valid_states[0]["path"]
-    return [candidates[index][0] for index in selected]
-
-
-def looks_like_pdf_simple_pinout_table(input_text):
-    tokens = get_flat_pdf_tokens(input_text)
-    header_end = find_simple_pinout_header_end(tokens)
-
-    if header_end is None:
-        return False
-
-    pin_indices = select_pin_token_indices(tokens, header_end, minimum_payload_tokens=2)
-    return len(pin_indices) >= 2
-
-
-def is_simple_pinout_header_line(line):
-    upper_text = normalize_pdf_line(line).upper()
-
-    if upper_text == "":
-        return True
-
-    if upper_text in {
-        "PIN",
-        "PIN #",
-        "SIGNAL NAME",
-        "SIGNAL TYPE",
-        "SIGNAL DESCRIPTION"
-    }:
-        return True
-
-    if (
-        "PIN" in upper_text
-        and "SIGNAL NAME" in upper_text
-        and "SIGNAL TYPE" in upper_text
-        and "SIGNAL DESCRIPTION" in upper_text
-    ):
-        return True
-
-    if upper_text.startswith("TABLE ") and "PINOUT" in upper_text:
-        return True
-
-    if re.fullmatch(r"PAGE\s+\d+\s+OF\s+\d+", upper_text):
-        return True
-
-    if re.fullmatch(r"\d+\s+OF\s+\d+", upper_text):
-        return True
-
-    return False
-
-
-SIGNAL_START_JOIN_CHARS = "_-/#+.:"
-SIGNAL_END_JOIN_CHARS = "_/#.:"
-SIGNAL_STANDALONE_JOIN_CHARS = "_-/#+.:"
-
-
-def token_starts_with_signal_joiner(value):
-    text = str(value or "").strip()
-    return text != "" and text[0] in SIGNAL_START_JOIN_CHARS
-
-
-def token_ends_with_signal_joiner(value):
-    text = str(value or "").strip()
-    # Do not treat a trailing + or - as proof that the next word belongs to the
-    # signal.  Differential signals commonly end in + / -, e.g. D4- Input.
-    return text != "" and text[-1] in SIGNAL_END_JOIN_CHARS
-
-
-def token_is_signal_joiner(value):
-    text = str(value or "").strip()
-    return text != "" and all(char in SIGNAL_STANDALONE_JOIN_CHARS for char in text)
-
-
-def signal_tokens_are_continuous(previous_value, next_value):
-    """
-    Acrobat occasionally breaks an identifier at punctuation, for example:
-
-        BUS_  RTN
-        BUS   _RTN
-        BUS   _   RTN
-        P5_   1000BT_D4-
-
-    Those are one Signal Name, not extra PDF columns.  Only fuse tokens when
-    punctuation gives us strong evidence that the identifier continues.  This
-    avoids swallowing an ordinary Signal Type such as "Power".
-    """
-    previous_text = str(previous_value or "").strip()
-    next_text = str(next_value or "").strip()
-
-    if previous_text == "" or next_text == "":
-        return False
-
-    if token_ends_with_signal_joiner(previous_text):
-        return True
-
-    if token_starts_with_signal_joiner(next_text):
-        return True
-
-    if token_is_signal_joiner(previous_text) or token_is_signal_joiner(next_text):
-        return True
-
-    return False
-
-
-def normalize_signal_name_fragments(fragments):
-    fragments = [str(value or "").strip() for value in fragments if str(value or "").strip() != ""]
-
-    if not fragments:
-        return ""
-
-    # Preserve a real two-word mnemonic that occurs in the older table family.
-    if len(fragments) == 2 and fragments[0].upper() == "CTU" and fragments[1].upper() == "RTN":
-        return "CTU RTN"
-
-    text = " ".join(fragments)
-
-    # Rejoin identifiers that Acrobat split immediately before/after connector
-    # punctuation.  Repeating the substitution handles forms such as
-    # "BUS _ RTN" as well as "P5_ 1000BT_D4-".
-    previous = None
-    while previous != text:
-        previous = text
-        text = re.sub(r"\s*([_\-/#+.:])\s*", r"\1", text)
-
-    return text.strip()
-
-
-def consume_signal_name_tokens(payload):
-    """Return (signal_name, number_of_payload_tokens_consumed)."""
-    if not payload:
-        return "", 0
-
-    fragments = [payload[0]]
-    index = 1
-
-    while index < len(payload):
-        current_signal = normalize_signal_name_fragments(fragments)
-        next_value = payload[index]
-
-        if signal_tokens_are_continuous(current_signal, next_value):
-            fragments.append(next_value)
-            index += 1
-            continue
-
-        # Existing PDFs also contain the legitimate two-word signal CTU RTN.
-        if current_signal.upper() == "CTU" and str(next_value).strip().upper() == "RTN":
-            fragments.append(next_value)
-            index += 1
-            continue
-
+    symname = "MilBlockSymbolReceptacleInt¶FULL"
+
+    connector_map_info = CONNECTOR_MAP[i]
+    connector_position = connector_map_info['connector position']
+    flip = connector_map_info['connector flip']
+
+    if flip == 0:
+        x = x_block + 0.3
+        y = y_start - (connector_position * PIN_VIEW_SPACING)
+    else:
+        x = x_block + block_width - 0.3
+        y = y_start - (connector_position * PIN_VIEW_SPACING)
+        flip = "/1"
+
+    # print(f'placing {PIN_SIGNAL_INFO[i][0]['connector name']} at x = {x}, y = {y}, flip = {flip} when block_x = {x_block} block_y: {y_block} start: {y_start}')
+    app.PutMessage(f'placing {PIN_SIGNAL_INFO[i][0]['connector name']} at x = {x}, y = {y}, flip = {flip}')
+    res = sym.PlacePins(PINDICT, symname, ver, sheet_1_id, x, y, flip, 1.0)
+    sym.SetId(res[0])
+    textinfo = sym.GetTextIds(None)
+    textids = [x for x in textinfo[1] if x is not None]
+    for text_id in textids:
+        text.SetId(text_id)
+        if PIN_SIGNAL_INFO[i][0]['connector name'] == text.GetText():
+            text.SetColour(0)
+            text.SetMode(1)
+            text.SetStyle(1)
+            text.SetHeight(0.2)
+    time.sleep(0.5)
+
+#=========================================
+# LOAD AND PLACE SCHEMATIC VIEWS
+#=========================================
+MAIN_DEVICE_ID = None
+devinfo = prj.GetAllDeviceIds(None)
+devids = [x for x in devinfo[1] if x is not None]
+for dev_id in devids:
+    dev.SetId(dev_id)
+    name = dev.GetName()
+    if name == DEVICE_DESIGNATION:
+        MAIN_DEVICE_ID = dev_id
         break
 
-    return normalize_signal_name_fragments(fragments), index
+if MAIN_DEVICE_ID is None:
+    raise Exception(f"Could not find main device {DEVICE_DESIGNATION}")
 
+MASTER_SCHEMATIC_LAYOUT, SHEET_DICT = generate_master_schematic_layout(PIN_SIGNAL_INFO, x_block, block_width)
 
-def parse_simple_pinout_data_line(line):
-    line = normalize_pdf_line(line)
+SCHEMATIC_DATA = []
+#=========================================
+# PHASE 1 - CREATE ALL BLOCKS AND VIEWS
+#=========================================
+for i in range(len(PIN_SIGNAL_INFO)):
+    conn_name = PIN_SIGNAL_INFO[i][0]["connector name"]
+    conn_layout_dict = MASTER_SCHEMATIC_LAYOUT[i]
+    current_sheet_id = SHEET_DICT[conn_layout_dict["sheet"]]
 
-    if line == "":
-        return None
+    xp = conn_layout_dict["x start"]
+    yp = conn_layout_dict["y start"]
+    xwidth = conn_layout_dict["width"]
+    yheight = conn_layout_dict["height"]
 
-    tokens = line.split()
+    view_number = i + 1
 
-    if len(tokens) < 3:
-        return None
+    dev.SetId(MAIN_DEVICE_ID)
+    parent_block = dev.CreateView(MAIN_DEVICE_ID, view_number, 0, "0")
 
-    if not is_integer_value(tokens[0]):
-        return None
+    if parent_block == 0:
+        raise Exception(f"Failed creating main view {view_number} for {conn_name}")
 
-    pin = tokens.pop(0)
-    signal_name, consumed = consume_signal_name_tokens(tokens)
+    print("MAIN VIEW:", conn_name, "SOURCE:", MAIN_DEVICE_ID, "VIEW:", view_number, "RESULT:", parent_block)
 
-    if consumed >= len(tokens):
-        return None
+    # Fresh symbol object ONLY for this block
+    block_sym = prj.CreateSymbolObject()
+    is_loaded = block_sym.Load("CABBLOCK", 1)
 
-    signal_type = tokens[consumed]
-    description = " ".join(tokens[consumed + 1:])
+    if not is_loaded:
+        raise Exception(f"Failed loading CABBLOCK for {conn_name}")
 
-    return [pin, signal_name, signal_type, description]
+    block_symbol_id = block_sym.PlaceBlock(current_sheet_id, xp, yp, xwidth, yheight, parent_block)
 
+    if block_symbol_id == 0:
+        raise Exception(f"Failed placing main block for {conn_name}")
 
-def parse_pdf_simple_pinout_table(input_text):
-    # Flattening first is intentional.  The same parser therefore works when
-    # Acrobat gives us normal rows, one cell per line, or one word per line.
-    tokens = get_flat_pdf_tokens(input_text)
-    header_end = find_simple_pinout_header_end(tokens)
-    rows = [list(SIMPLE_PINOUT_HEADERS)]
+    # =========================================
+    # SET COLOR
+    # =========================================
+    block_sym.SetId(block_symbol_id)
+    block_sym.SetBlockHatchPattern(1, 45.0, 135.0)
+    block_sym.SetBlockHatchStyle(0)
+    block_sym.SetBlockHatchWidth(0.25)
+    block_sym.SetBlockHatchDistance(1.0)
+    block_sym.SetBlockHatchColour(58)
 
-    if header_end is None:
-        return rows
+    print("BLOCK:", conn_name, "DEVICE VIEW:", parent_block, "SYMBOL:", block_symbol_id)
 
-    pin_indices = select_pin_token_indices(tokens, header_end, minimum_payload_tokens=2)
+    # =========================================
+    # ADD EQUIPMENT IDENTIFACATION DIRECTLY TO
+    # THE EXACT SECONDARY BLOCK SYMBOL WE JUST PLACED
+    # =========================================
+    block_sym.SetId(block_symbol_id)
 
-    for row_index, pin_index in enumerate(pin_indices):
-        next_pin_index = pin_indices[row_index + 1] if row_index + 1 < len(pin_indices) else len(tokens)
-        payload_end = next_pin_index
+    equipment_attr_id = block_sym.AddAttributeValue("Equipment Identifacation", ADDITIONAL_PART_ID)
 
-        payload = tokens[pin_index + 1:payload_end]
-
-        if len(payload) < 2:
-            continue
-
-        pin = tokens[pin_index]
-        signal_name, consumed = consume_signal_name_tokens(payload)
-
-        if consumed >= len(payload):
-            continue
-
-        signal_type = payload[consumed]
-        description = " ".join(payload[consumed + 1:])
-
-        rows.append([
-            pin,
-            signal_name,
-            signal_type,
-            description
-        ])
-
-    return rows
-
-
-def looks_like_pdf_pinout_table(input_text):
-    tokens = get_flat_pdf_tokens(input_text)
-    header_end = find_connector_pinout_header_end(tokens)
-
-    if header_end is None:
-        return False
-
-    pin_indices = select_pin_token_indices(tokens, header_end, minimum_payload_tokens=3)
-    return len(pin_indices) >= 2
-
-
-def is_pinout_header_line(line):
-    upper_text = normalize_pdf_line(line).upper()
-
-    if upper_text == "":
-        return True
-
-    if upper_text in {
-        "REF",
-        "DES",
-        "REF DES",
-        "PIN",
-        "SIGNAL NAME",
-        "DIRECTION",
-        "TYPE",
-        "DESCRIPTION"
-    }:
-        return True
-
-    if (
-        "PIN" in upper_text
-        and "SIGNAL NAME" in upper_text
-        and "DIRECTION" in upper_text
-        and "TYPE" in upper_text
-        and "DESCRIPTION" in upper_text
-    ):
-        return True
-
-    if upper_text.startswith("TABLE ") and "PINOUT" in upper_text:
-        return True
-
-    if re.fullmatch(r"PAGE\s+\d+\s+OF\s+\d+", upper_text):
-        return True
-
-    if re.fullmatch(r"\d+\s+OF\s+\d+", upper_text):
-        return True
-
-    return False
-
-
-
-
-def is_pinout_ref_designator(value):
-    """Stricter Ref Des test so signal names like P5_1000BT_D4- are not connectors."""
-    text = normalize_pdf_line(value).upper().replace(" ", "")
-
-    if text == "":
-        return False
-
-    # Normal connector names used by these pinout tables, including a compact
-    # shared label such as J1R/J2R.
-    return re.fullmatch(r"J\d+[A-Z]*(?:[/,&+]J\d+[A-Z]*)*", text) is not None
-
-def normalize_pinout_direction(value):
-    upper = str(value or "").strip().upper().replace("\\", "/")
-
-    mapping = {
-        "INPUT": "Input",
-        "IN": "In",
-        "OUTPUT": "Output",
-        "OUT": "Out",
-        "INOUT": "Inout",
-        "IN/OUT": "In/Out",
-        "BIDIR": "Bidir",
-        "BIDIRECTIONAL": "Bidirectional",
-        "NC": "NC",
-        "N/C": "N/C",
-        "-": "-"
-    }
-
-    return mapping.get(upper, str(value or "").strip())
-
-
-def find_direction_token_index(payload):
-    direction_values = {
-        "INPUT",
-        "IN",
-        "OUTPUT",
-        "OUT",
-        "INOUT",
-        "IN/OUT",
-        "BIDIR",
-        "BIDIRECTIONAL",
-        "NC",
-        "N/C",
-        "-"
-    }
-
-    # Start at 1 so a signal named NC is not mistaken for the direction when
-    # the row is "NC NC NC No Connect".
-    for index in range(1, len(payload)):
-        upper = str(payload[index]).strip().upper().replace("\\", "/")
-
-        if upper not in direction_values:
-            continue
-
-        previous_value = payload[index - 1] if index > 0 else ""
-        next_value = payload[index + 1] if index + 1 < len(payload) else ""
-
-        # Do not mistake IN / OUT for the Direction column when Acrobat split a
-        # signal identifier around an underscore, e.g. DIG_ / IN / _1.
-        if signal_tokens_are_continuous(previous_value, payload[index]):
-            continue
-
-        if signal_tokens_are_continuous(payload[index], next_value):
-            continue
-
-        # A standalone '-' can itself be part of a signal name.  If a stronger
-        # direction word immediately follows, keep '-' with the signal and use
-        # the later token as Direction.
-        if upper == "-":
-            for lookahead in range(index + 1, min(index + 3, len(payload))):
-                later = str(payload[lookahead]).strip().upper().replace("\\", "/")
-                if later in direction_values and later != "-":
-                    break
-            else:
-                return index
-            continue
-
-        return index
-
-    return None
-
-
-def parse_pinout_data_line(line, current_ref_des):
-    line = normalize_pdf_line(line)
-
-    if line == "":
-        return None
-
-    tokens = line.split()
-
-    if len(tokens) < 4:
-        return None
-
-    ref_des = current_ref_des
-
-    if (
-        len(tokens) >= 2
-        and is_connector_designator(tokens[0])
-        and is_integer_value(tokens[1])
-    ):
-        ref_des = tokens.pop(0)
-
-    if len(tokens) == 0 or not is_integer_value(tokens[0]):
-        return None
-
-    pin = tokens.pop(0)
-    direction_index = find_direction_token_index(tokens)
-
-    if direction_index is not None and direction_index >= 1 and direction_index + 1 < len(tokens):
-        signal_name = normalize_signal_name_fragments(tokens[:direction_index])
-        direction = normalize_pinout_direction(tokens[direction_index])
-        signal_type = tokens[direction_index + 1]
-        description = " ".join(tokens[direction_index + 2:])
+    if equipment_attr_id == -1:
+        print("ADD EQUIPMENT IDENTIFACATION RETURNED -1:", "CONNECTOR:", conn_name, "VIEW:", parent_block, "SYMBOL:", block_symbol_id)
     else:
-        if len(tokens) < 3:
-            return None
-
-        signal_name, consumed = consume_signal_name_tokens(tokens)
-
-        if consumed + 1 >= len(tokens):
-            return None
-
-        direction = normalize_pinout_direction(tokens[consumed])
-        signal_type = tokens[consumed + 1]
-        description = " ".join(tokens[consumed + 2:])
-
-    return [ref_des, pin, signal_name, direction, signal_type, description]
-
-
-def parse_pdf_pinout_table(input_text):
-    tokens = get_flat_pdf_tokens(input_text)
-    header_end = find_connector_pinout_header_end(tokens)
-    rows = [list(PINOUT_HEADERS)]
-
-    if header_end is None:
-        return rows
-
-    pin_indices = select_pin_token_indices(tokens, header_end, minimum_payload_tokens=3)
-    current_ref_des = ""
-
-    for row_index, pin_index in enumerate(pin_indices):
-        next_pin_index = pin_indices[row_index + 1] if row_index + 1 < len(pin_indices) else len(tokens)
-
-        # Ref Des can be a vertically merged value once before the first pin,
-        # or it can be repeated immediately before each pin.
-        if row_index == 0:
-            # Only search the small pre-data area before the first pin.  Do not
-            # scan the previous row payload for later pins, because signal names
-            # such as P5_1000BT_D4- also contain letters and digits.
-            for token in tokens[header_end:pin_index]:
-                if is_pinout_ref_designator(token):
-                    current_ref_des = token
-
-        if pin_index > header_end and is_pinout_ref_designator(tokens[pin_index - 1]):
-            current_ref_des = tokens[pin_index - 1]
-
-        payload_end = next_pin_index
-
-        if row_index + 1 < len(pin_indices):
-            # A repeated connector name immediately before the next pin belongs
-            # to the next row, not this row's Description.
-            if payload_end - 1 > pin_index and is_pinout_ref_designator(tokens[payload_end - 1]):
-                payload_end -= 1
-
-        payload = tokens[pin_index + 1:payload_end]
-
-        if len(payload) < 3:
-            continue
-
-        direction_index = find_direction_token_index(payload)
-
-        if direction_index is not None and direction_index >= 1 and direction_index + 1 < len(payload):
-            signal_name = normalize_signal_name_fragments(payload[:direction_index])
-            direction = normalize_pinout_direction(payload[direction_index])
-            signal_type = payload[direction_index + 1]
-            description = " ".join(payload[direction_index + 2:])
-        else:
-            signal_name, consumed = consume_signal_name_tokens(payload)
-
-            if consumed + 1 >= len(payload):
-                continue
-
-            direction = normalize_pinout_direction(payload[consumed])
-            signal_type = payload[consumed + 1]
-            description = " ".join(payload[consumed + 2:])
-
-        rows.append([
-            current_ref_des,
-            tokens[pin_index],
-            signal_name,
-            direction,
-            signal_type,
-            description
-        ])
-
-    return rows
-
-
-# =========================================
-# SAFE CSV DETECTION
-#
-# Do NOT treat a block as CSV merely because a description contains a comma.
-# Real CSV should show comma-separated structure on the first meaningful rows.
-# =========================================
-
-def looks_like_real_csv(input_text):
-    raw_lines = [line for line in input_text.split("\n") if line.strip() != ""]
-
-    if len(raw_lines) == 0:
-        return False
-
-    sample_lines = raw_lines[:6]
-    comma_sample_count = sum(1 for line in sample_lines if "," in line)
-
-    # A normal CSV header/data block will contain commas immediately. A PDF
-    # table whose descriptions merely contain punctuation usually will not.
-    if comma_sample_count < min(2, len(sample_lines)):
-        return False
-
-    widths = []
-
-    for line in raw_lines:
-        try:
-            parsed = next(csv.reader([line]))
-        except csv.Error:
-            continue
-
-        if len(parsed) > 1:
-            widths.append(len(parsed))
-
-    if len(widths) < 2:
-        return False
-
-    # Require a repeated multi-column width. This rejects isolated prose commas.
-    width_counts = {}
-
-    for width in widths:
-        width_counts[width] = width_counts.get(width, 0) + 1
-
-    most_common_width = max(width_counts, key=width_counts.get)
-    most_common_count = width_counts[most_common_width]
-
-    return most_common_width > 1 and most_common_count >= 2
-
-
-# =========================================
-# PDF WIRING TABLE DETECTION
-# =========================================
-
-def is_connector_designator(value):
-    value = normalize_pdf_line(value)
-
-    if value == "":
-        return False
-
-    if " " in value:
-        return False
-
-    if re.fullmatch(r"[A-Za-z][A-Za-z0-9_.#/-]*", value) is None:
-        return False
-
-    if re.search(r"[A-Za-z]", value) is None:
-        return False
-
-    if re.search(r"\d", value) is None:
-        return False
-
-    return True
-
-
-def looks_like_inline_wiring_row(line):
-    line = normalize_pdf_line(line)
-
-    if line == "":
-        return False
-
-    match = re.match(
-        r"^([A-Za-z][A-Za-z0-9_.#/-]*)\s+(\d+)\s+(\S+)(?:\s+.*)?$",
-        line
-    )
-
-    if match is None:
-        return False
-
-    return is_connector_designator(match.group(1))
-
-
-def is_pdf_junk_line(line):
-    text = normalize_pdf_line(line)
-    upper_text = text.upper()
-
-    if text == "":
-        return True
-
-    if re.fullmatch(r"PAGE\s+\d+\s+OF\s+\d+", upper_text):
-        return True
-
-    if re.fullmatch(r"\d+\s+OF\s+\d+", upper_text):
-        return True
-
-    exact_junk = {
-        "FROM",
-        "TO",
-        "SIGNAL NAME",
-        "MNEMONIC",
-        "DESCRIPTION",
-        "WIRE",
-        "CODE",
-        "WIRE CODE",
-        "NOTE",
-        "COMMENT",
-        "WIRE CODES"
-    }
-
-    if upper_text in exact_junk:
-        return True
-
-    if upper_text.startswith("DES POSN DES POSN"):
-        return True
-
-    if upper_text.startswith("CODE NOTE COMMENT"):
-        return True
-
-    if "DES" in upper_text and "POSN" in upper_text and "MNEMONIC" in upper_text:
-        return True
-
-    if "MNEMONIC" in upper_text and "DESCRIPTION" in upper_text:
-        return True
-
-    if "WIRE CODE" in upper_text and "NOTE" in upper_text:
-        return True
-
-    return False
-
-
-# =========================================
-# FIND PDF RECORDS
-#
-# Supports both:
-#
-# J12 18 114 SPARE
-#
-# AND:
-#
-# J12
-# 19
-# 114
-# MAG1-X-
-# Magnetometer 1 X axis negative
-# differential input
-# IN
-# =========================================
-
-def find_pdf_records(input_text):
-    raw_lines = input_text.split("\n")
-
-    lines = []
-
-    for raw_line in raw_lines:
-        line = normalize_pdf_line(raw_line)
-
-        if is_pdf_junk_line(line):
-            continue
-
-        lines.append(line)
-
-    records = []
-    current_record = None
-
-    index = 0
-
-    while index < len(lines):
-        line = lines[index]
-
-        # =========================================
-        # INLINE RECORD
-        #
-        # J12 19 114 MAG1-X- ...
-        # =========================================
-
-        if looks_like_inline_wiring_row(line):
-
-            if current_record is not None:
-                records.append(current_record)
-
-            match = re.match(
-                r"^(\S+)\s+(\d+)\s+(\S+)(?:\s+(.*))?$",
-                line
-            )
-
-            current_record = {
-                "from_des": match.group(1),
-                "from_posn": match.group(2),
-                "to_des": match.group(3),
-                "payload": []
-            }
-
-            remainder = match.group(4)
-
-            if remainder is not None:
-                remainder = remainder.strip()
-
-                if remainder != "":
-                    current_record["payload"].append(remainder)
-
-            index += 1
-            continue
-
-        # =========================================
-        # VERTICAL / BROKEN PDF RECORD
-        #
-        # J12
-        # 19
-        # 114
-        # MAG1-X-
-        # ...
-        # =========================================
-
-        if is_connector_designator(line):
-
-            if index + 2 < len(lines):
-                possible_pin = lines[index + 1]
-                possible_destination = lines[index + 2]
-
-                if is_integer_value(possible_pin):
-
-                    if current_record is not None:
-                        records.append(current_record)
-
-                    current_record = {
-                        "from_des": line,
-                        "from_posn": possible_pin,
-                        "to_des": possible_destination,
-                        "payload": []
-                    }
-
-                    index += 3
-                    continue
-
-        # =========================================
-        # CONTINUATION OF CURRENT ROW
-        # =========================================
-
-        if current_record is not None:
-            current_record["payload"].append(line)
-
-        index += 1
-
-    if current_record is not None:
-        records.append(current_record)
-
-    return records
-
-
-# =========================================
-# PARSE CONTENT OF ONE PDF ROW
-# =========================================
-
-def parse_wiring_payload(payload_lines):
-    to_posn = ""
-    mnemonic = ""
-    description = ""
-    wire_code = ""
-    note = ""
-    comment = ""
-
-    if len(payload_lines) == 0:
-        return (
-            to_posn,
-            mnemonic,
-            description,
-            wire_code,
-            note,
-            comment
-        )
-
-    payload_text = " ".join(payload_lines)
-    payload_text = normalize_pdf_line(payload_text)
-
-    if payload_text == "":
-        return (
-            to_posn,
-            mnemonic,
-            description,
-            wire_code,
-            note,
-            comment
-        )
-
-    tokens = payload_text.split()
+        print("ADDED EQUIPMENT IDENTIFACATION:", "CONNECTOR:", conn_name, "VIEW:", parent_block, "SYMBOL:", block_symbol_id, "ATTR ID:", equipment_attr_id, "VALUE:", repr(ADDITIONAL_PART_ID))
 
     # =========================================
-    # COMMENTS
-    #
-    # A SPARE row must produce a BLANK mnemonic.
+    # VERIFY IT IS ACTUALLY ON THIS SYMBOL
+    # DO NOT DISPLAY OR FORMAT IT
     # =========================================
+    verify_attr_info = block_sym.GetAttributeIds(None)
+    verify_attr_ids = [x for x in verify_attr_info[1] if x is not None]
 
-    comment_values = {
-        "SPARE",
-        "UNUSED",
-        "NC",
-        "N/C"
-    }
+    equipment_attr_found = False
 
-    remaining = []
-
-    for token in tokens:
-
-        if token.upper() in comment_values:
-
-            if comment == "":
-                comment = token
-
-        else:
-            remaining.append(token)
-
-    tokens = remaining
-
-    if len(tokens) == 0:
-        return (
-            to_posn,
-            mnemonic,
-            description,
-            wire_code,
-            note,
-            comment
-        )
-
-    # =========================================
-    # NOTE / DIRECTION
-    # =========================================
-
-    note_values = {
-        "IN",
-        "OUT",
-        "IN/OUT",
-    }
-
-    remaining = []
-
-    for token in tokens:
-
-        if token in note_values:
-
-            if note == "":
-                note = token
-
-        else:
-            remaining.append(token)
-
-    tokens = remaining
-
-    if note not in note_values:
-        note = ""
-
-    # =========================================
-    # OPTIONAL TO POSITION
-    # =========================================
-
-    if len(tokens) >= 2:
-
-        if is_integer_value(tokens[0]):
-            to_posn = tokens.pop(0)
-
-    # =========================================
-    # MNEMONIC
-    #
-    # First remaining item is normally the
-    # mnemonic.
-    #
-    # CTU RTN is a valid two-word mnemonic.
-    # Preserve it instead of treating RTN as
-    # the start of the description.
-    # =========================================
-
-    if len(tokens) >= 2 and tokens[0].upper() == "CTU" and tokens[1].upper() == "RTN":
-        mnemonic = "CTU RTN"
-        tokens = tokens[2:]
-    elif len(tokens) >= 1 and tokens[0].upper() == "CTURTN":
-        mnemonic = "CTU RTN"
-        tokens.pop(0)
-    elif len(tokens) >= 1:
-        mnemonic = tokens.pop(0)
-
-        if len(tokens) >= 1 and tokens[0].startswith("("):
-            continuation_parts = []
-
-            while len(tokens) >= 1:
-                continuation_token = tokens.pop(0)
-                continuation_parts.append(continuation_token)
-
-                if continuation_token.endswith(")"):
-                    break
-
-            if len(continuation_parts) > 0:
-                mnemonic = mnemonic + " " + " ".join(continuation_parts)
-
-    # =========================================
-    # DESCRIPTION
-    #
-    # Preserve all remaining text. This is
-    # important because Acrobat frequently wraps
-    # descriptions onto multiple clipboard lines.
-    # =========================================
-
-    if len(tokens) > 0:
-        description = " ".join(tokens)
-
-    return (
-        to_posn,
-        mnemonic,
-        description,
-        wire_code,
-        note,
-        comment
-    )
-
-
-# =========================================
-# BUILD 9-COLUMN PDF TABLE
-# =========================================
-
-def parse_flat_pdf_wiring_table(input_text):
-    records = find_pdf_records(input_text)
-
-    rows = []
-
-    rows.append([
-        "FROM DES",
-        "FROM POSN",
-        "TO DES",
-        "TO POSN",
-        "MNEMONIC",
-        "DESCRIPTION",
-        "WIRE CODE",
-        "NOTE",
-        "COMMENT"
-    ])
-
-    for record in records:
-
-        (
-            to_posn,
-            mnemonic,
-            description,
-            wire_code,
-            note,
-            comment
-        ) = parse_wiring_payload(record["payload"])
-
-        rows.append([
-            record["from_des"],
-            record["from_posn"],
-            record["to_des"],
-            to_posn,
-            mnemonic,
-            description,
-            wire_code,
-            note,
-            comment
-        ])
-
-    return rows
-
-
-def looks_like_flat_pdf_wiring_table(input_text):
-    records = find_pdf_records(input_text)
-
-    manual_columns = get_manual_column_count()
-
-    if manual_columns == 9 and len(records) >= 1:
-        return True
-
-    if len(records) >= 2:
-        return True
-
-    return False
-
-
-# =========================================
-# GENERAL TABLE PARSER
-# =========================================
-
-def parse_table():
-    input_text = input_box.get("1.0", "end-1c")
-
-    if input_text == "":
-        return [], 0, "NONE"
-
-    input_text = input_text.replace("\r\n", "\n")
-    input_text = input_text.replace("\r", "\n")
-
-    manual_columns = get_manual_column_count()
-
-    rows = []
-    delimiter_name = ""
-
-    # =========================================
-    # PDF 3-COLUMN PIN / DESCRIPTION / FIGURE TABLE FIRST
-    #
-    # This format can be copied from the PDF in a staggered tagged-text order,
-    # so it must be reconstructed before the generic spaced-table fallback.
-    # =========================================
-
-    if looks_like_pdf_pin_description_figure_table(input_text):
-
-        rows = parse_pdf_pin_description_figure_table(input_text)
-
-        if len(rows) > 1:
-            label = "PDF PIN / DESCRIPTION / FIGURE TABLE"
-            if looks_highly_verticalized(input_text):
-                label += " / INTERLEAVED PDF PASTE"
-            return rows, 3, label
-
-    # =========================================
-    # PDF 4-COLUMN SIMPLE / POWER PINOUT TABLE FIRST
-    #
-    # Example: Pin # | Signal Name | Signal Type | Signal Description.
-    # This has no Ref Des and no Direction column.
-    # =========================================
-
-    if looks_like_pdf_simple_pinout_table(input_text):
-
-        rows = parse_pdf_simple_pinout_table(input_text)
-
-        if len(rows) > 1:
-            label = "PDF SIMPLE PINOUT TABLE"
-            if looks_highly_verticalized(input_text):
-                label += " / VERTICAL PASTE"
-            return rows, 4, label
-
-    # =========================================
-    # PDF 6-COLUMN CONNECTOR PINOUT TABLE
-    #
-    # This must run before the wiring-table and CSV checks. Pinout tables can
-    # contain commas inside Description and can have a vertically merged Ref Des.
-    # =========================================
-
-    if looks_like_pdf_pinout_table(input_text):
-
-        rows = parse_pdf_pinout_table(input_text)
-
-        if len(rows) > 1:
-            label = "PDF PINOUT TABLE"
-            if looks_highly_verticalized(input_text):
-                label += " / VERTICAL PASTE"
-            return rows, 6, label
-
-    # =========================================
-    # PDF WIRING TABLE
-    #
-    # This MUST happen before generic TAB parsing because PDF clipboard data can
-    # contain tabs without actually preserving table structure.
-    # =========================================
-
-    if looks_like_flat_pdf_wiring_table(input_text):
-
-        rows = parse_flat_pdf_wiring_table(input_text)
-
-        if len(rows) > 1:
-            return rows, 9, "PDF WIRING TABLE"
-
-    # =========================================
-    # TRUE TAB-SEPARATED DATA
-    # =========================================
-
-    if "\t" in input_text:
-        delimiter_name = "TAB"
-
-        for line in input_text.split("\n"):
-            rows.append(line.split("\t"))
-
-    # =========================================
-    # CSV
-    #
-    # Use structural CSV detection instead of `if "," in input_text` so a
-    # normal Description such as "pair 4/D, negative" does not hijack parsing.
-    # =========================================
-
-    elif looks_like_real_csv(input_text):
-        delimiter_name = "COMMA"
-
-        reader = csv.reader(io.StringIO(input_text))
-
-        for row in reader:
-            rows.append(row)
-
-    # =========================================
-    # GENERIC SPACE-ALIGNED TABLE
-    # =========================================
-
-    elif manual_columns is not None and manual_columns > 1:
-        delimiter_name = "SPACED TABLE"
-
-        for line in input_text.split("\n"):
-
-            if line.strip() == "":
-                continue
-
-            row = re.split(r" {2,}", line.strip())
-
-            rows.append(row)
-
-    # =========================================
-    # SINGLE COLUMN
-    # =========================================
-
-    else:
-        delimiter_name = "LINES"
-
-        for line in input_text.split("\n"):
-            rows.append([line])
-
-    # =========================================
-    # COLUMN COUNT
-    # =========================================
-
-    if manual_columns is not None:
-        column_count = manual_columns
-
-    else:
-        column_count = 0
-
-        for row in rows:
-
-            if len(row) > column_count:
-                column_count = len(row)
-
-    # =========================================
-    # NORMALIZE ALL ROW WIDTHS
-    # =========================================
-
-    normalized_rows = []
-
-    for row in rows:
-
-        normalized_row = list(row)
-
-        while len(normalized_row) < column_count:
-            normalized_row.append("")
-
-        if len(normalized_row) > column_count:
-            normalized_row = normalized_row[:column_count]
-
-        normalized_rows.append(normalized_row)
-
-    return normalized_rows, column_count, delimiter_name
-
-
-# =========================================
-# DETECT TABLE
-# =========================================
-
-def detect_table():
-    global detected_table
-    global detected_column_count
-
-    rows, column_count, delimiter_name = parse_table()
-
-    detected_table = rows
-    detected_column_count = column_count
-
-    if len(rows) == 0:
-        column_selector["values"] = []
-        column_selector.set("")
-
-        status_label.config(
-            text="No table data found."
-        )
-
-        return
-
-    column_choices = []
-
-    first_row = rows[0]
-
-    for index in range(column_count):
-        header = ""
-
-        if index < len(first_row):
-            header = str(first_row[index]).strip()
-
-        if header == "":
-            column_choices.append(str(index + 1))
-
-        else:
-            column_choices.append(
-                f"{index + 1}: {header}"
-            )
-
-    column_selector["values"] = column_choices
-
-    if column_count > 0:
-        column_selector.current(0)
-
-    structured_pdf_table = (
-        delimiter_name == "PDF WIRING TABLE"
-        or delimiter_name.startswith("PDF PINOUT TABLE")
-        or delimiter_name.startswith("PDF SIMPLE PINOUT TABLE")
-        or delimiter_name.startswith("PDF PIN / DESCRIPTION / FIGURE TABLE")
-    )
-
-    detected_row_count = len(rows) - 1 if structured_pdf_table else len(rows)
-
-    status_label.config(
-        text=f"Detected {detected_row_count} rows x {column_count} columns | {delimiter_name}"
-    )
-
-
-def get_selected_column():
-    selected = column_selector.get().strip()
-
-    if selected == "":
-        return None
-
-    selected_number = selected.split(":")[0].strip()
-
-    try:
-        return int(selected_number)
-
-    except ValueError:
-        return None
-
-
-# =========================================
-# EXTRACT SELECTED COLUMN
-# =========================================
-
-def extract_column():
-    global current_count
-    global detected_table
-    global detected_column_count
-
-    rows, column_count, delimiter_name = parse_table()
-
-    detected_table = rows
-    detected_column_count = column_count
-
-    if len(rows) == 0:
-        status_label.config(
-            text="No table data found."
-        )
-
-        return
-
-    selected_column = get_selected_column()
-
-    if selected_column is None:
-
-        detect_table()
-
-        selected_column = get_selected_column()
-
-    if selected_column is None:
-        status_label.config(
-            text="Select a column."
-        )
-
-        return
-
-    if selected_column < 1 or selected_column > column_count:
-        status_label.config(
-            text=f"Column must be between 1 and {column_count}."
-        )
-
-        return
-
-    start_row = 0
-
-    if skip_header_var.get():
-        start_row = 1
-
-    output_values = []
-
-    for row_index in range(start_row, len(rows)):
-        row = rows[row_index]
-
-        if selected_column - 1 < len(row):
-            value = str(row[selected_column - 1]).strip()
-
-        else:
-            value = ""
-
-        output_values.append(value)
-
-    output_text = "\n".join(output_values)
-
-    output_box.delete("1.0", tk.END)
-    output_box.insert(tk.END, output_text)
-
-    current_count = len(output_values)
-
-    blank_count = 0
-
-    for value in output_values:
-
-        if value.strip() == "":
-            blank_count += 1
-
-    count_label.config(
-        text=f"Items: {current_count}"
-    )
-
-    status_label.config(
-        text=f"Column {selected_column} extracted | Blank cells: {blank_count}"
-    )
-
-
-# =========================================
-# OUTPUT FUNCTIONS
-# =========================================
-
-def copy_output():
-    output_text = output_box.get("1.0", "end-1c")
-
-    root.clipboard_clear()
-    root.clipboard_append(output_text)
-    root.update()
-
-    status_label.config(
-        text="Output copied to clipboard."
-    )
-
-
-def clear_all():
-    global current_count
-    global detected_table
-    global detected_column_count
-
-    input_box.delete("1.0", tk.END)
-    output_box.delete("1.0", tk.END)
-
-    column_count_entry.delete(0, tk.END)
-
-    column_selector.set("")
-    column_selector["values"] = []
-
-    detected_table = []
-    detected_column_count = 0
-
-    current_count = 0
-
-    count_label.config(
-        text="Items: 0"
-    )
-
-    status_label.config(
-        text=""
-    )
-
-
-# =========================================
-# CONNECTOR NUMBER GENERATOR
-# =========================================
-
-def copy_connector():
-    connector_number = connector_entry.get().strip()
-    copy_count_text = copy_count_entry.get().strip()
-
-    if connector_number == "":
-        connector_status.config(
-            text="Enter a connector number."
-        )
-
-        return
-
-    if copy_count_text == "":
-        copy_count = current_count
-
-    else:
+    for verify_attr_id in verify_attr_ids:
+        attr.SetId(verify_attr_id)
 
         try:
-            copy_count = int(copy_count_text)
-
-        except ValueError:
-            connector_status.config(
-                text="Copy count must be a number."
-            )
-
-            return
-
-    if copy_count <= 0:
-        connector_status.config(
-            text="No items to copy."
-        )
-
-        return
-
-    connector_output = "\n".join(
-        [connector_number] * copy_count
-    )
-
-    root.clipboard_clear()
-    root.clipboard_append(connector_output)
-    root.update()
-
-    connector_status.config(
-        text=f"Copied {copy_count} copies of connector {connector_number}"
-    )
-
-
-# =========================================
-# GUI
-# =========================================
-
-root = tk.Tk()
-
-root.title("Excel Column Formatter")
-root.geometry("600x680")
-
-
-# =========================================
-# INPUT
-# =========================================
-
-tk.Label(
-    root,
-    text="Paste Data Here:",
-    font=("Arial", 12, "bold")
-).pack(
-    pady=(12, 4)
-)
-
-
-input_box = scrolledtext.ScrolledText(
-    root,
-    width=65,
-    height=7,
-    font=("Consolas", 11),
-    wrap=tk.NONE
-)
-
-input_box.pack(
-    padx=15
-)
-
-
-# =========================================
-# MAIN TOOL BUTTONS
-# =========================================
-
-main_button_frame = tk.Frame(root)
-
-main_button_frame.pack(
-    pady=7
-)
-
-
-tk.Button(
-    main_button_frame,
-    text="Convert Numbers",
-    command=convert,
-    width=16
-).pack(
-    side=tk.LEFT,
-    padx=4
-)
-
-
-tk.Button(
-    main_button_frame,
-    text="Detect Table",
-    command=detect_table,
-    width=16
-).pack(
-    side=tk.LEFT,
-    padx=4
-)
-
-
-# =========================================
-# TABLE CONTROLS
-# =========================================
-
-table_frame = tk.Frame(root)
-
-table_frame.pack(
-    pady=3
-)
-
-
-tk.Label(
-    table_frame,
-    text="Columns:"
-).grid(
-    row=0,
-    column=0,
-    padx=3
-)
-
-
-column_count_entry = tk.Entry(
-    table_frame,
-    width=5,
-    font=("Consolas", 10)
-)
-
-column_count_entry.grid(
-    row=0,
-    column=1,
-    padx=3
-)
-
-
-tk.Label(
-    table_frame,
-    text="Output Column:"
-).grid(
-    row=0,
-    column=2,
-    padx=(10, 3)
-)
-
-
-column_selector = ttk.Combobox(
-    table_frame,
-    width=18,
-    state="readonly"
-)
-
-column_selector.grid(
-    row=0,
-    column=3,
-    padx=3
-)
-
-
-skip_header_var = tk.BooleanVar(
-    value=True
-)
-
-
-tk.Checkbutton(
-    table_frame,
-    text="Skip Header",
-    variable=skip_header_var
-).grid(
-    row=1,
-    column=0,
-    columnspan=2,
-    pady=4
-)
-
-
-tk.Button(
-    table_frame,
-    text="Extract Column",
-    command=extract_column,
-    width=18
-).grid(
-    row=1,
-    column=2,
-    columnspan=2,
-    pady=4
-)
-
-
-# =========================================
-# OUTPUT
-# =========================================
-
-tk.Label(
-    root,
-    text="Excel-Ready Output:",
-    font=("Arial", 12, "bold")
-).pack(
-    pady=(4, 4)
-)
-
-
-output_box = scrolledtext.ScrolledText(
-    root,
-    width=65,
-    height=8,
-    font=("Consolas", 11),
-    wrap=tk.NONE
-)
-
-output_box.pack(
-    padx=15
-)
-
-
-count_label = tk.Label(
-    root,
-    text="Items: 0",
-    font=("Arial", 11, "bold"),
-    fg="blue"
-)
-
-count_label.pack(
-    pady=(4, 1)
-)
-
-
-status_label = tk.Label(
-    root,
-    text="",
-    font=("Arial", 9)
-)
-
-status_label.pack(
-    pady=(0, 4)
-)
-
-
-output_button_frame = tk.Frame(root)
-
-output_button_frame.pack(
-    pady=4
-)
-
-
-tk.Button(
-    output_button_frame,
-    text="Copy to Clipboard",
-    command=copy_output,
-    width=18
-).pack(
-    side=tk.LEFT,
-    padx=5
-)
-
-
-tk.Button(
-    output_button_frame,
-    text="Clear",
-    command=clear_all,
-    width=12
-).pack(
-    side=tk.LEFT,
-    padx=5
-)
-
-
-# =========================================
-# CONNECTOR COPY SECTION
-# =========================================
-
-separator = tk.Frame(
-    root,
-    height=2,
-    bd=1,
-    relief=tk.SUNKEN
-)
-
-separator.pack(
-    fill=tk.X,
-    padx=20,
-    pady=8
-)
-
-
-tk.Label(
-    root,
-    text="Connector Number Generator",
-    font=("Arial", 11, "bold")
-).pack(
-    pady=(0, 4)
-)
-
-
-connector_frame = tk.Frame(root)
-
-connector_frame.pack()
-
-
-tk.Label(
-    connector_frame,
-    text="Connector:"
-).grid(
-    row=0,
-    column=0,
-    padx=3,
-    pady=3
-)
-
-
-connector_entry = tk.Entry(
-    connector_frame,
-    width=10,
-    font=("Consolas", 11)
-)
-
-connector_entry.grid(
-    row=0,
-    column=1,
-    padx=3,
-    pady=3
-)
-
-
-tk.Label(
-    connector_frame,
-    text="Copies:"
-).grid(
-    row=0,
-    column=2,
-    padx=(10, 3),
-    pady=3
-)
-
-
-copy_count_entry = tk.Entry(
-    connector_frame,
-    width=8,
-    font=("Consolas", 11)
-)
-
-copy_count_entry.grid(
-    row=0,
-    column=3,
-    padx=3,
-    pady=3
-)
-
-
-tk.Button(
-    root,
-    text="Copy Connector Column",
-    command=copy_connector,
-    width=22
-).pack(
-    pady=5
-)
-
-
-connector_status = tk.Label(
-    root,
-    text="Leave Copies blank to use Items count.",
-    font=("Arial", 9)
-)
-
-connector_status.pack(
-    pady=(0, 5)
-)
-
-
-root.mainloop()
+            verify_attr_name = str(attr.GetName()).strip()
+        except Exception:
+            continue
+
+        if verify_attr_name == "Equipment Identifacation":
+            equipment_attr_found = True
+            print("VERIFIED EQUIPMENT IDENTIFACATION ON BLOCK SYMBOL:", "CONNECTOR:", conn_name, "VIEW:", parent_block, "SYMBOL:", block_symbol_id, "ATTR ID:", verify_attr_id)
+            break
+
+    if not equipment_attr_found:
+        print("WARNING - EQUIPMENT IDENTIFACATION NOT FOUND AFTER ADD:", "CONNECTOR:", conn_name, "VIEW:", parent_block, "SYMBOL:", block_symbol_id)
+
+    # IMPORTANT - release this symbol object NOW
+    del block_sym
+    time.sleep(0.25)
+
+    connector_device_id = CONNECTOR_DEVICE_IDS[conn_name]
+
+    dev.SetId(connector_device_id)
+    connector_view_number = view_number
+    connector_view_id = dev.CreateView(connector_device_id, connector_view_number, parent_block)
+
+    if connector_view_id == 0:
+        raise Exception(f"Failed creating connector view for {conn_name}")
+
+    print("CONNECTOR VIEW:", conn_name, "SOURCE:", connector_device_id, "PARENT:", parent_block, "RESULT:", connector_view_id)
+
+    SCHEMATIC_DATA.append({
+        "index": i,
+        "name": conn_name,
+        "parent_block": parent_block,
+        "block_symbol_id": block_symbol_id,
+        "connector_view": connector_view_id,
+        "sheet_id": current_sheet_id,
+        "layout": conn_layout_dict
+    })
+
+    time.sleep(0.5)
+
+#=========================================
+# SAVE EXACT SECONDARY BLOCK SYMBOL IDS
+# FOR THE FRESH-PROCESS FORMATTER
+#=========================================
+secondary_block_file = os.environ.get("E3_SECONDARY_BLOCK_FILE")
+
+if not secondary_block_file:
+    raise RuntimeError("E3_SECONDARY_BLOCK_FILE was not provided by launcher.py")
+
+secondary_block_data = []
+
+for data in SCHEMATIC_DATA:
+    secondary_block_data.append({
+        "name": data["name"],
+        "parent_block": data["parent_block"],
+        "block_symbol_id": data["block_symbol_id"],
+        "sheet_id": data["sheet_id"],
+        "x": data["layout"]["x start"],
+        "y": data["layout"]["y start"],
+        "width": data["layout"]["width"],
+        "height": data["layout"]["height"]
+    })
+
+with open(secondary_block_file, "w", encoding="utf-8") as secondary_block_handle:
+    json.dump(secondary_block_data, secondary_block_handle, indent=2)
+
+print("SAVED SECONDARY BLOCK METADATA:", secondary_block_file)
+print("SECONDARY BLOCK COUNT:", len(secondary_block_data))
+
+#=========================================
+# COMPLETELY RELEASE E3 OBJECTS
+#=========================================
+del attr
+del text
+del sym
+del pin
+del comp
+del dev
+del sht
+del prj
+del app
+
+time.sleep(1.5)
+
+#=========================================
+# RECREATE CLEAN E3 OBJECTS
+#=========================================
+app = win32.gencache.EnsureDispatch("CT.Application")
+prj = app.CreateJobObject()
+text = prj.CreateTextObject()
+comp = prj.CreateComponentObject()
+dev = prj.CreateDeviceObject()
+sym = prj.CreateSymbolObject()
+pin = prj.CreatePinObject()
+attr = prj.CreateAttributeObject()
+sht = prj.CreateSheetObject()
+
+#=========================================
+# PHASE 2 - PLACE ALL PINS
+# RESET E3 OBJECTS FOR EVERY CONNECTOR
+#=========================================
+for data in SCHEMATIC_DATA:
+    del attr
+    del text
+    del sym
+    del pin
+    del comp
+    del dev
+    del sht
+    del prj
+    del app
+
+    time.sleep(1.0)
+
+    app = win32.gencache.EnsureDispatch("CT.Application")
+    prj = app.CreateJobObject()
+    text = prj.CreateTextObject()
+    comp = prj.CreateComponentObject()
+    dev = prj.CreateDeviceObject()
+    sym = prj.CreateSymbolObject()
+    pin = prj.CreatePinObject()
+    attr = prj.CreateAttributeObject()
+    sht = prj.CreateSheetObject()
+
+    i = data["index"]
+    conn_name = data["name"]
+    connector_view_id = data["connector_view"]
+    current_sheet_id = data["sheet_id"]
+    conn_layout_dict = data["layout"]
+
+    print("=========================================")
+    print("STARTING CONNECTOR:", conn_name)
+    print("CONNECTOR VIEW:", connector_view_id)
+    print("SHEET:", current_sheet_id)
+    print("=========================================")
+
+    dev.SetId(connector_view_id)
+
+    newpininfo = dev.GetAllPinIds(None)
+    newpinids = [x for x in newpininfo[1] if x is not None]
+
+    newpindict = {}
+
+    for pin_id in newpinids:
+        pin.SetId(pin_id)
+        pin_name = str(pin.GetName())
+        newpindict[pin_name] = pin_id
+
+    print("PIN VIEW:", conn_name, "VIEW:", connector_view_id, "PINS:", newpindict)
+
+    SCHEMATIC_PIN_MAP = generate_schematic_pin_map(PIN_SIGNAL_INFO[i], newpindict, conn_layout_dict)
+    data["placed_pin_symbols"] = []
+
+    symname = "MilSymbolReceptacle¶END_SPLIT"
+
+    for pin_data in SCHEMATIC_PIN_MAP:
+        print("ATTEMPTING:", conn_name, "PIN:", pin_data["pin name"], "ID:", pin_data["pin id"], "X:", pin_data["x"], "Y:", pin_data["y"])
+
+        res = sym.PlacePins(pin_data["pin id"], symname, "1", current_sheet_id, pin_data["x"], pin_data["y"], pin_data["flip"], 1.0)
+
+        print("PLACEPINS RESULT:", repr(res))
+
+        status = res[0] if isinstance(res, (tuple, list)) else res
+
+        if status == 0:
+            raise Exception(f"Failed placing {conn_name} pin {pin_data['pin name']}")
+
+        data["placed_pin_symbols"].append({"symbol_id": status, "pin_id": pin_data["pin id"], "pin_name": pin_data["pin name"]})
+
+        app.PutMessage(f"Placed {conn_name} pin {pin_data['pin name']} x={pin_data['x']} y={pin_data['y']}")
+
+        symname = "MilSymbolReceptacle¶SPLIT_BOTTOM"
+
+        time.sleep(0.25)
+
+    print("FINISHED CONNECTOR:", conn_name)
+    time.sleep(0.5)
+
+#=========================================
+# RESET BEFORE MAIN BLOCK FORMATTING
+#=========================================
+del attr
+del text
+del sym
+del pin
+del comp
+del dev
+del sht
+del prj
+del app
+
+time.sleep(1.0)
+
+app = win32.gencache.EnsureDispatch("CT.Application")
+prj = app.CreateJobObject()
+text = prj.CreateTextObject()
+comp = prj.CreateComponentObject()
+dev = prj.CreateDeviceObject()
+sym = prj.CreateSymbolObject()
+pin = prj.CreatePinObject()
+attr = prj.CreateAttributeObject()
+sht = prj.CreateSheetObject()
+
+#=========================================
+# FORMAT SECONDARY MAIN BLOCK TEXT
+#=========================================
+for data in SCHEMATIC_DATA:
+    layout = data["layout"]
+    format_main_block_view(data["parent_block"], layout["x start"], layout["y start"], layout["width"], layout["height"])
+
+#=========================================
+# MAIN CREATION PHASE COMPLETE
+#
+# IMPORTANT:
+# main.py does NOT launch test.py and does NOT import utils.
+# launcher.py waits for this entire Python process to exit,
+# then launcher.py starts test.py in a fresh Python process.
+#=========================================
+print("")
+print("============================================================")
+print("MAIN E3 CREATION COMPLETE")
+print("MAIN.PY WILL NOW END")
+print("============================================================")
+
+# Close the SQL handles if possible.
+# Do not run the final text formatter here.
+try:
+    cur.close()
+except Exception:
+    pass
+
+try:
+    conn.close()
+except Exception:
+    pass
