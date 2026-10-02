@@ -14,7 +14,7 @@ import pdfplumber
 # ================================================
 # CONSTANTS
 # ================================================
-DEFAULT_COLUMN_NAMES = [
+NINE_COLUMN_NAMES = [
     "FROM_DES",
     "FROM_POSN",
     "TO_DES",
@@ -25,6 +25,18 @@ DEFAULT_COLUMN_NAMES = [
     "NOTE",
     "COMMENT",
 ]
+
+SIX_COLUMN_PINOUT_NAMES = [
+    "REF_DES",
+    "PIN",
+    "SIGNAL_NAME",
+    "DIRECTION",
+    "TYPE",
+    "DESCRIPTION",
+]
+
+# Fallback only. The script now auto-detects 6-column pinout vs 9-column wiring tables.
+DEFAULT_COLUMN_NAMES = NINE_COLUMN_NAMES
 
 TARGET_SHEET_NAME = "Selection"
 EXCEL_CONNECTOR_COUNT_CELL = "C5"
@@ -159,18 +171,25 @@ def ask_column_names(default_names):
     text_box = scrolledtext.ScrolledText(root, width=52, height=14, font=("Consolas", 10))
     text_box.pack(padx=12, pady=5)
     text_box.insert("1.0", "\n".join(default_names))
-    status = tk.Label(root, text=f"Current parser expects {len(default_names)} physical PDF columns.", font=("Arial", 9))
+    status = tk.Label(
+        root,
+        text=f"Auto-detected {len(default_names)} physical PDF columns. Supported layouts: 6-column pinout or 9-column wiring.",
+        font=("Arial", 9)
+    )
     status.pack(pady=4)
+
     def accept():
         names = parse_pasted_column_names(text_box.get("1.0", "end-1c"))
-        if len(names) != len(default_names):
-            status.config(text=f"Found {len(names)} names. This parser currently needs exactly {len(default_names)} names.")
+        if len(names) not in (6, 9):
+            status.config(text=f"Found {len(names)} names. Enter either 6 pinout columns or 9 wiring-table columns.")
             return
         result["value"] = names
         root.destroy()
+
     def cancel():
         result["value"] = None
         root.destroy()
+
     button_frame = tk.Frame(root)
     button_frame.pack(pady=10)
     tk.Button(button_frame, text="Use Columns", command=accept, width=16).pack(side=tk.LEFT, padx=6)
@@ -271,15 +290,20 @@ def normalize_direction_value(value):
     text = str(value or "").strip().upper()
     text = text.replace("\\", "/")
     text = re.sub(r"\s+", " ", text)
-    compact = re.sub(r"\s+", "", text)
-    if compact == "IN/OUT":
+    compact = re.sub(r"[\s_-]+", "", text)
+
+    # Common wiring-table values
+    if compact in {"IN/OUT", "INOUT", "I/O", "IO", "BIDIR", "BIDIRECTIONAL"}:
         return "IN/OUT"
-    if compact == "IN":
+    if compact in {"IN", "INPUT"}:
         return "IN"
-    if compact == "OUT":
+    if compact in {"OUT", "OUTPUT"}:
         return "OUT"
+
     if re.fullmatch(r"IN\s*/\s*OUT", text):
         return "IN/OUT"
+
+    # NC, "-", blank, etc. intentionally remain blank.
     return ""
 
 
@@ -710,6 +734,91 @@ def load_pdf_cache(pdf_path, start_page, end_page=None):
 
 
 # ================================================
+# AUTO-DETECT SUPPORTED TABLE FORMAT
+# ================================================
+def detect_default_column_names(pdf_cache):
+    # Prefer strong header geometry/text signatures over raw comma/space parsing.
+    for page_number in sorted(pdf_cache):
+        page_data = pdf_cache[page_number]
+        words = page_data.get("words", [])
+        lines = page_data.get("lines", [])
+
+        if not words:
+            continue
+
+        for line in lines:
+            upper_values = {
+                str(word.get("text", "")).strip().upper()
+                for word in line.get("words", [])
+            }
+
+            # 6-column pinout:
+            # REF DES | PIN | SIGNAL NAME | DIRECTION | TYPE | DESCRIPTION
+            if {"DIRECTION", "TYPE", "DESCRIPTION"}.issubset(upper_values):
+                header_y = float(line["top"])
+                nearby = [
+                    str(word.get("text", "")).strip().upper()
+                    for word in words
+                    if abs(float(word["top"]) - header_y) <= 40.0
+                ]
+
+                if (
+                    "PIN" in nearby
+                    and "SIGNAL" in nearby
+                    and "REF" in nearby
+                    and "DES" in nearby
+                ):
+                    print("AUTO-DETECTED TABLE FORMAT: 6-COLUMN CONNECTOR PINOUT")
+                    return list(SIX_COLUMN_PINOUT_NAMES)
+
+            # 9-column wiring:
+            # FROM DES/POSN | TO DES/POSN | MNEMONIC | DESCRIPTION | WIRE | NOTE | COMMENT
+            if "MNEMONIC" in upper_values and "DESCRIPTION" in upper_values:
+                header_y = float(line["top"])
+                nearby = [
+                    str(word.get("text", "")).strip().upper()
+                    for word in words
+                    if abs(float(word["top"]) - header_y) <= 60.0
+                ]
+
+                if (
+                    nearby.count("DES") >= 2
+                    and nearby.count("POSN") >= 2
+                    and "WIRE" in nearby
+                    and "NOTE" in nearby
+                    and "COMMENT" in nearby
+                ):
+                    print("AUTO-DETECTED TABLE FORMAT: 9-COLUMN WIRING TABLE")
+                    return list(NINE_COLUMN_NAMES)
+
+    # Text-level fallback for PDFs whose header words are oddly grouped.
+    for page_number in sorted(pdf_cache):
+        upper_text = str(pdf_cache[page_number].get("text", "") or "").upper()
+
+        if (
+            "SIGNAL NAME" in upper_text
+            and "DIRECTION" in upper_text
+            and "TYPE" in upper_text
+            and "DESCRIPTION" in upper_text
+            and "PIN" in upper_text
+        ):
+            print("AUTO-DETECTED TABLE FORMAT: 6-COLUMN CONNECTOR PINOUT (TEXT FALLBACK)")
+            return list(SIX_COLUMN_PINOUT_NAMES)
+
+        if (
+            "MNEMONIC" in upper_text
+            and "WIRE" in upper_text
+            and "NOTE" in upper_text
+            and "COMMENT" in upper_text
+        ):
+            print("AUTO-DETECTED TABLE FORMAT: 9-COLUMN WIRING TABLE (TEXT FALLBACK)")
+            return list(NINE_COLUMN_NAMES)
+
+    print("WARNING: TABLE FORMAT NOT AUTO-DETECTED; DEFAULTING TO 9-COLUMN WIRING")
+    return list(DEFAULT_COLUMN_NAMES)
+
+
+# ================================================
 # FIRST PASS - SPLIT RAW TEXT INTO SECTIONS
 # ================================================
 def extract_sections_by_keyword(pdf_cache, separator_keyword):
@@ -789,9 +898,18 @@ def choose_grid_boundary(clusters, left_center, right_center):
     return candidates[0]["x"]
 
 
-def find_column_centers(pdf_cache, column_names):
-    if len(column_names) != 9:
-        raise ValueError("This connector-table parser currently expects exactly 9 physical columns")
+def print_learned_columns(page_number, column_names, centers):
+    print("")
+    print("============================================================")
+    print("TABLE COLUMNS LEARNED")
+    print("============================================================")
+    print("PAGE:", page_number)
+    for name, center in zip(column_names, centers):
+        print(name, "X =", round(center, 2))
+    print("============================================================")
+
+
+def find_nine_column_centers(pdf_cache, column_names):
     for page_number in sorted(pdf_cache):
         page_data = pdf_cache[page_number]
         words = page_data["words"]
@@ -817,19 +935,134 @@ def find_column_centers(pdf_cache, column_names):
             comment_word = find_exact_word(nearby_words, "COMMENT", header_y)
             if mnemonic_word is None or description_word is None or wire_word is None or note_word is None or comment_word is None:
                 continue
-            centers = [word_center_x(des_words[0]), word_center_x(posn_words[0]), word_center_x(des_words[1]), word_center_x(posn_words[1]), word_center_x(mnemonic_word), word_center_x(description_word), word_center_x(wire_word), word_center_x(note_word), word_center_x(comment_word)]
+            centers = [
+                word_center_x(des_words[0]),
+                word_center_x(posn_words[0]),
+                word_center_x(des_words[1]),
+                word_center_x(posn_words[1]),
+                word_center_x(mnemonic_word),
+                word_center_x(description_word),
+                word_center_x(wire_word),
+                word_center_x(note_word),
+                word_center_x(comment_word),
+            ]
             if any(centers[index] >= centers[index + 1] for index in range(len(centers) - 1)):
                 continue
-            print("")
-            print("============================================================")
-            print("TABLE COLUMNS LEARNED")
-            print("============================================================")
-            print("PAGE:", page_number)
-            for name, center in zip(column_names, centers):
-                print(name, "X =", round(center, 2))
-            print("============================================================")
+            print_learned_columns(page_number, column_names, centers)
             return centers, page_data["width"], page_number
-    raise Exception("Could not automatically determine table column locations from PDF headers")
+    raise Exception("Could not automatically determine the 9-column wiring-table locations from PDF headers")
+
+
+def find_six_column_centers(pdf_cache, column_names):
+    """
+    Learn the 6-column connector pinout layout:
+        REF DES | PIN | SIGNAL NAME | DIRECTION | TYPE | DESCRIPTION
+
+    REF/DES can be stacked on two lines, and SIGNAL/NAME can be split into
+    separate PDF words. We therefore use a vertical header window instead of
+    requiring every header word to live on one text line.
+    """
+    for page_number in sorted(pdf_cache):
+        page_data = pdf_cache[page_number]
+        words = page_data["words"]
+        lines = page_data["lines"]
+
+        if not words:
+            continue
+
+        for line in lines:
+            upper_values = {str(word["text"]).strip().upper() for word in line["words"]}
+
+            # The right side of this header is the most stable identifying pattern.
+            if not {"DIRECTION", "TYPE", "DESCRIPTION"}.issubset(upper_values):
+                continue
+
+            header_y = float(line["top"])
+            nearby_words = [
+                word for word in words
+                if abs(float(word["top"]) - header_y) <= 40.0
+            ]
+
+            pin_word = find_exact_word(nearby_words, "PIN", header_y, y_tolerance=40.0)
+            direction_word = find_exact_word(nearby_words, "DIRECTION", header_y, y_tolerance=40.0)
+            type_word = find_exact_word(nearby_words, "TYPE", header_y, y_tolerance=40.0)
+            description_word = find_exact_word(nearby_words, "DESCRIPTION", header_y, y_tolerance=40.0)
+
+            signal_candidates = [
+                word for word in nearby_words
+                if str(word["text"]).strip().upper() == "SIGNAL"
+            ]
+            name_candidates = [
+                word for word in nearby_words
+                if str(word["text"]).strip().upper() == "NAME"
+            ]
+            ref_candidates = [
+                word for word in nearby_words
+                if str(word["text"]).strip().upper() == "REF"
+            ]
+            des_candidates = [
+                word for word in nearby_words
+                if str(word["text"]).strip().upper() == "DES"
+            ]
+
+            if pin_word is None or direction_word is None or type_word is None or description_word is None:
+                continue
+            if not signal_candidates or not ref_candidates or not des_candidates:
+                continue
+
+            # Pick the REF/DES pair that lives to the left of PIN.
+            pin_center = word_center_x(pin_word)
+            ref_candidates = [word for word in ref_candidates if word_center_x(word) < pin_center]
+            des_candidates = [word for word in des_candidates if word_center_x(word) < pin_center]
+            if not ref_candidates or not des_candidates:
+                continue
+
+            ref_word = min(ref_candidates, key=lambda word: abs(word_center_x(word) - pin_center))
+            des_word = min(des_candidates, key=lambda word: abs(word_center_x(word) - word_center_x(ref_word)))
+            ref_des_center = (word_center_x(ref_word) + word_center_x(des_word)) / 2.0
+
+            # SIGNAL is enough to establish the column. If NAME is present nearby,
+            # average the two centers for a better estimate of the visual header center.
+            signal_word = min(signal_candidates, key=lambda word: abs(float(word["top"]) - header_y))
+            signal_center = word_center_x(signal_word)
+            if name_candidates:
+                plausible_names = [
+                    word for word in name_candidates
+                    if abs(word_center_x(word) - signal_center) < 80.0
+                ]
+                if plausible_names:
+                    name_word = min(plausible_names, key=lambda word: abs(word_center_x(word) - signal_center))
+                    signal_center = (signal_center + word_center_x(name_word)) / 2.0
+
+            centers = [
+                ref_des_center,
+                pin_center,
+                signal_center,
+                word_center_x(direction_word),
+                word_center_x(type_word),
+                word_center_x(description_word),
+            ]
+
+            if any(centers[index] >= centers[index + 1] for index in range(len(centers) - 1)):
+                continue
+
+            print_learned_columns(page_number, column_names, centers)
+            return centers, page_data["width"], page_number
+
+    raise Exception("Could not automatically determine the 6-column pinout locations from PDF headers")
+
+
+def find_column_centers(pdf_cache, column_names):
+    if len(column_names) == 9:
+        return find_nine_column_centers(pdf_cache, column_names)
+
+    if len(column_names) == 6:
+        return find_six_column_centers(pdf_cache, column_names)
+
+    raise ValueError(
+        f"Unsupported physical column count: {len(column_names)}. "
+        "This scraper supports 6-column pinout tables and 9-column wiring tables."
+    )
 
 
 def build_column_boundaries(pdf_cache, column_centers, page_width, header_page):
@@ -1000,9 +1233,425 @@ def parse_row_chars(row_chars, boundaries, column_names):
 
 
 # ================================================
-# EXTRACT STRUCTURED ROWS
+# 6-COLUMN PINOUT ROW HELPERS
 # ================================================
-def extract_structured_rows(pdf_cache, separator_keyword, column_names, pdf_roles):
+def find_pin_anchors(chars, boundaries, pin_index):
+    if pin_index < 0 or pin_index >= len(boundaries) - 1:
+        return []
+
+    left = boundaries[pin_index]
+    right = boundaries[pin_index + 1]
+
+    pin_chars = [
+        char for char in chars
+        if left <= char_center_x(char) < right
+    ]
+
+    lines = group_chars_into_lines(pin_chars, y_tolerance=2.5)
+    anchors = []
+
+    for line in lines:
+        value = rebuild_cell_from_chars(line["chars"])
+
+        if not re.fullmatch(r"\d+", value):
+            continue
+
+        line_top = min(float(char["top"]) for char in line["chars"])
+        line_bottom = max(float(char["bottom"]) for char in line["chars"])
+
+        anchors.append({
+            "pin": value,
+            "top": line_top,
+            "bottom": line_bottom,
+        })
+
+    anchors.sort(key=lambda anchor: anchor["top"])
+
+    deduped = []
+
+    for anchor in anchors:
+        if deduped and abs(anchor["top"] - deduped[-1]["top"]) <= 2.0:
+            # Keep the first numeric value found on this text line.
+            continue
+        deduped.append(anchor)
+
+    return deduped
+
+
+def find_connector_labels(chars, boundaries, connector_index):
+    if connector_index < 0 or connector_index >= len(boundaries) - 1:
+        return []
+
+    left = boundaries[connector_index]
+    right = boundaries[connector_index + 1]
+
+    connector_chars = [
+        char for char in chars
+        if left <= char_center_x(char) < right
+    ]
+
+    lines = group_chars_into_lines(connector_chars, y_tolerance=2.5)
+    labels = []
+
+    for line in lines:
+        raw_value = rebuild_cell_from_chars(line["chars"])
+        canonical = canonical_connector_name(raw_value)
+
+        if not is_connector_name(canonical):
+            continue
+
+        line_top = min(float(char["top"]) for char in line["chars"])
+        line_bottom = max(float(char["bottom"]) for char in line["chars"])
+
+        labels.append({
+            "connector": canonical,
+            "top": line_top,
+            "bottom": line_bottom,
+            "center": (line_top + line_bottom) / 2.0,
+        })
+
+    labels.sort(key=lambda item: item["center"])
+
+    deduped = []
+
+    for label in labels:
+        if deduped:
+            previous = deduped[-1]
+            if (
+                label["connector"] == previous["connector"]
+                and abs(label["center"] - previous["center"]) <= 2.0
+            ):
+                continue
+
+        deduped.append(label)
+
+    return deduped
+
+
+def split_pin_rows_into_groups(rows):
+    if not rows:
+        return []
+
+    tops = [float(row["_anchor_top"]) for row in rows]
+    gaps = [
+        tops[index + 1] - tops[index]
+        for index in range(len(tops) - 1)
+        if tops[index + 1] - tops[index] > 0.0
+    ]
+
+    normal_gap = statistics.median(gaps) if gaps else 20.0
+    large_gap_threshold = max(normal_gap * 2.5, 35.0)
+
+    groups = [[rows[0]]]
+
+    for row in rows[1:]:
+        previous = groups[-1][-1]
+
+        current_pin = int(row["_pin_number"])
+        previous_pin = int(previous["_pin_number"])
+        vertical_gap = float(row["_anchor_top"]) - float(previous["_anchor_top"])
+
+        starts_new_group = (
+            current_pin <= previous_pin
+            or vertical_gap > large_gap_threshold
+        )
+
+        if starts_new_group:
+            groups.append([row])
+        else:
+            groups[-1].append(row)
+
+    return groups
+
+
+def choose_connector_for_pin_group(group, connector_labels, last_connector=""):
+    # First prefer any valid connector text that was physically inside one row.
+    row_connectors = []
+
+    for row in group:
+        raw_value = row.get("_parsed_connector", "")
+        canonical = canonical_connector_name(raw_value)
+
+        if is_connector_name(canonical) and canonical not in row_connectors:
+            row_connectors.append(canonical)
+
+    if row_connectors:
+        return row_connectors[0]
+
+    group_top = min(float(row["_row_top"]) for row in group)
+    group_bottom = max(float(row["_row_bottom"]) for row in group)
+    group_center = (group_top + group_bottom) / 2.0
+
+    inside = [
+        label for label in connector_labels
+        if group_top - 3.0 <= label["center"] <= group_bottom + 3.0
+    ]
+
+    if inside:
+        inside.sort(key=lambda label: abs(label["center"] - group_center))
+        return inside[0]["connector"]
+
+    # If this page has one merged REF DES label, it belongs to the visible pin table.
+    if len(connector_labels) == 1:
+        return connector_labels[0]["connector"]
+
+    # Multiple tables can share a page. Choose the closest merged connector label.
+    if connector_labels:
+        nearest = min(
+            connector_labels,
+            key=lambda label: abs(label["center"] - group_center)
+        )
+
+        # Avoid borrowing a connector from a very distant table.
+        if abs(nearest["center"] - group_center) <= max(group_bottom - group_top, 80.0):
+            return nearest["connector"]
+
+    # Continuation-page fallback: if pins continue above 1 and the REF DES merged
+    # cell was not repeated on the new page, keep the connector from the prior page.
+    first_pin = int(group[0]["_pin_number"])
+
+    if last_connector and first_pin > 1:
+        return last_connector
+
+    return ""
+
+
+# ================================================
+# EXTRACT 6-COLUMN PINOUT TABLE
+#
+# REF DES is often one merged cell spanning many
+# pin rows, so PIN is the row anchor instead of
+# requiring the connector name on every row.
+# ================================================
+def extract_structured_rows_six_column(pdf_cache, separator_keyword, column_names, pdf_roles):
+    start_time = time.perf_counter()
+
+    column_centers, page_width, header_page = find_column_centers(pdf_cache, column_names)
+    reference_boundaries = build_column_boundaries(
+        pdf_cache,
+        column_centers,
+        page_width,
+        header_page
+    )
+
+    section_markers = find_section_markers(pdf_cache, separator_keyword)
+
+    connector_index = column_names.index(pdf_roles["connector"])
+    pin_index = column_names.index(pdf_roles["pin"])
+    signal_index = column_names.index(pdf_roles["signal"])
+    direction_index = column_names.index(pdf_roles["direction"])
+
+    structured_rows = []
+    grid_bounded_rows = 0
+    fallback_bounded_rows = 0
+    last_connector = ""
+
+    for page_number in sorted(pdf_cache):
+        page_data = pdf_cache[page_number]
+        chars = page_data["chars"]
+        words = page_data["words"]
+
+        if not chars:
+            continue
+
+        boundaries = reference_boundaries
+
+        pin_anchors = find_pin_anchors(chars, boundaries, pin_index)
+
+        if not pin_anchors:
+            continue
+
+        connector_labels = find_connector_labels(
+            chars,
+            boundaries,
+            connector_index
+        )
+
+        horizontal_grid_lines = get_horizontal_table_grid_lines(
+            page_data.get("edges", []),
+            boundaries[0],
+            boundaries[-1]
+        )
+
+        anchor_tops = [float(anchor["top"]) for anchor in pin_anchors]
+        gaps = [
+            anchor_tops[index + 1] - anchor_tops[index]
+            for index in range(len(anchor_tops) - 1)
+            if anchor_tops[index + 1] - anchor_tops[index] > 0
+        ]
+
+        normal_row_height = statistics.median(gaps) if gaps else 22.0
+        maximum_last_row_height = max(normal_row_height * 2.75, 50.0)
+
+        page_bottom = (
+            page_data["footer_top"] - 2.0
+            if page_data.get("footer_top") is not None
+            else page_data["height"]
+        )
+
+        page_rows = []
+
+        for anchor_index, anchor in enumerate(pin_anchors):
+            grid_bounds = find_grid_row_bounds(anchor, horizontal_grid_lines)
+
+            if grid_bounds is not None:
+                row_top = grid_bounds[0] + 0.35
+                row_bottom = grid_bounds[1] - 0.35
+                grid_bounded_rows += 1
+            else:
+                row_top = float(anchor["top"]) - 2.0
+                row_bottom = (
+                    float(pin_anchors[anchor_index + 1]["top"]) - 1.0
+                    if anchor_index + 1 < len(pin_anchors)
+                    else float(anchor["top"]) + maximum_last_row_height
+                )
+                fallback_bounded_rows += 1
+
+            row_bottom = min(row_bottom, page_bottom)
+
+            if row_bottom <= row_top:
+                continue
+
+            row_chars = [
+                char for char in chars
+                if row_top <= float(char["top"]) < row_bottom
+            ]
+
+            row_words = [
+                word for word in words
+                if row_top <= float(word["top"]) < row_bottom
+            ]
+
+            parsed_row = parse_row_chars(
+                row_chars,
+                boundaries,
+                column_names
+            )
+
+            # PIN is our authoritative row anchor.
+            parsed_row[pdf_roles["pin"]] = str(anchor["pin"])
+
+            signal_from_words = extract_local_signal_from_words(
+                row_words,
+                boundaries,
+                signal_index
+            )
+
+            if signal_from_words != "":
+                parsed_row[pdf_roles["signal"]] = normalize_local_signal_value(
+                    signal_from_words
+                )
+            else:
+                parsed_row[pdf_roles["signal"]] = normalize_local_signal_value(
+                    parsed_row.get(pdf_roles["signal"], "")
+                )
+
+            direction_from_words = extract_role_text_from_words(
+                row_words,
+                boundaries,
+                direction_index,
+                left_pad=8.0,
+                right_pad=8.0,
+                skip_numeric=False
+            )
+
+            direction_value = normalize_direction_value(direction_from_words)
+
+            if direction_value == "":
+                direction_value = normalize_direction_value(
+                    parsed_row.get(pdf_roles["direction"], "")
+                )
+
+            if direction_value == "":
+                direction_value = find_direction_from_row_words(
+                    row_words,
+                    boundaries,
+                    direction_index
+                )
+
+            parsed_row[pdf_roles["direction"]] = direction_value
+
+            parsed_connector = canonical_connector_name(
+                parsed_row.get(pdf_roles["connector"], "")
+            )
+
+            if not is_connector_name(parsed_connector):
+                parsed_connector = ""
+
+            section_marker = find_section_for_row(
+                page_number,
+                float(anchor["top"]),
+                section_markers
+            )
+
+            parsed_row["PAGE"] = page_number
+            parsed_row["SECTION"] = (
+                section_marker["section_number"]
+                if section_marker
+                else None
+            )
+            parsed_row["SECTION_TITLE"] = (
+                section_marker["title"]
+                if section_marker
+                else ""
+            )
+
+            # Temporary geometry fields for merged REF DES assignment.
+            parsed_row["_anchor_top"] = float(anchor["top"])
+            parsed_row["_row_top"] = float(row_top)
+            parsed_row["_row_bottom"] = float(row_bottom)
+            parsed_row["_pin_number"] = int(anchor["pin"])
+            parsed_row["_parsed_connector"] = parsed_connector
+
+            page_rows.append(parsed_row)
+
+        pin_groups = split_pin_rows_into_groups(page_rows)
+
+        for group in pin_groups:
+            connector = choose_connector_for_pin_group(
+                group,
+                connector_labels,
+                last_connector=last_connector
+            )
+
+            if not connector:
+                print(
+                    "WARNING: Could not assign REF DES to pin group on page",
+                    page_number,
+                    "pins",
+                    group[0]["_pin_number"],
+                    "through",
+                    group[-1]["_pin_number"]
+                )
+                continue
+
+            for parsed_row in group:
+                parsed_row[pdf_roles["connector"]] = connector
+
+                parsed_row.pop("_anchor_top", None)
+                parsed_row.pop("_row_top", None)
+                parsed_row.pop("_row_bottom", None)
+                parsed_row.pop("_pin_number", None)
+                parsed_row.pop("_parsed_connector", None)
+
+                structured_rows.append(parsed_row)
+
+            last_connector = connector
+
+    elapsed = time.perf_counter() - start_time
+
+    print("PARSER MODE: 6-COLUMN PINOUT")
+    print("GRID-BOUNDED ROWS:", grid_bounded_rows)
+    print("FALLBACK-BOUNDED ROWS:", fallback_bounded_rows)
+    print(f"STRUCTURED ROW EXTRACTION TIME: {elapsed:.2f} SECONDS")
+
+    return structured_rows
+
+
+# ================================================
+# EXTRACT ORIGINAL 9-COLUMN WIRING TABLE
+# ================================================
+def extract_structured_rows_nine_column(pdf_cache, separator_keyword, column_names, pdf_roles):
     start_time = time.perf_counter()
     column_centers, page_width, header_page = find_column_centers(pdf_cache, column_names)
     reference_boundaries = build_column_boundaries(pdf_cache, column_centers, page_width, header_page)
@@ -1012,63 +1661,175 @@ def extract_structured_rows(pdf_cache, separator_keyword, column_names, pdf_role
     structured_rows = []
     grid_bounded_rows = 0
     fallback_bounded_rows = 0
+
     for page_number in sorted(pdf_cache):
         page_data = pdf_cache[page_number]
         chars = page_data["chars"]
         words = page_data["words"]
+
         if not chars:
             continue
+
         boundaries = reference_boundaries
         anchors = find_connector_anchors(chars, boundaries)
+
         if not anchors:
             continue
-        horizontal_grid_lines = get_horizontal_table_grid_lines(page_data.get("edges", []), boundaries[0], boundaries[-1])
+
+        horizontal_grid_lines = get_horizontal_table_grid_lines(
+            page_data.get("edges", []),
+            boundaries[0],
+            boundaries[-1]
+        )
+
         anchor_tops = [float(anchor["top"]) for anchor in anchors]
-        gaps = [anchor_tops[index + 1] - anchor_tops[index] for index in range(len(anchor_tops) - 1) if anchor_tops[index + 1] - anchor_tops[index] > 0]
+        gaps = [
+            anchor_tops[index + 1] - anchor_tops[index]
+            for index in range(len(anchor_tops) - 1)
+            if anchor_tops[index + 1] - anchor_tops[index] > 0
+        ]
+
         normal_row_height = statistics.median(gaps) if gaps else 22.0
         maximum_last_row_height = max(normal_row_height * 2.75, 50.0)
-        page_bottom = page_data["footer_top"] - 2.0 if page_data.get("footer_top") is not None else page_data["height"]
+
+        page_bottom = (
+            page_data["footer_top"] - 2.0
+            if page_data.get("footer_top") is not None
+            else page_data["height"]
+        )
+
         for anchor_index, anchor in enumerate(anchors):
             grid_bounds = find_grid_row_bounds(anchor, horizontal_grid_lines)
+
             if grid_bounds is not None:
                 row_top = grid_bounds[0] + 0.35
                 row_bottom = grid_bounds[1] - 0.35
                 grid_bounded_rows += 1
             else:
                 row_top = float(anchor["top"]) - 2.0
-                row_bottom = float(anchors[anchor_index + 1]["top"]) - 1.0 if anchor_index + 1 < len(anchors) else float(anchor["top"]) + maximum_last_row_height
+                row_bottom = (
+                    float(anchors[anchor_index + 1]["top"]) - 1.0
+                    if anchor_index + 1 < len(anchors)
+                    else float(anchor["top"]) + maximum_last_row_height
+                )
                 fallback_bounded_rows += 1
+
             row_bottom = min(row_bottom, page_bottom)
+
             if row_bottom <= row_top:
                 continue
-            row_chars = [char for char in chars if row_top <= float(char["top"]) < row_bottom]
-            row_words = [word for word in words if row_top <= float(word["top"]) < row_bottom]
-            parsed_row = parse_row_chars(row_chars, boundaries, column_names)
-            signal_from_words = extract_local_signal_from_words(row_words, boundaries, signal_index)
-            direction_from_words = extract_role_text_from_words(row_words, boundaries, direction_index, left_pad=8.0, right_pad=8.0, skip_numeric=False)
+
+            row_chars = [
+                char for char in chars
+                if row_top <= float(char["top"]) < row_bottom
+            ]
+
+            row_words = [
+                word for word in words
+                if row_top <= float(word["top"]) < row_bottom
+            ]
+
+            parsed_row = parse_row_chars(
+                row_chars,
+                boundaries,
+                column_names
+            )
+
+            signal_from_words = extract_local_signal_from_words(
+                row_words,
+                boundaries,
+                signal_index
+            )
+
+            direction_from_words = extract_role_text_from_words(
+                row_words,
+                boundaries,
+                direction_index,
+                left_pad=8.0,
+                right_pad=8.0,
+                skip_numeric=False
+            )
+
             if signal_from_words != "":
-                parsed_row[pdf_roles["signal"]] = normalize_local_signal_value(signal_from_words)
+                parsed_row[pdf_roles["signal"]] = normalize_local_signal_value(
+                    signal_from_words
+                )
             else:
-                parsed_row[pdf_roles["signal"]] = normalize_local_signal_value(parsed_row.get(pdf_roles["signal"], ""))
+                parsed_row[pdf_roles["signal"]] = normalize_local_signal_value(
+                    parsed_row.get(pdf_roles["signal"], "")
+                )
+
             direction_value = normalize_direction_value(direction_from_words)
+
             if direction_value == "":
-                direction_value = normalize_direction_value(parsed_row.get(pdf_roles["direction"], ""))
+                direction_value = normalize_direction_value(
+                    parsed_row.get(pdf_roles["direction"], "")
+                )
+
             if direction_value == "":
-                direction_value = find_direction_from_row_words(row_words, boundaries, direction_index)
+                direction_value = find_direction_from_row_words(
+                    row_words,
+                    boundaries,
+                    direction_index
+                )
+
             parsed_row[pdf_roles["direction"]] = direction_value
             parsed_row[column_names[0]] = anchor["connector"]
+
             if not is_connector_name(parsed_row[column_names[0]]):
                 continue
-            section_marker = find_section_for_row(page_number, float(anchor["top"]), section_markers)
+
+            section_marker = find_section_for_row(
+                page_number,
+                float(anchor["top"]),
+                section_markers
+            )
+
             parsed_row["PAGE"] = page_number
-            parsed_row["SECTION"] = section_marker["section_number"] if section_marker else None
-            parsed_row["SECTION_TITLE"] = section_marker["title"] if section_marker else ""
+            parsed_row["SECTION"] = (
+                section_marker["section_number"]
+                if section_marker
+                else None
+            )
+            parsed_row["SECTION_TITLE"] = (
+                section_marker["title"]
+                if section_marker
+                else ""
+            )
+
             structured_rows.append(parsed_row)
+
     elapsed = time.perf_counter() - start_time
+
+    print("PARSER MODE: 9-COLUMN WIRING")
     print("GRID-BOUNDED ROWS:", grid_bounded_rows)
     print("FALLBACK-BOUNDED ROWS:", fallback_bounded_rows)
     print(f"STRUCTURED ROW EXTRACTION TIME: {elapsed:.2f} SECONDS")
+
     return structured_rows
+
+
+def extract_structured_rows(pdf_cache, separator_keyword, column_names, pdf_roles):
+    if len(column_names) == 6:
+        return extract_structured_rows_six_column(
+            pdf_cache,
+            separator_keyword,
+            column_names,
+            pdf_roles
+        )
+
+    if len(column_names) == 9:
+        return extract_structured_rows_nine_column(
+            pdf_cache,
+            separator_keyword,
+            column_names,
+            pdf_roles
+        )
+
+    raise ValueError(
+        f"Unsupported physical column count: {len(column_names)}. "
+        "Use 6 columns for pinout tables or 9 columns for wiring tables."
+    )
 
 
 # ================================================
@@ -1346,7 +2107,13 @@ if __name__ == "__main__":
     if start_page is None or separator_keyword is None:
         raise Exception("Extraction settings cancelled")
 
-    column_names = ask_column_names(DEFAULT_COLUMN_NAMES)
+    # Load the PDF before asking for columns so the script can choose the
+    # correct 6-column pinout or 9-column wiring preset automatically.
+    pdf_cache = load_pdf_cache(pdf_path, start_page, end_page)
+
+    detected_column_names = detect_default_column_names(pdf_cache)
+
+    column_names = ask_column_names(detected_column_names)
     if column_names is None:
         raise Exception("Column setup cancelled")
 
@@ -1372,7 +2139,6 @@ if __name__ == "__main__":
     print("IN/OUT:", pdf_roles["direction"])
     print("============================================================")
 
-    pdf_cache = load_pdf_cache(pdf_path, start_page, end_page)
     sections = extract_sections_by_keyword(pdf_cache, separator_keyword)
 
     print("")
