@@ -5,7 +5,7 @@ import csv
 import io
 import re
 
-# FIX VERSION: dash-column alignment + Description/Figure separation
+# FIX VERSION: numeric-leading signal/description + dash-column alignment + strict column separation
 
 
 current_count = 0
@@ -159,6 +159,72 @@ def normalize_dash_cell(value):
     if text in {"-", "–", "—"}:
         return "-"
     return text
+
+
+# A description/signal is allowed to START with a number.  The J5 clock table
+# contains values such as "10 MHz+ Input" and "10 MHz- Input".  Those leading
+# 10s are part of Column 2; they are NOT pin numbers.
+#
+# Keep this deliberately unit-based instead of saying "every number followed by
+# text is a description", because a normal row is also "6 10 MHz+ Input ...".
+# In that normal row, the first number (6) is the pin and the *second* number is
+# the start of the description.
+ENGINEERING_DESCRIPTION_UNIT_RE = re.compile(
+    r"(?:Hz|kHz|MHz|GHz|THz|bps|kbps|Mbps|Gbps|Tbps|"
+    r"V|mV|uV|µV|A|mA|uA|µA|W|mW|kW|Ohm|ohms|Ω)"
+    r"[+\-]?",
+    re.IGNORECASE
+)
+
+
+def looks_like_numeric_leading_description(value):
+    """
+    True when the beginning of a cell is an engineering value such as:
+        10 MHz+ Input
+        10 MHz- Input
+        3.3 V Logic
+
+    This check happens BEFORE pin-row detection so the leading numeric value is
+    preserved in Column 2 instead of being stolen and emitted as a pin.
+    """
+    text = normalize_pdf_line(value)
+    if text == "":
+        return False
+
+    match = re.match(r"^(\d+(?:\.\d+)?)\s+([^\s]+)(?:\s|$)", text)
+    if match is None:
+        return False
+
+    unit_token = match.group(2).strip().rstrip(",;:")
+    return ENGINEERING_DESCRIPTION_UNIT_RE.fullmatch(unit_token) is not None
+
+
+def next_line_continues_numeric_description(lines, index):
+    """
+    Handle the even uglier Acrobat form where one cell is broken as:
+        10
+        MHz+ Input
+
+    An exact integer followed immediately by an engineering-unit fragment is
+    treated as description text rather than a new pin.
+    """
+    if index < 0 or index >= len(lines):
+        return False
+
+    current = normalize_pdf_line(lines[index])
+    if re.fullmatch(r"\d+(?:\.\d+)?", current) is None:
+        return False
+
+    lookahead = index + 1
+    while lookahead < len(lines):
+        nxt = normalize_pdf_line(lines[lookahead])
+        if nxt == "":
+            lookahead += 1
+            continue
+        first = nxt.split()[0].rstrip(",;:")
+        return ENGINEERING_DESCRIPTION_UNIT_RE.fullmatch(first) is not None
+
+    return False
 
 
 def is_logic_cell_text(value):
@@ -329,6 +395,11 @@ def parse_normal_pin_description_figure_logic_rows(lines):
         if line == "" or is_figure_logic_table_header_fragment(line):
             continue
 
+        # IMPORTANT: "10 MHz+ Input Figure 10 LVDS" is a Description/Figure/
+        # Logic fragment, not pin 10.  Preserve the 10 in Column 2.
+        if looks_like_numeric_leading_description(line):
+            continue
+
         match = re.match(r"^(\d+)\s+(.+)$", line)
         if match is None:
             continue
@@ -393,9 +464,41 @@ def parse_stream_pin_description_figure_logic_rows(lines, header_info):
         else:
             logics.append("-")
 
-    for raw_line in lines[start_index:]:
-        line = normalize_pdf_line(raw_line)
+    line_index = start_index
+    while line_index < len(lines):
+        line = normalize_pdf_line(lines[line_index])
         if line == "" or is_figure_logic_table_header_fragment(line):
+            line_index += 1
+            continue
+
+        # Protect engineering descriptions that start with a number.  This must
+        # run before the generic ^\d+ pin matcher.
+        if looks_like_numeric_leading_description(line):
+            description, figure, logic = split_pin_description_figure_logic_payload(line)
+            if description:
+                descriptions.append(description)
+            if figure:
+                append_figure(figure)
+            if logic:
+                append_logic(logic)
+            line_index += 1
+            continue
+
+        # Acrobat can split the same description into two physical lines:
+        #     10
+        #     MHz+ Input [Figure 10] [LVDS]
+        # Rejoin those two pieces before pin detection.
+        if next_line_continues_numeric_description(lines, line_index):
+            next_text = normalize_pdf_line(lines[line_index + 1])
+            combined = normalize_pdf_line(line + " " + next_text)
+            description, figure, logic = split_pin_description_figure_logic_payload(combined)
+            if description:
+                descriptions.append(description)
+            if figure:
+                append_figure(figure)
+            if logic:
+                append_logic(logic)
+            line_index += 2
             continue
 
         dash_tokens = re.findall(r"(?<!\S)[-–—](?!\S)", line)
@@ -404,6 +507,7 @@ def parse_stream_pin_description_figure_logic_rows(lines, header_info):
             if normalize_pdf_line(remainder_without_dashes) == "":
                 for _ in dash_tokens:
                     append_ambiguous_dash()
+                line_index += 1
                 continue
 
         pin_match = re.match(r"^(\d+)(?:\s+(.*))?$", line)
@@ -413,6 +517,7 @@ def parse_stream_pin_description_figure_logic_rows(lines, header_info):
 
             if remainder == "":
                 pins.append(pin)
+                line_index += 1
                 continue
 
             description, figure, logic = split_pin_description_figure_logic_payload(remainder)
@@ -424,11 +529,13 @@ def parse_stream_pin_description_figure_logic_rows(lines, header_info):
                     append_figure(figure)
                 if logic:
                     append_logic(logic)
+                line_index += 1
                 continue
 
             # No trailing-column evidence: protect numeric descriptions such as
             # '10 MHz+ Input' from becoming phantom pin rows.
             descriptions.append(line)
+            line_index += 1
             continue
 
         description, figure, logic = split_pin_description_figure_logic_payload(line)
@@ -439,6 +546,7 @@ def parse_stream_pin_description_figure_logic_rows(lines, header_info):
                 append_figure(figure)
             if logic:
                 append_logic(logic)
+            line_index += 1
             continue
 
         figure_only, logic_only = split_figure_logic_only_payload(line)
@@ -447,17 +555,21 @@ def parse_stream_pin_description_figure_logic_rows(lines, header_info):
                 append_figure(figure_only)
             if logic_only:
                 append_logic(logic_only)
+            line_index += 1
             continue
 
         if re.fullmatch(r"Figure\s+\d+(?:\s*,\s*Figure\s+\d+)*", line, re.IGNORECASE):
             append_figure(line)
+            line_index += 1
             continue
 
         if is_logic_cell_text(line) and normalize_dash_cell(line) != "-":
             append_logic(line)
+            line_index += 1
             continue
 
         descriptions.append(line)
+        line_index += 1
 
     if len(pins) < 2:
         return []
@@ -481,7 +593,6 @@ def parse_stream_pin_description_figure_logic_rows(lines, header_info):
         logics.append("")
 
     return [[pin, descriptions[i], figures[i], logics[i]] for i, pin in enumerate(pins)]
-
 
 def figure_logic_candidate_score(rows):
     if not rows:
@@ -569,6 +680,8 @@ def parse_headerless_pin_description_figure_logic_rows(input_text):
     first_pin_index = None
     for index, line in enumerate(lines):
         if re.fullmatch(r"\d+", line):
+            if next_line_continues_numeric_description(lines, index):
+                continue
             first_pin_index = index
             break
 
@@ -731,6 +844,11 @@ def parse_normal_pin_description_figure_rows(lines):
 
     for line in lines:
         if is_figure_table_header_fragment(line):
+            continue
+
+        # A Description such as "10 MHz+ Input Figure 10" must not create
+        # phantom pin 10 or lose the leading 10 from Column 2.
+        if looks_like_numeric_leading_description(line):
             continue
 
         match = re.match(r"^(\d+)\s+(.+)$", line)
@@ -929,9 +1047,31 @@ def parse_stream_pin_description_figure_rows(lines, header_info):
     figures = []
     start_index = max(0, header_info["first"])
 
-    for line_index in range(start_index, len(lines)):
+    line_index = start_index
+    while line_index < len(lines):
         line = normalize_pdf_line(lines[line_index])
         if line == "" or is_figure_table_header_fragment(line):
+            line_index += 1
+            continue
+
+        if looks_like_numeric_leading_description(line):
+            description, figure = split_pin_description_figure_payload(line)
+            if description:
+                descriptions.append(description)
+            if figure:
+                figures.extend(extract_figure_cells_from_text(figure) or [normalize_dash_cell(figure)])
+            line_index += 1
+            continue
+
+        if next_line_continues_numeric_description(lines, line_index):
+            next_text = normalize_pdf_line(lines[line_index + 1])
+            combined = normalize_pdf_line(line + " " + next_text)
+            description, figure = split_pin_description_figure_payload(combined)
+            if description:
+                descriptions.append(description)
+            if figure:
+                figures.extend(extract_figure_cells_from_text(figure) or [normalize_dash_cell(figure)])
+            line_index += 2
             continue
 
         pin_match = re.match(r"^(\d+)(?:\s+(.*))?$", line)
@@ -941,6 +1081,7 @@ def parse_stream_pin_description_figure_rows(lines, header_info):
 
             if remainder == "":
                 pins.append(pin)
+                line_index += 1
                 continue
 
             description, figure = split_pin_description_figure_payload(remainder)
@@ -949,9 +1090,11 @@ def parse_stream_pin_description_figure_rows(lines, header_info):
                 if description:
                     descriptions.append(description)
                 figures.extend(extract_figure_cells_from_text(figure) or [normalize_dash_cell(figure)])
+                line_index += 1
                 continue
 
             descriptions.append(line)
+            line_index += 1
             continue
 
         description, figure = split_pin_description_figure_payload(line)
@@ -959,18 +1102,22 @@ def parse_stream_pin_description_figure_rows(lines, header_info):
             if description:
                 descriptions.append(description)
             figures.extend(extract_figure_cells_from_text(figure) or [normalize_dash_cell(figure)])
+            line_index += 1
             continue
 
         figure_cells = extract_figure_cells_from_text(line)
         if figure_cells:
             figures.extend(figure_cells)
+            line_index += 1
             continue
 
         if line in {"-", "–", "—"}:
             figures.append("-")
+            line_index += 1
             continue
 
         descriptions.append(line)
+        line_index += 1
 
     if not pins:
         return []
@@ -990,7 +1137,6 @@ def parse_stream_pin_description_figure_rows(lines, header_info):
         figures.append("")
 
     return [[pin, descriptions[i], figures[i]] for i, pin in enumerate(pins)]
-
 
 def parse_staggered_pin_description_figure_rows(lines, header_info):
     """Legacy adjacency parser retained only as a fallback."""
