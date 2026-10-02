@@ -5,7 +5,7 @@ import csv
 import io
 import re
 
-# FIX VERSION: generic PDF 3-10 columns + OMITTED BLANK CELL recovery + newline/cell-stream recovery + strict dash cells + no adjacent-column bleed + J5 fixes
+# FIX VERSION: generic PDF 3-10 columns + HYBRID ROW/COLUMN STREAM recovery + sequential-anchor alignment + omitted blanks + strict dash cells + J5 fixes
 
 
 current_count = 0
@@ -3351,6 +3351,284 @@ def generic_pdf_merge_payload_to_width(payload, target_count):
     return generic_pdf_partition_payload(payload, target_count)
 
 
+
+
+def generic_pdf_choose_sequential_numeric_anchor_path(lines):
+    """
+    Find the longest physically ordered run of consecutive numeric row keys.
+
+    This is intentionally stronger than the generic anchor scorer for tables
+    whose first column is 01, 02, 03 ... (or 1, 2, 3 ...).  PDF tagged-text
+    extraction can reorder later columns, so the distance between row keys is
+    not reliable.  The numeric sequence itself is reliable and prevents values
+    such as the 10 in "Figure 10" or "10 MHz+ Input" from stealing a row.
+    """
+    candidates = []
+    for index, raw in enumerate(lines):
+        text = generic_pdf_normalized_cell(raw)
+        if re.fullmatch(r"\d+", text) is None:
+            continue
+        candidates.append((index, text, int(text)))
+
+    if len(candidates) < 3:
+        return []
+
+    best_path = []
+
+    # Keep zero-padded and non-padded families separate.  Width is part of the
+    # family only for values beginning with zero so 01..09 cannot jump into a
+    # random 10 embedded in another column.
+    families = {}
+    for pos, (index, text, number) in enumerate(candidates):
+        if len(text) > 1 and text.startswith("0"):
+            key = ("ZERO_PADDED", len(text))
+        else:
+            key = ("PLAIN",)
+        families.setdefault(key, []).append((pos, index, text, number))
+
+    for family, values in families.items():
+        # DP: best consecutive-value path ending at this candidate.
+        states = []
+        for local_pos, (_global_pos, line_index, text_value, number) in enumerate(values):
+            best = [line_index]
+            for prev_local in range(local_pos):
+                _p, prev_line, prev_text, prev_number = values[prev_local]
+                if prev_number + 1 != number:
+                    continue
+                candidate_path = states[prev_local] + [line_index]
+                if len(candidate_path) > len(best):
+                    best = candidate_path
+            states.append(best)
+            if len(best) > len(best_path):
+                best_path = best
+
+    return best_path if len(best_path) >= 3 else []
+
+
+def generic_pdf_mode_int(values):
+    if not values:
+        return None
+    counts = {}
+    for value in values:
+        counts[value] = counts.get(value, 0) + 1
+    return max(counts, key=lambda value: (counts[value], -value))
+
+
+def generic_pdf_partition_nonempty_payload(payload, target_count):
+    """Partition into target_count non-empty cells; used for columns known present."""
+    values = [generic_pdf_normalized_cell(v) for v in payload]
+    values = [v for v in values if v != ""]
+    if target_count <= 0:
+        return []
+    if len(values) < target_count:
+        return []
+    if target_count == 1:
+        return [generic_pdf_join_cell_lines(values)]
+
+    n = len(values)
+    neg = -10**18
+    dp = [[neg] * (n + 1) for _ in range(target_count + 1)]
+    prev = [[None] * (n + 1) for _ in range(target_count + 1)]
+    dp[0][0] = 0.0
+
+    for groups in range(1, target_count + 1):
+        col = groups - 1
+        for i in range(1, n + 1):
+            for j in range(groups - 1, i):
+                if dp[groups - 1][j] == neg:
+                    continue
+                vals = values[j:i]
+                score = dp[groups - 1][j] + generic_pdf_group_score(vals, col, target_count)
+                joined = generic_pdf_join_cell_lines(vals)
+                if len(vals) >= 2:
+                    if any(
+                        vals[k].rstrip().endswith(("_", "/", "-", "+", "."))
+                        or vals[k + 1].lstrip().startswith(("_", "/", "-", "+", "."))
+                        for k in range(len(vals) - 1)
+                    ):
+                        score += 6.0
+                    upper_parts = [v.upper() for v in vals]
+                    if upper_parts[0] == "FIGURE" and len(upper_parts) >= 2 and re.fullmatch(r"\d+", upper_parts[1]):
+                        score += 5.0
+                if score > dp[groups][i]:
+                    dp[groups][i] = score
+                    prev[groups][i] = j
+
+    if dp[target_count][n] == neg:
+        return []
+
+    cells = []
+    g = target_count
+    i = n
+    while g > 0:
+        j = prev[g][i]
+        if j is None:
+            return []
+        cells.append(generic_pdf_join_cell_lines(values[j:i]))
+        i = j
+        g -= 1
+    cells.reverse()
+    return cells
+
+
+def parse_generic_pdf_hybrid_anchor_stream(input_text, column_count):
+    """
+    Recover PDF tables that mix row-major and column-major tagged-text order.
+
+    A common Acrobat stream for a five-column table is effectively:
+
+        01
+        SIGNAL_1
+        Output
+        02
+        SIGNAL_2
+        Output
+        ...
+        07
+        RESERVED
+        NA
+        Analog
+        Analog
+        Analog
+        Analog
+        Analog
+        Analog
+        NA
+
+    The first few columns are emitted row-by-row, while a later column is emitted
+    as one trailing column stream.  Earlier parsers treated the trailing stream
+    as part of the final row and then shifted/merged Column 2.  This routine uses
+    a consecutive first-column sequence, learns how many payload columns are
+    present before each next row key, then distributes complete trailing streams
+    back across ALL rows.
+    """
+    lines = generic_pdf_raw_lines(input_text)
+    if len(lines) < max(6, column_count + 2):
+        return []
+
+    path = generic_pdf_choose_sequential_numeric_anchor_path(lines)
+    if len(path) < 3:
+        return []
+
+    row_count = len(path)
+    payload_width = column_count - 1
+
+    # Physical payload slices for every row except the last one.  Their repeated
+    # size tells us how many early columns Acrobat is keeping row-major.
+    between = [lines[path[i] + 1:path[i + 1]] for i in range(row_count - 1)]
+    between_lengths = [len([v for v in part if generic_pdf_normalized_cell(v) != ""]) for part in between]
+    if not between_lengths:
+        return []
+
+    typical_physical = generic_pdf_mode_int(between_lengths)
+    if typical_physical is None:
+        return []
+
+    # If anchors are adjacent, the body is column-major: no payload columns were
+    # emitted row-major before the next anchor.  Otherwise, when the repeated
+    # between-anchor payload has <= payload_width lines, each line is normally a
+    # complete early-column cell.  For wrapped cells, fall back to the old anchor
+    # parser instead of guessing.
+    if typical_physical == 0:
+        early_columns = 0
+    elif typical_physical <= payload_width:
+        early_columns = typical_physical
+    else:
+        return []
+
+    # Require most rows to agree with the detected physical pattern.  This keeps
+    # the recovery conservative on ordinary prose containing numeric sequences.
+    agreeing = sum(1 for value in between_lengths if value == typical_physical)
+    if agreeing < max(2, (len(between_lengths) + 1) // 2):
+        return []
+
+    rows = [[generic_pdf_normalized_cell(lines[index])] + [""] * payload_width for index in path]
+
+    # Fill the row-major prefix for all rows except the final row.
+    for row_index, part in enumerate(between):
+        if early_columns == 0:
+            continue
+        cells = generic_pdf_partition_nonempty_payload(part, early_columns)
+        if len(cells) != early_columns:
+            return []
+        for col, cell in enumerate(cells, start=1):
+            rows[row_index][col] = cell
+
+    # Everything after the final anchor contains the final row's early cells,
+    # followed by zero or more complete column streams.
+    tail = [generic_pdf_normalized_cell(v) for v in lines[path[-1] + 1:]]
+    tail = [v for v in tail if v != ""]
+
+    # Determine how many physical lines belong to the final row's early prefix.
+    # For the newline-per-cell case this is exactly typical_physical.  We also
+    # try a small range and prefer a remainder divisible by row_count, because a
+    # complete trailing column stream contains one cell per row.
+    prefix_candidates = [0] if early_columns == 0 else []
+    if early_columns > 0:
+        low = early_columns
+        high = min(len(tail), max(early_columns, typical_physical + 6))
+        for prefix_len in range(low, high + 1):
+            cells = generic_pdf_partition_nonempty_payload(tail[:prefix_len], early_columns)
+            if len(cells) != early_columns:
+                continue
+            remainder = len(tail) - prefix_len
+            full_streams = remainder // row_count
+            leftover = remainder % row_count
+            score = (
+                1 if leftover == 0 else 0,
+                min(full_streams, payload_width - early_columns),
+                -leftover,
+                -abs(prefix_len - typical_physical),
+            )
+            prefix_candidates.append((score, prefix_len, cells))
+
+    if early_columns == 0:
+        final_prefix_len = 0
+        final_prefix_cells = []
+    else:
+        if not prefix_candidates:
+            return []
+        prefix_candidates.sort(reverse=True, key=lambda item: item[0])
+        _score, final_prefix_len, final_prefix_cells = prefix_candidates[0]
+        for col, cell in enumerate(final_prefix_cells, start=1):
+            rows[-1][col] = cell
+
+    remaining = tail[final_prefix_len:]
+    next_col = 1 + early_columns
+
+    # Distribute complete trailing streams.  One stream == one logical column
+    # with one value for every row.  This is the key fix for Signal Type / Figure
+    # / Logic columns that Acrobat emits after all row anchors.
+    while next_col < column_count and len(remaining) >= row_count:
+        stream = remaining[:row_count]
+
+        # A real trailing stream normally has a consistent semantic shape
+        # (Analog/Analog/..., LVDS/LVDS/..., '-'/'-'/..., etc.).  Reject a chunk
+        # that looks like arbitrary prose so we do not manufacture columns.
+        shapes = [generic_pdf_cell_shape(v) for v in stream]
+        shape_counts = {}
+        for shape in shapes:
+            shape_counts[shape] = shape_counts.get(shape, 0) + 1
+        dominant = max(shape_counts.values())
+        scalar_count = sum(1 for value in stream if generic_pdf_is_strong_scalar(value) or value == "-")
+
+        if dominant < max(2, (row_count + 1) // 2) and scalar_count < max(2, (row_count + 1) // 2):
+            break
+
+        for row_index, value in enumerate(stream):
+            rows[row_index][next_col] = value
+
+        remaining = remaining[row_count:]
+        next_col += 1
+
+    # If a small remainder exists and only the final logical column is still
+    # empty, it is usually wrapped Description text for the last row.  Preserve
+    # it there rather than allowing it to contaminate Column 2.
+    if remaining and next_col == column_count - 1:
+        rows[-1][next_col] = generic_pdf_join_cell_lines(remaining)
+
+    return rows
+
 def parse_generic_pdf_anchor_stream(input_text, column_count):
     lines = generic_pdf_raw_lines(input_text)
     if len(lines) < column_count * 2:
@@ -3695,12 +3973,17 @@ def parse_generic_pdf_table(input_text, column_count):
         return []
 
     explicit_rows = parse_generic_pdf_explicit_rows(input_text, column_count)
+    hybrid_rows = parse_generic_pdf_hybrid_anchor_stream(input_text, column_count)
     anchor_rows = parse_generic_pdf_anchor_stream(input_text, column_count)
     modulo_rows = parse_generic_pdf_modulo_cell_stream(input_text, column_count)
     single_space_rows = parse_generic_pdf_single_space_rows(input_text, column_count)
 
     candidates = [
-        (explicit_rows, 4),
+        (explicit_rows, 5),
+        # Hybrid row/column stream recovery is deliberately ahead of the old
+        # anchor parser when it succeeds; it is the format that caused adjacent
+        # columns to be concatenated in the user's 01..07 contact table.
+        (hybrid_rows, 4),
         (anchor_rows, 3),
     ]
 
@@ -3708,7 +3991,7 @@ def parse_generic_pdf_table(input_text, column_count):
     # Only use the pure modulo/cell-stream fallback when anchor reconstruction
     # is unavailable; otherwise extra newlines can make an incorrect modulo
     # alignment appear to contain more rows than the real table.
-    if not anchor_rows and not explicit_rows:
+    if not hybrid_rows and not anchor_rows and not explicit_rows:
         candidates.append((modulo_rows, 2))
 
     candidates.append((single_space_rows, 1))
