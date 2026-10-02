@@ -110,6 +110,460 @@ def get_nonempty_normalized_lines(input_text):
 
 
 # =========================================
+# PDF 4-COLUMN PIN / DESCRIPTION / FIGURE / LOGIC TABLE
+#
+# Handles tables such as the J5 Clock Signals table:
+#   Pin Number | Description     | Figure    | Logic
+#   1          | Chassis GND     | -         | -
+#   6          | 10 MHz+ Input   | Figure 10 | LVDS
+#   2          | 10 MHz- Input   | Figure 10 | LVDS
+#
+# This parser intentionally runs BEFORE the older 3-column Figure-table parser.
+# Otherwise a 4-column table can be mistaken for Pin/Description/Figure and the
+# Logic column is silently lost.
+#
+# It supports both normal row-wise clipboard text and Acrobat's tagged/interleaved
+# form where the next pin can be emitted alongside the previous row's Figure and
+# Logic cells, for example:
+#
+#   Pin
+#   Number
+#   Description
+#   1
+#   Figure
+#   Logic
+#   6 - -
+#   Chassis GND
+#   2 Figure 10 LVDS
+#   10 MHz+ Input
+#   7 Figure 10 LVDS
+#   10 MHz- Input
+#
+# Note that Description values are allowed to BEGIN WITH NUMBERS (10 MHz...), so
+# this table family must never locate rows by blindly treating every numeric token
+# as a new pin.
+# =========================================
+
+FIGURE_LOGIC_PINOUT_HEADERS = [
+    "PIN NUMBER",
+    "DESCRIPTION",
+    "FIGURE",
+    "LOGIC"
+]
+
+
+def normalize_dash_cell(value):
+    text = normalize_pdf_line(value)
+    if text in {"-", "–", "—"}:
+        return "-"
+    return text
+
+
+def is_logic_cell_text(value):
+    """Return True for the short electrical-interface values used in Logic columns."""
+    text = normalize_dash_cell(value)
+    if text == "-":
+        return True
+
+    upper = text.upper().replace(" ", "")
+
+    known = {
+        "LVDS", "LVTTL", "TTL", "CMOS", "LVCMOS", "ECL", "PECL", "LVPECL",
+        "CML", "RS422", "RS-422", "RS485", "RS-485", "SINGLEENDED",
+        "SINGLE-ENDED", "DIFFERENTIAL"
+    }
+    if upper in known:
+        return True
+
+    # Voltage-style logic labels such as 3.3V / 5V / 1.8 V.
+    if re.fullmatch(r"\d+(?:\.\d+)?V", upper):
+        return True
+
+    return False
+
+
+def is_figure_logic_table_header_fragment(value):
+    upper = normalize_pdf_line(value).upper()
+    if upper == "":
+        return True
+
+    if upper in {
+        "PIN", "NUMBER", "PIN NUMBER", "DESCRIPTION", "FIGURE", "LOGIC",
+        "LOGIC TYPE", "LOGIC LEVEL"
+    }:
+        return True
+
+    if upper.startswith("TABLE ") and ("PIN" in upper or "CONNECTOR" in upper):
+        return True
+
+    if re.fullmatch(r"PAGE\s+\d+\s+OF\s+\d+", upper):
+        return True
+    if re.fullmatch(r"\d+\s+OF\s+\d+", upper):
+        return True
+
+    return False
+
+
+def get_figure_logic_header_window(input_text):
+    lines = get_nonempty_normalized_lines(input_text)
+    if len(lines) < 4:
+        return lines, None
+
+    search_limit = min(len(lines), 40)
+    pin_seen = False
+    number_seen = False
+    description_seen = False
+    figure_seen = False
+    logic_seen = False
+    first_header_index = None
+    last_header_index = None
+
+    for index, line in enumerate(lines[:search_limit]):
+        compact = re.sub(r"\s+", " ", line.upper()).strip()
+
+        # These tests intentionally work for either individual header cells or
+        # a whole header row copied as one line.
+        if compact == "PIN" or "PIN NUMBER" in compact:
+            pin_seen = True
+            first_header_index = index if first_header_index is None else first_header_index
+            last_header_index = index
+
+        if compact == "NUMBER" or "PIN NUMBER" in compact:
+            number_seen = True
+            first_header_index = index if first_header_index is None else first_header_index
+            last_header_index = index
+
+        if re.search(r"\bDESCRIPTION\b", compact):
+            description_seen = True
+            first_header_index = index if first_header_index is None else first_header_index
+            last_header_index = index
+
+        # Require the standalone word Figure, not Figure 10 in a data cell.
+        if compact == "FIGURE" or re.search(r"\bDESCRIPTION\b.*\bFIGURE\b", compact):
+            figure_seen = True
+            first_header_index = index if first_header_index is None else first_header_index
+            last_header_index = index
+
+        if compact == "LOGIC" or compact.startswith("LOGIC ") or re.search(r"\bFIGURE\b.*\bLOGIC\b", compact):
+            logic_seen = True
+            first_header_index = index if first_header_index is None else first_header_index
+            last_header_index = index
+
+        if pin_seen and number_seen and description_seen and figure_seen and logic_seen:
+            break
+
+    if not (pin_seen and number_seen and description_seen and figure_seen and logic_seen):
+        return lines, None
+
+    return lines, {
+        "first": first_header_index,
+        "last": last_header_index
+    }
+
+
+def extract_one_figure_cell_prefix(value):
+    """
+    Return (figure_cell, remainder) when value starts with one Figure-column cell.
+    A comma-separated reference such as 'Figure 5, Figure 8' is one cell.
+    """
+    text = normalize_pdf_line(value)
+    match = re.match(
+        r"^(Figure\s+\d+(?:\s*,\s*Figure\s+\d+)*)(?:\s+(.*))?$",
+        text,
+        re.IGNORECASE
+    )
+    if match is None:
+        return "", text
+    return normalize_pdf_line(match.group(1)), normalize_pdf_line(match.group(2) or "")
+
+
+def split_pin_description_figure_logic_payload(payload):
+    """Split everything after a pin into Description / Figure / Logic."""
+    text = normalize_pdf_line(payload)
+    if text == "":
+        return "", "", ""
+
+    # Normal Figure-bearing row, e.g.:
+    #   10 MHz+ Input Figure 10 LVDS
+    figure_match = re.search(
+        r"\bFigure\s+\d+(?:\s*,\s*Figure\s+\d+)*",
+        text,
+        re.IGNORECASE
+    )
+    if figure_match is not None:
+        description = text[:figure_match.start()].strip()
+        figure = normalize_pdf_line(figure_match.group(0))
+        logic = normalize_dash_cell(text[figure_match.end():].strip())
+        return description, figure, logic
+
+    # No-figure rows in this family normally end in two independent dash cells:
+    #   Chassis GND - -
+    dash_pair = re.match(r"^(.*?)\s+[-–—]\s+[-–—]$", text)
+    if dash_pair is not None:
+        return dash_pair.group(1).strip(), "-", "-"
+
+    # Tagged PDF transition marker with no Description attached:
+    #   - -
+    if re.fullmatch(r"[-–—]\s+[-–—]", text):
+        return "", "-", "-"
+
+    # A Figure dash plus a non-dash Logic value is uncommon but valid.
+    dash_logic = re.match(r"^(.*?)\s+[-–—]\s+(\S+)$", text)
+    if dash_logic is not None and is_logic_cell_text(dash_logic.group(2)):
+        return dash_logic.group(1).strip(), "-", normalize_dash_cell(dash_logic.group(2))
+
+    return text, "", ""
+
+
+def parse_normal_pin_description_figure_logic_rows(lines):
+    rows = []
+
+    for raw_line in lines:
+        line = normalize_pdf_line(raw_line)
+        if line == "" or is_figure_logic_table_header_fragment(line):
+            continue
+
+        match = re.match(r"^(\d+)\s+(.+)$", line)
+        if match is None:
+            continue
+
+        pin = match.group(1)
+        description, figure, logic = split_pin_description_figure_logic_payload(match.group(2))
+
+        # Require actual trailing column evidence.  This is what keeps a line
+        # such as '10 MHz+ Input' from being interpreted as pin 10.
+        if description == "" or figure == "" or logic == "":
+            continue
+
+        rows.append([pin, description, figure, logic])
+
+    return rows
+
+
+def split_figure_logic_only_payload(value):
+    """Return (figure, logic) only when the entire value is those two cells."""
+    text = normalize_pdf_line(value)
+    if text == "":
+        return "", ""
+
+    if re.fullmatch(r"[-–—]\s+[-–—]", text):
+        return "-", "-"
+
+    figure, remainder = extract_one_figure_cell_prefix(text)
+    if figure and remainder and is_logic_cell_text(remainder):
+        return figure, normalize_dash_cell(remainder)
+
+    return "", ""
+
+
+def parse_stream_pin_description_figure_logic_rows(lines, header_info):
+    """
+    Reconstruct a 4-column table as four ordered cell streams.  This handles the
+    tagged-PDF pattern where the NEXT pin is emitted together with the PREVIOUS
+    row's Figure and Logic values.
+    """
+    pins = []
+    descriptions = []
+    figures = []
+    logics = []
+
+    start_index = max(0, header_info["first"])
+
+    for raw_line in lines[start_index:]:
+        line = normalize_pdf_line(raw_line)
+        if line == "" or is_figure_logic_table_header_fragment(line):
+            continue
+
+        pin_match = re.match(r"^(\d+)(?:\s+(.*))?$", line)
+        if pin_match is not None:
+            pin = pin_match.group(1)
+            remainder = normalize_pdf_line(pin_match.group(2) or "")
+
+            # A numeric Description like '10 MHz+ Input' must NOT become pin 10.
+            # A line beginning with a number is accepted as a pin only if it is
+            # an exact number or its remainder contains complete table-cell
+            # evidence (Description+Figure+Logic or Figure+Logic transition).
+            if remainder:
+                description, figure, logic = split_pin_description_figure_logic_payload(remainder)
+                figure_only, logic_only = split_figure_logic_only_payload(remainder)
+
+                complete_row = bool(description and figure and logic)
+                transition = bool(figure_only and logic_only)
+
+                if not complete_row and not transition:
+                    descriptions.append(line)
+                    continue
+
+                pins.append(pin)
+
+                if complete_row:
+                    descriptions.append(description)
+                    figures.append(figure)
+                    logics.append(logic)
+                else:
+                    figures.append(figure_only)
+                    logics.append(logic_only)
+                continue
+
+            pins.append(pin)
+            continue
+
+        # Figure+Logic pair without a pin on the same physical clipboard line.
+        figure, logic = split_figure_logic_only_payload(line)
+        if figure and logic:
+            figures.append(figure)
+            logics.append(logic)
+            continue
+
+        # Standalone Figure cell.  Standalone '-' is intentionally NOT consumed
+        # here because it is ambiguous between Figure and Logic; paired dashes
+        # are handled above and normal Acrobat output keeps these columns paired.
+        if re.fullmatch(r"Figure\s+\d+(?:\s*,\s*Figure\s+\d+)*", line, re.IGNORECASE):
+            figures.append(line)
+            continue
+
+        if is_logic_cell_text(line) and normalize_dash_cell(line) != "-":
+            logics.append(normalize_dash_cell(line))
+            continue
+
+        # Anything else is Description data.  '10 MHz+ Input' lands here.
+        descriptions.append(line)
+
+    if len(pins) < 2:
+        return []
+
+    # Pin count is the hard row count.  Discard footer spillover and pad missing
+    # cells instead of letting neighboring columns shift alignment.
+    descriptions = descriptions[:len(pins)]
+    figures = figures[:len(pins)]
+    logics = logics[:len(pins)]
+
+    while len(descriptions) < len(pins):
+        descriptions.append("")
+    while len(figures) < len(pins):
+        figures.append("")
+    while len(logics) < len(pins):
+        logics.append("")
+
+    return [
+        [pin, descriptions[index], figures[index], logics[index]]
+        for index, pin in enumerate(pins)
+    ]
+
+
+def figure_logic_candidate_score(rows):
+    if not rows:
+        return (0, 0, 0, 0)
+
+    complete = sum(
+        1 for row in rows
+        if len(row) >= 4
+        and str(row[1]).strip() != ""
+        and is_figure_cell_text(row[2])
+        and is_logic_cell_text(row[3])
+    )
+    descriptions = sum(1 for row in rows if len(row) >= 2 and str(row[1]).strip() != "")
+    figures = sum(1 for row in rows if len(row) >= 3 and is_figure_cell_text(row[2]))
+    logics = sum(1 for row in rows if len(row) >= 4 and is_logic_cell_text(row[3]))
+    return (len(rows), complete, descriptions, min(figures, logics))
+
+
+def is_valid_figure_logic_rows(rows):
+    if len(rows) < 2:
+        return False
+
+    complete = sum(
+        1 for row in rows
+        if len(row) >= 4
+        and str(row[1]).strip() != ""
+        and is_figure_cell_text(row[2])
+        and is_logic_cell_text(row[3])
+    )
+    minimum_complete = max(2, (len(rows) + 1) // 2)
+    return complete >= minimum_complete
+
+
+def looks_like_pdf_pin_description_figure_logic_table(input_text):
+    lines, header_info = get_figure_logic_header_window(input_text)
+    if header_info is None:
+        return False
+
+    # Use line starts, not every numeric token, because Description values can
+    # legitimately begin with numbers (10 MHz+ Input / 10 MHz- Input).
+    candidates = 0
+    for line in lines[header_info["first"] + 1:]:
+        if re.match(r"^\d+(?:\s|$)", line):
+            candidates += 1
+
+    return candidates >= 2
+
+
+def parse_pdf_pin_description_figure_logic_table(input_text):
+    lines, header_info = get_figure_logic_header_window(input_text)
+    rows = [list(FIGURE_LOGIC_PINOUT_HEADERS)]
+
+    if header_info is None:
+        return rows
+
+    normal_rows = parse_normal_pin_description_figure_logic_rows(lines[header_info["first"]:])
+    stream_rows = parse_stream_pin_description_figure_logic_rows(lines, header_info)
+
+    candidates = [candidate for candidate in (normal_rows, stream_rows) if candidate]
+    if not candidates:
+        return rows
+
+    selected_rows = max(candidates, key=figure_logic_candidate_score)
+    rows.extend(selected_rows)
+    return rows
+
+
+def parse_headerless_pin_description_figure_logic_rows(input_text):
+    """Conservative body-only recovery for rows such as '1 Chassis GND - -'."""
+    lines = get_nonempty_normalized_lines(input_text)
+    if len(lines) < 2:
+        return []
+
+    # A real header belongs to the normal parser.
+    _, header_info = get_figure_logic_header_window(input_text)
+    if header_info is not None:
+        return []
+
+    normal_rows = parse_normal_pin_description_figure_logic_rows(lines)
+    if is_valid_figure_logic_rows(normal_rows):
+        return normal_rows
+
+    # Headerless interleaved recovery starts at the first exact pin line.  It is
+    # intentionally conservative so this path does not steal unrelated text.
+    first_pin_index = None
+    for index, line in enumerate(lines):
+        if re.fullmatch(r"\d+", line):
+            first_pin_index = index
+            break
+
+    if first_pin_index is None:
+        return []
+
+    stream_rows = parse_stream_pin_description_figure_logic_rows(
+        lines,
+        {"first": first_pin_index, "last": first_pin_index}
+    )
+    if is_valid_figure_logic_rows(stream_rows):
+        return stream_rows
+
+    return []
+
+
+def looks_like_headerless_pin_description_figure_logic_table(input_text):
+    return len(parse_headerless_pin_description_figure_logic_rows(input_text)) >= 2
+
+
+def parse_headerless_pin_description_figure_logic_table(input_text):
+    rows = [list(FIGURE_LOGIC_PINOUT_HEADERS)]
+    rows.extend(parse_headerless_pin_description_figure_logic_rows(input_text))
+    return rows
+
+
+# =========================================
 # PDF 3-COLUMN PIN / DESCRIPTION / FIGURE TABLE
 #
 # Handles tables such as:
@@ -608,6 +1062,11 @@ def looks_like_pdf_pin_description_figure_table(input_text):
     if header_info is None:
         return False
 
+    # A visible Logic header means this is the 4-column family handled above.
+    header_probe = " ".join(lines[:40]).upper()
+    if re.search(r"\bLOGIC\b", header_probe):
+        return False
+
     data_candidates = 0
     for line in lines[header_info["first"] + 1:]:
         if re.match(r"^\d+(?:\s|$)", line):
@@ -748,6 +1207,10 @@ def parse_headerless_pin_description_figure_rows(input_text):
     # If the real header is present, the normal parser should own this input.
     _, header_info = get_figure_pinout_header_window(input_text)
     if header_info is not None:
+        return []
+
+    # Do not steal the 4-column Figure/Logic body-only family.
+    if looks_like_headerless_pin_description_figure_logic_table(input_text):
         return []
 
     # Do not steal the other known pinout families when their headers are clear.
@@ -2047,6 +2510,37 @@ def parse_table():
     delimiter_name = ""
 
     # =========================================
+    # PDF 4-COLUMN PIN / DESCRIPTION / FIGURE / LOGIC TABLE FIRST
+    #
+    # This must run before the 3-column Figure-table parser because both formats
+    # contain Pin Number / Description / Figure headers.
+    # =========================================
+
+    if looks_like_pdf_pin_description_figure_logic_table(input_text):
+
+        rows = parse_pdf_pin_description_figure_logic_table(input_text)
+
+        if len(rows) > 1:
+            label = "PDF PIN / DESCRIPTION / FIGURE / LOGIC TABLE"
+            if looks_highly_verticalized(input_text):
+                label += " / INTERLEAVED PDF PASTE"
+            return rows, 4, label
+
+    # =========================================
+    # HEADERLESS 4-COLUMN PIN / DESCRIPTION / FIGURE / LOGIC CONTINUATION
+    # =========================================
+
+    if looks_like_headerless_pin_description_figure_logic_table(input_text):
+
+        rows = parse_headerless_pin_description_figure_logic_table(input_text)
+
+        if len(rows) > 1:
+            label = "PDF PIN / DESCRIPTION / FIGURE / LOGIC TABLE / HEADERLESS CONTINUATION"
+            if looks_highly_verticalized(input_text):
+                label += " / INTERLEAVED PDF PASTE"
+            return rows, 4, label
+
+    # =========================================
     # PDF 3-COLUMN PIN / DESCRIPTION / FIGURE TABLE FIRST
     #
     # This format can be copied from the PDF in a staggered tagged-text order,
@@ -2271,6 +2765,7 @@ def detect_table():
         or delimiter_name.startswith("PDF PINOUT TABLE")
         or delimiter_name.startswith("PDF SIMPLE PINOUT TABLE")
         or delimiter_name.startswith("PDF PIN / DESCRIPTION / FIGURE TABLE")
+        or delimiter_name.startswith("PDF PIN / DESCRIPTION / FIGURE / LOGIC TABLE")
     )
 
     detected_row_count = len(rows) - 1 if structured_pdf_table else len(rows)
