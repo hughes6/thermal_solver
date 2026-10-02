@@ -396,6 +396,110 @@ def is_simple_pinout_header_line(line):
     return False
 
 
+SIGNAL_START_JOIN_CHARS = "_-/#+.:"
+SIGNAL_END_JOIN_CHARS = "_/#.:"
+SIGNAL_STANDALONE_JOIN_CHARS = "_-/#+.:"
+
+
+def token_starts_with_signal_joiner(value):
+    text = str(value or "").strip()
+    return text != "" and text[0] in SIGNAL_START_JOIN_CHARS
+
+
+def token_ends_with_signal_joiner(value):
+    text = str(value or "").strip()
+    # Do not treat a trailing + or - as proof that the next word belongs to the
+    # signal.  Differential signals commonly end in + / -, e.g. D4- Input.
+    return text != "" and text[-1] in SIGNAL_END_JOIN_CHARS
+
+
+def token_is_signal_joiner(value):
+    text = str(value or "").strip()
+    return text != "" and all(char in SIGNAL_STANDALONE_JOIN_CHARS for char in text)
+
+
+def signal_tokens_are_continuous(previous_value, next_value):
+    """
+    Acrobat occasionally breaks an identifier at punctuation, for example:
+
+        BUS_  RTN
+        BUS   _RTN
+        BUS   _   RTN
+        P5_   1000BT_D4-
+
+    Those are one Signal Name, not extra PDF columns.  Only fuse tokens when
+    punctuation gives us strong evidence that the identifier continues.  This
+    avoids swallowing an ordinary Signal Type such as "Power".
+    """
+    previous_text = str(previous_value or "").strip()
+    next_text = str(next_value or "").strip()
+
+    if previous_text == "" or next_text == "":
+        return False
+
+    if token_ends_with_signal_joiner(previous_text):
+        return True
+
+    if token_starts_with_signal_joiner(next_text):
+        return True
+
+    if token_is_signal_joiner(previous_text) or token_is_signal_joiner(next_text):
+        return True
+
+    return False
+
+
+def normalize_signal_name_fragments(fragments):
+    fragments = [str(value or "").strip() for value in fragments if str(value or "").strip() != ""]
+
+    if not fragments:
+        return ""
+
+    # Preserve a real two-word mnemonic that occurs in the older table family.
+    if len(fragments) == 2 and fragments[0].upper() == "CTU" and fragments[1].upper() == "RTN":
+        return "CTU RTN"
+
+    text = " ".join(fragments)
+
+    # Rejoin identifiers that Acrobat split immediately before/after connector
+    # punctuation.  Repeating the substitution handles forms such as
+    # "BUS _ RTN" as well as "P5_ 1000BT_D4-".
+    previous = None
+    while previous != text:
+        previous = text
+        text = re.sub(r"\s*([_\-/#+.:])\s*", r"\1", text)
+
+    return text.strip()
+
+
+def consume_signal_name_tokens(payload):
+    """Return (signal_name, number_of_payload_tokens_consumed)."""
+    if not payload:
+        return "", 0
+
+    fragments = [payload[0]]
+    index = 1
+
+    while index < len(payload):
+        current_signal = normalize_signal_name_fragments(fragments)
+        next_value = payload[index]
+
+        if signal_tokens_are_continuous(current_signal, next_value):
+            fragments.append(next_value)
+            index += 1
+            continue
+
+        # Existing PDFs also contain the legitimate two-word signal CTU RTN.
+        if current_signal.upper() == "CTU" and str(next_value).strip().upper() == "RTN":
+            fragments.append(next_value)
+            index += 1
+            continue
+
+        break
+
+    return normalize_signal_name_fragments(fragments), index
+
+
 def parse_simple_pinout_data_line(line):
     line = normalize_pdf_line(line)
 
@@ -411,9 +515,13 @@ def parse_simple_pinout_data_line(line):
         return None
 
     pin = tokens.pop(0)
-    signal_name = tokens.pop(0)
-    signal_type = tokens.pop(0)
-    description = " ".join(tokens)
+    signal_name, consumed = consume_signal_name_tokens(tokens)
+
+    if consumed >= len(tokens):
+        return None
+
+    signal_type = tokens[consumed]
+    description = " ".join(tokens[consumed + 1:])
 
     return [pin, signal_name, signal_type, description]
 
@@ -440,9 +548,13 @@ def parse_pdf_simple_pinout_table(input_text):
             continue
 
         pin = tokens[pin_index]
-        signal_name = payload[0]
-        signal_type = payload[1]
-        description = " ".join(payload[2:])
+        signal_name, consumed = consume_signal_name_tokens(payload)
+
+        if consumed >= len(payload):
+            continue
+
+        signal_type = payload[consumed]
+        description = " ".join(payload[consumed + 1:])
 
         rows.append([
             pin,
@@ -557,8 +669,33 @@ def find_direction_token_index(payload):
     for index in range(1, len(payload)):
         upper = str(payload[index]).strip().upper().replace("\\", "/")
 
-        if upper in direction_values:
-            return index
+        if upper not in direction_values:
+            continue
+
+        previous_value = payload[index - 1] if index > 0 else ""
+        next_value = payload[index + 1] if index + 1 < len(payload) else ""
+
+        # Do not mistake IN / OUT for the Direction column when Acrobat split a
+        # signal identifier around an underscore, e.g. DIG_ / IN / _1.
+        if signal_tokens_are_continuous(previous_value, payload[index]):
+            continue
+
+        if signal_tokens_are_continuous(payload[index], next_value):
+            continue
+
+        # A standalone '-' can itself be part of a signal name.  If a stronger
+        # direction word immediately follows, keep '-' with the signal and use
+        # the later token as Direction.
+        if upper == "-":
+            for lookahead in range(index + 1, min(index + 3, len(payload))):
+                later = str(payload[lookahead]).strip().upper().replace("\\", "/")
+                if later in direction_values and later != "-":
+                    break
+            else:
+                return index
+            continue
+
+        return index
 
     return None
 
@@ -590,7 +727,7 @@ def parse_pinout_data_line(line, current_ref_des):
     direction_index = find_direction_token_index(tokens)
 
     if direction_index is not None and direction_index >= 1 and direction_index + 1 < len(tokens):
-        signal_name = " ".join(tokens[:direction_index])
+        signal_name = normalize_signal_name_fragments(tokens[:direction_index])
         direction = normalize_pinout_direction(tokens[direction_index])
         signal_type = tokens[direction_index + 1]
         description = " ".join(tokens[direction_index + 2:])
@@ -598,10 +735,14 @@ def parse_pinout_data_line(line, current_ref_des):
         if len(tokens) < 3:
             return None
 
-        signal_name = tokens[0]
-        direction = normalize_pinout_direction(tokens[1])
-        signal_type = tokens[2]
-        description = " ".join(tokens[3:])
+        signal_name, consumed = consume_signal_name_tokens(tokens)
+
+        if consumed + 1 >= len(tokens):
+            return None
+
+        direction = normalize_pinout_direction(tokens[consumed])
+        signal_type = tokens[consumed + 1]
+        description = " ".join(tokens[consumed + 2:])
 
     return [ref_des, pin, signal_name, direction, signal_type, description]
 
@@ -649,15 +790,19 @@ def parse_pdf_pinout_table(input_text):
         direction_index = find_direction_token_index(payload)
 
         if direction_index is not None and direction_index >= 1 and direction_index + 1 < len(payload):
-            signal_name = " ".join(payload[:direction_index])
+            signal_name = normalize_signal_name_fragments(payload[:direction_index])
             direction = normalize_pinout_direction(payload[direction_index])
             signal_type = payload[direction_index + 1]
             description = " ".join(payload[direction_index + 2:])
         else:
-            signal_name = payload[0]
-            direction = normalize_pinout_direction(payload[1])
-            signal_type = payload[2]
-            description = " ".join(payload[3:])
+            signal_name, consumed = consume_signal_name_tokens(payload)
+
+            if consumed + 1 >= len(payload):
+                continue
+
+            direction = normalize_pinout_direction(payload[consumed])
+            signal_type = payload[consumed + 1]
+            description = " ".join(payload[consumed + 2:])
 
         rows.append([
             current_ref_des,
