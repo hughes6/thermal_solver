@@ -452,8 +452,6 @@ else:
     app.PutMessage("Symbol loaded successfully.")
 
 PIN_VIEW_SPACING = 0.75
-PIN_VIEW_PIN_SPACING = 0.25
-
 TOP_OF_PAGE = 32.9
 TOP_MARIGIN = 1.0
 LEFT_OF_PAGE = 0.0
@@ -461,102 +459,12 @@ LEFT_MARIGIN = 1.0
 left_target = LEFT_OF_PAGE + LEFT_MARIGIN
 top_target = TOP_OF_PAGE - TOP_MARIGIN
 
-
-def get_connector_map_slots(connector):
-    """
-    Number of 0.75-unit rows to reserve for this connector's FULL pin view.
-
-    The FULL view has pins on a 0.25 pitch, so three pin pitches fit in one
-    normal 0.75 connector-map row.
-
-    Small 1-3 pin views are given TWO rows (1.50 total) because their symbol
-    body is taller than the raw pin span and was the case that could overlap.
-
-    Examples:
-        1 pin  -> 2 slots -> 1.50
-        2 pins -> 2 slots -> 1.50
-        3 pins -> 2 slots -> 1.50
-        4 pins -> 2 slots -> 1.50
-        6 pins -> 2 slots -> 1.50
-        15 pins -> 5 slots -> 3.75
-
-    Everything stays on the original 0.75 CABBLOCK grid.
-    """
-    try:
-        pin_count = int(connector[0]['number of pins'] or 0)
-    except Exception:
-        pin_count = 0
-
-    if pin_count <= 0:
-        pin_count = len(connector[1:])
-
-    pin_count = max(1, pin_count)
-
-    # 0.75 / 0.25 = 3 pins per normal map slot.
-    slots_from_pins = (pin_count + 2) // 3
-
-    # The one-pin/small connector symbol needs more room than its raw pin span.
-    return max(2, slots_from_pins)
-
-
-# ================================================================
-# CREATE CONNECTOR MAP
-#
-# connector position is now an ACTUAL 0.75-grid slot index instead
-# of simply 0, 1, 2, ...
-# ================================================================
-CONNECTOR_MAP = []
-
-if NUMBER_OF_CONNECTORS < 6:
-    left_slot = 0
-
-    for i, connector in enumerate(PIN_SIGNAL_INFO):
-        connector_name = connector[0]['connector name']
-        slots = get_connector_map_slots(connector)
-
-        CONNECTOR_MAP.append({
-            'connector name': connector_name,
-            'connector position': left_slot,
-            'connector flip': 0,
-            'connector slots': slots
-        })
-
-        left_slot += slots
-
-    required_map_slots = left_slot
-
-else:
-    left_count = (NUMBER_OF_CONNECTORS + 1) // 2
-    left_slot = 0
-    right_slot = 0
-
-    for i, connector in enumerate(PIN_SIGNAL_INFO):
-        connector_name = connector[0]['connector name']
-        slots = get_connector_map_slots(connector)
-
-        if i < left_count:
-            connector_position = left_slot
-            connector_flip = 0
-            left_slot += slots
-        else:
-            connector_position = right_slot
-            connector_flip = 1
-            right_slot += slots
-
-        CONNECTOR_MAP.append({
-            'connector name': connector_name,
-            'connector position': connector_position,
-            'connector flip': connector_flip,
-            'connector slots': slots
-        })
-
-    required_map_slots = max(left_slot, right_slot)
-
-
-# Keep the SAME original CABBLOCK height formula, but use the number of
-# occupied 0.75 map slots rather than the raw connector count.
+HALF_NUMBER_OF_CONNECTORS = int(NUMBER_OF_CONNECTORS/2.0) + 1
 block_width = 3.0
-block_height = 1.75 + (PIN_VIEW_SPACING * required_map_slots)
+if NUMBER_OF_CONNECTORS < 6:
+    block_height = 1.75 + (PIN_VIEW_SPACING * NUMBER_OF_CONNECTORS)
+else:
+    block_height = 1.75 + (PIN_VIEW_SPACING * HALF_NUMBER_OF_CONNECTORS)    
 
 x_block = left_target
 y_block = top_target - (block_height)
@@ -569,15 +477,72 @@ if DEVICE_FUNCTION is not None:
 else:
     y_start = y_block + block_height - 2.0
 
+# CREATE MAPPING HERE
+#
+# IMPORTANT:
+# Do not change the main CABBLOCK size or placement here.
+# Only change the connector-position map so each connector reserves enough
+# 0.75-unit vertical slots for the FULL pin-view symbol.
+#
+# FULL pin views use ~0.25 pin pitch. Three pin positions fit in one 0.75 slot.
+# Small 1-pin/2-pin/3-pin connectors still need more than one slot because the
+# symbol body itself is taller than the raw pin span, so reserve at least 2 slots.
+def connector_map_slots(connector):
+    try:
+        pin_count = int(connector[0]['number of pins'] or 0)
+    except Exception:
+        pin_count = 0
 
-# Diagnostics: shows exactly where each connector will be placed.
-for map_entry in CONNECTOR_MAP:
-    app.PutMessage(
-        f"CONNECTOR MAP: {map_entry['connector name']} "
-        f"slot={map_entry['connector position']} "
-        f"slots_used={map_entry['connector slots']} "
-        f"side={'RIGHT' if map_entry['connector flip'] else 'LEFT'}"
-    )
+    if pin_count <= 0:
+        pin_count = len(connector[1:])
+
+    pin_count = max(1, pin_count)
+
+    # 3 pins per 0.75-unit placement slot, minimum 2 slots for tiny connectors.
+    return max(2, (pin_count + 2) // 3)
+
+
+CONNECTOR_MAP = []
+
+if NUMBER_OF_CONNECTORS < 6:
+    current_slot = 0
+
+    for i, connector in enumerate(PIN_SIGNAL_INFO):
+        connector_name = connector[0]['connector name']
+        connector_slots = connector_map_slots(connector)
+
+        CONNECTOR_MAP.append({
+            'connector name': connector_name,
+            'connector position': current_slot,
+            'connector flip': 0
+        })
+
+        current_slot += connector_slots
+
+else:
+    left_count = (NUMBER_OF_CONNECTORS + 1) // 2
+
+    left_slot = 0
+    right_slot = 0
+
+    for i, connector in enumerate(PIN_SIGNAL_INFO):
+        connector_name = connector[0]['connector name']
+        connector_slots = connector_map_slots(connector)
+
+        if i < left_count:
+            connector_position = left_slot
+            connector_flip = 0
+            left_slot += connector_slots
+        else:
+            connector_position = right_slot
+            connector_flip = 1
+            right_slot += connector_slots
+
+        CONNECTOR_MAP.append({
+            'connector name': connector_name,
+            'connector position': connector_position,
+            'connector flip': connector_flip
+        })
 
 if res == 0:
     app.PutMessage(f"Place block failed: {res}")
