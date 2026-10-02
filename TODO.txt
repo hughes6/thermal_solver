@@ -471,6 +471,34 @@ y_block = top_target - (block_height)
 x_block_center = x_block + block_width/2.0
 res = sym.PlaceBlock(sheet_1_id, x_block, y_block, block_width, block_height)
 
+# TEST ONLY:
+# If the FIRST main-block placement fails, retry exactly once at y - 1.0,
+# then stop this script immediately so nothing after placement can affect the test.
+if res == 0:
+    retry_y_block = y_block - 1.0
+    app.PutMessage(
+        f"Initial main block placement failed at x={x_block}, y={y_block}. "
+        f"Retrying once at y={retry_y_block}."
+    )
+
+    retry_res = sym.PlaceBlock(
+        sheet_1_id,
+        x_block,
+        retry_y_block,
+        block_width,
+        block_height
+    )
+
+    app.PutMessage(
+        f"Retry main block placement result: {retry_res} "
+        f"at x={x_block}, y={retry_y_block}"
+    )
+
+    if retry_res == 0:
+        raise SystemExit("Retry placement also failed.")
+
+    raise SystemExit("Retry placement succeeded. Test script stopped intentionally.")
+
 if DEVICE_FUNCTION is not None:
     y_start = y_block + block_height - 2.25
     block_height += 0.5
@@ -478,71 +506,23 @@ else:
     y_start = y_block + block_height - 2.0
 
 # CREATE MAPPING HERE
-#
-# IMPORTANT:
-# Do not change the main CABBLOCK size or placement here.
-# Only change the connector-position map so each connector reserves enough
-# 0.75-unit vertical slots for the FULL pin-view symbol.
-#
-# FULL pin views use ~0.25 pin pitch. Three pin positions fit in one 0.75 slot.
-# Small 1-pin/2-pin/3-pin connectors still need more than one slot because the
-# symbol body itself is taller than the raw pin span, so reserve at least 2 slots.
-def connector_map_slots(connector):
-    try:
-        pin_count = int(connector[0]['number of pins'] or 0)
-    except Exception:
-        pin_count = 0
-
-    if pin_count <= 0:
-        pin_count = len(connector[1:])
-
-    pin_count = max(1, pin_count)
-
-    # 3 pins per 0.75-unit placement slot, minimum 2 slots for tiny connectors.
-    return max(2, (pin_count + 2) // 3)
-
-
 CONNECTOR_MAP = []
-
 if NUMBER_OF_CONNECTORS < 6:
-    current_slot = 0
-
     for i, connector in enumerate(PIN_SIGNAL_INFO):
         connector_name = connector[0]['connector name']
-        connector_slots = connector_map_slots(connector)
-
-        CONNECTOR_MAP.append({
-            'connector name': connector_name,
-            'connector position': current_slot,
-            'connector flip': 0
-        })
-
-        current_slot += connector_slots
-
+        CONNECTOR_MAP.append({'connector name' : connector_name, 'connector position' : i, 'connector flip' : 0})
 else:
     left_count = (NUMBER_OF_CONNECTORS + 1) // 2
-
-    left_slot = 0
-    right_slot = 0
-
     for i, connector in enumerate(PIN_SIGNAL_INFO):
         connector_name = connector[0]['connector name']
-        connector_slots = connector_map_slots(connector)
-
-        if i < left_count:
-            connector_position = left_slot
+        if i < left_count: 
+            connector_position = i
             connector_flip = 0
-            left_slot += connector_slots
         else:
-            connector_position = right_slot
+            connector_position = i - left_count
             connector_flip = 1
-            right_slot += connector_slots
 
-        CONNECTOR_MAP.append({
-            'connector name': connector_name,
-            'connector position': connector_position,
-            'connector flip': connector_flip
-        })
+        CONNECTOR_MAP.append({'connector name' : connector_name, 'connector position' : connector_position, 'connector flip' : connector_flip})
 
 if res == 0:
     app.PutMessage(f"Place block failed: {res}")
