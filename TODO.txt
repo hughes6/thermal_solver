@@ -145,8 +145,12 @@ def is_figure_cell_text(value):
     text = normalize_pdf_line(value)
     if text == "":
         return False
-    if text == "-":
+
+    # The Figure column commonly uses a plain dash for "no figure".  Some PDFs
+    # copy that glyph as an en/em dash, so accept those forms too.
+    if text in {"-", "–", "—"}:
         return True
+
     return re.match(r"^FIGURE\b", text, re.IGNORECASE) is not None
 
 
@@ -226,8 +230,9 @@ def split_pin_description_figure_payload(payload):
         figure = payload[figure_match.start():].strip()
         return description, figure
 
-    # A dash is a legitimate Figure-column value in this table family.
-    dash_match = re.search(r"(?:^|\s)-(?:\s*)$", payload)
+    # A dash is a legitimate Figure-column value in this table family.  Accept
+    # the common Unicode dash variants Acrobat may put on the clipboard.
+    dash_match = re.search(r"(?:^|\s)[-–—](?:\s*)$", payload)
     if dash_match is not None:
         description = payload[:dash_match.start()].strip()
         return description, "-"
@@ -304,20 +309,21 @@ def extract_figure_cells_from_text(value):
     Split one clipboard line into Figure-column cells without confusing a
     multi-reference cell such as "Figure 5, Figure 8" with two rows.
 
-    Examples:
-        "-"                                  -> ["-"]
-        "Figure 8"                           -> ["Figure 8"]
-        "Figure 5, Figure 8"                 -> ["Figure 5, Figure 8"]
-        "Figure 8 Figure 8"                  -> ["Figure 8", "Figure 8"]
-        "Figure 5, Figure 8 Figure 5, Figure 8"
-                                              -> two cells
+    Also handles PDFs that collapse many blank Figure cells onto one line:
+        "- - - -" -> ["-", "-", "-", "-"]
     """
     text = normalize_pdf_line(value)
     if text == "":
         return []
 
-    if text == "-":
-        return ["-"]
+    # One or more dash-only Figure cells.  This is important for continuation
+    # tables like the Chassis GND block where every Figure cell is '-'.
+    dash_tokens = re.findall(r"(?<!\S)[-–—](?!\S)", text)
+    if dash_tokens:
+        remainder = re.sub(r"(?<!\S)[-–—](?!\S)", " ", text)
+        remainder = re.sub(r"\s+", "", remainder)
+        if remainder == "":
+            return ["-"] * len(dash_tokens)
 
     # A comma joins references that belong to ONE Figure cell.  A new Figure
     # token not introduced by a comma starts the next cell.
@@ -353,10 +359,56 @@ def description_start_positions(text):
     return positions
 
 
+def split_repeated_description_cells(value):
+    """
+    Recover description cells when a PDF merges repeated neighboring cells.
+
+    Example from the continuation table shown by the user:
+        "Chassis GND Chassis GND Chassis GND"
+    becomes:
+        ["Chassis GND", "Chassis GND", "Chassis GND"]
+
+    Only exact repeated token phrases are split, which keeps ordinary prose
+    intact.
+    """
+    text = normalize_pdf_line(value)
+    if text == "":
+        return []
+
+    tokens = text.split()
+    if len(tokens) < 2:
+        return [text]
+
+    # Description cells in these pinout tables are normally short.  Limiting
+    # the repeated unit to eight tokens keeps this recovery conservative.
+    max_unit = min(8, len(tokens) // 2)
+
+    for unit_length in range(1, max_unit + 1):
+        if len(tokens) % unit_length != 0:
+            continue
+
+        repeat_count = len(tokens) // unit_length
+        if repeat_count < 2:
+            continue
+
+        unit = tokens[:unit_length]
+        if unit * repeat_count == tokens:
+            phrase = " ".join(unit)
+            return [phrase] * repeat_count
+
+    return [text]
+
+
 def split_merged_description_cell(value):
     text = normalize_pdf_line(value)
     if text == "":
         return []
+
+    # First handle exact repeated phrases such as a whole run of "Chassis GND"
+    # cells merged onto one clipboard line.
+    repeated_parts = split_repeated_description_cells(text)
+    if len(repeated_parts) > 1:
+        return repeated_parts
 
     positions = description_start_positions(text)
     if not positions:
@@ -435,7 +487,7 @@ def parse_stream_pin_description_figure_rows(lines, header_info):
 
                 if figure_cells:
                     figures.extend(figure_cells)
-                elif remainder == "-":
+                elif remainder in {"-", "–", "—"}:
                     figures.append("-")
                 else:
                     # Normal row-wise copy: "1 Chassis GND -" or
@@ -453,7 +505,7 @@ def parse_stream_pin_description_figure_rows(lines, header_info):
             figures.extend(figure_cells)
             continue
 
-        if line == "-":
+        if line in {"-", "–", "—"}:
             figures.append("-")
             continue
 
@@ -564,6 +616,199 @@ def looks_like_pdf_pin_description_figure_table(input_text):
     return data_candidates >= 2
 
 
+def parse_compact_pin_description_figure_columns(lines, start_index=0):
+    """
+    Recover a 3-column pin table when the PDF collapses an entire visual column
+    onto one clipboard line, for example:
+
+        47 13 31 48 14 32
+        Chassis GND Chassis GND Chassis GND Chassis GND Chassis GND Chassis GND
+        - - - - - -
+
+    The visual pin order is preserved exactly; pin numbers do NOT need to be
+    ascending or consecutive.
+    """
+    pins = []
+    descriptions = []
+    figures = []
+    pin_block_found = False
+
+    for raw_line in lines[start_index:]:
+        line = normalize_pdf_line(raw_line)
+        if line == "" or is_figure_table_header_fragment(line):
+            continue
+
+        tokens = line.split()
+
+        # A compact pin-number column: at least two integer cells on one line.
+        if not pin_block_found and len(tokens) >= 2 and all(is_integer_value(token) for token in tokens):
+            pins.extend(tokens)
+            pin_block_found = True
+            continue
+
+        if not pin_block_found:
+            continue
+
+        figure_cells = extract_figure_cells_from_text(line)
+        if figure_cells:
+            # Only accept the line as a Figure block when all of its visible
+            # content is made from Figure cells/dashes.  This prevents a normal
+            # description containing the word "Figure" from being stolen.
+            dash_only = re.fullmatch(r"(?:\s*[-–—]\s*)+", line) is not None
+            figure_only = re.fullmatch(
+                r"\s*Figure\s+\d+(?:\s*,\s*Figure\s+\d+)*(?:\s+Figure\s+\d+(?:\s*,\s*Figure\s+\d+)*)*\s*",
+                line,
+                re.IGNORECASE
+            ) is not None
+
+            if dash_only or figure_only:
+                figures.extend(figure_cells)
+                continue
+
+        descriptions.extend(split_merged_description_cell(line))
+
+    if len(pins) < 2:
+        return []
+
+    descriptions = descriptions[:len(pins)]
+    figures = figures[:len(pins)]
+
+    while len(descriptions) < len(pins):
+        descriptions.append("")
+    while len(figures) < len(pins):
+        figures.append("")
+
+    return [
+        [pin, descriptions[index], figures[index]]
+        for index, pin in enumerate(pins)
+    ]
+
+
+def figure_table_candidate_score(rows):
+    """Score a possible 3-column Pin / Description / Figure reconstruction."""
+    if not rows:
+        return (0, 0, 0)
+
+    description_count = sum(
+        1 for row in rows
+        if len(row) >= 2 and str(row[1]).strip() != ""
+    )
+    figure_count = sum(
+        1 for row in rows
+        if len(row) >= 3 and is_figure_cell_text(row[2])
+    )
+
+    return (len(rows), description_count, figure_count)
+
+
+def is_valid_headerless_figure_table_rows(rows):
+    """
+    Conservative validation for a headerless continuation table.
+
+    Requiring real Figure-column markers is what keeps an arbitrary list of
+    numbers and text from being misdetected as this special 3-column format.
+    """
+    if len(rows) < 3:
+        return False
+
+    description_count = sum(
+        1 for row in rows
+        if len(row) >= 2 and str(row[1]).strip() != ""
+    )
+    figure_count = sum(
+        1 for row in rows
+        if len(row) >= 3 and is_figure_cell_text(row[2])
+    )
+
+    minimum_descriptions = max(2, (len(rows) + 1) // 2)
+    minimum_figures = max(2, (len(rows) + 1) // 2)
+
+    return (
+        description_count >= minimum_descriptions
+        and figure_count >= minimum_figures
+    )
+
+
+def parse_headerless_pin_description_figure_rows(input_text):
+    """
+    Parse a continuation/body-only Pin Number | Description | Figure table.
+
+    This is specifically for selections like the screenshot where the visible
+    rows are only:
+        47   Chassis GND   -
+        13   Chassis GND   -
+        31   Chassis GND   -
+        ...
+    and the Pin Number / Description / Figure header is not part of the copy.
+    """
+    lines = get_nonempty_normalized_lines(input_text)
+    if len(lines) < 3:
+        return []
+
+    # If the real header is present, the normal parser should own this input.
+    _, header_info = get_figure_pinout_header_window(input_text)
+    if header_info is not None:
+        return []
+
+    # Do not steal the other known pinout families when their headers are clear.
+    header_probe = " ".join(lines[:20]).upper()
+    if "SIGNAL NAME" in header_probe and (
+        "SIGNAL TYPE" in header_probe
+        or "DIRECTION" in header_probe
+    ):
+        return []
+
+    candidates = []
+
+    # 1) Normal row-wise copy: 47 Chassis GND -
+    normal_rows = parse_normal_pin_description_figure_rows(lines)
+    if is_valid_headerless_figure_table_rows(normal_rows):
+        candidates.append(normal_rows)
+
+    # 2) Tagged/interleaved/column-major copy.  Start at the first numeric row so
+    # page titles before the continuation block cannot shift the descriptions.
+    first_pin_index = None
+    for index, line in enumerate(lines):
+        if re.match(r"^\d+(?:\s|$)", line):
+            first_pin_index = index
+            break
+
+    if first_pin_index is not None:
+        synthetic_header = {"first": first_pin_index, "last": first_pin_index}
+        stream_rows = parse_stream_pin_description_figure_rows(lines, synthetic_header)
+        if is_valid_headerless_figure_table_rows(stream_rows):
+            candidates.append(stream_rows)
+
+        # 3) Entire visual columns collapsed onto single lines.
+        compact_rows = parse_compact_pin_description_figure_columns(lines, first_pin_index)
+        if is_valid_headerless_figure_table_rows(compact_rows):
+            candidates.append(compact_rows)
+
+    if not candidates:
+        return []
+
+    # Prefer the candidate with the most complete Figure cells when row counts
+    # are equal; those markers are the strongest evidence of correct alignment.
+    return max(
+        candidates,
+        key=lambda rows: (
+            figure_table_candidate_score(rows)[0],
+            figure_table_candidate_score(rows)[2],
+            figure_table_candidate_score(rows)[1]
+        )
+    )
+
+
+def looks_like_headerless_pin_description_figure_table(input_text):
+    return len(parse_headerless_pin_description_figure_rows(input_text)) >= 3
+
+
+def parse_headerless_pin_description_figure_table(input_text):
+    rows = [list(FIGURE_PINOUT_HEADERS)]
+    rows.extend(parse_headerless_pin_description_figure_rows(input_text))
+    return rows
+
+
 def parse_pdf_pin_description_figure_table(input_text):
     lines, header_info = get_figure_pinout_header_window(input_text)
     rows = [list(FIGURE_PINOUT_HEADERS)]
@@ -574,11 +819,12 @@ def parse_pdf_pin_description_figure_table(input_text):
     normal_rows = parse_normal_pin_description_figure_rows(lines[header_info["first"]:])
     stream_rows = parse_stream_pin_description_figure_rows(lines, header_info)
     legacy_rows = parse_staggered_pin_description_figure_rows(lines, header_info)
+    compact_rows = parse_compact_pin_description_figure_columns(lines, header_info["first"])
 
     # Prefer stream reconstruction whenever it found the same or more rows than
     # the alternatives.  It is specifically designed for PDFs whose clipboard
     # tags interleave the three physical columns.
-    candidates = [normal_rows, legacy_rows, stream_rows]
+    candidates = [normal_rows, legacy_rows, stream_rows, compact_rows]
     selected_rows = max(
         candidates,
         key=lambda candidate: (
@@ -1813,6 +2059,28 @@ def parse_table():
 
         if len(rows) > 1:
             label = "PDF PIN / DESCRIPTION / FIGURE TABLE"
+            if looks_highly_verticalized(input_text):
+                label += " / INTERLEAVED PDF PASTE"
+            return rows, 3, label
+
+    # =========================================
+    # HEADERLESS 3-COLUMN PIN / DESCRIPTION / FIGURE CONTINUATION
+    #
+    # Handles body-only selections such as:
+    #   47   Chassis GND   -
+    #   13   Chassis GND   -
+    #   31   Chassis GND   -
+    # where the table header is on a previous page/section and is not copied.
+    # This also handles PDF clipboard streams that merge repeated descriptions
+    # or many '-' Figure cells onto a single line.
+    # =========================================
+
+    if looks_like_headerless_pin_description_figure_table(input_text):
+
+        rows = parse_headerless_pin_description_figure_table(input_text)
+
+        if len(rows) > 1:
+            label = "PDF PIN / DESCRIPTION / FIGURE TABLE / HEADERLESS CONTINUATION"
             if looks_highly_verticalized(input_text):
                 label += " / INTERLEAVED PDF PASTE"
             return rows, 3, label
