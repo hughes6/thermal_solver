@@ -1,4 +1,4 @@
-\import tkinter as tk
+import tkinter as tk
 from tkinter import scrolledtext
 from tkinter import ttk
 import csv
@@ -299,9 +299,217 @@ def clean_figure_description_lines(values):
     return " ".join(cleaned).strip()
 
 
+def extract_figure_cells_from_text(value):
+    """
+    Split one clipboard line into Figure-column cells without confusing a
+    multi-reference cell such as "Figure 5, Figure 8" with two rows.
+
+    Examples:
+        "-"                                  -> ["-"]
+        "Figure 8"                           -> ["Figure 8"]
+        "Figure 5, Figure 8"                 -> ["Figure 5, Figure 8"]
+        "Figure 8 Figure 8"                  -> ["Figure 8", "Figure 8"]
+        "Figure 5, Figure 8 Figure 5, Figure 8"
+                                              -> two cells
+    """
+    text = normalize_pdf_line(value)
+    if text == "":
+        return []
+
+    if text == "-":
+        return ["-"]
+
+    # A comma joins references that belong to ONE Figure cell.  A new Figure
+    # token not introduced by a comma starts the next cell.
+    pattern = re.compile(
+        r"Figure\s+\d+(?:\s*,\s*Figure\s+\d+)*",
+        re.IGNORECASE
+    )
+    matches = [normalize_pdf_line(match.group(0)) for match in pattern.finditer(text)]
+    return matches
+
+
+def description_start_positions(text):
+    """
+    Return strong candidate starts of a second Description cell on a line.
+
+    Some tagged PDFs collapse TWO description cells onto one clipboard line.
+    We only split at signal-like all-caps identifiers, and only use this as a
+    recovery step when there are fewer description cells than pin numbers.
+    """
+    positions = []
+
+    # Signal-like identifiers seen in connector tables.  Require either an
+    # underscore-containing identifier or TEMP/TEMP_RTN so ordinary prose is
+    # not split merely because it contains a capitalized word.
+    pattern = re.compile(
+        r"(?<!\S)(?:[A-Z][A-Z0-9]*_[A-Z0-9_+\-./]+|TEMP(?:_RTN)?)(?=\s|$|\()"
+    )
+
+    for match in pattern.finditer(text):
+        if match.start() > 0:
+            positions.append(match.start())
+
+    return positions
+
+
+def split_merged_description_cell(value):
+    text = normalize_pdf_line(value)
+    if text == "":
+        return []
+
+    positions = description_start_positions(text)
+    if not positions:
+        return [text]
+
+    # Split at every strong later signal start.  The first chunk remains intact
+    # (e.g. "Chassis GND"), then each following signal begins a new cell.
+    parts = []
+    start = 0
+    for position in positions:
+        part = text[start:position].strip()
+        if part:
+            parts.append(part)
+        start = position
+
+    tail = text[start:].strip()
+    if tail:
+        parts.append(tail)
+
+    return parts if parts else [text]
+
+
+def parse_stream_pin_description_figure_rows(lines, header_info):
+    """
+    Reconstruct the 3-column table as THREE ORDERED STREAMS instead of trying
+    to infer rows from newline adjacency.
+
+    This is the important fix for this PDF.  Its clipboard order can look like:
+
+        Pin
+        Number
+        Description
+        1
+        Figure
+        19 -
+        Chassis GND
+        36 Figure 5, Figure 8
+        TEMP (Thermistor)
+        2 Figure 5, Figure 8
+        TEMP_RTN (Thermistor)
+        ...
+
+    The numeric values are the pin stream.  The text values are the Description
+    stream.  The '-' / Figure values are the Figure stream.  Their internal
+    order is preserved even though the three streams are interleaved by the PDF.
+    """
+    pins = []
+    descriptions = []
+    figures = []
+
+    start_index = max(0, header_info["first"])
+
+    for line_index in range(start_index, len(lines)):
+        line = normalize_pdf_line(lines[line_index])
+        if line == "":
+            continue
+
+        upper = line.upper()
+
+        # Skip header fragments.  In this PDF the standalone "Figure" header
+        # can appear AFTER the first data pin, so it must be ignored wherever it
+        # occurs rather than used as the start of the data region.
+        if is_figure_table_header_fragment(line):
+            continue
+
+        # A pin may be alone, or may carry a Figure value for the PREVIOUS row:
+        #     19 -
+        #     36 Figure 5, Figure 8
+        pin_match = re.match(r"^(\d+)(?:\s+(.*))?$", line)
+        if pin_match is not None:
+            pins.append(pin_match.group(1))
+            remainder = normalize_pdf_line(pin_match.group(2) or "")
+
+            if remainder != "":
+                figure_cells = extract_figure_cells_from_text(remainder)
+
+                if figure_cells:
+                    figures.extend(figure_cells)
+                elif remainder == "-":
+                    figures.append("-")
+                else:
+                    # Normal row-wise copy: "1 Chassis GND -" or
+                    # "19 TEMP (Thermistor) Figure 5, Figure 8".
+                    description, figure = split_pin_description_figure_payload(remainder)
+                    if description:
+                        descriptions.append(description)
+                    if figure:
+                        figures.extend(extract_figure_cells_from_text(figure) or [figure])
+            continue
+
+        # Standalone Figure-column content.
+        figure_cells = extract_figure_cells_from_text(line)
+        if figure_cells:
+            figures.extend(figure_cells)
+            continue
+
+        if line == "-":
+            figures.append("-")
+            continue
+
+        # Anything else in the data stream is Description-column content.
+        descriptions.append(line)
+
+    if not pins:
+        return []
+
+    # If Acrobat merged multiple Description cells onto a single physical line,
+    # split only as much as necessary to reach the pin count.  This avoids
+    # over-splitting ordinary prose in PDFs that paste cleanly.
+    if len(descriptions) < len(pins):
+        expanded = []
+        for description in descriptions:
+            parts = split_merged_description_cell(description)
+            expanded.extend(parts)
+        if len(expanded) >= len(descriptions):
+            descriptions = expanded
+
+    # A final conservative recovery for lines like:
+    #   "L1_ENET GND L1_ENET_B+"
+    # where the first signal contains a space and the second signal has an
+    # underscore.  Re-run only while we still need more Description cells.
+    if len(descriptions) < len(pins):
+        recovered = []
+        for description in descriptions:
+            if len(recovered) >= len(pins):
+                break
+            parts = split_merged_description_cell(description)
+            recovered.extend(parts)
+        descriptions = recovered
+
+    # Do not let footer text become phantom table rows.  Pin count is the hard
+    # row count for this table family.
+    descriptions = descriptions[:len(pins)]
+    figures = figures[:len(pins)]
+
+    while len(descriptions) < len(pins):
+        descriptions.append("")
+    while len(figures) < len(pins):
+        figures.append("")
+
+    rows = []
+    for index, pin in enumerate(pins):
+        rows.append([
+            pin,
+            descriptions[index],
+            figures[index]
+        ])
+
+    return rows
+
+
 def parse_staggered_pin_description_figure_rows(lines, header_info):
-    # Start at the Description header, not after the Figure header, because this
-    # PDF sometimes emits the first pin BEFORE it emits the Figure header.
+    """Legacy adjacency parser retained only as a fallback."""
     start_index = max(0, header_info["first"])
     markers = get_staggered_figure_markers(lines, start_index)
 
@@ -310,19 +518,12 @@ def parse_staggered_pin_description_figure_rows(lines, header_info):
 
     rows = []
 
-    # marker[i] introduces the next pin while carrying the Figure value for
-    # marker[i-1].  The description for marker[i-1] follows marker[i] and ends
-    # immediately before marker[i+1].
     for marker_index in range(1, len(markers)):
         previous_marker = markers[marker_index - 1]
         current_marker = markers[marker_index]
         next_line_index = markers[marker_index + 1]["index"] if marker_index + 1 < len(markers) else len(lines)
-
         description_slice = lines[current_marker["index"] + 1:next_line_index]
 
-        # The final slice can also contain the last pin's terminal Figure cell.
-        # Split at the first standalone Figure-value line so it is not swallowed
-        # into the previous row's Description.
         terminal_figure_offset = None
         if marker_index == len(markers) - 1:
             for offset, value in enumerate(description_slice):
@@ -341,8 +542,6 @@ def parse_staggered_pin_description_figure_rows(lines, header_info):
         if description != "":
             rows.append([previous_marker["pin"], description, figure])
 
-        # If the PDF emitted a terminal Figure cell after the final transition,
-        # the text after it is the final pin's Description.  Recover that row too.
         if marker_index == len(markers) - 1 and terminal_figure_offset is not None:
             terminal_figure = normalize_pdf_line(description_slice[terminal_figure_offset])
             terminal_description = clean_figure_description_lines(description_slice[terminal_figure_offset + 1:])
@@ -357,7 +556,6 @@ def looks_like_pdf_pin_description_figure_table(input_text):
     if header_info is None:
         return False
 
-    # Require at least two plausible pin-bearing data lines.
     data_candidates = 0
     for line in lines[header_info["first"] + 1:]:
         if re.match(r"^\d+(?:\s|$)", line):
@@ -374,12 +572,21 @@ def parse_pdf_pin_description_figure_table(input_text):
         return rows
 
     normal_rows = parse_normal_pin_description_figure_rows(lines[header_info["first"]:])
-    staggered_rows = parse_staggered_pin_description_figure_rows(lines, header_info)
+    stream_rows = parse_stream_pin_description_figure_rows(lines, header_info)
+    legacy_rows = parse_staggered_pin_description_figure_rows(lines, header_info)
 
-    # Choose the interpretation that reconstructs more complete rows.  This lets
-    # normal row-wise PDF copies keep their natural structure while the broken
-    # tagged-text form from this Figure table uses the staggered recovery path.
-    selected_rows = staggered_rows if len(staggered_rows) > len(normal_rows) else normal_rows
+    # Prefer stream reconstruction whenever it found the same or more rows than
+    # the alternatives.  It is specifically designed for PDFs whose clipboard
+    # tags interleave the three physical columns.
+    candidates = [normal_rows, legacy_rows, stream_rows]
+    selected_rows = max(
+        candidates,
+        key=lambda candidate: (
+            len(candidate),
+            sum(1 for row in candidate if len(row) >= 2 and str(row[1]).strip() != ""),
+            1 if candidate is stream_rows else 0
+        )
+    )
 
     rows.extend(selected_rows)
     return rows
@@ -1607,7 +1814,7 @@ def parse_table():
         if len(rows) > 1:
             label = "PDF PIN / DESCRIPTION / FIGURE TABLE"
             if looks_highly_verticalized(input_text):
-                label += " / STAGGERED PASTE"
+                label += " / INTERLEAVED PDF PASTE"
             return rows, 3, label
 
     # =========================================
