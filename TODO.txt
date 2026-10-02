@@ -5,7 +5,7 @@ import csv
 import io
 import re
 
-# FIX VERSION: numeric-leading signal/description + dash-column alignment + strict column separation
+# FIX VERSION: J5 numeric-description preservation + partial-row pin retention + Figure/Logic isolation
 
 
 current_count = 0
@@ -521,20 +521,37 @@ def parse_stream_pin_description_figure_logic_rows(lines, header_info):
                 continue
 
             description, figure, logic = split_pin_description_figure_logic_payload(remainder)
-            if figure or logic:
-                pins.append(pin)
-                if description:
-                    descriptions.append(description)
-                if figure:
-                    append_figure(figure)
-                if logic:
-                    append_logic(logic)
-                line_index += 1
-                continue
 
-            # No trailing-column evidence: protect numeric descriptions such as
-            # '10 MHz+ Input' from becoming phantom pin rows.
-            descriptions.append(line)
+            # IMPORTANT FIX:
+            # A PDF row can be split after column 2, for example:
+            #     6 10 MHz+ Input
+            #     Figure 10
+            #     LVDS
+            # or:
+            #     8 1PPS+ Input
+            #     Figure 10
+            #     LVDS
+            #
+            # At this point the WHOLE line has already passed the
+            # looks_like_numeric_leading_description(line) guard above, so the
+            # first number is the pin.  Do not throw the pin away just because
+            # Figure/Logic were copied onto later physical lines.
+            pins.append(pin)
+
+            if description:
+                descriptions.append(description)
+
+            # Do NOT append `remainder` when it contained only Figure/Logic
+            # cells (for example the transition marker "2 Figure 10 LVDS").
+            # Those trailing cells belong to the previous row in Acrobat's
+            # interleaved clipboard order; treating them as Description is what
+            # caused Column 3 to leak into Column 2.
+
+            if figure:
+                append_figure(figure)
+            if logic:
+                append_logic(logic)
+
             line_index += 1
             continue
 
@@ -594,9 +611,179 @@ def parse_stream_pin_description_figure_logic_rows(lines, header_info):
 
     return [[pin, descriptions[i], figures[i], logics[i]] for i, pin in enumerate(pins)]
 
+
+def expand_figure_logic_trailing_cells(value):
+    """
+    Expand a physical clipboard line into Figure/Logic cells.  This is used by
+    the column-major fallback where Acrobat copies the table one column at a
+    time.  Dashes are kept as real cells.
+    """
+    text = normalize_pdf_line(value)
+    if text == "":
+        return []
+
+    cells = []
+    position = 0
+    token_re = re.compile(
+        r"Figure\s+\d+(?:\s*,\s*Figure\s+\d+)*|(?<!\S)[-–—](?!\S)|"
+        r"LVDS|LVTTL|TTL|CMOS|LVCMOS|ECL|PECL|LVPECL|CML|RS-?422|RS-?485",
+        re.IGNORECASE
+    )
+
+    for match in token_re.finditer(text):
+        gap = normalize_pdf_line(text[position:match.start()])
+        if gap:
+            # Unknown text means this is probably not a pure trailing-cell line.
+            return []
+        cells.append(normalize_dash_cell(match.group(0)))
+        position = match.end()
+
+    if normalize_pdf_line(text[position:]):
+        return []
+
+    return cells
+
+
+def parse_column_major_pin_description_figure_logic_rows(lines, header_info):
+    """
+    Fallback for PDFs that copy the J5-style table by columns rather than rows:
+
+        1
+        6
+        2
+        7
+        ...
+        Chassis GND
+        10 MHz+ Input
+        10 MHz- Input
+        ...
+        -
+        Figure 10
+        Figure 10
+        ...
+        -
+        LVDS
+        LVDS
+        ...
+
+    The key rule is that once the leading pin block has ended, numeric-leading
+    descriptions such as "10 MHz+ Input" are collected as Description cells
+    and can never re-enter the pin stream.
+    """
+    start_index = max(0, header_info["first"])
+    data = []
+    for line in lines[start_index:]:
+        line = normalize_pdf_line(line)
+        if line == "" or is_figure_logic_table_header_fragment(line):
+            continue
+        data.append(line)
+
+    if len(data) < 4:
+        return []
+
+    # Column-major copies start with a contiguous run of exact pin cells.
+    pins = []
+    index = 0
+    while index < len(data):
+        line = data[index]
+        if re.fullmatch(r"\d+", line) is None:
+            break
+
+        # Do not steal the first half of a split engineering description.
+        if index + 1 < len(data):
+            nxt = normalize_pdf_line(data[index + 1])
+            first = nxt.split()[0].rstrip(",;:") if nxt else ""
+            if ENGINEERING_DESCRIPTION_UNIT_RE.fullmatch(first):
+                break
+
+        pins.append(line)
+        index += 1
+
+    if len(pins) < 2:
+        return []
+
+    row_count = len(pins)
+
+    # Collect exactly one Description cell per pin.  Numeric-leading engineering
+    # descriptions are preserved verbatim, including the leading number.
+    descriptions = []
+    pending_trailing = []
+
+    while index < len(data) and len(descriptions) < row_count:
+        line = data[index]
+
+        # Handle a description Acrobat split as "10" / "MHz+ Input".
+        if re.fullmatch(r"\d+(?:\.\d+)?", line) and index + 1 < len(data):
+            nxt = normalize_pdf_line(data[index + 1])
+            first = nxt.split()[0].rstrip(",;:") if nxt else ""
+            if ENGINEERING_DESCRIPTION_UNIT_RE.fullmatch(first):
+                line = normalize_pdf_line(line + " " + nxt)
+                index += 2
+            else:
+                index += 1
+        else:
+            index += 1
+
+        description, figure, logic = split_pin_description_figure_logic_payload(line)
+
+        # A pure Figure/Logic cell means Description collection ended too early;
+        # keep it for the trailing columns and stop rather than contaminating col 2.
+        if description == "" and (figure or logic):
+            if figure:
+                pending_trailing.append(figure)
+            if logic:
+                pending_trailing.append(logic)
+            break
+
+        # A pure trailing cell like '-' or 'LVDS' should not become Description.
+        pure_cells = expand_figure_logic_trailing_cells(line)
+        if pure_cells and (line == "-" or is_logic_cell_text(line) or line.upper().startswith("FIGURE ")):
+            pending_trailing.extend(pure_cells)
+            break
+
+        if description:
+            descriptions.append(description)
+            if figure:
+                pending_trailing.append(figure)
+            if logic:
+                pending_trailing.append(logic)
+        else:
+            descriptions.append(line)
+
+    if len(descriptions) != row_count:
+        return []
+
+    trailing_cells = list(pending_trailing)
+    while index < len(data):
+        line = data[index]
+        cells = expand_figure_logic_trailing_cells(line)
+        if not cells:
+            # Do not accept a candidate that would have to concatenate unknown
+            # text into Description/Figure/Logic.
+            return []
+        trailing_cells.extend(cells)
+        index += 1
+
+    # We need exactly N Figure cells followed by N Logic cells.  Extra page text
+    # invalidates this conservative fallback instead of shifting columns.
+    if len(trailing_cells) < row_count * 2:
+        return []
+
+    trailing_cells = trailing_cells[:row_count * 2]
+    figures = [normalize_dash_cell(v) for v in trailing_cells[:row_count]]
+    logics = [normalize_dash_cell(v) for v in trailing_cells[row_count:row_count * 2]]
+
+    if not all(is_figure_cell_text(v) for v in figures):
+        return []
+    if not all(is_logic_cell_text(v) for v in logics):
+        return []
+
+    return [[pins[i], descriptions[i], figures[i], logics[i]] for i in range(row_count)]
+
+
 def figure_logic_candidate_score(rows):
     if not rows:
-        return (0, 0, 0, 0)
+        return (0, 0, 0, 0, 0)
 
     complete = sum(
         1 for row in rows
@@ -605,10 +792,15 @@ def figure_logic_candidate_score(rows):
         and is_figure_cell_text(row[2])
         and is_logic_cell_text(row[3])
     )
+    incomplete = len(rows) - complete
     descriptions = sum(1 for row in rows if len(row) >= 2 and str(row[1]).strip() != "")
     figures = sum(1 for row in rows if len(row) >= 3 and is_figure_cell_text(row[2]))
     logics = sum(1 for row in rows if len(row) >= 4 and is_logic_cell_text(row[3]))
-    return (len(rows), complete, descriptions, min(figures, logics))
+
+    # Prefer candidates that reconstruct COMPLETE rows.  This prevents a parser
+    # that invented an extra numeric pin from beating a shorter but correct
+    # candidate merely because it returned more rows.
+    return (complete, -incomplete, descriptions, min(figures, logics), len(rows))
 
 
 def is_valid_figure_logic_rows(rows):
@@ -650,8 +842,17 @@ def parse_pdf_pin_description_figure_logic_table(input_text):
 
     normal_rows = parse_normal_pin_description_figure_logic_rows(lines[header_info["first"]:])
     stream_rows = parse_stream_pin_description_figure_logic_rows(lines, header_info)
+    column_major_rows = parse_column_major_pin_description_figure_logic_rows(lines, header_info)
 
-    candidates = [candidate for candidate in (normal_rows, stream_rows) if candidate]
+    candidates = [
+        candidate
+        # Column-major reconstruction is deliberately ahead of the generic
+        # stream candidate.  When both are equally complete, the column-major
+        # parser has stronger structural evidence and keeps dash cells in their
+        # real Figure/Logic columns.
+        for candidate in (normal_rows, column_major_rows, stream_rows)
+        if candidate
+    ]
     if not candidates:
         return rows
 
@@ -3429,3 +3630,4 @@ connector_status.pack(
 
 
 root.mainloop()
+c
