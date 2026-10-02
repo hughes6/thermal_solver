@@ -5,7 +5,7 @@ import csv
 import io
 import re
 
-# FIX VERSION: J5 numeric-description preservation + partial-row pin retention + Figure/Logic isolation
+# FIX VERSION: generic PDF 3-10 columns + strict dash cells + no adjacent-column bleed + J5 fixes
 
 
 current_count = 0
@@ -2817,6 +2817,473 @@ def looks_like_flat_pdf_wiring_table(input_text):
 
 
 # =========================================
+# GENERIC PDF TABLE PARSER (3-10 COLUMNS)
+#
+# This is the fallback for PDF tables that do not match one of the specialized
+# pinout/wiring formats above.  Set the "Columns" box to the physical number of
+# columns in the PDF (3 through 10).  The parser deliberately works with CELLS
+# and ROW ANCHORS instead of flattening the whole table into words.  That keeps
+# literal '-' cells in their own columns and prevents the next column from being
+# concatenated onto the selected output column.
+# =========================================
+
+GENERIC_PDF_MIN_COLUMNS = 3
+GENERIC_PDF_MAX_COLUMNS = 10
+
+
+def generic_pdf_columns_supported(column_count):
+    return (
+        column_count is not None
+        and GENERIC_PDF_MIN_COLUMNS <= column_count <= GENERIC_PDF_MAX_COLUMNS
+    )
+
+
+def generic_pdf_normalized_cell(value):
+    text = str(value or "")
+    text = text.replace("\t", " ")
+    text = re.sub(r"\s+", " ", text)
+    return text.strip()
+
+
+def generic_pdf_is_junk_line(value):
+    text = generic_pdf_normalized_cell(value)
+    upper = text.upper()
+
+    if text == "":
+        return True
+
+    if re.fullmatch(r"PAGE\s+\d+\s+OF\s+\d+", upper):
+        return True
+    if re.fullmatch(r"\d+\s+OF\s+\d+", upper):
+        return True
+
+    # Common PDF page/footer fragments.  Keep this intentionally conservative;
+    # '-' and NA/N/A are REAL CELLS and must never be treated as junk.
+    if upper in {"CONTINUED", "CONTINUED ON NEXT PAGE"}:
+        return True
+
+    return False
+
+
+def generic_pdf_raw_lines(input_text):
+    values = []
+    for raw in input_text.replace("\r\n", "\n").replace("\r", "\n").split("\n"):
+        if raw.strip() == "":
+            continue
+        if generic_pdf_is_junk_line(raw):
+            continue
+        values.append(raw.rstrip())
+    return values
+
+
+def generic_pdf_anchor_signature(value):
+    """
+    Return a conservative signature for a likely first-column row key.
+
+    Requiring anchors to share a signature is what prevents a numeric value in
+    another column (for example the 10 in "10 MHz+ Input") from being promoted
+    to a new row when the real first column is 01, 02, 03, ... .
+    """
+    text = generic_pdf_normalized_cell(value)
+    if text == "" or " " in text:
+        return None
+
+    # 01, 02, 03 ... -- preserve the leading zero and exact width.
+    if re.fullmatch(r"\d+", text):
+        if len(text) > 1 and text.startswith("0"):
+            return ("DIGITS_ZERO_PADDED", len(text))
+        return ("DIGITS",)
+
+    # A01, J12, P003 etc.  Keep the alphabetic prefix stable.
+    match = re.fullmatch(r"([A-Za-z]+)(\d+)([A-Za-z]*)", text)
+    if match is not None:
+        return (
+            "ALPHA_DIGITS",
+            match.group(1).upper(),
+            match.group(3).upper(),
+        )
+
+    # Compact designators with punctuation, but only when a digit is present.
+    if (
+        len(text) <= 18
+        and re.fullmatch(r"[A-Za-z0-9_.#/+\-]+", text) is not None
+        and re.search(r"\d", text) is not None
+    ):
+        prefix = re.match(r"^[A-Za-z]+", text)
+        return ("COMPACT_DESIGNATOR", prefix.group(0).upper() if prefix else "")
+
+    return None
+
+
+def generic_pdf_same_anchor_signature(value, signature):
+    return generic_pdf_anchor_signature(value) == signature
+
+
+def generic_pdf_choose_anchor_path(lines, column_count):
+    """
+    Find the longest plausible sequence of first-column cells in a vertical PDF
+    clipboard stream.  A normal unwrapped row occupies exactly column_count
+    physical cell lines.  Wrapped cells may make it a little longer.
+    """
+    candidates_by_signature = {}
+
+    for index, raw in enumerate(lines):
+        cell = generic_pdf_normalized_cell(raw)
+        signature = generic_pdf_anchor_signature(cell)
+        if signature is None:
+            continue
+        candidates_by_signature.setdefault(signature, []).append(index)
+
+    best_path = []
+    best_score = None
+
+    # Allow wrapped text, but not an unlimited distance.  The limit is generous
+    # enough for long Description cells while still rejecting unrelated numbers.
+    max_gap = column_count + 14
+
+    for signature, indices in candidates_by_signature.items():
+        if len(indices) < 2:
+            continue
+
+        states = []
+
+        for pos, line_index in enumerate(indices):
+            best = {
+                "path": [line_index],
+                "rows": 1,
+                "gap_error": 0,
+                "wrapped": 0,
+            }
+
+            for prev_pos in range(pos):
+                prev_index = indices[prev_pos]
+                gap = line_index - prev_index
+
+                # One row must have at least one physical cell per column.
+                if gap < column_count:
+                    continue
+                if gap > max_gap:
+                    continue
+
+                prev_state = states[prev_pos]
+                state = {
+                    "path": prev_state["path"] + [line_index],
+                    "rows": prev_state["rows"] + 1,
+                    "gap_error": prev_state["gap_error"] + abs(gap - column_count),
+                    "wrapped": prev_state["wrapped"] + max(0, gap - column_count),
+                }
+
+                state_score = (
+                    state["rows"],
+                    -state["gap_error"],
+                    -state["wrapped"],
+                    -state["path"][0],
+                )
+                best_score_local = (
+                    best["rows"],
+                    -best["gap_error"],
+                    -best["wrapped"],
+                    -best["path"][0],
+                )
+
+                if state_score > best_score_local:
+                    best = state
+
+            states.append(best)
+
+        for state in states:
+            score = (
+                state["rows"],
+                -state["gap_error"],
+                -state["wrapped"],
+                # A zero-padded numeric contact/pin column is especially strong.
+                1 if signature[0] == "DIGITS_ZERO_PADDED" else 0,
+                -state["path"][0],
+            )
+            if best_score is None or score > best_score:
+                best_score = score
+                best_path = state["path"]
+
+    return best_path
+
+
+def generic_pdf_merge_payload_to_width(payload, target_count):
+    """
+    Convert the physical cell lines after a row anchor into target_count cells.
+
+    Extra physical lines almost always come from a wrapped text cell.  Preserve
+    all explicit cells (including '-') and merge only the excess text.  Prefer
+    merging into the final column because Description/Comment is the common PDF
+    wrap case.  This is intentionally different from whitespace-token parsing:
+    a dash remains a cell and can never disappear or shift a later column left.
+    """
+    cells = [generic_pdf_normalized_cell(value) for value in payload]
+    cells = [value for value in cells if value != ""]
+
+    if target_count <= 0:
+        return []
+
+    if len(cells) == target_count:
+        return cells
+
+    if len(cells) < target_count:
+        return cells + [""] * (target_count - len(cells))
+
+    # Keep the first target_count-1 physical cells intact and merge only the
+    # overflow into the final cell.  This preserves scalar middle columns such
+    # as Direction, Signal Type, Figure, Logic, '-' and NA.
+    if target_count == 1:
+        return [" ".join(cells)]
+
+    head = cells[:target_count - 1]
+    tail = " ".join(cells[target_count - 1:]).strip()
+    return head + [tail]
+
+
+def parse_generic_pdf_anchor_stream(input_text, column_count):
+    lines = generic_pdf_raw_lines(input_text)
+    if len(lines) < column_count * 2:
+        return []
+
+    path = generic_pdf_choose_anchor_path(lines, column_count)
+    if len(path) < 2:
+        return []
+
+    rows = []
+
+    for row_index, start in enumerate(path):
+        end = path[row_index + 1] if row_index + 1 < len(path) else len(lines)
+        anchor = generic_pdf_normalized_cell(lines[start])
+        payload = lines[start + 1:end]
+
+        # The final row may be followed by a footer/title.  Once we have at
+        # least enough cells, only let modest overflow be merged into the last
+        # column.  Very large overflow is more likely outside the table.
+        max_payload = (column_count - 1) + 8
+        if len(payload) > max_payload:
+            payload = payload[:max_payload]
+
+        cells = [anchor] + generic_pdf_merge_payload_to_width(
+            payload,
+            column_count - 1,
+        )
+
+        if len(cells) == column_count:
+            rows.append(cells)
+
+    return rows
+
+
+def generic_pdf_split_explicit_columns(raw_line, column_count):
+    """
+    Split one physical row only when the PDF preserved an actual column
+    delimiter: tabs, pipes, or runs of 2+ whitespace.  Never split ordinary
+    single spaces here because they belong inside values such as 10 MHz+ Input.
+    """
+    raw = raw_line.rstrip("\r\n")
+
+    if "\t" in raw:
+        parts = [generic_pdf_normalized_cell(value) for value in raw.split("\t")]
+        if len(parts) == column_count:
+            return parts
+
+    if "|" in raw:
+        parts = [generic_pdf_normalized_cell(value) for value in raw.split("|")]
+        parts = [value for value in parts if value != "" or len(parts) == column_count]
+        if len(parts) == column_count:
+            return parts
+
+    parts = [
+        generic_pdf_normalized_cell(value)
+        for value in re.split(r"\s{2,}", raw.strip())
+    ]
+    if len(parts) == column_count:
+        return parts
+
+    return None
+
+
+def parse_generic_pdf_explicit_rows(input_text, column_count):
+    rows = []
+    for raw in input_text.replace("\r\n", "\n").replace("\r", "\n").split("\n"):
+        if raw.strip() == "" or generic_pdf_is_junk_line(raw):
+            continue
+        row = generic_pdf_split_explicit_columns(raw, column_count)
+        if row is not None:
+            rows.append(row)
+
+    if not rows:
+        return []
+
+    # A clean aligned header is also a column_count-wide row.  Do not return it
+    # as DATA when the following rows share a clear first-column key pattern.
+    signatures = {}
+    anchored_rows = []
+    for row in rows:
+        signature = generic_pdf_anchor_signature(row[0])
+        if signature is None:
+            continue
+        signatures[signature] = signatures.get(signature, 0) + 1
+        anchored_rows.append((signature, row))
+
+    if signatures:
+        dominant = max(signatures, key=signatures.get)
+        selected = [row for signature, row in anchored_rows if signature == dominant]
+        if len(selected) >= 2:
+            return selected
+
+    return rows
+
+
+def generic_pdf_partition_single_space_row(raw_line, column_count):
+    """
+    Last-resort row parser for PDFs that collapse column spacing to one space.
+
+    It is conservative: the first column is required to look like a row key.
+    Extra words are kept together in the LAST column instead of being truncated.
+    Therefore `02 RESERVED NA NA do not use this contact` remains five cells.
+    Specialized parsers still run before this fallback for layouts where a
+    multi-word middle cell needs format-specific treatment.
+    """
+    text = generic_pdf_normalized_cell(raw_line)
+    tokens = text.split()
+
+    if len(tokens) < column_count:
+        return None
+    if generic_pdf_anchor_signature(tokens[0]) is None:
+        return None
+
+    if len(tokens) == column_count:
+        return tokens
+
+    if column_count == 1:
+        return [text]
+
+    return tokens[:column_count - 1] + [" ".join(tokens[column_count - 1:])]
+
+
+def parse_generic_pdf_single_space_rows(input_text, column_count):
+    rows = []
+    signatures = {}
+
+    for raw in generic_pdf_raw_lines(input_text):
+        row = generic_pdf_partition_single_space_row(raw, column_count)
+        if row is None:
+            continue
+        signature = generic_pdf_anchor_signature(row[0])
+        signatures[signature] = signatures.get(signature, 0) + 1
+        rows.append((signature, row))
+
+    if not rows:
+        return []
+
+    # Keep the dominant first-column signature so numeric prose elsewhere in
+    # the selection cannot become a phantom table row.
+    dominant = max(signatures, key=signatures.get)
+    selected = [row for signature, row in rows if signature == dominant]
+    return selected if len(selected) >= 2 else []
+
+
+def generic_pdf_candidate_score(rows, column_count, method_priority):
+    if not rows:
+        return (-1, -1, -1, -1)
+
+    valid = [row for row in rows if len(row) == column_count]
+    if len(valid) < 2:
+        return (-1, -1, -1, -1)
+
+    nonblank = sum(
+        1
+        for row in valid
+        for value in row
+        if generic_pdf_normalized_cell(value) != ""
+    )
+    dash_cells = sum(
+        1
+        for row in valid
+        for value in row
+        if generic_pdf_normalized_cell(value) == "-"
+    )
+
+    return (len(valid), nonblank, dash_cells, method_priority)
+
+
+def generic_pdf_extract_aligned_headers(input_text, column_count, first_data_row):
+    """Use a clean aligned header when one exists; otherwise use safe labels."""
+    if first_data_row is None:
+        return [f"COLUMN {index + 1}" for index in range(column_count)]
+
+    raw_lines = input_text.replace("\r\n", "\n").replace("\r", "\n").split("\n")
+    data_key = generic_pdf_normalized_cell(first_data_row[0])
+
+    data_line_index = None
+    for index, raw in enumerate(raw_lines):
+        normalized = generic_pdf_normalized_cell(raw)
+        if normalized == data_key or normalized.startswith(data_key + " "):
+            data_line_index = index
+            break
+
+    if data_line_index is None:
+        return [f"COLUMN {index + 1}" for index in range(column_count)]
+
+    # Search only the nearby pre-data lines.  If one clean row already has the
+    # correct width, it is a much better header than guessing from wrapped text.
+    for raw in reversed(raw_lines[max(0, data_line_index - 6):data_line_index]):
+        row = generic_pdf_split_explicit_columns(raw, column_count)
+        if row is not None and any(row):
+            return row
+
+    return [f"COLUMN {index + 1}" for index in range(column_count)]
+
+
+def parse_generic_pdf_table(input_text, column_count):
+    """
+    Generic 3-10 column PDF fallback.
+
+    Candidate order:
+      1. explicit/aligned rows (tabs, pipes, 2+ spaces)
+      2. vertical/cell-stream rows reconstructed from first-column anchors
+      3. conservative single-space rows
+
+    The best reconstruction is returned with one header row.  Synthetic headers
+    are intentional when the PDF header itself is wrapped/interleaved; they keep
+    Extract Column aligned and let the existing Skip Header checkbox work.
+    """
+    if not generic_pdf_columns_supported(column_count):
+        return []
+
+    explicit_rows = parse_generic_pdf_explicit_rows(input_text, column_count)
+    anchor_rows = parse_generic_pdf_anchor_stream(input_text, column_count)
+    single_space_rows = parse_generic_pdf_single_space_rows(input_text, column_count)
+
+    candidates = [
+        (explicit_rows, 3),
+        (anchor_rows, 2),
+        (single_space_rows, 1),
+    ]
+
+    best_rows = []
+    best_score = None
+
+    for candidate_rows, priority in candidates:
+        score = generic_pdf_candidate_score(candidate_rows, column_count, priority)
+        if best_score is None or score > best_score:
+            best_score = score
+            best_rows = candidate_rows
+
+    if not best_rows:
+        return []
+
+    headers = generic_pdf_extract_aligned_headers(
+        input_text,
+        column_count,
+        best_rows[0] if best_rows else None,
+    )
+
+    return [headers] + best_rows
+
+
+# =========================================
 # GENERAL TABLE PARSER
 # =========================================
 
@@ -2951,6 +3418,19 @@ def parse_table():
 
         if len(rows) > 1:
             return rows, 9, "PDF WIRING TABLE"
+
+    # =========================================
+    # GENERIC PDF TABLE, MANUAL 3-10 COLUMNS
+    #
+    # Any table not covered by the specialized formats above can be parsed by
+    # entering its physical column count in the Columns box.
+    # =========================================
+
+    if generic_pdf_columns_supported(manual_columns):
+        rows = parse_generic_pdf_table(input_text, manual_columns)
+
+        if len(rows) > 2:
+            return rows, manual_columns, f"GENERIC PDF TABLE / {manual_columns} COLUMNS"
 
     # =========================================
     # TRUE TAB-SEPARATED DATA
@@ -3091,6 +3571,7 @@ def detect_table():
         or delimiter_name.startswith("PDF SIMPLE PINOUT TABLE")
         or delimiter_name.startswith("PDF PIN / DESCRIPTION / FIGURE TABLE")
         or delimiter_name.startswith("PDF PIN / DESCRIPTION / FIGURE / LOGIC TABLE")
+        or delimiter_name.startswith("GENERIC PDF TABLE")
     )
 
     detected_row_count = len(rows) - 1 if structured_pdf_table else len(rows)
@@ -3630,4 +4111,3 @@ connector_status.pack(
 
 
 root.mainloop()
-c
