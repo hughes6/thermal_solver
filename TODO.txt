@@ -6,7 +6,7 @@ import tkinter as tk
 import gc
 import json
 import os
-import re
+
 
 # ================================================
 # HELPER FXN
@@ -40,27 +40,6 @@ def ask_save_path(default_full_path=""):
     root.destroy()
     # Return ONLY the file name (not full path)
     return os.path.abspath(selected_path)
-
-
-def normalize_pin_identifier(value):
-    """Normalize Excel/E3 pin identifiers so 1, 1.0, and " 1 " all match."""
-    if value is None:
-        return ""
-
-    # openpyxl can occasionally hand back numeric-looking pin values as floats.
-    if isinstance(value, float) and value.is_integer():
-        return str(int(value))
-
-    text = str(value).strip()
-
-    # Also normalize string forms such as "1.0".
-    if re.fullmatch(r"[+-]?\d+\.0+", text):
-        try:
-            return str(int(float(text)))
-        except Exception:
-            pass
-
-    return text
 
 def generate_master_schematic_layout(PIN_SIGNAL_INFO,x_block,main_block_width):
     SHEET_DICT = {1:sheet_1_id}
@@ -176,33 +155,10 @@ def generate_schematic_pin_map(connector_info,newpindict,layout,pin_spacing=0.25
     x=layout["x start"]+layout["width"]-0.3
     y_start=layout["y start"]+layout["height"]-pin_start_offset
     pin_map=[]
-    placed_pos = 0
-
-    for pin_data in connector_info[1:]:
-        # A connector is allowed to have pins with no signal / IN-OUT data.
-        # Only the pin number is required for schematic placement.
-        if pin_data is None or len(pin_data) == 0:
-            continue
-
-        pin_name = normalize_pin_identifier(pin_data[0])
-
-        if pin_name == "":
-            continue
-
-        if pin_name not in newpindict:
-            raise Exception(
-                f"Pin {pin_name} not found in new view for {connector_info[0]['connector name']}"
-            )
-
-        pin_map.append({
-            "pin name": pin_name,
-            "pin id": newpindict[pin_name],
-            "x": x,
-            "y": y_start-(placed_pos*pin_spacing),
-            "flip": "/1"
-        })
-        placed_pos += 1
-
+    for pos,pin_data in enumerate(connector_info[1:]):
+        pin_name=str(pin_data[0])
+        if pin_name not in newpindict: raise Exception(f"Pin {pin_name} not found in new view for {connector_info[0]['connector name']}")
+        pin_map.append({"pin name":pin_name,"pin id":newpindict[pin_name],"x":x,"y":y_start-(pos*pin_spacing),"flip":"/1"})
     return pin_map
 
 def recreate_e3_objects():
@@ -381,19 +337,11 @@ for i in range(NUMBER_OF_CONNECTORS):
     for r in range(8, end_row + 1):
         pin = ws.cell(row=r, column=pin_col).value
         signal = ws.cell(row=r, column=signal_col).value
+        if signal is None:
+            signal = "SPARE"
         in_out = ws.cell(row=r, column=in_out_col).value
-
-        # Pin-only connectors are valid.  Keep empty signal/direction cells blank
-        # rather than inventing SPARE/NONE values.
-        pin = normalize_pin_identifier(pin)
-        signal = "" if signal is None else str(signal).strip()
-        in_out = "" if in_out is None else str(in_out).strip()
-
-        # Ignore a truly empty worksheet row, but keep rows that contain a pin
-        # even when both other columns are blank.
-        if pin == "":
-            continue
-
+        if in_out is None:
+            in_out = "NONE"
         temp.append([pin, signal, in_out])
     PIN_SIGNAL_INFO.append(temp)
 
@@ -470,34 +418,6 @@ x_block = left_target
 y_block = top_target - (block_height)
 x_block_center = x_block + block_width/2.0
 res = sym.PlaceBlock(sheet_1_id, x_block, y_block, block_width, block_height)
-
-# TEST ONLY:
-# If the FIRST main-block placement fails, retry exactly once at y - 1.0,
-# then stop this script immediately so nothing after placement can affect the test.
-if res == 0:
-    retry_y_block = y_block - 1.0
-    app.PutMessage(
-        f"Initial main block placement failed at x={x_block}, y={y_block}. "
-        f"Retrying once at y={retry_y_block}."
-    )
-
-    retry_res = sym.PlaceBlock(
-        sheet_1_id,
-        x_block,
-        retry_y_block,
-        block_width,
-        block_height
-    )
-
-    app.PutMessage(
-        f"Retry main block placement result: {retry_res} "
-        f"at x={x_block}, y={retry_y_block}"
-    )
-
-    if retry_res == 0:
-        raise SystemExit("Retry placement also failed.")
-
-    raise SystemExit("Retry placement succeeded. Test script stopped intentionally.")
 
 if DEVICE_FUNCTION is not None:
     y_start = y_block + block_height - 2.25
@@ -706,45 +626,21 @@ for i in range(len(PIN_SIGNAL_INFO)):
     pins = []
     for pin_id in pindids:
         pin.SetId(pin_id)
-        name = normalize_pin_identifier(pin.GetName())
+        name = pin.GetName()
         pins.append(pin_id)
         current_pin_info = None
-
         for pin_data in PIN_SIGNAL_INFO[i][1:]:
-            if pin_data is None or len(pin_data) == 0:
-                continue
-
-            excel_pin_name = normalize_pin_identifier(pin_data[0])
-
-            if excel_pin_name == name:
+            if str(pin_data[0]) == str(name):
                 current_pin_info = pin_data
                 break
-
-        # IMPORTANT: current_pin_info itself can be None when the E3 connector
-        # contains a library pin that was not present in the spreadsheet block.
-        # Do not subscript None.  Leave both attributes blank and continue.
-        if current_pin_info is None:
-            signal = ""
-            in_out = ""
-            app.PutMessage(
-                f"WARNING: {conn_name} pin {name} has no matching spreadsheet row; "
-                "Local Signal Name and Signal Types left blank."
-            )
+        if current_pin_info[1] is not None:
+            signal = current_pin_info[1]
         else:
-            signal = (
-                current_pin_info[1]
-                if len(current_pin_info) > 1 and current_pin_info[1] is not None
-                else ""
-            )
-            in_out = (
-                current_pin_info[2]
-                if len(current_pin_info) > 2 and current_pin_info[2] is not None
-                else ""
-            )
-
-            signal = str(signal).strip()
-            in_out = str(in_out).strip()
-
+            signal = None
+        if current_pin_info[2] is not None:
+            in_out = current_pin_info[2]
+        else:
+            in_out = None
         pin.SetAttributeValue("Local Signal Name", signal)
         pin.SetAttributeValue("Signal Types", in_out)
         attrinfo = pin.GetAttributeIds(None)
@@ -845,7 +741,12 @@ for i in range(len(PIN_SIGNAL_INFO)):
     block_symbol_id = block_sym.PlaceBlock(current_sheet_id, xp, yp, xwidth, yheight, parent_block)
 
     if block_symbol_id == 0:
-        raise Exception(f"Failed placing main block for {conn_name}")
+        for i in range(5):
+            block_symbol_id = block_sym.PlaceBlock(current_sheet_id, xp, yp-i, xwidth, yheight, parent_block)
+            if block_symbol_id != 0:
+                break
+        if block_symbol_id == 0:
+            raise Exception(f"Failed placing main block for {conn_name}")
 
     # =========================================
     # SET COLOR
@@ -1029,9 +930,8 @@ for data in SCHEMATIC_DATA:
 
     for pin_id in newpinids:
         pin.SetId(pin_id)
-        pin_name = normalize_pin_identifier(pin.GetName())
-        if pin_name != "":
-            newpindict[pin_name] = pin_id
+        pin_name = str(pin.GetName())
+        newpindict[pin_name] = pin_id
 
     print("PIN VIEW:", conn_name, "VIEW:", connector_view_id, "PINS:", newpindict)
 
