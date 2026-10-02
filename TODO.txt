@@ -217,30 +217,86 @@ def ask_pdf_column_roles(column_names):
     result = {"value": None}
     root = tk.Tk()
     root.title("PDF Column Roles")
-    root.geometry("500x340")
+    root.geometry("540x410")
     root.attributes("-topmost", True)
-    tk.Label(root, text="Tell the script which PDF column is used for each Block Maker field.", font=("Arial", 11, "bold")).pack(pady=(15, 6))
-    tk.Label(root, text="These are automatically guessed from the names you entered.", font=("Arial", 9)).pack(pady=(0, 10))
+
+    tk.Label(
+        root,
+        text="Tell the script which PDF column is used for each Block Maker field.",
+        font=("Arial", 11, "bold")
+    ).pack(pady=(15, 6))
+
+    tk.Label(
+        root,
+        text="These are automatically guessed from the names you entered.",
+        font=("Arial", 9)
+    ).pack(pady=(0, 10))
+
     frame = tk.Frame(root)
     frame.pack(padx=20, pady=5)
+
     connector_var = tk.StringVar(value=guess_role_column(column_names, ["FROM_DES", "CONNECTOR", "DES"]))
     pin_var = tk.StringVar(value=guess_role_column(column_names, ["FROM_POSN", "PIN", "POSN"]))
     signal_var = tk.StringVar(value=guess_role_column(column_names, ["MNEMONIC", "LOCAL_SIGNAL", "SIGNAL"]))
     direction_var = tk.StringVar(value=guess_role_column(column_names, ["NOTE", "IN/OUT", "DIRECTION"]))
+    skip_direction_var = tk.BooleanVar(value=False)
+
     tk.Label(frame, text="Connector:").grid(row=0, column=0, sticky="e", padx=6, pady=8)
     ttk.Combobox(frame, textvariable=connector_var, values=column_names, state="readonly", width=24).grid(row=0, column=1, sticky="w", padx=6, pady=8)
+
     tk.Label(frame, text="Pin:").grid(row=1, column=0, sticky="e", padx=6, pady=8)
     ttk.Combobox(frame, textvariable=pin_var, values=column_names, state="readonly", width=24).grid(row=1, column=1, sticky="w", padx=6, pady=8)
+
     tk.Label(frame, text="Local Signal:").grid(row=2, column=0, sticky="e", padx=6, pady=8)
     ttk.Combobox(frame, textvariable=signal_var, values=column_names, state="readonly", width=24).grid(row=2, column=1, sticky="w", padx=6, pady=8)
+
     tk.Label(frame, text="IN/OUT:").grid(row=3, column=0, sticky="e", padx=6, pady=8)
-    ttk.Combobox(frame, textvariable=direction_var, values=column_names, state="readonly", width=24).grid(row=3, column=1, sticky="w", padx=6, pady=8)
+    direction_combo = ttk.Combobox(
+        frame,
+        textvariable=direction_var,
+        values=column_names,
+        state="readonly",
+        width=24
+    )
+    direction_combo.grid(row=3, column=1, sticky="w", padx=6, pady=8)
+
+    def update_direction_state():
+        if skip_direction_var.get():
+            direction_combo.configure(state="disabled")
+        else:
+            direction_combo.configure(state="readonly")
+
+    tk.Checkbutton(
+        root,
+        text="Skip IN/OUT / Direction column",
+        variable=skip_direction_var,
+        command=update_direction_state,
+        font=("Arial", 10, "bold")
+    ).pack(pady=(8, 2))
+
+    tk.Label(
+        root,
+        text="When checked, direction is not scraped or written to Excel; existing IN/OUT cells are left unchanged.",
+        font=("Arial", 9),
+        wraplength=490,
+        justify="center"
+    ).pack(pady=(0, 8))
+
     def accept():
-        result["value"] = {"connector": connector_var.get(), "pin": pin_var.get(), "signal": signal_var.get(), "direction": direction_var.get()}
+        skip_direction = bool(skip_direction_var.get())
+        result["value"] = {
+            "connector": connector_var.get(),
+            "pin": pin_var.get(),
+            "signal": signal_var.get(),
+            "direction": None if skip_direction else direction_var.get(),
+            "skip_direction": skip_direction,
+        }
         root.destroy()
+
     def cancel():
         result["value"] = None
         root.destroy()
+
     button_frame = tk.Frame(root)
     button_frame.pack(pady=15)
     tk.Button(button_frame, text="Use Mapping", command=accept, width=15).pack(side=tk.LEFT, padx=5)
@@ -250,14 +306,46 @@ def ask_pdf_column_roles(column_names):
     return result["value"]
 
 
-def canonical_connector_name(value):
-    value = str(value or "").strip().upper()
-    match = re.search(r"J\s*0*(\d+)\s*([A-Z]*)\b", value)
-    if match:
+def should_skip_direction(pdf_roles):
+    """Return True when the user chose not to scrape/write IN/OUT data."""
+    return bool(pdf_roles.get("skip_direction", False)) or not pdf_roles.get("direction")
+
+
+def extract_connector_names(value):
+    """
+    Return every connector designator found in a PDF/Excel label.
+
+    Examples handled:
+        J1R
+        J1R / J2R
+        J1R, J2R
+        J1R & J2R
+        SCP-J1R / SCP-J2R
+
+    Keeping this as a list is important because some PDF tables use one
+    shared pinout for two (or more) connectors.
+    """
+    text = str(value or "").strip().upper()
+    connectors = []
+
+    for match in re.finditer(r"J\s*0*(\d+)\s*([A-Z]*)\b", text):
         number = int(match.group(1))
         suffix = match.group(2)
-        return f"J{number}{suffix}"
-    return value
+        connector = f"J{number}{suffix}"
+
+        if connector not in connectors:
+            connectors.append(connector)
+
+    return connectors
+
+
+def canonical_connector_name(value):
+    connectors = extract_connector_names(value)
+
+    if connectors:
+        return connectors[0]
+
+    return str(value or "").strip().upper()
 
 
 def connector_sort_key(value):
@@ -1141,20 +1229,40 @@ def find_connector_anchors(chars, boundaries):
     first_column_chars = [char for char in chars if char_center_x(char) < first_column_right]
     lines = group_chars_into_lines(first_column_chars, y_tolerance=2.5)
     anchors = []
+
     for line in lines:
         value = rebuild_cell_from_chars(line["chars"])
-        canonical = canonical_connector_name(value)
-        if not is_connector_name(canonical):
+        connectors = extract_connector_names(value)
+
+        if not connectors:
             continue
+
         line_top = min(float(char["top"]) for char in line["chars"])
         line_bottom = max(float(char["bottom"]) for char in line["chars"])
-        anchors.append({"connector": canonical, "top": line_top, "bottom": line_bottom})
+
+        # One physical row can explicitly apply to multiple connectors, e.g.
+        # "J1R / J2R".  Keep one row anchor and carry all connector aliases.
+        anchors.append({
+            "connector": connectors[0],
+            "connectors": connectors,
+            "top": line_top,
+            "bottom": line_bottom,
+        })
+
     anchors.sort(key=lambda anchor: anchor["top"])
     deduped = []
+
     for anchor in anchors:
         if deduped and abs(anchor["top"] - deduped[-1]["top"]) <= 2.0:
+            # Merge aliases rather than dropping a second connector printed on
+            # the same physical line.
+            for connector in anchor.get("connectors", []):
+                if connector not in deduped[-1]["connectors"]:
+                    deduped[-1]["connectors"].append(connector)
             continue
+
         deduped.append(anchor)
+
     return deduped
 
 
@@ -1295,16 +1403,17 @@ def find_connector_labels(chars, boundaries, connector_index):
 
     for line in lines:
         raw_value = rebuild_cell_from_chars(line["chars"])
-        canonical = canonical_connector_name(raw_value)
+        connectors = extract_connector_names(raw_value)
 
-        if not is_connector_name(canonical):
+        if not connectors:
             continue
 
         line_top = min(float(char["top"]) for char in line["chars"])
         line_bottom = max(float(char["bottom"]) for char in line["chars"])
 
         labels.append({
-            "connector": canonical,
+            "connector": connectors[0],
+            "connectors": connectors,
             "top": line_top,
             "bottom": line_bottom,
             "center": (line_top + line_bottom) / 2.0,
@@ -1315,13 +1424,13 @@ def find_connector_labels(chars, boundaries, connector_index):
     deduped = []
 
     for label in labels:
-        if deduped:
-            previous = deduped[-1]
-            if (
-                label["connector"] == previous["connector"]
-                and abs(label["center"] - previous["center"]) <= 2.0
-            ):
-                continue
+        if deduped and abs(label["center"] - deduped[-1]["center"]) <= 2.0:
+            # A combined label may be split into multiple text fragments by the
+            # PDF. Merge all connector names at the same vertical location.
+            for connector in label.get("connectors", []):
+                if connector not in deduped[-1]["connectors"]:
+                    deduped[-1]["connectors"].append(connector)
+            continue
 
         deduped.append(label)
 
@@ -1364,19 +1473,31 @@ def split_pin_rows_into_groups(rows):
     return groups
 
 
-def choose_connector_for_pin_group(group, connector_labels, last_connector=""):
-    # First prefer any valid connector text that was physically inside one row.
+def _unique_connectors(values):
+    output = []
+
+    for value in values:
+        for connector in extract_connector_names(value):
+            if connector not in output:
+                output.append(connector)
+
+    return output
+
+
+def choose_connectors_for_pin_group(group, connector_labels, last_connectors=None):
+    if last_connectors is None:
+        last_connectors = []
+
+    # First prefer any valid connector text that was physically inside a row.
     row_connectors = []
 
     for row in group:
-        raw_value = row.get("_parsed_connector", "")
-        canonical = canonical_connector_name(raw_value)
-
-        if is_connector_name(canonical) and canonical not in row_connectors:
-            row_connectors.append(canonical)
+        for connector in row.get("_parsed_connectors", []):
+            if is_connector_name(connector) and connector not in row_connectors:
+                row_connectors.append(connector)
 
     if row_connectors:
-        return row_connectors[0]
+        return row_connectors
 
     group_top = min(float(row["_row_top"]) for row in group)
     group_bottom = max(float(row["_row_bottom"]) for row in group)
@@ -1388,14 +1509,24 @@ def choose_connector_for_pin_group(group, connector_labels, last_connector=""):
     ]
 
     if inside:
-        inside.sort(key=lambda label: abs(label["center"] - group_center))
-        return inside[0]["connector"]
+        connectors = []
+
+        # All labels physically inside the same merged REF DES area apply to
+        # this pin group. This is the key behavior for shared pinouts such as
+        # J1R + J2R using one common table.
+        for label in inside:
+            for connector in label.get("connectors", [label.get("connector", "")]):
+                if is_connector_name(connector) and connector not in connectors:
+                    connectors.append(connector)
+
+        if connectors:
+            return connectors
 
     # If this page has one merged REF DES label, it belongs to the visible pin table.
     if len(connector_labels) == 1:
-        return connector_labels[0]["connector"]
+        return list(connector_labels[0].get("connectors", [connector_labels[0]["connector"]]))
 
-    # Multiple tables can share a page. Choose the closest merged connector label.
+    # Multiple tables can share a page. Choose the closest label cluster.
     if connector_labels:
         nearest = min(
             connector_labels,
@@ -1404,16 +1535,27 @@ def choose_connector_for_pin_group(group, connector_labels, last_connector=""):
 
         # Avoid borrowing a connector from a very distant table.
         if abs(nearest["center"] - group_center) <= max(group_bottom - group_top, 80.0):
-            return nearest["connector"]
+            cluster_tolerance = 12.0
+            connectors = []
+
+            for label in connector_labels:
+                if abs(label["center"] - nearest["center"]) <= cluster_tolerance:
+                    for connector in label.get("connectors", [label.get("connector", "")]):
+                        if is_connector_name(connector) and connector not in connectors:
+                            connectors.append(connector)
+
+            if connectors:
+                return connectors
 
     # Continuation-page fallback: if pins continue above 1 and the REF DES merged
-    # cell was not repeated on the new page, keep the connector from the prior page.
+    # cell was not repeated on the new page, keep every connector from the prior
+    # shared table.
     first_pin = int(group[0]["_pin_number"])
 
-    if last_connector and first_pin > 1:
-        return last_connector
+    if last_connectors and first_pin > 1:
+        return list(last_connectors)
 
-    return ""
+    return []
 
 
 # ================================================
@@ -1439,12 +1581,13 @@ def extract_structured_rows_six_column(pdf_cache, separator_keyword, column_name
     connector_index = column_names.index(pdf_roles["connector"])
     pin_index = column_names.index(pdf_roles["pin"])
     signal_index = column_names.index(pdf_roles["signal"])
-    direction_index = column_names.index(pdf_roles["direction"])
+    skip_direction = should_skip_direction(pdf_roles)
+    direction_index = None if skip_direction else column_names.index(pdf_roles["direction"])
 
     structured_rows = []
     grid_bounded_rows = 0
     fallback_bounded_rows = 0
-    last_connector = ""
+    last_connectors = []
 
     for page_number in sorted(pdf_cache):
         page_data = pdf_cache[page_number]
@@ -1546,37 +1689,35 @@ def extract_structured_rows_six_column(pdf_cache, separator_keyword, column_name
                     parsed_row.get(pdf_roles["signal"], "")
                 )
 
-            direction_from_words = extract_role_text_from_words(
-                row_words,
-                boundaries,
-                direction_index,
-                left_pad=8.0,
-                right_pad=8.0,
-                skip_numeric=False
-            )
-
-            direction_value = normalize_direction_value(direction_from_words)
-
-            if direction_value == "":
-                direction_value = normalize_direction_value(
-                    parsed_row.get(pdf_roles["direction"], "")
-                )
-
-            if direction_value == "":
-                direction_value = find_direction_from_row_words(
+            if not skip_direction:
+                direction_from_words = extract_role_text_from_words(
                     row_words,
                     boundaries,
-                    direction_index
+                    direction_index,
+                    left_pad=8.0,
+                    right_pad=8.0,
+                    skip_numeric=False
                 )
 
-            parsed_row[pdf_roles["direction"]] = direction_value
+                direction_value = normalize_direction_value(direction_from_words)
 
-            parsed_connector = canonical_connector_name(
+                if direction_value == "":
+                    direction_value = normalize_direction_value(
+                        parsed_row.get(pdf_roles["direction"], "")
+                    )
+
+                if direction_value == "":
+                    direction_value = find_direction_from_row_words(
+                        row_words,
+                        boundaries,
+                        direction_index
+                    )
+
+                parsed_row[pdf_roles["direction"]] = direction_value
+
+            parsed_connectors = extract_connector_names(
                 parsed_row.get(pdf_roles["connector"], "")
             )
-
-            if not is_connector_name(parsed_connector):
-                parsed_connector = ""
 
             section_marker = find_section_for_row(
                 page_number,
@@ -1601,20 +1742,20 @@ def extract_structured_rows_six_column(pdf_cache, separator_keyword, column_name
             parsed_row["_row_top"] = float(row_top)
             parsed_row["_row_bottom"] = float(row_bottom)
             parsed_row["_pin_number"] = int(anchor["pin"])
-            parsed_row["_parsed_connector"] = parsed_connector
+            parsed_row["_parsed_connectors"] = parsed_connectors
 
             page_rows.append(parsed_row)
 
         pin_groups = split_pin_rows_into_groups(page_rows)
 
         for group in pin_groups:
-            connector = choose_connector_for_pin_group(
+            connectors = choose_connectors_for_pin_group(
                 group,
                 connector_labels,
-                last_connector=last_connector
+                last_connectors=last_connectors
             )
 
-            if not connector:
+            if not connectors:
                 print(
                     "WARNING: Could not assign REF DES to pin group on page",
                     page_number,
@@ -1625,18 +1766,35 @@ def extract_structured_rows_six_column(pdf_cache, separator_keyword, column_name
                 )
                 continue
 
+            if len(connectors) > 1:
+                print(
+                    "SHARED CONNECTOR PINOUT:",
+                    ", ".join(connectors),
+                    "| PAGE",
+                    page_number,
+                    "| PINS",
+                    group[0]["_pin_number"],
+                    "THROUGH",
+                    group[-1]["_pin_number"]
+                )
+
             for parsed_row in group:
-                parsed_row[pdf_roles["connector"]] = connector
+                base_row = dict(parsed_row)
+                base_row.pop("_anchor_top", None)
+                base_row.pop("_row_top", None)
+                base_row.pop("_row_bottom", None)
+                base_row.pop("_pin_number", None)
+                base_row.pop("_parsed_connectors", None)
 
-                parsed_row.pop("_anchor_top", None)
-                parsed_row.pop("_row_top", None)
-                parsed_row.pop("_row_bottom", None)
-                parsed_row.pop("_pin_number", None)
-                parsed_row.pop("_parsed_connector", None)
+                # Duplicate the same physical PDF row under every connector
+                # named by the shared REF DES cell. Excel matching is by name,
+                # so J1R and J2R can appear in any spreadsheet order.
+                for connector in connectors:
+                    output_row = dict(base_row)
+                    output_row[pdf_roles["connector"]] = connector
+                    structured_rows.append(output_row)
 
-                structured_rows.append(parsed_row)
-
-            last_connector = connector
+            last_connectors = list(connectors)
 
     elapsed = time.perf_counter() - start_time
 
@@ -1657,7 +1815,8 @@ def extract_structured_rows_nine_column(pdf_cache, separator_keyword, column_nam
     reference_boundaries = build_column_boundaries(pdf_cache, column_centers, page_width, header_page)
     section_markers = find_section_markers(pdf_cache, separator_keyword)
     signal_index = column_names.index(pdf_roles["signal"])
-    direction_index = column_names.index(pdf_roles["direction"])
+    skip_direction = should_skip_direction(pdf_roles)
+    direction_index = None if skip_direction else column_names.index(pdf_roles["direction"])
     structured_rows = []
     grid_bounded_rows = 0
     fallback_bounded_rows = 0
@@ -1741,15 +1900,6 @@ def extract_structured_rows_nine_column(pdf_cache, separator_keyword, column_nam
                 signal_index
             )
 
-            direction_from_words = extract_role_text_from_words(
-                row_words,
-                boundaries,
-                direction_index,
-                left_pad=8.0,
-                right_pad=8.0,
-                skip_numeric=False
-            )
-
             if signal_from_words != "":
                 parsed_row[pdf_roles["signal"]] = normalize_local_signal_value(
                     signal_from_words
@@ -1759,24 +1909,39 @@ def extract_structured_rows_nine_column(pdf_cache, separator_keyword, column_nam
                     parsed_row.get(pdf_roles["signal"], "")
                 )
 
-            direction_value = normalize_direction_value(direction_from_words)
-
-            if direction_value == "":
-                direction_value = normalize_direction_value(
-                    parsed_row.get(pdf_roles["direction"], "")
-                )
-
-            if direction_value == "":
-                direction_value = find_direction_from_row_words(
+            if not skip_direction:
+                direction_from_words = extract_role_text_from_words(
                     row_words,
                     boundaries,
-                    direction_index
+                    direction_index,
+                    left_pad=8.0,
+                    right_pad=8.0,
+                    skip_numeric=False
                 )
 
-            parsed_row[pdf_roles["direction"]] = direction_value
-            parsed_row[column_names[0]] = anchor["connector"]
+                direction_value = normalize_direction_value(direction_from_words)
 
-            if not is_connector_name(parsed_row[column_names[0]]):
+                if direction_value == "":
+                    direction_value = normalize_direction_value(
+                        parsed_row.get(pdf_roles["direction"], "")
+                    )
+
+                if direction_value == "":
+                    direction_value = find_direction_from_row_words(
+                        row_words,
+                        boundaries,
+                        direction_index
+                    )
+
+                parsed_row[pdf_roles["direction"]] = direction_value
+
+            connectors = [
+                connector
+                for connector in anchor.get("connectors", [anchor.get("connector", "")])
+                if is_connector_name(connector)
+            ]
+
+            if not connectors:
                 continue
 
             section_marker = find_section_for_row(
@@ -1797,7 +1962,13 @@ def extract_structured_rows_nine_column(pdf_cache, separator_keyword, column_nam
                 else ""
             )
 
-            structured_rows.append(parsed_row)
+            # If the FROM DES cell contains multiple connector names, the same
+            # wiring row applies to each one. Duplicate by connector name rather
+            # than assuming PDF/Excel positional order.
+            for connector in connectors:
+                output_row = dict(parsed_row)
+                output_row[column_names[0]] = connector
+                structured_rows.append(output_row)
 
     elapsed = time.perf_counter() - start_time
 
@@ -1837,12 +2008,15 @@ def extract_structured_rows(pdf_cache, separator_keyword, column_names, pdf_role
 # ================================================
 def validate_row(row, pdf_roles):
     problems = []
-    connector = canonical_connector_name(get_role_value(row, pdf_roles, "connector"))
+    connectors = extract_connector_names(get_role_value(row, pdf_roles, "connector"))
     pin_text = get_role_value(row, pdf_roles, "pin")
-    if not re.fullmatch(r"J\d+[A-Z]*", connector, re.IGNORECASE):
+
+    if not connectors:
         problems.append("invalid connector")
+
     if not re.fullmatch(r"\d+", pin_text):
         problems.append("invalid pin")
+
     return problems
 
 
@@ -1860,11 +2034,22 @@ def validate_structured_rows(structured_rows, pdf_roles):
 
 def build_pdf_connector_map(structured_rows, pdf_roles):
     pdf_connectors = {}
+
     for row in structured_rows:
-        connector = canonical_connector_name(get_role_value(row, pdf_roles, "connector"))
-        if not is_connector_name(connector):
-            continue
-        pdf_connectors.setdefault(connector, []).append(row)
+        connectors = extract_connector_names(
+            get_role_value(row, pdf_roles, "connector")
+        )
+
+        for connector in connectors:
+            if not is_connector_name(connector):
+                continue
+
+            # Store a connector-specific copy so a shared PDF table can safely
+            # feed multiple independent spreadsheet blocks.
+            mapped_row = dict(row)
+            mapped_row[pdf_roles["connector"]] = connector
+            pdf_connectors.setdefault(connector, []).append(mapped_row)
+
     return pdf_connectors
 
 
@@ -1961,31 +2146,82 @@ def read_excel_connector_info(excel_path):
 
 def build_excel_write_jobs(pdf_connectors, pdf_roles, connector_info):
     jobs = []
+    skip_direction = should_skip_direction(pdf_roles)
+
     for connector in connector_info:
         block_index = connector["block_index"]
         excel_name = connector["excel_name"]
         canonical = connector["canonical"]
         expected_pins = connector["expected_pins"]
+
         if canonical not in pdf_connectors:
-            jobs.append({"block_index": block_index, "excel_name": excel_name, "canonical": canonical, "expected_pins": expected_pins, "skip": True, "reason": "connector not found in PDF"})
+            jobs.append({
+                "block_index": block_index,
+                "excel_name": excel_name,
+                "canonical": canonical,
+                "expected_pins": expected_pins,
+                "skip": True,
+                "reason": "connector not found in PDF"
+            })
             continue
+
         pin_map = get_connector_pin_map(pdf_connectors[canonical], pdf_roles)
+
         if expected_pins is not None and expected_pins > BLOCK_DATA_ROW_CAPACITY:
-            raise ValueError(f"{excel_name} expects {expected_pins} pins but BLOCK_DATA_ROW_CAPACITY is only {BLOCK_DATA_ROW_CAPACITY}")
-        matrix = [["", "", ""] for _ in range(BLOCK_DATA_ROW_CAPACITY)]
+            raise ValueError(
+                f"{excel_name} expects {expected_pins} pins but "
+                f"BLOCK_DATA_ROW_CAPACITY is only {BLOCK_DATA_ROW_CAPACITY}"
+            )
+
+        # Normal mode writes PIN + SIGNAL + IN/OUT.
+        # Skip-direction mode intentionally writes only PIN + SIGNAL so the
+        # existing spreadsheet IN/OUT column is never cleared or overwritten.
+        matrix_width = 2 if skip_direction else 3
+        matrix = [[""] * matrix_width for _ in range(BLOCK_DATA_ROW_CAPACITY)]
+
         for pin_number, row in pin_map.items():
             if pin_number < 1 or pin_number > BLOCK_DATA_ROW_CAPACITY:
                 continue
+
             matrix[pin_number - 1][0] = pin_number
-            matrix[pin_number - 1][1] = normalize_local_signal_value(get_role_value(row, pdf_roles, "signal"))
-            matrix[pin_number - 1][2] = normalize_direction_value(get_role_value(row, pdf_roles, "direction"))
+            matrix[pin_number - 1][1] = normalize_local_signal_value(
+                get_role_value(row, pdf_roles, "signal")
+            )
+
+            if not skip_direction:
+                matrix[pin_number - 1][2] = normalize_direction_value(
+                    get_role_value(row, pdf_roles, "direction")
+                )
+
         missing = []
         if expected_pins is not None and expected_pins > 0:
-            missing = [pin_number for pin_number in range(1, expected_pins + 1) if pin_number not in pin_map]
+            missing = [
+                pin_number
+                for pin_number in range(1, expected_pins + 1)
+                if pin_number not in pin_map
+            ]
+
         block_start_column = BLOCK_FIRST_COLUMN + block_index * BLOCK_WIDTH
         pin_column = block_start_column + BLOCK_PIN_COLUMN_OFFSET
+        signal_column = block_start_column + BLOCK_SIGNAL_COLUMN_OFFSET
         direction_column = block_start_column + BLOCK_DIRECTION_COLUMN_OFFSET
-        jobs.append({"block_index": block_index, "excel_name": excel_name, "canonical": canonical, "expected_pins": expected_pins, "skip": False, "pin_count": len(pin_map), "missing": missing, "first_row": BLOCK_DATA_FIRST_ROW, "last_row": BLOCK_DATA_FIRST_ROW + BLOCK_DATA_ROW_CAPACITY - 1, "first_column": pin_column, "last_column": direction_column, "matrix": tuple(tuple(row) for row in matrix)})
+
+        jobs.append({
+            "block_index": block_index,
+            "excel_name": excel_name,
+            "canonical": canonical,
+            "expected_pins": expected_pins,
+            "skip": False,
+            "pin_count": len(pin_map),
+            "missing": missing,
+            "first_row": BLOCK_DATA_FIRST_ROW,
+            "last_row": BLOCK_DATA_FIRST_ROW + BLOCK_DATA_ROW_CAPACITY - 1,
+            "first_column": pin_column,
+            "last_column": signal_column if skip_direction else direction_column,
+            "matrix": tuple(tuple(row) for row in matrix),
+            "write_direction": not skip_direction,
+        })
+
     return jobs
 
 
@@ -2025,6 +2261,13 @@ def write_pdf_data_to_excel(source_excel_path, output_excel_path, pdf_connectors
         print("============================================================")
         print("EXCEL CONNECTORS:", len(connector_info))
         print("PDF CONNECTORS:", len(pdf_connectors))
+        print("MATCH MODE: CONNECTOR NAME (PDF/EXCEL ORDER DOES NOT MATTER)")
+        print(
+            "IN/OUT WRITE MODE:",
+            "SKIPPED - EXISTING EXCEL VALUES LEFT UNCHANGED"
+            if should_skip_direction(pdf_roles)
+            else "WRITE FROM PDF"
+        )
         print("============================================================")
         write_start = time.perf_counter()
         written_blocks = 0
@@ -2040,6 +2283,8 @@ def write_pdf_data_to_excel(source_excel_path, output_excel_path, pdf_connectors
             written_blocks += 1
             written_pin_rows += job["pin_count"]
             print("WRITTEN PINS:", job["pin_count"], "EXPECTED:", job["expected_pins"], "MISSING:", job["missing"])
+            if not job.get("write_direction", True):
+                print("IN/OUT COLUMN: SKIPPED (LEFT UNCHANGED IN EXCEL)")
         write_elapsed = time.perf_counter() - write_start
         print(f"BULK EXCEL WRITE TIME: {write_elapsed:.2f} SECONDS")
         calc_start = time.perf_counter()
@@ -2136,7 +2381,12 @@ if __name__ == "__main__":
     print("CONNECTOR:", pdf_roles["connector"])
     print("PIN:", pdf_roles["pin"])
     print("LOCAL SIGNAL:", pdf_roles["signal"])
-    print("IN/OUT:", pdf_roles["direction"])
+    print(
+        "IN/OUT:",
+        "SKIPPED - WILL NOT SCRAPE OR WRITE"
+        if should_skip_direction(pdf_roles)
+        else pdf_roles["direction"]
+    )
     print("============================================================")
 
     sections = extract_sections_by_keyword(pdf_cache, separator_keyword)
