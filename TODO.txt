@@ -6,6 +6,7 @@ import tkinter as tk
 import gc
 import json
 import os
+import math
 
 
 # ================================================
@@ -494,9 +495,29 @@ def get_connector_pin_count(connector):
 
 
 def get_connector_view_pitch(connector):
+    """
+    Reserve enough height for the connector pin view, BUT keep the reservation
+    on the CABBLOCK's native 0.75-unit row grid.
+
+    The previous fix used raw 0.25-unit pin geometry directly.  That prevented
+    connector overlap, but it also produced main-block heights such as 7.50 or
+    8.25 that are not necessarily valid CABBLOCK stretch positions.
+
+    Example:
+        1 pin  -> raw 0.75 -> 0.75 reserved
+        2 pins -> raw 1.00 -> 1.50 reserved
+        4 pins -> raw 1.50 -> 1.50 reserved
+        15 pins -> raw 4.25 -> 4.50 reserved
+
+    Every returned value is therefore an exact multiple of PIN_VIEW_SPACING.
+    """
     pin_count = get_connector_pin_count(connector)
+
     symbol_span = (pin_count - 1) * PIN_VIEW_PIN_PITCH
-    return max(PIN_VIEW_SPACING, symbol_span + PIN_VIEW_SPACING)
+    raw_pitch = max(PIN_VIEW_SPACING, symbol_span + PIN_VIEW_SPACING)
+
+    row_slots = max(1, math.ceil((raw_pitch - 1e-9) / PIN_VIEW_SPACING))
+    return row_slots * PIN_VIEW_SPACING
 
 
 block_width = 3.0
@@ -565,11 +586,27 @@ else:
     required_pin_view_height = max(left_offset, right_offset)
 
 
+# CABBLOCK connector rows are laid out on a 0.75-unit grid.  Since every
+# connector_y_offset and view_pitch above is a multiple of PIN_VIEW_SPACING,
+# this height remains on the same stretch grid as the original working code.
 block_height = 1.75 + required_pin_view_height
 
 x_block = left_target
 y_block = top_target - block_height
 x_block_center = x_block + block_width / 2.0
+
+app.PutMessage(
+    f"MAIN CABBLOCK GEOMETRY: x={x_block:.2f}, y={y_block:.2f}, "
+    f"width={block_width:.2f}, height={block_height:.2f}, "
+    f"row_height={required_pin_view_height:.2f}"
+)
+
+if y_block < 0.0:
+    raise Exception(
+        f"Main CABBLOCK would extend below the page: "
+        f"y={y_block:.2f}, height={block_height:.2f}. "
+        "Connector pin views require more vertical space than one main block can hold."
+    )
 
 res = sym.PlaceBlock(sheet_1_id, x_block, y_block, block_width, block_height)
 
@@ -590,8 +627,16 @@ for map_info in CONNECTOR_MAP:
     )
 
 if res == 0:
-    app.PutMessage(f"Place block failed: {res}")
-    raise Exception(f"place block failed: {res}")
+    app.PutMessage(
+        f"Place block failed: {res} | "
+        f"x={x_block:.2f} y={y_block:.2f} "
+        f"width={block_width:.2f} height={block_height:.2f}"
+    )
+    raise Exception(
+        f"Main CABBLOCK placement failed: result={res}, "
+        f"x={x_block:.2f}, y={y_block:.2f}, "
+        f"width={block_width:.2f}, height={block_height:.2f}"
+    )
 else:
     app.PutMessage(f"Placed block: {res}")
 
