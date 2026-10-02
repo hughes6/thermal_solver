@@ -451,7 +451,27 @@ if not isLoaded:
 else:
     app.PutMessage("Symbol loaded successfully.")
 
+# ----------------------------------------------------------------
+# CONNECTOR PIN-VIEW LAYOUT
+#
+# The old code moved every connector down by exactly 0.75 regardless
+# of how many pins the connector view contained.  That works for tiny
+# connectors, but a 15-pin FULL view extends several grid steps below
+# its insertion point.  The next connector was therefore being placed
+# on top of it.
+#
+# Reserve vertical space from the ACTUAL pin count:
+#     1 pin  -> 0.75
+#     2 pins -> 1.00
+#     ...
+#     15 pins -> 4.25
+#
+# 0.25 is the pin-to-pin pitch used by these connector symbols and
+# 0.75 leaves the same minimum separation the old layout used.
+# ----------------------------------------------------------------
 PIN_VIEW_SPACING = 0.75
+PIN_VIEW_PIN_PITCH = 0.25
+
 TOP_OF_PAGE = 32.9
 TOP_MARIGIN = 1.0
 LEFT_OF_PAGE = 0.0
@@ -459,16 +479,98 @@ LEFT_MARIGIN = 1.0
 left_target = LEFT_OF_PAGE + LEFT_MARIGIN
 top_target = TOP_OF_PAGE - TOP_MARIGIN
 
-HALF_NUMBER_OF_CONNECTORS = int(NUMBER_OF_CONNECTORS/2.0) + 1
+
+def get_connector_pin_count(connector):
+    try:
+        count = int(connector[0].get("number of pins", 0) or 0)
+    except Exception:
+        count = 0
+
+    # Fall back to the rows actually read from Excel.
+    if count <= 0:
+        count = len(connector[1:])
+
+    return max(1, count)
+
+
+def get_connector_view_pitch(connector):
+    pin_count = get_connector_pin_count(connector)
+    symbol_span = (pin_count - 1) * PIN_VIEW_PIN_PITCH
+    return max(PIN_VIEW_SPACING, symbol_span + PIN_VIEW_SPACING)
+
+
 block_width = 3.0
+
+# Build the connector map BEFORE placing the main block so the block height
+# can be sized to the taller of the left/right connector columns.
+CONNECTOR_MAP = []
+
 if NUMBER_OF_CONNECTORS < 6:
-    block_height = 1.75 + (PIN_VIEW_SPACING * NUMBER_OF_CONNECTORS)
+    left_offset = 0.0
+
+    for i, connector in enumerate(PIN_SIGNAL_INFO):
+        connector_name = connector[0]["connector name"]
+        pin_count = get_connector_pin_count(connector)
+        view_pitch = get_connector_view_pitch(connector)
+
+        CONNECTOR_MAP.append({
+            "connector name": connector_name,
+            "connector position": i,      # kept for diagnostics/backward compatibility
+            "connector flip": 0,
+            "connector y offset": left_offset,
+            "pin count": pin_count,
+            "view pitch": view_pitch
+        })
+
+        left_offset += view_pitch
+
+    required_pin_view_height = left_offset
+
 else:
-    block_height = 1.75 + (PIN_VIEW_SPACING * HALF_NUMBER_OF_CONNECTORS)    
+    left_count = (NUMBER_OF_CONNECTORS + 1) // 2
+    left_offset = 0.0
+    right_offset = 0.0
+    left_position = 0
+    right_position = 0
+
+    for i, connector in enumerate(PIN_SIGNAL_INFO):
+        connector_name = connector[0]["connector name"]
+        pin_count = get_connector_pin_count(connector)
+        view_pitch = get_connector_view_pitch(connector)
+
+        if i < left_count:
+            connector_flip = 0
+            connector_position = left_position
+            y_offset = left_offset
+
+            left_offset += view_pitch
+            left_position += 1
+        else:
+            connector_flip = 1
+            connector_position = right_position
+            y_offset = right_offset
+
+            right_offset += view_pitch
+            right_position += 1
+
+        CONNECTOR_MAP.append({
+            "connector name": connector_name,
+            "connector position": connector_position,
+            "connector flip": connector_flip,
+            "connector y offset": y_offset,
+            "pin count": pin_count,
+            "view pitch": view_pitch
+        })
+
+    required_pin_view_height = max(left_offset, right_offset)
+
+
+block_height = 1.75 + required_pin_view_height
 
 x_block = left_target
-y_block = top_target - (block_height)
-x_block_center = x_block + block_width/2.0
+y_block = top_target - block_height
+x_block_center = x_block + block_width / 2.0
+
 res = sym.PlaceBlock(sheet_1_id, x_block, y_block, block_width, block_height)
 
 if DEVICE_FUNCTION is not None:
@@ -477,24 +579,15 @@ if DEVICE_FUNCTION is not None:
 else:
     y_start = y_block + block_height - 2.0
 
-# CREATE MAPPING HERE
-CONNECTOR_MAP = []
-if NUMBER_OF_CONNECTORS < 6:
-    for i, connector in enumerate(PIN_SIGNAL_INFO):
-        connector_name = connector[0]['connector name']
-        CONNECTOR_MAP.append({'connector name' : connector_name, 'connector position' : i, 'connector flip' : 0})
-else:
-    left_count = (NUMBER_OF_CONNECTORS + 1) // 2
-    for i, connector in enumerate(PIN_SIGNAL_INFO):
-        connector_name = connector[0]['connector name']
-        if i < left_count: 
-            connector_position = i
-            connector_flip = 0
-        else:
-            connector_position = i - left_count
-            connector_flip = 1
-
-        CONNECTOR_MAP.append({'connector name' : connector_name, 'connector position' : connector_position, 'connector flip' : connector_flip})
+app.PutMessage("CONNECTOR PIN-VIEW LAYOUT:")
+for map_info in CONNECTOR_MAP:
+    side = "RIGHT" if map_info["connector flip"] else "LEFT"
+    app.PutMessage(
+        f'  {map_info["connector name"]}: side={side}, '
+        f'pins={map_info["pin count"]}, '
+        f'y_offset={map_info["connector y offset"]:.2f}, '
+        f'reserved_pitch={map_info["view pitch"]:.2f}'
+    )
 
 if res == 0:
     app.PutMessage(f"Place block failed: {res}")
@@ -739,21 +832,45 @@ for i in range(len(PIN_SIGNAL_INFO)):
     symname = "MilBlockSymbolReceptacleInt¶FULL"
 
     connector_map_info = CONNECTOR_MAP[i]
-    connector_position = connector_map_info['connector position']
-    flip = connector_map_info['connector flip']
+    connector_position = connector_map_info["connector position"]
+    connector_y_offset = connector_map_info["connector y offset"]
+    flip = connector_map_info["connector flip"]
 
     if flip == 0:
         x = x_block + 0.3
-        y = y_start - (connector_position * PIN_VIEW_SPACING)
+        y = y_start - connector_y_offset
+        place_flip = 0
     else:
         x = x_block + block_width - 0.3
-        y = y_start - (connector_position * PIN_VIEW_SPACING)
-        flip = "/1"
+        y = y_start - connector_y_offset
+        place_flip = "/1"
 
-    # print(f'placing {PIN_SIGNAL_INFO[i][0]['connector name']} at x = {x}, y = {y}, flip = {flip} when block_x = {x_block} block_y: {y_block} start: {y_start}')
-    app.PutMessage(f'placing {PIN_SIGNAL_INFO[i][0]['connector name']} at x = {x}, y = {y}, flip = {flip}')
-    res = sym.PlacePins(PINDICT, symname, ver, sheet_1_id, x, y, flip, 1.0)
-    sym.SetId(res[0])
+    app.PutMessage(
+        f'placing {PIN_SIGNAL_INFO[i][0]["connector name"]} '
+        f'pins={len(PINDICT)} x={x} y={y} flip={place_flip} '
+        f'offset={connector_y_offset:.2f}'
+    )
+
+    if len(PINDICT) == 0:
+        raise Exception(
+            f'Connector {PIN_SIGNAL_INFO[i][0]["connector name"]} has no E3 pins to place.'
+        )
+
+    res = sym.PlacePins(PINDICT, symname, ver, sheet_1_id, x, y, place_flip, 1.0)
+
+    # E3 may return either a scalar ID or a tuple/list depending on the
+    # PlacePins case.  In particular, do not assume a one-pin result is
+    # always subscriptable.
+    placed_symbol_id = res[0] if isinstance(res, (tuple, list)) else res
+
+    if placed_symbol_id in (None, 0):
+        raise Exception(
+            f'Failed placing connector pin view for '
+            f'{PIN_SIGNAL_INFO[i][0]["connector name"]} at x={x}, y={y}. '
+            f'PlacePins returned {res!r}'
+        )
+
+    sym.SetId(placed_symbol_id)
     textinfo = sym.GetTextIds(None)
     textids = [x for x in textinfo[1] if x is not None]
     for text_id in textids:
