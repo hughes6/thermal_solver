@@ -1,4 +1,4 @@
-import tkinter as tk
+\import tkinter as tk
 from tkinter import scrolledtext
 from tkinter import ttk
 import csv
@@ -105,6 +105,284 @@ def get_nonempty_normalized_lines(input_text):
             lines.append(line)
 
     return lines
+
+
+
+
+# =========================================
+# PDF 3-COLUMN PIN / DESCRIPTION / FIGURE TABLE
+#
+# Handles tables such as:
+#   Pin Number | Description | Figure
+#
+# Some tagged PDFs copy this table in a staggered order.  A typical clipboard
+# stream looks like:
+#
+#   Pin
+#   Number
+#   Description
+#   1
+#   Figure
+#   19 -
+#   Chassis GND
+#   36 Figure 5, Figure 8
+#   TEMP (Thermistor)
+#
+# In that form the NEXT pin is emitted on the same line as the PREVIOUS row's
+# Figure cell, and the previous row's Description follows on the next line(s).
+# The parser below reconstructs the rows instead of treating every newline as a
+# new spreadsheet row.
+# =========================================
+
+FIGURE_PINOUT_HEADERS = [
+    "PIN NUMBER",
+    "DESCRIPTION",
+    "FIGURE"
+]
+
+
+def is_figure_cell_text(value):
+    text = normalize_pdf_line(value)
+    if text == "":
+        return False
+    if text == "-":
+        return True
+    return re.match(r"^FIGURE\b", text, re.IGNORECASE) is not None
+
+
+def is_figure_table_header_fragment(value):
+    upper = normalize_pdf_line(value).upper()
+    if upper in {"PIN", "NUMBER", "PIN NUMBER", "DESCRIPTION", "FIGURE"}:
+        return True
+    if upper.startswith("TABLE ") and ("PIN" in upper or "CONNECTOR" in upper):
+        return True
+    if re.fullmatch(r"PAGE\s+\d+\s+OF\s+\d+", upper):
+        return True
+    if re.fullmatch(r"\d+\s+OF\s+\d+", upper):
+        return True
+    return False
+
+
+def get_figure_pinout_header_window(input_text):
+    lines = get_nonempty_normalized_lines(input_text)
+    if len(lines) < 5:
+        return lines, None
+
+    search_limit = min(len(lines), 30)
+    upper_lines = [line.upper() for line in lines[:search_limit]]
+
+    pin_seen = False
+    number_seen = False
+    description_seen = False
+    figure_seen = False
+    first_header_index = None
+    last_header_index = None
+
+    for index, upper in enumerate(upper_lines):
+        compact = re.sub(r"\s+", " ", upper).strip()
+
+        if compact == "PIN" or compact.startswith("PIN NUMBER") or "PIN NUMBER" in compact:
+            pin_seen = True
+            first_header_index = index if first_header_index is None else first_header_index
+            last_header_index = index
+
+        if compact == "NUMBER" or "PIN NUMBER" in compact:
+            number_seen = True
+            first_header_index = index if first_header_index is None else first_header_index
+            last_header_index = index
+
+        if re.search(r"\bDESCRIPTION\b", compact):
+            description_seen = True
+            first_header_index = index if first_header_index is None else first_header_index
+            last_header_index = index
+
+        if re.search(r"\bFIGURE\b", compact):
+            figure_seen = True
+            first_header_index = index if first_header_index is None else first_header_index
+            last_header_index = index
+
+        # Do not scan forever into the data.  Once every required header has
+        # appeared, the window is known even if Figure was emitted after pin 1.
+        if pin_seen and number_seen and description_seen and figure_seen:
+            break
+
+    if not (pin_seen and number_seen and description_seen and figure_seen):
+        return lines, None
+
+    return lines, {
+        "first": first_header_index,
+        "last": last_header_index
+    }
+
+
+def split_pin_description_figure_payload(payload):
+    payload = normalize_pdf_line(payload)
+    if payload == "":
+        return "", ""
+
+    figure_match = re.search(r"\bFIGURE\b", payload, re.IGNORECASE)
+    if figure_match is not None:
+        description = payload[:figure_match.start()].strip()
+        figure = payload[figure_match.start():].strip()
+        return description, figure
+
+    # A dash is a legitimate Figure-column value in this table family.
+    dash_match = re.search(r"(?:^|\s)-(?:\s*)$", payload)
+    if dash_match is not None:
+        description = payload[:dash_match.start()].strip()
+        return description, "-"
+
+    return payload, ""
+
+
+def parse_normal_pin_description_figure_rows(lines):
+    rows = []
+
+    for line in lines:
+        if is_figure_table_header_fragment(line):
+            continue
+
+        match = re.match(r"^(\d+)\s+(.+)$", line)
+        if match is None:
+            continue
+
+        pin = match.group(1)
+        payload = match.group(2).strip()
+        description, figure = split_pin_description_figure_payload(payload)
+
+        # A line such as "19 -" or "36 Figure 5, Figure 8" is the staggered
+        # form's transition marker, not a complete normal row.
+        if description == "":
+            continue
+
+        rows.append([pin, description, figure])
+
+    return rows
+
+
+def get_staggered_figure_markers(lines, start_index):
+    markers = []
+
+    for index in range(start_index, len(lines)):
+        line = lines[index]
+
+        if is_figure_table_header_fragment(line):
+            continue
+
+        exact_pin = re.fullmatch(r"\d+", line)
+        if exact_pin is not None:
+            markers.append({"index": index, "pin": exact_pin.group(0), "figure": ""})
+            continue
+
+        match = re.match(r"^(\d+)\s+(.+)$", line)
+        if match is None:
+            continue
+
+        remainder = normalize_pdf_line(match.group(2))
+        if is_figure_cell_text(remainder):
+            markers.append({
+                "index": index,
+                "pin": match.group(1),
+                "figure": remainder
+            })
+
+    return markers
+
+
+def clean_figure_description_lines(values):
+    cleaned = []
+    for value in values:
+        text = normalize_pdf_line(value)
+        if text == "" or is_figure_table_header_fragment(text):
+            continue
+        cleaned.append(text)
+    return " ".join(cleaned).strip()
+
+
+def parse_staggered_pin_description_figure_rows(lines, header_info):
+    # Start at the Description header, not after the Figure header, because this
+    # PDF sometimes emits the first pin BEFORE it emits the Figure header.
+    start_index = max(0, header_info["first"])
+    markers = get_staggered_figure_markers(lines, start_index)
+
+    if len(markers) < 2:
+        return []
+
+    rows = []
+
+    # marker[i] introduces the next pin while carrying the Figure value for
+    # marker[i-1].  The description for marker[i-1] follows marker[i] and ends
+    # immediately before marker[i+1].
+    for marker_index in range(1, len(markers)):
+        previous_marker = markers[marker_index - 1]
+        current_marker = markers[marker_index]
+        next_line_index = markers[marker_index + 1]["index"] if marker_index + 1 < len(markers) else len(lines)
+
+        description_slice = lines[current_marker["index"] + 1:next_line_index]
+
+        # The final slice can also contain the last pin's terminal Figure cell.
+        # Split at the first standalone Figure-value line so it is not swallowed
+        # into the previous row's Description.
+        terminal_figure_offset = None
+        if marker_index == len(markers) - 1:
+            for offset, value in enumerate(description_slice):
+                if is_figure_cell_text(value):
+                    terminal_figure_offset = offset
+                    break
+
+        if terminal_figure_offset is None:
+            previous_description_lines = description_slice
+        else:
+            previous_description_lines = description_slice[:terminal_figure_offset]
+
+        description = clean_figure_description_lines(previous_description_lines)
+        figure = current_marker["figure"]
+
+        if description != "":
+            rows.append([previous_marker["pin"], description, figure])
+
+        # If the PDF emitted a terminal Figure cell after the final transition,
+        # the text after it is the final pin's Description.  Recover that row too.
+        if marker_index == len(markers) - 1 and terminal_figure_offset is not None:
+            terminal_figure = normalize_pdf_line(description_slice[terminal_figure_offset])
+            terminal_description = clean_figure_description_lines(description_slice[terminal_figure_offset + 1:])
+            if terminal_description != "":
+                rows.append([current_marker["pin"], terminal_description, terminal_figure])
+
+    return rows
+
+
+def looks_like_pdf_pin_description_figure_table(input_text):
+    lines, header_info = get_figure_pinout_header_window(input_text)
+    if header_info is None:
+        return False
+
+    # Require at least two plausible pin-bearing data lines.
+    data_candidates = 0
+    for line in lines[header_info["first"] + 1:]:
+        if re.match(r"^\d+(?:\s|$)", line):
+            data_candidates += 1
+
+    return data_candidates >= 2
+
+
+def parse_pdf_pin_description_figure_table(input_text):
+    lines, header_info = get_figure_pinout_header_window(input_text)
+    rows = [list(FIGURE_PINOUT_HEADERS)]
+
+    if header_info is None:
+        return rows
+
+    normal_rows = parse_normal_pin_description_figure_rows(lines[header_info["first"]:])
+    staggered_rows = parse_staggered_pin_description_figure_rows(lines, header_info)
+
+    # Choose the interpretation that reconstructs more complete rows.  This lets
+    # normal row-wise PDF copies keep their natural structure while the broken
+    # tagged-text form from this Figure table uses the staggered recovery path.
+    selected_rows = staggered_rows if len(staggered_rows) > len(normal_rows) else normal_rows
+
+    rows.extend(selected_rows)
+    return rows
 
 
 # =========================================
@@ -1316,6 +1594,23 @@ def parse_table():
     delimiter_name = ""
 
     # =========================================
+    # PDF 3-COLUMN PIN / DESCRIPTION / FIGURE TABLE FIRST
+    #
+    # This format can be copied from the PDF in a staggered tagged-text order,
+    # so it must be reconstructed before the generic spaced-table fallback.
+    # =========================================
+
+    if looks_like_pdf_pin_description_figure_table(input_text):
+
+        rows = parse_pdf_pin_description_figure_table(input_text)
+
+        if len(rows) > 1:
+            label = "PDF PIN / DESCRIPTION / FIGURE TABLE"
+            if looks_highly_verticalized(input_text):
+                label += " / STAGGERED PASTE"
+            return rows, 3, label
+
+    # =========================================
     # PDF 4-COLUMN SIMPLE / POWER PINOUT TABLE FIRST
     #
     # Example: Pin # | Signal Name | Signal Type | Signal Description.
@@ -1500,6 +1795,7 @@ def detect_table():
         delimiter_name == "PDF WIRING TABLE"
         or delimiter_name.startswith("PDF PINOUT TABLE")
         or delimiter_name.startswith("PDF SIMPLE PINOUT TABLE")
+        or delimiter_name.startswith("PDF PIN / DESCRIPTION / FIGURE TABLE")
     )
 
     detected_row_count = len(rows) - 1 if structured_pdf_table else len(rows)
