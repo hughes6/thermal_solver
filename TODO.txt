@@ -132,37 +132,233 @@ SIMPLE_PINOUT_HEADERS = [
 ]
 
 
-def looks_like_pdf_simple_pinout_table(input_text):
+def get_flat_pdf_tokens(input_text):
+    """Return a whitespace token stream regardless of how Acrobat inserted newlines."""
+    tokens = []
+
+    for raw_line in input_text.replace("\r\n", "\n").replace("\r", "\n").split("\n"):
+        line = normalize_pdf_line(raw_line)
+
+        if line == "":
+            continue
+
+        tokens.extend(line.split())
+
+    return tokens
+
+
+def normalized_header_token(value):
+    value = str(value or "").strip().upper()
+    value = value.replace("–", "-").replace("—", "-")
+    return value.strip(":")
+
+
+def find_token_pair(tokens, first, second, start=0, stop=None):
+    upper_tokens = [normalized_header_token(token) for token in tokens]
+    if stop is None:
+        stop = len(tokens)
+
+    for index in range(max(0, start), min(stop, len(tokens) - 1)):
+        if upper_tokens[index] == first and upper_tokens[index + 1] == second:
+            return index
+
+    return None
+
+
+def find_simple_pinout_header_end(tokens):
+    """
+    Find the end of:
+        Pin # | Signal Name | Signal Type | Signal Description
+
+    This works whether those headers arrive as four normal lines, individual
+    cells on separate lines, or literally one word per line.
+    """
+    upper_tokens = [normalized_header_token(token) for token in tokens]
+    search_stop = min(len(tokens), 120)
+
+    for description_index in range(search_stop - 1):
+        if not (
+            upper_tokens[description_index] == "SIGNAL"
+            and upper_tokens[description_index + 1] == "DESCRIPTION"
+        ):
+            continue
+
+        before = upper_tokens[max(0, description_index - 20):description_index]
+        before_text = " ".join(before)
+
+        if "SIGNAL NAME" not in before_text:
+            continue
+
+        if "SIGNAL TYPE" not in before_text:
+            continue
+
+        if "PIN" not in before:
+            continue
+
+        return description_index + 2
+
+    return None
+
+
+def find_connector_pinout_header_end(tokens):
+    """
+    Find the end of:
+        Ref Des | Pin | Signal Name | Direction | Type | Description
+
+    The header can be split at arbitrary newline boundaries.
+    """
+    upper_tokens = [normalized_header_token(token) for token in tokens]
+    search_stop = min(len(tokens), 140)
+
+    for description_index in range(search_stop):
+        if upper_tokens[description_index] != "DESCRIPTION":
+            continue
+
+        before = upper_tokens[max(0, description_index - 24):description_index]
+        before_text = " ".join(before)
+
+        if "SIGNAL NAME" not in before_text:
+            continue
+
+        if "DIRECTION" not in before:
+            continue
+
+        if "TYPE" not in before:
+            continue
+
+        if "PIN" not in before:
+            continue
+
+        if "REF" not in before or "DES" not in before:
+            continue
+
+        # A 4-column table has the phrase SIGNAL TYPE.  Do not steal it.
+        if "SIGNAL TYPE" in before_text:
+            continue
+
+        return description_index + 1
+
+    return None
+
+
+def looks_highly_verticalized(input_text):
+    """Heuristic used only for the status text, not for deciding correctness."""
     lines = get_nonempty_normalized_lines(input_text)
 
-    if len(lines) < 3:
+    if len(lines) < 6:
         return False
 
-    header_block = " ".join(lines[:10]).upper()
+    short_lines = sum(1 for line in lines if len(line.split()) <= 1)
+    return short_lines / len(lines) >= 0.55
 
-    required_header_terms = [
-        "PIN",
-        "SIGNAL NAME",
-        "SIGNAL TYPE",
-        "SIGNAL DESCRIPTION"
-    ]
 
-    if not all(term in header_block for term in required_header_terms):
+def select_pin_token_indices(tokens, data_start, minimum_payload_tokens):
+    """
+    Pick the most plausible increasing pin-number sequence from a flattened PDF
+    token stream.  This prevents an isolated numeric value in a description from
+    normally being mistaken for a new pin row.
+    """
+    candidates = []
+
+    for index in range(data_start, len(tokens)):
+        value = tokens[index]
+
+        if not is_integer_value(value):
+            continue
+
+        candidates.append((index, int(value)))
+
+    if not candidates:
+        return []
+
+    # DP state: best path ending at each candidate.  Prefer more rows first,
+    # then consecutive pin numbering, then a smaller first pin number.
+    states = []
+
+    for candidate_index, (token_index, pin_number) in enumerate(candidates):
+        best_path = [candidate_index]
+        best_count = 1
+        best_consecutive = 0
+        best_first_pin = pin_number
+
+        for previous_candidate_index in range(candidate_index):
+            previous_token_index, previous_pin_number = candidates[previous_candidate_index]
+
+            if pin_number <= previous_pin_number:
+                continue
+
+            payload_end = token_index
+
+            # If a connector designator sits immediately before this pin, it
+            # belongs to this row, not the previous row's Description.
+            if token_index - 1 > previous_token_index:
+                possible_ref = tokens[token_index - 1]
+                if is_pinout_ref_designator(possible_ref):
+                    payload_end -= 1
+
+            payload_count = payload_end - previous_token_index - 1
+
+            if payload_count < minimum_payload_tokens:
+                continue
+
+            previous_state = states[previous_candidate_index]
+            path = previous_state["path"] + [candidate_index]
+            count = previous_state["count"] + 1
+            consecutive = previous_state["consecutive"] + (1 if pin_number == previous_pin_number + 1 else 0)
+            first_pin = previous_state["first_pin"]
+
+            score = (count, consecutive, 1 if first_pin == 1 else 0, -first_pin)
+            best_score = (best_count, best_consecutive, 1 if best_first_pin == 1 else 0, -best_first_pin)
+
+            if score > best_score:
+                best_path = path
+                best_count = count
+                best_consecutive = consecutive
+                best_first_pin = first_pin
+
+        states.append({
+            "path": best_path,
+            "count": best_count,
+            "consecutive": best_consecutive,
+            "first_pin": best_first_pin
+        })
+
+    valid_states = []
+
+    for state in states:
+        last_candidate_index = state["path"][-1]
+        last_token_index = candidates[last_candidate_index][0]
+        remaining_payload = len(tokens) - last_token_index - 1
+
+        if remaining_payload >= minimum_payload_tokens:
+            valid_states.append(state)
+
+    if not valid_states:
+        valid_states = states
+
+    valid_states.sort(
+        key=lambda state: (
+            state["count"],
+            state["consecutive"],
+            1 if state["first_pin"] == 1 else 0,
+            -state["first_pin"]
+        ),
+        reverse=True
+    )
+
+    selected = valid_states[0]["path"]
+    return [candidates[index][0] for index in selected]
+
+
+def looks_like_pdf_simple_pinout_table(input_text):
+    tokens = get_flat_pdf_tokens(input_text)
+    header_end = find_simple_pinout_header_end(tokens)
+
+    if header_end is None:
         return False
 
-    # Do not let a 6-column connector table fall into this parser.
-    if "DIRECTION" in header_block and "DESCRIPTION" in header_block:
-        return False
-
-    pin_row_count = 0
-
-    for line in lines:
-        # Logical columns: Pin | Signal Name | Signal Type | Signal Description
-        # Description may be blank, but signal name and type must exist.
-        if re.match(r"^\d+\s+\S+\s+\S+(?:\s+.*)?$", line):
-            pin_row_count += 1
-
-    return pin_row_count >= 2
+    pin_indices = select_pin_token_indices(tokens, header_end, minimum_payload_tokens=2)
+    return len(pin_indices) >= 2
 
 
 def is_simple_pinout_header_line(line):
@@ -188,7 +384,6 @@ def is_simple_pinout_header_line(line):
     ):
         return True
 
-    # Common title form, e.g. "TABLE 5 - POWER CONNECTOR PINOUT".
     if upper_text.startswith("TABLE ") and "PINOUT" in upper_text:
         return True
 
@@ -220,84 +415,54 @@ def parse_simple_pinout_data_line(line):
     signal_type = tokens.pop(0)
     description = " ".join(tokens)
 
-    return [
-        pin,
-        signal_name,
-        signal_type,
-        description
-    ]
+    return [pin, signal_name, signal_type, description]
 
 
 def parse_pdf_simple_pinout_table(input_text):
-    lines = get_nonempty_normalized_lines(input_text)
-
+    # Flattening first is intentional.  The same parser therefore works when
+    # Acrobat gives us normal rows, one cell per line, or one word per line.
+    tokens = get_flat_pdf_tokens(input_text)
+    header_end = find_simple_pinout_header_end(tokens)
     rows = [list(SIMPLE_PINOUT_HEADERS)]
-    last_data_row = None
 
-    for line in lines:
-        if is_simple_pinout_header_line(line):
+    if header_end is None:
+        return rows
+
+    pin_indices = select_pin_token_indices(tokens, header_end, minimum_payload_tokens=2)
+
+    for row_index, pin_index in enumerate(pin_indices):
+        next_pin_index = pin_indices[row_index + 1] if row_index + 1 < len(pin_indices) else len(tokens)
+        payload_end = next_pin_index
+
+        payload = tokens[pin_index + 1:payload_end]
+
+        if len(payload) < 2:
             continue
 
-        parsed_row = parse_simple_pinout_data_line(line)
+        pin = tokens[pin_index]
+        signal_name = payload[0]
+        signal_type = payload[1]
+        description = " ".join(payload[2:])
 
-        if parsed_row is not None:
-            rows.append(parsed_row)
-            last_data_row = len(rows) - 1
-            continue
-
-        # If Acrobat wraps a long Signal Description onto another clipboard
-        # line, keep that text with the previous pin instead of creating junk.
-        if last_data_row is not None:
-            continuation = normalize_pdf_line(line)
-
-            if continuation != "":
-                if rows[last_data_row][3] == "":
-                    rows[last_data_row][3] = continuation
-                else:
-                    rows[last_data_row][3] += " " + continuation
+        rows.append([
+            pin,
+            signal_name,
+            signal_type,
+            description
+        ])
 
     return rows
 
 
 def looks_like_pdf_pinout_table(input_text):
-    lines = get_nonempty_normalized_lines(input_text)
+    tokens = get_flat_pdf_tokens(input_text)
+    header_end = find_connector_pinout_header_end(tokens)
 
-    if len(lines) < 3:
+    if header_end is None:
         return False
 
-    # PDF copy/paste may split "Ref Des" across two lines, so inspect the
-    # beginning as one normalized block instead of requiring one exact header.
-    header_block = " ".join(lines[:10]).upper()
-
-    required_header_terms = [
-        "PIN",
-        "SIGNAL NAME",
-        "DIRECTION",
-        "TYPE",
-        "DESCRIPTION"
-    ]
-
-    if not all(term in header_block for term in required_header_terms):
-        return False
-
-    if "REF" not in header_block or "DES" not in header_block:
-        return False
-
-    pin_row_count = 0
-
-    for line in lines:
-        # Standard merged-ref form: 1 NC NC NC No Connect
-        if re.match(r"^\d+\s+\S+\s+\S+\s+\S+(?:\s+.*)?$", line):
-            pin_row_count += 1
-            continue
-
-        # Inline-ref form: J1R 1 NC NC NC No Connect
-        match = re.match(r"^(\S+)\s+(\d+)\s+\S+\s+\S+\s+\S+(?:\s+.*)?$", line)
-
-        if match is not None and is_connector_designator(match.group(1)):
-            pin_row_count += 1
-
-    return pin_row_count >= 2
+    pin_indices = select_pin_token_indices(tokens, header_end, minimum_payload_tokens=3)
+    return len(pin_indices) >= 2
 
 
 def is_pinout_header_line(line):
@@ -318,7 +483,6 @@ def is_pinout_header_line(line):
     }:
         return True
 
-    # Combined/split header text from PDF clipboard extraction.
     if (
         "PIN" in upper_text
         and "SIGNAL NAME" in upper_text
@@ -328,7 +492,6 @@ def is_pinout_header_line(line):
     ):
         return True
 
-    # Common title form, e.g. "Table 5-1 - Networking Connector Pinout".
     if upper_text.startswith("TABLE ") and "PINOUT" in upper_text:
         return True
 
@@ -339,6 +502,65 @@ def is_pinout_header_line(line):
         return True
 
     return False
+
+
+
+
+def is_pinout_ref_designator(value):
+    """Stricter Ref Des test so signal names like P5_1000BT_D4- are not connectors."""
+    text = normalize_pdf_line(value).upper().replace(" ", "")
+
+    if text == "":
+        return False
+
+    # Normal connector names used by these pinout tables, including a compact
+    # shared label such as J1R/J2R.
+    return re.fullmatch(r"J\d+[A-Z]*(?:[/,&+]J\d+[A-Z]*)*", text) is not None
+
+def normalize_pinout_direction(value):
+    upper = str(value or "").strip().upper().replace("\\", "/")
+
+    mapping = {
+        "INPUT": "Input",
+        "IN": "In",
+        "OUTPUT": "Output",
+        "OUT": "Out",
+        "INOUT": "Inout",
+        "IN/OUT": "In/Out",
+        "BIDIR": "Bidir",
+        "BIDIRECTIONAL": "Bidirectional",
+        "NC": "NC",
+        "N/C": "N/C",
+        "-": "-"
+    }
+
+    return mapping.get(upper, str(value or "").strip())
+
+
+def find_direction_token_index(payload):
+    direction_values = {
+        "INPUT",
+        "IN",
+        "OUTPUT",
+        "OUT",
+        "INOUT",
+        "IN/OUT",
+        "BIDIR",
+        "BIDIRECTIONAL",
+        "NC",
+        "N/C",
+        "-"
+    }
+
+    # Start at 1 so a signal named NC is not mistaken for the direction when
+    # the row is "NC NC NC No Connect".
+    for index in range(1, len(payload)):
+        upper = str(payload[index]).strip().upper().replace("\\", "/")
+
+        if upper in direction_values:
+            return index
+
+    return None
 
 
 def parse_pinout_data_line(line, current_ref_des):
@@ -354,8 +576,6 @@ def parse_pinout_data_line(line, current_ref_des):
 
     ref_des = current_ref_des
 
-    # Some PDFs repeat the Ref Des on every row; others show it once in a
-    # vertically merged cell. Support both without shifting the remaining data.
     if (
         len(tokens) >= 2
         and is_connector_designator(tokens[0])
@@ -367,92 +587,86 @@ def parse_pinout_data_line(line, current_ref_des):
         return None
 
     pin = tokens.pop(0)
+    direction_index = find_direction_token_index(tokens)
 
-    # Remaining logical columns are:
-    # Signal Name | Direction | Type | Description
-    # Signal/Direction/Type are single clipboard tokens in this table family;
-    # Description consumes the rest, including spaces and commas.
-    if len(tokens) < 3:
-        return None
+    if direction_index is not None and direction_index >= 1 and direction_index + 1 < len(tokens):
+        signal_name = " ".join(tokens[:direction_index])
+        direction = normalize_pinout_direction(tokens[direction_index])
+        signal_type = tokens[direction_index + 1]
+        description = " ".join(tokens[direction_index + 2:])
+    else:
+        if len(tokens) < 3:
+            return None
 
-    signal_name = tokens.pop(0)
-    direction = tokens.pop(0)
-    signal_type = tokens.pop(0)
-    description = " ".join(tokens)
+        signal_name = tokens[0]
+        direction = normalize_pinout_direction(tokens[1])
+        signal_type = tokens[2]
+        description = " ".join(tokens[3:])
 
-    return [
-        ref_des,
-        pin,
-        signal_name,
-        direction,
-        signal_type,
-        description
-    ]
+    return [ref_des, pin, signal_name, direction, signal_type, description]
 
 
 def parse_pdf_pinout_table(input_text):
-    lines = get_nonempty_normalized_lines(input_text)
-
+    tokens = get_flat_pdf_tokens(input_text)
+    header_end = find_connector_pinout_header_end(tokens)
     rows = [list(PINOUT_HEADERS)]
 
+    if header_end is None:
+        return rows
+
+    pin_indices = select_pin_token_indices(tokens, header_end, minimum_payload_tokens=3)
     current_ref_des = ""
-    last_data_row = None
 
-    index = 0
+    for row_index, pin_index in enumerate(pin_indices):
+        next_pin_index = pin_indices[row_index + 1] if row_index + 1 < len(pin_indices) else len(tokens)
 
-    while index < len(lines):
-        line = lines[index]
+        # Ref Des can be a vertically merged value once before the first pin,
+        # or it can be repeated immediately before each pin.
+        if row_index == 0:
+            # Only search the small pre-data area before the first pin.  Do not
+            # scan the previous row payload for later pins, because signal names
+            # such as P5_1000BT_D4- also contain letters and digits.
+            for token in tokens[header_end:pin_index]:
+                if is_pinout_ref_designator(token):
+                    current_ref_des = token
 
-        if is_pinout_header_line(line):
-            index += 1
+        if pin_index > header_end and is_pinout_ref_designator(tokens[pin_index - 1]):
+            current_ref_des = tokens[pin_index - 1]
+
+        payload_end = next_pin_index
+
+        if row_index + 1 < len(pin_indices):
+            # A repeated connector name immediately before the next pin belongs
+            # to the next row, not this row's Description.
+            if payload_end - 1 > pin_index and is_pinout_ref_designator(tokens[payload_end - 1]):
+                payload_end -= 1
+
+        payload = tokens[pin_index + 1:payload_end]
+
+        if len(payload) < 3:
             continue
 
-        parsed_row = parse_pinout_data_line(line, current_ref_des)
+        direction_index = find_direction_token_index(payload)
 
-        if parsed_row is not None:
-            # If the row carried its own Ref Des, keep it for subsequent rows
-            # belonging to the same merged connector block.
-            if parsed_row[0] != "":
-                current_ref_des = parsed_row[0]
+        if direction_index is not None and direction_index >= 1 and direction_index + 1 < len(payload):
+            signal_name = " ".join(payload[:direction_index])
+            direction = normalize_pinout_direction(payload[direction_index])
+            signal_type = payload[direction_index + 1]
+            description = " ".join(payload[direction_index + 2:])
+        else:
+            signal_name = payload[0]
+            direction = normalize_pinout_direction(payload[1])
+            signal_type = payload[2]
+            description = " ".join(payload[3:])
 
-            rows.append(parsed_row)
-            last_data_row = len(rows) - 1
-            index += 1
-            continue
-
-        # A standalone connector name immediately before a pin row is the
-        # clipboard representation of a vertically merged Ref Des cell.
-        if is_connector_designator(line):
-            next_data_found = False
-
-            for lookahead in range(index + 1, min(index + 4, len(lines))):
-                next_line = lines[lookahead]
-
-                if is_pinout_header_line(next_line):
-                    continue
-
-                if re.match(r"^\d+\s+", next_line):
-                    next_data_found = True
-
-                break
-
-            if next_data_found:
-                current_ref_des = line
-                index += 1
-                continue
-
-        # Wrapped description text belongs to the previous pin row. Do not
-        # discard it merely because the PDF placed it on a separate line.
-        if last_data_row is not None:
-            continuation = normalize_pdf_line(line)
-
-            if continuation != "":
-                if rows[last_data_row][5] == "":
-                    rows[last_data_row][5] = continuation
-                else:
-                    rows[last_data_row][5] += " " + continuation
-
-        index += 1
+        rows.append([
+            current_ref_des,
+            tokens[pin_index],
+            signal_name,
+            direction,
+            signal_type,
+            description
+        ])
 
     return rows
 
@@ -968,7 +1182,10 @@ def parse_table():
         rows = parse_pdf_simple_pinout_table(input_text)
 
         if len(rows) > 1:
-            return rows, 4, "PDF SIMPLE PINOUT TABLE"
+            label = "PDF SIMPLE PINOUT TABLE"
+            if looks_highly_verticalized(input_text):
+                label += " / VERTICAL PASTE"
+            return rows, 4, label
 
     # =========================================
     # PDF 6-COLUMN CONNECTOR PINOUT TABLE
@@ -982,7 +1199,10 @@ def parse_table():
         rows = parse_pdf_pinout_table(input_text)
 
         if len(rows) > 1:
-            return rows, 6, "PDF PINOUT TABLE"
+            label = "PDF PINOUT TABLE"
+            if looks_highly_verticalized(input_text):
+                label += " / VERTICAL PASTE"
+            return rows, 6, label
 
     # =========================================
     # PDF WIRING TABLE
@@ -1131,11 +1351,11 @@ def detect_table():
     if column_count > 0:
         column_selector.current(0)
 
-    structured_pdf_table = delimiter_name in {
-        "PDF WIRING TABLE",
-        "PDF PINOUT TABLE",
-        "PDF SIMPLE PINOUT TABLE"
-    }
+    structured_pdf_table = (
+        delimiter_name == "PDF WIRING TABLE"
+        or delimiter_name.startswith("PDF PINOUT TABLE")
+        or delimiter_name.startswith("PDF SIMPLE PINOUT TABLE")
+    )
 
     detected_row_count = len(rows) - 1 if structured_pdf_table else len(rows)
 
