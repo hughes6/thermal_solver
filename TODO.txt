@@ -5,7 +5,7 @@ import csv
 import io
 import re
 
-# FIX VERSION: generic PDF 3-10 columns + newline/cell-stream recovery + strict dash cells + no adjacent-column bleed + J5 fixes
+# FIX VERSION: generic PDF 3-10 columns + OMITTED BLANK CELL recovery + newline/cell-stream recovery + strict dash cells + no adjacent-column bleed + J5 fixes
 
 
 current_count = 0
@@ -2962,8 +2962,26 @@ def generic_pdf_choose_anchor_path(lines, column_count):
                 prev_index = indices[prev_pos]
                 gap = line_index - prev_index
 
-                # One row must have at least one physical cell per column.
-                if gap < column_count:
+                # PDF clipboard text often OMITS empty table cells entirely.
+                # Therefore a real N-column row can occupy fewer than N physical
+                # lines.  Do not require gap >= column_count here; that was the
+                # bug that skipped contacts such as 02/04/06 when Description was
+                # blank and merged the next row into Column 2.
+                #
+                # A one-line gap is allowed for strong anchor families where the
+                # first column itself is enough to identify the next row (e.g.
+                # 01, 02, 03 or J1, J2, J3).  For plain unpadded integers keep a
+                # two-line minimum so a numeric value inside another cell is less
+                # likely to become a phantom row anchor.
+                minimum_gap = 2
+                if signature[0] in {
+                    "DIGITS_ZERO_PADDED",
+                    "ALPHA_DIGITS",
+                    "COMPACT_DESIGNATOR",
+                }:
+                    minimum_gap = 1
+
+                if gap < minimum_gap:
                     continue
                 if gap > max_gap:
                     continue
@@ -2993,7 +3011,10 @@ def generic_pdf_choose_anchor_path(lines, column_count):
                 state = {
                     "path": prev_state["path"] + [line_index],
                     "rows": prev_state["rows"] + 1,
-                    "gap_error": prev_state["gap_error"] + abs(gap - column_count),
+                    # A gap SMALLER than column_count is not an error: it
+                    # usually means one or more blank PDF cells were not emitted
+                    # to the clipboard.  Only penalize overflow/wrapping.
+                    "gap_error": prev_state["gap_error"] + max(0, gap - column_count),
                     "wrapped": prev_state["wrapped"] + max(0, gap - column_count),
                     "quality": prev_state["quality"] + transition_quality,
                     "values": state_values,
@@ -3154,80 +3175,169 @@ def generic_pdf_group_score(values, column_index, target_count):
     return score
 
 
+
+def generic_pdf_empty_cell_score(column_index, target_count):
+    """
+    Score an omitted/blank logical cell.
+
+    Acrobat/PDF viewers commonly do not emit blank cells at all.  Empty cells
+    must therefore be legal during reconstruction.  The final payload column is
+    most often Description/Comment/Figure and is especially likely to be blank,
+    while a blank middle cell is possible but gets a small penalty.
+    """
+    if target_count <= 0:
+        return -3.0
+
+    if column_index == target_count - 1:
+        return 0.75
+
+    if column_index == 0:
+        return -3.0
+
+    return -1.25
+
 def generic_pdf_partition_payload(payload, target_count):
     """
-    Partition a vertical PDF row payload into exactly target_count cells.
+    Partition one anchor-delimited PDF row payload into exactly target_count
+    logical cells.
 
-    This is a dynamic-programming recovery path for Acrobat copies where a
-    newline is inserted between every cell OR even between words inside a cell.
-    It keeps literal '-' values as their own cells, rejoins Figure 10, rejoins
-    numeric-leading signals such as 10 MHz+ Input, and lets Description wrap.
+    Important behaviors:
+      * blank PDF cells may be omitted from clipboard text entirely;
+      * a newline may appear between every real cell;
+      * a newline may also appear inside one real cell;
+      * '-' / NA / Output / Analog / LVDS remain standalone cells;
+      * Figure + 10 may be rejoined as "Figure 10";
+      * 10 + MHz+ + Input may be rejoined as "10 MHz+ Input".
+
+    Unlike the older implementation, EMPTY logical groups are allowed.  That is
+    what keeps a five-column row such as
+
+        01
+        RA0_THERM_P
+        Output
+        Analog
+        02
+
+    aligned as
+
+        01 | RA0_THERM_P | Output | Analog | <blank>
+
+    instead of skipping 02 and concatenating the next row into Column 2.
     """
     values = [generic_pdf_normalized_cell(value) for value in payload]
     values = [value for value in values if value != ""]
 
     if target_count <= 0:
         return []
+
     if not values:
         return [""] * target_count
-    if len(values) < target_count:
-        return values + [""] * (target_count - len(values))
-    if len(values) == target_count:
-        return values
+
     if target_count == 1:
         return [generic_pdf_join_cell_lines(values)]
 
     n = len(values)
     neg = -10**18
-    # dp[g][i] = best score for first i physical lines partitioned into g cells.
+
+    # dp[g][i] = best score after creating g logical cells and consuming the
+    # first i physical clipboard lines.  A logical cell may consume zero lines.
     dp = [[neg] * (n + 1) for _ in range(target_count + 1)]
     prev = [[None] * (n + 1) for _ in range(target_count + 1)]
     dp[0][0] = 0.0
 
     for groups in range(1, target_count + 1):
-        min_i = groups
-        max_i = n - (target_count - groups)
-        for i in range(min_i, max_i + 1):
-            # Keep search bounded.  Long text is normally Description, and the
-            # last cell may consume everything that remains.
-            max_group_len = n if groups == target_count else min(12, i - (groups - 1))
-            j_min = max(groups - 1, i - max_group_len)
+        column_index = groups - 1
+
+        for i in range(0, n + 1):
+            # Option 1: this logical column was blank/omitted by the PDF copy.
+            if dp[groups - 1][i] != neg:
+                empty_score = dp[groups - 1][i] + generic_pdf_empty_cell_score(
+                    column_index,
+                    target_count,
+                )
+                if empty_score > dp[groups][i]:
+                    dp[groups][i] = empty_score
+                    prev[groups][i] = ("EMPTY", i)
+
+            # Option 2: consume one or more consecutive physical lines.
+            max_group_len = n if groups == target_count else min(12, i)
+            j_min = max(0, i - max_group_len)
+
             for j in range(j_min, i):
                 if dp[groups - 1][j] == neg:
                     continue
+
                 group_values = values[j:i]
                 group_score = generic_pdf_group_score(
                     group_values,
-                    groups - 1,
+                    column_index,
                     target_count,
                 )
+
+                # Extra evidence for identifiers split at punctuation.
+                joined = generic_pdf_join_cell_lines(group_values)
+                if len(group_values) >= 2:
+                    if any(
+                        str(group_values[k]).rstrip().endswith(("_", "/", "-", "+", "."))
+                        or str(group_values[k + 1]).lstrip().startswith(("_", "/", "-", "+", "."))
+                        for k in range(len(group_values) - 1)
+                    ):
+                        group_score += 6.0
+
+                    # "Figure" + "10" and engineering-unit fragments are
+                    # especially common PDF line breaks.
+                    upper_parts = [str(v).upper() for v in group_values]
+                    if (
+                        upper_parts[0] == "FIGURE"
+                        and len(upper_parts) >= 2
+                        and re.fullmatch(r"\d+", upper_parts[1]) is not None
+                    ):
+                        group_score += 5.0
+
                 score = dp[groups - 1][j] + group_score
+
                 if score > dp[groups][i]:
                     dp[groups][i] = score
-                    prev[groups][i] = j
+                    prev[groups][i] = ("VALUES", j)
 
-    if prev[target_count][n] is None:
-        # Conservative fallback: preserve early scalar cells and merge overflow
-        # only into the final column.
-        head = values[:target_count - 1]
-        tail = generic_pdf_join_cell_lines(values[target_count - 1:])
-        return head + [tail]
+    if dp[target_count][n] == neg:
+        # Extremely conservative fallback.
+        values = values[:target_count]
+        while len(values) < target_count:
+            values.append("")
+        return values
 
-    groups = []
+    cells = []
     g = target_count
     i = n
+
     while g > 0:
-        j = prev[g][i]
-        if j is None:
-            break
-        groups.append(generic_pdf_join_cell_lines(values[j:i]))
-        i = j
+        entry = prev[g][i]
+
+        if entry is None:
+            cells.append("")
+            g -= 1
+            continue
+
+        kind, j = entry
+
+        if kind == "EMPTY":
+            cells.append("")
+            # i is unchanged
+        else:
+            cells.append(generic_pdf_join_cell_lines(values[j:i]))
+            i = j
+
         g -= 1
 
-    groups.reverse()
-    if len(groups) != target_count:
-        return values[:target_count - 1] + [generic_pdf_join_cell_lines(values[target_count - 1:])]
-    return groups
+    cells.reverse()
+
+    if len(cells) != target_count:
+        cells = cells[:target_count]
+        while len(cells) < target_count:
+            cells.append("")
+
+    return cells
 
 
 def generic_pdf_merge_payload_to_width(payload, target_count):
