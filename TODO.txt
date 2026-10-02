@@ -5,7 +5,7 @@ import csv
 import io
 import re
 
-# FIX VERSION: generic PDF 3-10 columns + HYBRID ROW/COLUMN STREAM recovery + sequential-anchor alignment + omitted blanks + strict dash cells + J5 fixes
+# FIX VERSION: contact-allocation token anchors + exact Unit Signal boundaries + generic PDF 3-10 columns + J5 fixes
 
 
 current_count = 0
@@ -2827,6 +2827,300 @@ def looks_like_flat_pdf_wiring_table(input_text):
 # concatenated onto the selected output column.
 # =========================================
 
+
+# =========================================
+# CONTACT ALLOCATION / UNIT SIGNAL TABLE
+# =========================================
+# Handles tables whose headers are split across arbitrary PDF clipboard lines:
+#
+#   Contact Designation | Unit Signal Designation | I/F Direction |
+#   Signal Type | Description
+#
+# The important difference from the generic parser is that row keys such as
+# 01, 02, 03 ... are detected in the FLATTENED token stream, not only when they
+# occupy a physical line by themselves.  This prevents Column 2 from swallowing
+# "Output" plus the next row's Unit Signal Designation.
+
+CONTACT_ALLOCATION_HEADERS = [
+    "CONTACT DESIGNATION",
+    "UNIT SIGNAL DESIGNATION",
+    "I/F DIRECTION",
+    "SIGNAL TYPE",
+    "DESCRIPTION",
+]
+
+CONTACT_DIRECTION_VALUES = {
+    "INPUT", "OUTPUT", "IN", "OUT", "INOUT", "IN/OUT", "I/O",
+    "BIDIR", "BIDIRECTIONAL", "NA", "N/A", "NC", "N/C", "-",
+}
+
+CONTACT_SIGNAL_TYPE_VALUES = {
+    "ANALOG", "DIGITAL", "DISCRETE", "POWER", "GROUND", "GND",
+    "LVDS", "TTL", "CMOS", "RS422", "RS-422", "RS485", "RS-485",
+    "CAN", "UART", "SPI", "I2C", "NA", "N/A", "NC", "N/C", "-",
+}
+
+
+def contact_allocation_token(value):
+    return generic_pdf_normalized_cell(value).strip(",;:")
+
+
+def contact_allocation_upper(value):
+    return contact_allocation_token(value).upper().replace("\\", "/")
+
+
+def looks_like_contact_allocation_table(input_text):
+    # Headers can be emitted one word per line, so inspect a flattened prefix.
+    tokens = [contact_allocation_token(v) for v in re.split(r"\s+", input_text) if contact_allocation_token(v)]
+    prefix = " ".join(tokens[:120]).upper()
+
+    return (
+        "CONTACT" in prefix
+        and "DESIGNATION" in prefix
+        and "UNIT" in prefix
+        and "SIGNAL" in prefix
+        and "DIRECTION" in prefix
+        and "TYPE" in prefix
+        and "DESCRIPTION" in prefix
+        and ("I/F" in prefix or "I F" in prefix or "IF" in prefix)
+    )
+
+
+def contact_allocation_longest_anchor_path(tokens):
+    """Return token indices for the strongest 01,02,03... / 1,2,3... run."""
+    numeric = []
+    for index, token in enumerate(tokens):
+        text = contact_allocation_token(token)
+        if re.fullmatch(r"\d+", text) is None:
+            continue
+        numeric.append((index, text, int(text)))
+
+    if len(numeric) < 2:
+        return []
+
+    # Prefer a zero-padded family (01,02,03...) when present.  This is extremely
+    # strong evidence for a Contact Designation column and cannot be confused
+    # with the 10 in a signal such as "10 MHz+ Input".
+    families = {}
+    for index, text, number in numeric:
+        if len(text) > 1 and text.startswith("0"):
+            family = ("ZERO", len(text))
+        else:
+            family = ("PLAIN",)
+        families.setdefault(family, []).append((index, text, number))
+
+    best = []
+    best_score = None
+
+    for family, values in families.items():
+        states = []
+        for pos, (index, text, number) in enumerate(values):
+            state = [index]
+            for prev_pos in range(pos):
+                prev_index, prev_text, prev_number = values[prev_pos]
+                if prev_number + 1 != number:
+                    continue
+                candidate = states[prev_pos] + [index]
+                if len(candidate) > len(state):
+                    state = candidate
+            states.append(state)
+
+            first_value = int(contact_allocation_token(tokens[state[0]]))
+            score = (
+                len(state),
+                1 if family[0] == "ZERO" else 0,
+                1 if first_value in (0, 1) else 0,
+                -state[0],
+            )
+            if best_score is None or score > best_score:
+                best_score = score
+                best = state
+
+    return best if len(best) >= 2 else []
+
+
+def contact_allocation_is_direction(value):
+    return contact_allocation_upper(value) in CONTACT_DIRECTION_VALUES
+
+
+def contact_allocation_is_signal_type(value):
+    return contact_allocation_upper(value) in CONTACT_SIGNAL_TYPE_VALUES
+
+
+def contact_allocation_join(values):
+    values = [contact_allocation_token(v) for v in values if contact_allocation_token(v)]
+    if not values:
+        return ""
+    return normalize_signal_name_fragments(values)
+
+
+def parse_contact_allocation_payload(payload, allow_large_tail=False):
+    """
+    Parse everything between two contact anchors.
+
+    Direction is a hard boundary.  Critically, the search starts at token 1 so
+    a Unit Signal value of NA is not mistaken for I/F Direction.  Therefore:
+
+        01 NA NA NA SPARE
+
+    becomes NA | NA | NA | SPARE, while:
+
+        03 RA0_OSW_D_A Output Analog
+
+    becomes RA0_OSW_D_A | Output | Analog | <blank>.
+    """
+    values = [contact_allocation_token(v) for v in payload if contact_allocation_token(v)]
+    if not values:
+        return ["", "", "", ""], []
+
+    direction_index = None
+    for index in range(1, len(values)):
+        if contact_allocation_is_direction(values[index]):
+            direction_index = index
+            break
+
+    if direction_index is None:
+        # No trustworthy column boundary.  Keep the entire payload in Unit
+        # Signal rather than contaminating multiple columns.
+        return [contact_allocation_join(values), "", "", ""], []
+
+    signal = contact_allocation_join(values[:direction_index])
+    direction = contact_allocation_token(values[direction_index])
+    remainder = values[direction_index + 1:]
+
+    signal_type = ""
+    description = ""
+    overflow = []
+
+    if remainder:
+        if contact_allocation_is_signal_type(remainder[0]):
+            signal_type = contact_allocation_token(remainder[0])
+            remainder = remainder[1:]
+
+        # For ordinary anchor-delimited rows, any residual text is Description.
+        # On the FINAL row a large residual block can instead contain one or
+        # more trailing whole-column streams, so return it separately for the
+        # caller to distribute.
+        if remainder:
+            if allow_large_tail:
+                overflow = remainder
+            else:
+                description = " ".join(remainder).strip()
+
+    return [signal, direction, signal_type, description], overflow
+
+
+def parse_contact_allocation_table(input_text):
+    """
+    Reconstruct the 5-column Contact Allocation table from arbitrary PDF \n.
+
+    This parser intentionally works on TOKENS rather than physical lines.  It
+    therefore handles all of these equally:
+
+        01\nRA0_THERM_P\nOutput\nAnalog\n02...
+        01 RA0_THERM_P\nOutput\nAnalog\n02...
+        01 RA0_THERM_P Output Analog 02 RA0_SW_P Output Analog ...
+
+    The sequential Contact Designation anchors are never allowed to become part
+    of Unit Signal Designation.
+    """
+    flat_tokens = [
+        contact_allocation_token(v)
+        for v in re.split(r"\s+", input_text.replace("\r", "\n"))
+        if contact_allocation_token(v)
+    ]
+
+    anchor_indices = contact_allocation_longest_anchor_path(flat_tokens)
+    if len(anchor_indices) < 2:
+        return []
+
+    rows = []
+    overflow_tail = []
+
+    for row_index, anchor_index in enumerate(anchor_indices):
+        next_anchor = anchor_indices[row_index + 1] if row_index + 1 < len(anchor_indices) else len(flat_tokens)
+        contact = contact_allocation_token(flat_tokens[anchor_index])
+        payload = flat_tokens[anchor_index + 1:next_anchor]
+
+        is_last_row = row_index == len(anchor_indices) - 1
+
+        # If the earlier rows consistently stop at Direction, Acrobat is
+        # emitting Signal Type as a trailing whole-column stream.  On the last
+        # row, do NOT consume the first trailing type token as though it belongs
+        # only to that row; keep the entire post-Direction tail for distribution.
+        prior_missing_types = sum(1 for row in rows if row[3] == "")
+        prior_rows = len(rows)
+        trailing_type_stream_expected = (
+            is_last_row
+            and prior_rows >= 2
+            and prior_missing_types >= max(2, (prior_rows + 1) // 2)
+        )
+
+        if trailing_type_stream_expected:
+            values = [contact_allocation_token(v) for v in payload if contact_allocation_token(v)]
+            direction_index = None
+            for candidate_index in range(1, len(values)):
+                if contact_allocation_is_direction(values[candidate_index]):
+                    direction_index = candidate_index
+                    break
+
+            if direction_index is not None:
+                parsed = [
+                    contact_allocation_join(values[:direction_index]),
+                    contact_allocation_token(values[direction_index]),
+                    "",
+                    "",
+                ]
+                overflow = values[direction_index + 1:]
+            else:
+                parsed, overflow = parse_contact_allocation_payload(payload, allow_large_tail=True)
+        else:
+            parsed, overflow = parse_contact_allocation_payload(
+                payload,
+                allow_large_tail=is_last_row,
+            )
+
+        rows.append([contact] + parsed)
+        if overflow:
+            overflow_tail = overflow
+
+    row_count = len(rows)
+
+    # The last interval can contain column-major streams emitted after all row
+    # anchors.  First recover Signal Type if it is absent from most rows and the
+    # next row_count tokens are valid type values.
+    if overflow_tail:
+        missing_types = sum(1 for row in rows if row[3] == "")
+        if missing_types >= max(1, row_count // 2) and len(overflow_tail) >= row_count:
+            candidate_types = overflow_tail[:row_count]
+            if sum(contact_allocation_is_signal_type(v) for v in candidate_types) >= max(2, (row_count + 1) // 2):
+                for idx, value in enumerate(candidate_types):
+                    if rows[idx][3] == "":
+                        rows[idx][3] = contact_allocation_token(value)
+                overflow_tail = overflow_tail[row_count:]
+
+        # If exactly one Description value per row remains, distribute it as a
+        # full trailing Description stream.  Literal '-' is a real cell.
+        if len(overflow_tail) == row_count:
+            for idx, value in enumerate(overflow_tail):
+                rows[idx][4] = contact_allocation_token(value)
+            overflow_tail = []
+
+        # Otherwise residual prose belongs only to the final row.  Never let it
+        # flow backward into Unit Signal Designation.
+        if overflow_tail:
+            rows[-1][4] = " ".join(overflow_tail).strip()
+
+    # Sanity check: we need at least two rows and most rows must have a Unit
+    # Signal plus a Direction boundary.  This prevents stealing unrelated data.
+    if len(rows) < 2:
+        return []
+    good = sum(1 for row in rows if row[1] != "" and row[2] != "")
+    if good < max(2, (len(rows) + 1) // 2):
+        return []
+
+    return [list(CONTACT_ALLOCATION_HEADERS)] + rows
+
 GENERIC_PDF_MIN_COLUMNS = 3
 GENERIC_PDF_MAX_COLUMNS = 10
 
@@ -4034,6 +4328,19 @@ def parse_table():
 
     rows = []
     delimiter_name = ""
+
+    # =========================================
+    # CONTACT ALLOCATION / UNIT SIGNAL TABLE
+    #
+    # Run this before the generic manual-column parser.  The PDF frequently
+    # inserts newlines at arbitrary token boundaries, so physical-line grouping
+    # is not reliable.  Sequential Contact Designations provide the row frame.
+    # =========================================
+
+    if (manual_columns in (None, 5)) and looks_like_contact_allocation_table(input_text):
+        rows = parse_contact_allocation_table(input_text)
+        if len(rows) > 2:
+            return rows, 5, "PDF CONTACT ALLOCATION TABLE / TOKEN-ANCHORED"
 
     # =========================================
     # MANUAL 3-10 COLUMN OVERRIDE
