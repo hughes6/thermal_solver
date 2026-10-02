@@ -741,23 +741,32 @@ for i in range(len(PIN_SIGNAL_INFO)):
     if not is_loaded:
         raise Exception(f"Failed loading CABBLOCK for {conn_name}")
 
-    block_symbol_id = block_sym.PlaceBlock(current_sheet_id, xp, yp, xwidth, yheight, parent_block)
+    actual_yp = yp
+    block_symbol_id = block_sym.PlaceBlock(current_sheet_id, xp, actual_yp, xwidth, yheight, parent_block)
 
     if block_symbol_id == 0:
         for retry_offset in range(1, 5):
+            actual_yp = yp - retry_offset
+
             block_symbol_id = block_sym.PlaceBlock(
                 current_sheet_id,
                 xp,
-                yp - retry_offset,
+                actual_yp,
                 xwidth,
                 yheight,
                 parent_block
             )
+
             if block_symbol_id != 0:
                 break
 
         if block_symbol_id == 0:
             raise Exception(f"Failed placing main block for {conn_name}")
+
+    # Keep the layout synchronized with where the block was ACTUALLY placed.
+    # The later pin map and text formatter both use this layout Y.
+    conn_layout_dict["y start"] = actual_yp
+    conn_layout_dict["y end"] = actual_yp + yheight
 
     # =========================================
     # SET COLOR
