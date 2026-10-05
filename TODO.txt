@@ -3,6 +3,7 @@ import time
 import pyodbc
 import tkinter as tk
 import pythoncom
+import sys
 import os
 import re
 import statistics
@@ -10,6 +11,102 @@ from openpyxl import load_workbook
 from collections import defaultdict
 from tkinter import messagebox, ttk, filedialog
 
+
+
+# -------------------------------------------------------
+# STARTUP MODE
+# -------------------------------------------------------
+def choose_start_mode():
+    """
+    Choose whether this run should:
+      1. Build/place the cable and then optionally place symbols, or
+      2. Add V9 shields/twists to the cable already open in E3.
+
+    Symbols-only mode does NOT create/load/place the cable component.
+    """
+    root = tk.Tk()
+    root.title("Cable Placer")
+    root.geometry("600x390")
+    root.resizable(False, False)
+
+    style = ttk.Style()
+    try:
+        style.theme_use("vista")
+    except:
+        pass
+
+    style.configure("ModeTitle.TLabel", font=("Segoe UI", 18, "bold"))
+    style.configure("ModeText.TLabel", font=("Segoe UI", 10))
+    style.configure("ModeButton.TButton", font=("Segoe UI", 11, "bold"), padding=(18, 11))
+
+    result = {"mode": None}
+
+    def select_mode(mode):
+        result["mode"] = mode
+        root.destroy()
+
+    frame = ttk.Frame(root, padding=25)
+    frame.pack(fill="both", expand=True)
+
+    ttk.Label(
+        frame,
+        text="Cable Placer",
+        style="ModeTitle.TLabel"
+    ).pack(anchor="w")
+
+    ttk.Label(
+        frame,
+        text="Choose what you want this run to do.",
+        style="ModeText.TLabel"
+    ).pack(anchor="w", pady=(4, 22))
+
+    ttk.Button(
+        frame,
+        text="Build / Place Cable",
+        style="ModeButton.TButton",
+        command=lambda: select_mode("FULL")
+    ).pack(fill="x", pady=(0, 12))
+
+    ttk.Label(
+        frame,
+        text=(
+            "Creates/loads and places the cable, formats the connector views, "
+            "then pauses for manual connection lines before placing shields/twists "
+            "when symbols are defined."
+        ),
+        justify="left",
+        wraplength=535,
+        style="ModeText.TLabel"
+    ).pack(anchor="w", pady=(0, 24))
+
+    ttk.Button(
+        frame,
+        text="Add Symbols to Open Cable",
+        style="ModeButton.TButton",
+        command=lambda: select_mode("SYMBOLS_ONLY")
+    ).pack(fill="x", pady=(0, 12))
+
+    ttk.Label(
+        frame,
+        text=(
+            "Uses the cable already open in E3 and runs only the V9 "
+            "shield/twist placement logic. It does not load or place the cable."
+        ),
+        justify="left",
+        wraplength=535,
+        style="ModeText.TLabel"
+    ).pack(anchor="w")
+
+    ttk.Button(
+        frame,
+        text="Cancel",
+        command=lambda: select_mode(None)
+    ).pack(pady=(22, 0))
+
+    root.protocol("WM_DELETE_WINDOW", lambda: select_mode(None))
+    root.mainloop()
+
+    return result["mode"]
 
 
 # -------------------------------------------------------
@@ -318,11 +415,34 @@ def generate_placement_locations(Pins, layout):
     Y_START = 32.5
     main_conn_locs = [] # conn, x, y, flip
 
-    for i, (row) in enumerate(layout):
-        for j, (conn) in enumerate(row):
-            if conn is not None:
-                flip = i > 0
-                main_conn_locs.append([conn, X_START + (i * 3.0), Y_START - (j * 1.0), flip])
+    # Center the shorter connector column vertically against the longer one.
+    # Example:
+    #   LEFT  = [P1, P3, P4]
+    #   RIGHT = [P2]
+    # gives P2 the same Y as P3.
+    active_rows = [
+        [conn for conn in row if conn is not None]
+        for row in layout
+    ]
+
+    max_connector_count = max(
+        (len(row) for row in active_rows),
+        default=0
+    )
+
+    for i, row in enumerate(active_rows):
+        vertical_offset = (max_connector_count - len(row)) / 2.0
+
+        for j, conn in enumerate(row):
+            flip = i > 0
+            y_index = j + vertical_offset
+
+            main_conn_locs.append([
+                conn,
+                X_START + (i * 3.0),
+                Y_START - (y_index * 1.0),
+                flip
+            ])
 
     y_pin_start = 32.9
     for r in main_conn_locs:
@@ -2348,6 +2468,12 @@ def run_v9_symbol_overlay(excel_path):
 # ================================================
 # PARSE EXCEL
 # ================================================
+START_MODE = choose_start_mode()
+
+if START_MODE is None:
+    print("Cancelled by user.")
+    sys.exit(0)
+
 output_path = ask_save_path()
 wb = load_workbook(output_path, data_only=True)
 ws = wb.active
@@ -2446,6 +2572,33 @@ print("NEW SHEET LAYOUT:", LAYOUT)
 print("SHIELD / TWIST DEFINITIONS PRESENT:", HAS_SYMBOLS)
 
 wb.close()
+
+
+# ------------------------------------------------
+# SYMBOLS-ONLY MODE
+#
+# Use the cable already open in E3.  Do not connect to the cable
+# database workflow, do not create/load the cable component, and do
+# not place connector blocks/pin views.
+# ------------------------------------------------
+if START_MODE == "SYMBOLS_ONLY":
+    print("")
+    print("============================================================")
+    print("MODE: ADD SYMBOLS TO OPEN CABLE")
+    print("============================================================")
+
+    if HAS_SYMBOLS:
+        run_v9_symbol_overlay(output_path)
+    else:
+        print("No shield / twist definitions found in the selected workbook.")
+        messagebox.showinfo(
+            "No Symbols Defined",
+            "No shield or twist definitions were found in the selected workbook."
+        )
+
+    print("Symbols-only run complete.")
+    sys.exit(0)
+
 
 PINORDER = defaultdict(list)
 for c1, p1, c2, p2 in pinouts:
