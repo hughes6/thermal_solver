@@ -2728,6 +2728,150 @@ if START_MODE == "FORMATTER_ONLY":
     print("MODE: SIMPLE FORMATTER RUN")
     print("============================================================")
 
+    # ------------------------------------------------
+    # FORMATTER-ONLY DISCOVERY
+    #
+    # The normal build/place path creates these globals while it
+    # creates the cable:
+    #
+    #   CONNECTORS
+    #   new_dev_ids
+    #   NEW_DEV_CONNECTORS
+    #   PINN_LOCS
+    #
+    # Formatter-only mode skips that entire build path, so identify
+    # the same objects from the cable that is already open in E3.
+    #
+    # Nothing outside formatter-only mode is changed.
+    # ------------------------------------------------
+    formatter_app = win32.gencache.EnsureDispatch("CT.Application")
+    formatter_prj = formatter_app.CreateJobObject()
+    formatter_dev = formatter_prj.CreateDeviceObject()
+    formatter_sym = formatter_prj.CreateSymbolObject()
+
+    CONNECTORS = {}
+    new_dev_ids = []
+    NEW_DEV_CONNECTORS = {}
+    PINN_LOCS = []
+
+    device_info = formatter_prj.GetAllDeviceIds(None)
+    formatter_device_ids = [
+        x for x in device_info[1]
+        if x is not None
+    ]
+
+    for formatter_device_id in formatter_device_ids:
+        formatter_dev.SetId(formatter_device_id)
+
+        try:
+            formatter_name = str(formatter_dev.GetName()).strip()
+        except Exception:
+            continue
+
+        match = re.fullmatch(r"W1\.P(\d+)", formatter_name.upper())
+
+        if not match:
+            continue
+
+        connector_number = int(match.group(1))
+
+        # A base connector owns its schematic view IDs.
+        try:
+            view_info = formatter_dev.GetViewIds(None)
+            formatter_view_ids = extract_e3_ids(view_info)
+        except Exception:
+            formatter_view_ids = []
+
+        if not formatter_view_ids:
+            continue
+
+        CONNECTORS[formatter_name] = formatter_device_id
+
+        for formatter_view_id in formatter_view_ids:
+            if formatter_view_id in NEW_DEV_CONNECTORS:
+                continue
+
+            formatter_dev.SetId(formatter_view_id)
+
+            # Only use actual placed schematic views.
+            try:
+                symbol_info = formatter_dev.GetSymbolIds(None)
+                formatter_symbol_ids = [
+                    x for x in symbol_info[1]
+                    if x is not None
+                ]
+            except Exception:
+                formatter_symbol_ids = []
+
+            if not formatter_symbol_ids:
+                continue
+
+            symbol_x_values = []
+
+            for formatter_symbol_id in formatter_symbol_ids:
+                formatter_sym.SetId(formatter_symbol_id)
+
+                xloc = [0.0]
+                yloc = [0.0]
+                grid = [""]
+                column = [""]
+                row = [""]
+
+                try:
+                    location = formatter_sym.GetSchemaLocation(
+                        xloc,
+                        yloc,
+                        grid,
+                        column,
+                        row
+                    )
+
+                    if isinstance(location, tuple) and len(location) >= 3:
+                        symbol_x_values.append(float(location[1]))
+                except Exception:
+                    pass
+
+            if not symbol_x_values:
+                continue
+
+            new_dev_ids.append(formatter_view_id)
+            NEW_DEV_CONNECTORS[formatter_view_id] = formatter_name
+
+            # run_ct_code() only needs PINN_LOCS here to recover the
+            # main left/right schematic X columns for centering the
+            # single Additional Part ID.
+            formatter_view_x = statistics.median(symbol_x_values)
+
+            PINN_LOCS.append([
+                connector_number,
+                formatter_view_x,
+                0.0,
+                False
+            ])
+
+            print(
+                "FORMATTER FOUND VIEW:",
+                formatter_view_id,
+                "| CONNECTOR:",
+                formatter_name,
+                "| X:",
+                formatter_view_x
+            )
+
+    del formatter_sym
+    del formatter_dev
+    del formatter_prj
+    del formatter_app
+
+    print("FORMATTER BASE CONNECTORS:", CONNECTORS)
+    print("FORMATTER SCHEMATIC VIEWS:", new_dev_ids)
+
+    if not new_dev_ids:
+        raise Exception(
+            "Formatter-only mode could not find any placed W1.P# "
+            "schematic connector views in the open E3 job."
+        )
+
     create_gui()
 
     print("Formatter-only run complete.")
