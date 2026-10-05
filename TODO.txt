@@ -583,6 +583,29 @@ def ask_save_path(default_full_path=""):
 def generate_ordered_pin_ids(dict_to_order, dest):
     return {str(pin): dict_to_order[str(pin)] for pin in dest}
 
+
+def connector_designation_from_device_name(value):
+    """
+    Convert an E3 connector device name such as W1.P9B to the layout
+    designation used by the workbook, e.g. "9B".
+
+    This intentionally keeps the designation as a STRING so connectors do
+    not have to be numbered 1, 2, 3, ...
+    """
+    text = str(value).strip().upper()
+
+    if "." in text:
+        text = text.split(".")[-1]
+
+    if "#" in text:
+        text = text.split("#", 1)[0]
+
+    if text.startswith("P"):
+        text = text[1:]
+
+    return text
+
+
 def generate_placement_locations(Pins, layout):
     TOP_OF_PAGE = 32.9
     BOTTOM_OF_PAGE = 0.0
@@ -636,9 +659,10 @@ def generate_placement_locations(Pins, layout):
     pin_locs = [] # conn, xstart, ystart, flip
 
     for dictionary in Pins:
-        # connector number from "W1.Pn"
+        # Actual connector designation from the E3 device name.
+        # Examples: W1.P1 -> "1", W1.P9B -> "9B".
         conn_key = list(dictionary.keys())[0]
-        conn = int(conn_key.split(".")[1][1:])   # P1 -> 1, P2 -> 2, etc.
+        conn = connector_designation_from_device_name(conn_key)
 
         # number of pins = all keys except the "W1.Pn"
         count = len(dictionary) - 1
@@ -650,7 +674,7 @@ def generate_placement_locations(Pins, layout):
 
         # find this connector's placement data
         for r in main_conn_locs:
-            if int(r[0]) == conn:
+            if str(r[0]) == conn:
                 xstart = r[1]
                 ystart = r[2]
                 flip = r[3]
@@ -675,14 +699,14 @@ def generate_placement_locations(Pins, layout):
             # iterate over all pin dictionaries ABOVE our current connector
             for r in Pins:
                 r_conn_key = list(r.keys())[0]
-                r_conn = int(r_conn_key.split(".")[1][1:])
+                r_conn = connector_designation_from_device_name(r_conn_key)
 
                 if r_conn == conn:
                     break  # stop when reaching our connector
 
                 # check if the connector is above AND same flip
                 for c in main_conn_locs:
-                    if int(c[0]) == r_conn and c[3] == flip:
+                    if str(c[0]) == r_conn and c[3] == flip:
                         if c[2] > ystart:
                             pins_above += (len(r) - 1)
                             conns_above += 1
@@ -717,8 +741,8 @@ def generate_aligned_pin_y(pinouts, y_start, pin_spacing=0.25, connector_gap=0.5
                 current_y -= connector_gap
 
         # Both ends of this wire get EXACTLY the same Y.
-        pin_y[(int(c1), str(p1))] = current_y
-        pin_y[(int(c2), str(p2))] = current_y
+        pin_y[(str(c1), str(p1))] = current_y
+        pin_y[(str(c2), str(p2))] = current_y
 
         current_y -= pin_spacing
 
@@ -2765,12 +2789,12 @@ if START_MODE == "FORMATTER_ONLY":
         except Exception:
             continue
 
-        match = re.fullmatch(r"W1\.P(\d+)", formatter_name.upper())
+        match = re.fullmatch(r"W1\.P(.+)", formatter_name.upper())
 
         if not match:
             continue
 
-        connector_number = int(match.group(1))
+        connector_designation = match.group(1).strip()
 
         # A base connector owns its schematic view IDs.
         try:
@@ -2840,7 +2864,7 @@ if START_MODE == "FORMATTER_ONLY":
             formatter_view_x = statistics.median(symbol_x_values)
 
             PINN_LOCS.append([
-                connector_number,
+                connector_designation,
                 formatter_view_x,
                 0.0,
                 False
@@ -2865,7 +2889,7 @@ if START_MODE == "FORMATTER_ONLY":
 
     if not new_dev_ids:
         raise Exception(
-            "Formatter-only mode could not find any placed W1.P# "
+            "Formatter-only mode could not find any placed W1.P<designation> "
             "schematic connector views in the open E3 job."
         )
 
@@ -2878,25 +2902,109 @@ output_path = ask_save_path()
 wb = load_workbook(output_path, data_only=True)
 ws = wb.active
 
-NO_WIRES = int(ws["B10"].value)
+NO_WIRES = int(ws["B11"].value)
 VERSION = ws["B2"].value
 NAME = ws["B1"].value
 
 
-def placer_connector_number(value):
-    token = normalize_connector_token(value)
+def placer_connector_designation(value):
+    """
+    Return the actual connector designation from Excel without forcing it
+    to an integer.  Examples:
+        9       -> "9"
+        9B      -> "9B"
+        P9B     -> "9B"
+        W1.P9B  -> "9B"
+    """
+    text = clean_excel_value(value).upper().replace(" ", "")
 
-    if token == "":
+    if text == "":
         return None
 
-    match = re.fullmatch(r"P0*(\d+)", token)
+    if "." in text:
+        text = text.split(".")[-1]
 
-    if not match:
-        raise Exception(
-            f"Unsupported connector value in cable table: {value}"
-        )
+    if "#" in text:
+        text = text.split("#", 1)[0]
 
-    return int(match.group(1))
+    if text.startswith("P"):
+        text = text[1:]
+
+    return text
+
+
+# ------------------------------------------------
+# CONNECTOR PART / TYPE ASSIGNMENT
+#
+# B3:B10 contains connector part numbers/types.
+# Populated layout cells consume those parts in this exact order:
+#   W4:W8 top-to-bottom, then Z4:Z8 top-to-bottom.
+#
+# The layout value is the actual connector designation.  It does NOT have
+# to be 1-8.  Examples: 1, 9, 9B, 12A.
+# ------------------------------------------------
+CONNECTOR_PARTS = [
+    ws[f"B{r}"].value
+    for r in range(3, 11)
+    if ws[f"B{r}"].value is not None
+    and str(ws[f"B{r}"].value).strip() != ""
+]
+
+LEFT_CONNECTOR_LAYOUT = [
+    placer_connector_designation(ws[f"W{r}"].value)
+    for r in range(4, 9)
+]
+RIGHT_CONNECTOR_LAYOUT = [
+    placer_connector_designation(ws[f"Z{r}"].value)
+    for r in range(4, 9)
+]
+
+LEFT_CONNECTOR_LAYOUT = [
+    connector for connector in LEFT_CONNECTOR_LAYOUT
+    if connector is not None
+]
+RIGHT_CONNECTOR_LAYOUT = [
+    connector for connector in RIGHT_CONNECTOR_LAYOUT
+    if connector is not None
+]
+
+CONNECTOR_LAYOUT = LEFT_CONNECTOR_LAYOUT + RIGHT_CONNECTOR_LAYOUT
+
+if len(CONNECTOR_LAYOUT) > 8:
+    raise Exception(
+        f"Cable placer supports up to 8 connectors. Found {len(CONNECTOR_LAYOUT)}."
+    )
+
+if len(LEFT_CONNECTOR_LAYOUT) > 5 or len(RIGHT_CONNECTOR_LAYOUT) > 5:
+    raise Exception("No more than 5 connectors may be placed on either side.")
+
+if len(CONNECTOR_LAYOUT) != len(CONNECTOR_PARTS):
+    raise Exception(
+        f"Connector layout count ({len(CONNECTOR_LAYOUT)}) does not match "
+        f"connector part/type count ({len(CONNECTOR_PARTS)}). "
+        "Check B3:B10 and W4:W8 / Z4:Z8."
+    )
+
+if len(set(CONNECTOR_LAYOUT)) != len(CONNECTOR_LAYOUT):
+    raise Exception(
+        f"Duplicate connector designation found in layout: {CONNECTOR_LAYOUT}"
+    )
+
+CONNECTOR_PART_MAP = dict(zip(CONNECTOR_LAYOUT, CONNECTOR_PARTS))
+
+LAYOUT = [
+    LEFT_CONNECTOR_LAYOUT,
+    RIGHT_CONNECTOR_LAYOUT
+]
+
+print("LEFT CONNECTOR LAYOUT:", LEFT_CONNECTOR_LAYOUT)
+print("RIGHT CONNECTOR LAYOUT:", RIGHT_CONNECTOR_LAYOUT)
+print("CONNECTOR ASSIGNMENT ORDER (B3:B10 -> W4:W8 then Z4:Z8):")
+for connector_designation in CONNECTOR_LAYOUT:
+    print(
+        f"  {connector_designation} -> "
+        f"{CONNECTOR_PART_MAP[connector_designation]}"
+    )
 
 
 # ------------------------------------------------
@@ -2906,14 +3014,14 @@ def placer_connector_number(value):
 # LEFT pin        = N
 # RIGHT pin       = O
 # RIGHT connector = Q
+#
+# L/Q may contain 9, P9, W1.P9, 9B, P9B, W1.P9B, etc.
+# They resolve back to the actual layout designation.
 # ------------------------------------------------
 pinouts = []
 
 current_connector1 = None
 current_connector2 = None
-
-left_layout = []
-right_layout = []
 
 for r in range(5, 5 + NO_WIRES):
     connector1_value = ws[f"L{r}"].value
@@ -2924,16 +3032,10 @@ for r in range(5, 5 + NO_WIRES):
 
     # New sheets may only show the connector once at the top of its block.
     if clean_excel_value(connector1_value) != "":
-        current_connector1 = placer_connector_number(connector1_value)
-
-        if current_connector1 not in left_layout:
-            left_layout.append(current_connector1)
+        current_connector1 = placer_connector_designation(connector1_value)
 
     if clean_excel_value(connector2_value) != "":
-        current_connector2 = placer_connector_number(connector2_value)
-
-        if current_connector2 not in right_layout:
-            right_layout.append(current_connector2)
+        current_connector2 = placer_connector_designation(connector2_value)
 
     # Preserve the old spare-pin behavior: if a pin is blank, that endpoint
     # is still None even though the connector block itself is known.
@@ -2943,10 +3045,18 @@ for r in range(5, 5 + NO_WIRES):
     pinouts.append([connector1, pin1, connector2, pin2])
 
 
-# Old sheet used Q4:Q7 and T4:T7 for layout.
-# Those locations are part of the new cable table, so derive the same
-# left/right layout from connector order in the actual cable data.
-LAYOUT = [left_layout, right_layout]
+# Fail early if the cable table references a designation that does not exist
+# in the W/Z connector layout.
+for c1, _, c2, _ in pinouts:
+    for connector_designation in (c1, c2):
+        if (
+            connector_designation is not None
+            and connector_designation not in CONNECTOR_PART_MAP
+        ):
+            raise Exception(
+                f"Cable table references connector {connector_designation}, "
+                "but that designation is not present in W4:W8 / Z4:Z8."
+            )
 
 
 # ------------------------------------------------
@@ -3089,24 +3199,27 @@ else:
     app.PutMessage("Getting pin info now.")
 
 
-CONNECTORS = {"W1.P1" : None, "W1.P2" : None, "W1.P3" : None, "W1.P4" : None, "W1.P5" : None}
+# Build the connector device map directly from the populated layout.
+# Example designation 9B -> expected E3 device W1.P9B.
+CONNECTORS = {
+    f"W1.P{designation}": None
+    for designation in CONNECTOR_LAYOUT
+}
+
+connector_name_lookup = {
+    connector_name.upper(): connector_name
+    for connector_name in CONNECTORS
+}
+
 for id in devids:
     dev.SetId(id)
-    name = dev.GetName()
+    name = str(dev.GetName()).strip()
     print(name)
-    match name:
-        case "W1.P1":
-            CONNECTORS["W1.P1"] = id
-        case "W1.P2":
-            CONNECTORS["W1.P2"] = id
-        case "W1.P3":
-            CONNECTORS["W1.P3"] = id
-        case "W1.P4":
-            CONNECTORS["W1.P4"] = id
-        case "W1.P5":
-            CONNECTORS["W1.P5"] = id
-        case _:
-            pass
+
+    connector_key = connector_name_lookup.get(name.upper())
+
+    if connector_key is not None:
+        CONNECTORS[connector_key] = id
 
 
 PINS = []
@@ -3169,9 +3282,9 @@ for i, (connector, conn_id) in enumerate(CONNECTORS.items()):
                     break
 
             symname = "MilSymbolReceptacle¶FULL"
-            p = int(connector_loop.split(".P")[1])
+            p = connector_designation_from_device_name(connector_loop)
             for c in MAIN_CONN_LOCS:
-                if c[0] == int(p):
+                if str(c[0]) == p:
                     x = c[1]
                     y = c[2]
                     flip = c[3]
@@ -3220,11 +3333,11 @@ for i, (connector, conn_id) in enumerate(CONNECTORS.items()):
         newpindict.update({name : id})
 
     # PINS ARE GETTING ORDERED HERE
-    ordered_pin_ids = generate_ordered_pin_ids(newpindict, PINORDER[j])
+    p = connector_designation_from_device_name(connector)
+    ordered_pin_ids = generate_ordered_pin_ids(newpindict, PINORDER[p])
 
-    p = connector[-1]
     for c in PINN_LOCS:
-        if c[0] == int(p):
+        if str(c[0]) == p:
             xp = c[1]
             yp = c[2]
             pflip = c[3]
@@ -3235,7 +3348,7 @@ for i, (connector, conn_id) in enumerate(CONNECTORS.items()):
 
     symname = "MilSymbolReceptacle¶END_SPLIT"
     for key, value in ordered_pin_ids.items():
-        pin_key = (int(p), str(key))
+        pin_key = (str(p), str(key))
         if pin_key not in PIN_Y:
             app.PutMessage(f"WARNING: No aligned Y position found forConnector {p} Pin {key}")
             continue
