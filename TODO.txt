@@ -121,15 +121,61 @@ for r in range(14, 14 + NO_SECTIONS):
     wire_definitions.append(entry)
 
 
+# New sheet pinout mapping:
+#   LEFT connector  = column L
+#   LEFT pin        = column N
+#   RIGHT pin       = column O
+#   RIGHT connector = column Q
+#
+# Connector cells may only be populated at the beginning of a connector
+# block, so forward-fill the most recent connector exactly as the new sheet
+# layout requires.
+
+def connector_number(value):
+    if value is None:
+        return None
+
+    text = str(value).strip().upper().replace(" ", "")
+
+    if text == "":
+        return None
+
+    # Accept P1, W1.P1, P1#..., or the old numeric form.
+    if "." in text:
+        text = text.split(".")[-1]
+
+    if "#" in text:
+        text = text.split("#", 1)[0]
+
+    if text.startswith("P"):
+        text = text[1:]
+
+    return int(text)
+
+
 pinouts = []
+current_connector1 = None
+current_connector2 = None
+
 for r in range(5, 5 + NO_WIRES):
-    connector1 = ws[r][7].value
-    pin1 = ws[r][9].value
-    connector2 = ws[r][12].value
-    pin2 = ws[r][10].value
-    if connector1 is None or connector2 is None:
+    connector1_value = ws[f"L{r}"].value
+    pin1 = ws[f"N{r}"].value
+    pin2 = ws[f"O{r}"].value
+    connector2_value = ws[f"Q{r}"].value
+
+    if connector1_value is not None:
+        current_connector1 = connector_number(connector1_value)
+
+    if connector2_value is not None:
+        current_connector2 = connector_number(connector2_value)
+
+    if current_connector1 is None or current_connector2 is None:
         continue
-    pinouts.append([int(connector1), pin1, int(connector2), pin2])
+
+    if pin1 is None or pin2 is None:
+        continue
+
+    pinouts.append([current_connector1, pin1, current_connector2, pin2])
 
 print(pinouts)
 wb.close()
