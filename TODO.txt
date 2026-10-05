@@ -86,24 +86,71 @@ ws = wb.active
 
 ASSY_NAME = ws["B1"].value
 VERSION = ws["B2"].value
-CONNECTOR_P1 = ws["B3"].value
-CONNECTOR_P2 = ws["B4"].value
-CONNECTOR_P3 = ws["B5"].value
-CONNECTOR_P4 = ws["B6"].value
-CONNECTOR_P5 = ws["B7"].value
-CONNECTOR_P6 = ws["B8"].value
-CONNECTOR_P7 = ws["B9"].value
-CONNECTOR_P8 = ws["B10"].value
-CONNECTORS = {
-    1: CONNECTOR_P1,
-    2: CONNECTOR_P2,
-    3: CONNECTOR_P3,
-    4: CONNECTOR_P4,
-    5: CONNECTOR_P5,
-    6: CONNECTOR_P6,
-    7: CONNECTOR_P7,
-    8: CONNECTOR_P8,
-}
+
+# Connector PART NUMBERS stay in B3:B10.
+CONNECTOR_PARTS = [ws[f"B{r}"].value for r in range(3, 11)]
+CONNECTOR_PARTS = [part for part in CONNECTOR_PARTS if part is not None and str(part).strip() != ""]
+
+
+def clean_connector_designation(value):
+    if value is None:
+        return None
+
+    # Keep Excel numbers clean: 9.0 -> "9"
+    if isinstance(value, float) and value.is_integer():
+        value = int(value)
+
+    text = str(value).strip().upper().replace(" ", "")
+
+    if text == "":
+        return None
+
+    # Accept values such as 9, 9B, P9, P9B, W1.P9B, P9B#...
+    if "." in text:
+        text = text.split(".")[-1]
+
+    if "#" in text:
+        text = text.split("#", 1)[0]
+
+    if text.startswith("P"):
+        text = text[1:]
+
+    return text
+
+
+# Connector DESIGNATIONS come from the connector layout window.
+# Up to 5 may be on either side.  Blank layout cells are ignored.
+LEFT_CONNECTOR_LAYOUT = [clean_connector_designation(ws[f"W{r}"].value) for r in range(4, 9)]
+RIGHT_CONNECTOR_LAYOUT = [clean_connector_designation(ws[f"Z{r}"].value) for r in range(4, 9)]
+
+LEFT_CONNECTOR_LAYOUT = [x for x in LEFT_CONNECTOR_LAYOUT if x is not None]
+RIGHT_CONNECTOR_LAYOUT = [x for x in RIGHT_CONNECTOR_LAYOUT if x is not None]
+CONNECTOR_LAYOUT = LEFT_CONNECTOR_LAYOUT + RIGHT_CONNECTOR_LAYOUT
+
+if len(CONNECTOR_LAYOUT) != len(CONNECTOR_PARTS):
+    raise Exception(
+        f"Connector layout count ({len(CONNECTOR_LAYOUT)}) does not match connector part count ({len(CONNECTOR_PARTS)}). "
+        "Check B3:B10 and W4:W8 / Z4:Z8."
+    )
+
+if len(set(CONNECTOR_LAYOUT)) != len(CONNECTOR_LAYOUT):
+    raise Exception(f"Duplicate connector designation found in layout: {CONNECTOR_LAYOUT}")
+
+# Key everything by the actual connector designation from the layout.
+# COPY remains numeric because E3's assembly connection tables use numeric COPY ids.
+CONNECTORS = {}
+CONNECTOR_COPIES = {}
+for copy_no, (designation, part) in enumerate(zip(CONNECTOR_LAYOUT, CONNECTOR_PARTS), start=1):
+    CONNECTORS[designation] = part
+    CONNECTOR_COPIES[designation] = copy_no
+
+print("LEFT CONNECTOR LAYOUT:", LEFT_CONNECTOR_LAYOUT)
+print("RIGHT CONNECTOR LAYOUT:", RIGHT_CONNECTOR_LAYOUT)
+print("CONNECTOR PART MAP:", CONNECTORS)
+print("CONNECTOR COPY MAP:", CONNECTOR_COPIES)
+print("CONNECTOR ASSIGNMENT ORDER (B3:B10 -> W4:W8 then Z4:Z8):")
+for designation in CONNECTOR_LAYOUT:
+    print(f"  {designation} -> {CONNECTORS[designation]} (COPY {CONNECTOR_COPIES[designation]})")
 
 
 NO_WIRES = ws["B11"].value
@@ -144,25 +191,10 @@ for r in range(14, 14 + NO_SECTIONS):
 # layout requires.
 
 def connector_number(value):
-    if value is None:
-        return None
-
-    text = str(value).strip().upper().replace(" ", "")
-
-    if text == "":
-        return None
-
-    # Accept P1, W1.P1, P1#..., or the old numeric form.
-    if "." in text:
-        text = text.split(".")[-1]
-
-    if "#" in text:
-        text = text.split("#", 1)[0]
-
-    if text.startswith("P"):
-        text = text[1:]
-
-    return int(text)
+    # Keep the old function name so nothing else has to change, but return
+    # the actual connector designation as a STRING instead of forcing int().
+    # Examples: 9 -> "9", 9B -> "9B", P9B -> "9B", W1.P9B -> "9B".
+    return clean_connector_designation(value)
 
 
 pinouts = []
@@ -196,8 +228,9 @@ wb.close()
 # PARSE DATA
 # ================================================
 WIRES = []
-idx = 0 
-assy_no = max(connector_no for connector_no, connector_part in CONNECTORS.items() if connector_part is not None) + 1
+idx = 0
+# Connector COPY ids are 1..N, so wires begin immediately after them.
+assy_no = max(CONNECTOR_COPIES.values()) + 1
 for entry in wire_definitions:
     wire_type = entry["type"]
     count = entry["value"]
@@ -281,12 +314,12 @@ LPNTR = row[-1]
 # HELPERS
 # ============================================================
 
-def add_member(copy_no, part, version):
+def add_member(copy_no, part, version, member_name="%.#"):
     cur.execute("""
     INSERT INTO dbo.Assembly
     (LPNTR, COPY, FLAGS, NAME, SUBENTRY, SUBVERSION)
-    VALUES (?, ?, 2, '%.#', ?, ?)
-    """, LPNTR, copy_no, part, version)
+    VALUES (?, ?, 2, ?, ?, ?)
+    """, LPNTR, copy_no, member_name, part, version)
 
     cur.execute("""
     INSERT INTO dbo.GatePinRelation
@@ -397,10 +430,23 @@ def get_pin_copy(connector_name, connector_version, physical_pin):
 # ============================================================
 remove_template_member("TEMPLATE_COMPONENT_DONT_DELETE")
 
-for i in range(len(CONNECTORS)):
-    if CONNECTORS[i+1] != None:
-        app.PutMessage(f"\nAdding Connector {i + 1}")
-        add_member(i + 1, CONNECTORS[i + 1], 1)
+for connector_designation in CONNECTOR_LAYOUT:
+    connector_part = CONNECTORS[connector_designation]
+    connector_copy = CONNECTOR_COPIES[connector_designation]
+
+    app.PutMessage(
+        f"\nAdding Connector {connector_designation} "
+        f"(COPY {connector_copy}): {connector_part}"
+    )
+
+    # Keep COPY numeric for E3 relationships, but use the layout designation
+    # for the actual assembly member name.  Example: 9B -> %.9B.
+    add_member(
+        connector_copy,
+        connector_part,
+        1,
+        f"%.{connector_designation}"
+    )
 
 
 # ============================================================
@@ -418,9 +464,12 @@ for wire_data in WIRES:
         add_member(wire_copy, wire_part, wire_version)
         added_wire_copies.add(wire_copy)
 
-    # Get connector part numbers
+    # Get connector part numbers and E3 numeric COPY ids from the actual
+    # connector designations read from the cable table/layout.
     connector1_part = CONNECTORS[connector1]
     connector2_part = CONNECTORS[connector2]
+    connector1_copy = CONNECTOR_COPIES[connector1]
+    connector2_copy = CONNECTOR_COPIES[connector2]
 
     # Convert physical pins to Zuken pin COPY numbers
     pin1_copy = get_pin_copy(connector1_part, 1, pin1)
@@ -432,8 +481,19 @@ for wire_data in WIRES:
     else:
         node_no = 4 + (conductor_no - 1)
 
-    app.PutMessage(f"Wire COPY {wire_copy}, Conductor {conductor_no}: {wire_part} | Connector {connector1} Pin {pin1} -> Connector {connector2} Pin {pin2} | Node {node_no}")
-    connect_wire(wire_copy, node_no, connector1, pin1_copy, connector2, pin2_copy)
+    app.PutMessage(
+        f"Wire COPY {wire_copy}, Conductor {conductor_no}: {wire_part} | "
+        f"Connector {connector1} (COPY {connector1_copy}) Pin {pin1} -> "
+        f"Connector {connector2} (COPY {connector2_copy}) Pin {pin2} | Node {node_no}"
+    )
+    connect_wire(
+        wire_copy,
+        node_no,
+        connector1_copy,
+        pin1_copy,
+        connector2_copy,
+        pin2_copy,
+    )
 
 mark_component_updated()
 
