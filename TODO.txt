@@ -19,14 +19,16 @@ from tkinter import messagebox, ttk, filedialog
 def choose_start_mode():
     """
     Choose whether this run should:
-      1. Build/place the cable and then optionally place symbols, or
-      2. Add V9 shields/twists to the cable already open in E3.
+      1. Build/place the cable and then optionally place symbols,
+      2. Add V9 shields/twists to the cable already open in E3, or
+      3. Run only the existing formatter.
 
     Symbols-only mode does NOT create/load/place the cable component.
+    Formatter-only mode does not require an Excel workbook.
     """
     root = tk.Tk()
     root.title("Cable Placer")
-    root.geometry("600x390")
+    root.geometry("600x520")
     root.resizable(False, False)
 
     style = ttk.Style()
@@ -91,6 +93,25 @@ def choose_start_mode():
         text=(
             "Uses the cable already open in E3 and runs only the V9 "
             "shield/twist placement logic. It does not load or place the cable."
+        ),
+        justify="left",
+        wraplength=535,
+        style="ModeText.TLabel"
+    ).pack(anchor="w")
+
+    ttk.Button(
+        frame,
+        text="Simple Formatter Run",
+        style="ModeButton.TButton",
+        command=lambda: select_mode("FORMATTER_ONLY")
+    ).pack(fill="x", pady=(24, 12))
+
+    ttk.Label(
+        frame,
+        text=(
+            "Runs only the existing CT Symbol Formatter on the cable already "
+            "open in E3. No Excel file is requested and no cable or symbols "
+            "are placed."
         ),
         justify="left",
         wraplength=535,
@@ -2358,11 +2379,76 @@ def place_shield(prj, job, placement):
 
         time.sleep(PLACEMENT_DELAY_SECONDS)
 
-    raise Exception(
-        f"{job['symbol_name']} could not resize to {requested_length}. "
-        f"All attempts used Load -> Place -> immediate SetDisplayLength "
-        f"without SetId before the stretch."
+    # ================================================================
+    # MANUAL-STRETCH FALLBACK
+    #
+    # If E3 refuses every automatic SetDisplayLength attempt, do not
+    # abandon the shield.  Place one normal, unstretched Shield_Demo at
+    # the correct FINAL bottom insertion point.  The user can stretch it
+    # manually in E3 after the script finishes.
+    #
+    # All failed trial shields above were already deleted, so this leaves
+    # exactly one fallback shield at the intended cable location.
+    # ================================================================
+    print("")
+    print("============================================================")
+    print("SHIELD AUTO-RESIZE FAILED - USING MANUAL-STRETCH FALLBACK")
+    print("============================================================")
+    print("FALLBACK SYMBOL:", job["symbol_name"])
+    print("FALLBACK X:", final_x)
+    print("FALLBACK BOTTOM Y:", final_y)
+    print("TARGET LENGTH FOR MANUAL STRETCH:", requested_length)
+
+    fallback_sym = prj.CreateSymbolObject()
+
+    fallback_load_result = fallback_sym.Load(
+        job["symbol_name"],
+        SYMBOL_VERSION
     )
+
+    print("FALLBACK LOAD RESULT:", fallback_load_result)
+
+    if fallback_load_result == 0:
+        raise Exception(
+            f"{job['symbol_name']} could not resize and the fallback symbol "
+            f"could not be loaded."
+        )
+
+    fallback_id = fallback_sym.Place(
+        sheet_id,
+        final_x,
+        final_y,
+        0,
+        1.0,
+        0
+    )
+
+    print("FALLBACK PLACE RESULT:", fallback_id)
+
+    if fallback_id == 0:
+        raise Exception(
+            f"{job['symbol_name']} could not resize and the unstretched "
+            f"fallback could not be placed at X={final_x} Y={final_y}."
+        )
+
+    time.sleep(PLACEMENT_DELAY_SECONDS)
+
+    try:
+        fallback_sym.SetId(fallback_id)
+    except Exception:
+        pass
+
+    try:
+        fallback_length = float(fallback_sym.GetDisplayLength())
+    except Exception:
+        fallback_length = None
+
+    print("FALLBACK NATIVE LENGTH:", fallback_length)
+    print("MANUAL ACTION REQUIRED: stretch this shield upward to:", requested_length)
+    print("SHIELD FALLBACK PLACED AT CORRECT BOTTOM LOCATION")
+    print("============================================================")
+
+    return fallback_id
 
 
 #====================================================================================================================================
@@ -2596,6 +2682,17 @@ START_MODE = choose_start_mode()
 
 if START_MODE is None:
     print("Cancelled by user.")
+    sys.exit(0)
+
+if START_MODE == "FORMATTER_ONLY":
+    print("")
+    print("============================================================")
+    print("MODE: SIMPLE FORMATTER RUN")
+    print("============================================================")
+
+    create_gui()
+
+    print("Formatter-only run complete.")
     sys.exit(0)
 
 output_path = ask_save_path()
