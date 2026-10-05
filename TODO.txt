@@ -1,558 +1,78 @@
-import win32com.client as win32
+
+
+
+BLOCK: PMOD HEADER-2 DEVICE VIEW: 124454 SYMBOL: 124359
+ADDED EQUIPMENT IDENTIFACATION: CONNECTOR: PMOD HEADER-2 VIEW: 124454 SYMBOL: 124359 ATTR ID: 124020 VALUE: 'XXXX'
+VERIFIED EQUIPMENT IDENTIFACATION ON BLOCK SYMBOL: CONNECTOR: PMOD HEADER-2 VIEW: 124454 SYMBOL: 124359 ATTR ID: 124020
+CONNECTOR VIEW: PMOD HEADER-2 SOURCE: 133878 PARENT: 124454 RESULT: 123995
+SAVED SECONDARY BLOCK METADATA: C:\Users\CONNER~1.HUG\AppData\Local\Temp\e3_block_maker_du3bv5xa\secondary_blocks.json
+SECONDARY BLOCK COUNT: 18
+=========================================
+STARTING CONNECTOR: ETH
+CONNECTOR VIEW: 132686
+SHEET: 204828
+=========================================
+PIN VIEW: ETH VIEW: 132686 PINS: {'1': 132684, '2': 132683, '3': 132682, '4': 132681, '5': 132678, '6': 132675, '7': 132672, '8': 132669}
+ATTEMPTING: ETH PIN: 1 ID: 132684 X: 7.7 Y: 29.9
+PLACEPINS RESULT: (148783, 132684)
+ATTEMPTING: ETH PIN: 2 ID: 132683 X: 7.7 Y: 29.65
+PLACEPINS RESULT: (147460, 132683)
+ATTEMPTING: ETH PIN: 3 ID: 132682 X: 7.7 Y: 29.4
+PLACEPINS RESULT: (147133, 132682)
+ATTEMPTING: ETH PIN: 4 ID: 132681 X: 7.7 Y: 29.15
+PLACEPINS RESULT: (146758, 132681)
+ATTEMPTING: ETH PIN: 5 ID: 132678 X: 7.7 Y: 28.9
+PLACEPINS RESULT: (146268, 132678)
+ATTEMPTING: ETH PIN: 6 ID: 132675 X: 7.7 Y: 28.65
+PLACEPINS RESULT: (145899, 132675)
+ATTEMPTING: ETH PIN: 7 ID: 132672 X: 7.7 Y: 28.4
+PLACEPINS RESULT: (145501, 132672)
+ATTEMPTING: ETH PIN: 8 ID: 132669 X: 7.7 Y: 28.15
+PLACEPINS RESULT: (144866, 132669)
+FINISHED CONNECTOR: ETH
+=========================================
+STARTING CONNECTOR: CLK INPUT
+CONNECTOR VIEW: 132185
+SHEET: 204828
+=========================================
+PIN VIEW: CLK INPUT VIEW: 132185 PINS: {'1-C': 132183, '2-S': 132182}
+Traceback (most recent call last):
+  File "C:\Users\conner.hughes\OneDrive\Documents\Python\Block Maker\launcher.py", line 37, in <module>
+    run_builder_child()
+    ~~~~~~~~~~~~~~~~~^^
+  File "C:\Users\conner.hughes\OneDriv\Documents\Python\Block Maker\launcher.py", line 27, in run_builder_child
+    import main
+  File "C:\Users\conner.hughes\OneDrive\Documents\Python\Block Maker\main.py", line 958, in <module>
+    SCHEMATIC_PIN_MAP = generate_schematic_pin_map(PIN_SIGNAL_INFO[i], newpindict, conn_layout_dict)
+  File "C:\Users\conner.hughes\OneDrive\Documents\Python\Block Maker\main.py", line 160, in generate_schematic_pin_map
+    if pin_name not in newpindict: raise Exception(f"Pin {pin_name} not found in new view for {connector_info[0]['connector name']}")
+                                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+Exception: Pin 1 not found in new view for CLK INPUT
+
+
+
+
+
+
+
+
+
+
+
+
+from openpyxl import load_workbook
 import time
 import pyodbc
+import win32com.client as win32
 import tkinter as tk
-import pythoncom
-import sys
+import gc
+import json
 import os
-import re
-import statistics
-from openpyxl import load_workbook
-from collections import defaultdict
-from tkinter import messagebox, ttk, filedialog
 
 
-
-# -------------------------------------------------------
-# STARTUP MODE
-# -------------------------------------------------------
-def choose_start_mode():
-    """
-    Choose whether this run should:
-      1. Build/place the cable and then optionally place symbols,
-      2. Add V9 shields/twists to the cable already open in E3, or
-      3. Run only the existing formatter.
-
-    Symbols-only mode does NOT create/load/place the cable component.
-    Formatter-only mode does not require an Excel workbook.
-    """
-    root = tk.Tk()
-    root.title("Cable Placer")
-    root.geometry("600x520")
-    root.resizable(False, False)
-
-    style = ttk.Style()
-    try:
-        style.theme_use("vista")
-    except:
-        pass
-
-    style.configure("ModeTitle.TLabel", font=("Segoe UI", 18, "bold"))
-    style.configure("ModeText.TLabel", font=("Segoe UI", 10))
-    style.configure("ModeButton.TButton", font=("Segoe UI", 11, "bold"), padding=(18, 11))
-
-    result = {"mode": None}
-
-    def select_mode(mode):
-        result["mode"] = mode
-        root.destroy()
-
-    frame = ttk.Frame(root, padding=25)
-    frame.pack(fill="both", expand=True)
-
-    ttk.Label(
-        frame,
-        text="Cable Placer",
-        style="ModeTitle.TLabel"
-    ).pack(anchor="w")
-
-    ttk.Label(
-        frame,
-        text="Choose what you want this run to do.",
-        style="ModeText.TLabel"
-    ).pack(anchor="w", pady=(4, 22))
-
-    ttk.Button(
-        frame,
-        text="Build / Place Cable",
-        style="ModeButton.TButton",
-        command=lambda: select_mode("FULL")
-    ).pack(fill="x", pady=(0, 12))
-
-    ttk.Label(
-        frame,
-        text=(
-            "Creates/loads and places the cable, formats the connector views, "
-            "then pauses for manual connection lines before placing shields/twists "
-            "when symbols are defined."
-        ),
-        justify="left",
-        wraplength=535,
-        style="ModeText.TLabel"
-    ).pack(anchor="w", pady=(0, 24))
-
-    ttk.Button(
-        frame,
-        text="Add Symbols to Open Cable",
-        style="ModeButton.TButton",
-        command=lambda: select_mode("SYMBOLS_ONLY")
-    ).pack(fill="x", pady=(0, 12))
-
-    ttk.Label(
-        frame,
-        text=(
-            "Uses the cable already open in E3 and runs only the V9 "
-            "shield/twist placement logic. It does not load or place the cable."
-        ),
-        justify="left",
-        wraplength=535,
-        style="ModeText.TLabel"
-    ).pack(anchor="w")
-
-    ttk.Button(
-        frame,
-        text="Simple Formatter Run",
-        style="ModeButton.TButton",
-        command=lambda: select_mode("FORMATTER_ONLY")
-    ).pack(fill="x", pady=(24, 12))
-
-    ttk.Label(
-        frame,
-        text=(
-            "Runs only the existing CT Symbol Formatter on the cable already "
-            "open in E3. No Excel file is requested and no cable or symbols "
-            "are placed."
-        ),
-        justify="left",
-        wraplength=535,
-        style="ModeText.TLabel"
-    ).pack(anchor="w")
-
-    ttk.Button(
-        frame,
-        text="Cancel",
-        command=lambda: select_mode(None)
-    ).pack(pady=(22, 0))
-
-    root.protocol("WM_DELETE_WINDOW", lambda: select_mode(None))
-    root.mainloop()
-
-    return result["mode"]
-
-
-# -------------------------------------------------------
-# GUI SETUP
-# -------------------------------------------------------
-def create_gui():
-    from tkinter import ttk
-    import threading
-
-    root = tk.Tk(); root.title("CT Symbol Formatter"); root.geometry("560x500"); root.resizable(False, False)
-
-    style = ttk.Style()
-    try: style.theme_use("vista")
-    except: pass
-
-    style.configure("Title.TLabel", font=("Segoe UI", 18, "bold"))
-    style.configure("Subtitle.TLabel", font=("Segoe UI", 10))
-    style.configure("Step.TLabel", font=("Segoe UI", 10))
-    style.configure("Status.TLabel", font=("Segoe UI", 10, "bold"))
-    style.configure("Run.TButton", font=("Segoe UI", 11, "bold"), padding=(20,10))
-    style.configure("Secondary.TButton", font=("Segoe UI", 10), padding=(15,8))
-
-    main_frame = ttk.Frame(root, padding=25); main_frame.pack(fill="both", expand=True)
-    ttk.Label(main_frame, text="CT Symbol Formatter", style="Title.TLabel").pack(anchor="w")
-    ttk.Label(main_frame, text="Configure and format generated connector symbols.", style="Subtitle.TLabel").pack(anchor="w", pady=(2,20))
-    instruction_frame = ttk.LabelFrame(main_frame, text="Before Running", padding=15); instruction_frame.pack(fill="x", pady=(0,20))
-    instructions = "1. Open Device Properties in CT.\n\n2. Enable:\n   Assembly  →  Additional Part ID\n\n3. Return here and click Run Formatter."
-    ttk.Label(instruction_frame, text=instructions, justify="left", style="Step.TLabel").pack(anchor="w")
-    status_frame = ttk.LabelFrame(main_frame, text="Status", padding=12); status_frame.pack(fill="x", pady=(0,20))
-    status_label = ttk.Label(status_frame, text="Ready", style="Status.TLabel"); status_label.pack(anchor="w")
-    def gui_showinfo(*args):
-        message = str(args[-1]) if args else "Finished successfully."
-        root.after(0,lambda msg=message: status_label.config(text=msg))
-    def gui_showerror(*args):
-        message = str(args[-1]) if args else "An unknown error occurred."
-        root.after(0, lambda msg=str(message): status_label.config(text=f"Error: f{msg}"))
-    messagebox.showinfo = gui_showinfo
-    messagebox.showerror = gui_showerror
-    def finished():
-        status_label.config(text="Finished successfully."); run_button.config(state="normal"); run_again_button.config(state="normal"); root.config(cursor="")
-    def failed(error):
-        status_label.config(text=f"Error: {error}"); run_button.config(state="normal"); run_again_button.config(state="normal"); root.config(cursor="")
-    def worker():
-        pythoncom.CoInitialize()
-        try:
-            run_ct_code()
-            root.after(0,lambda: status_label.config(text="Finished successfully."))
-        except Exception as e:
-            print(f"Error: {e}")
-            root.after(0, lambda e=e: status_label.config(text=f"Error: {e}"))
-        finally:
-            print("WORKER FINALLY")
-            pythoncom.CoUninitialize()
-    def run_formatter():
-        status_label.config(text="Running...")
-        run_button.config(state="disabled")
-        run_again_button.config(state="disabled")
-        root.config(cursor="watch")
-        threading.Thread(target=worker, daemon=True).start()
-    def close_app(): root.destroy()
-
-    button_frame = ttk.Frame(main_frame); button_frame.pack(fill="x")
-    run_button = ttk.Button(button_frame, text="Run Formatter", style="Run.TButton", command=run_formatter); run_button.pack(fill="x")
-    secondary_frame = ttk.Frame(main_frame); secondary_frame.pack(pady=(12,0))
-    run_again_button = ttk.Button(secondary_frame, text="Run Again", style="Secondary.TButton", command=run_formatter); run_again_button.pack(side="left", padx=(0,8))
-    ttk.Button(secondary_frame, text="Close", style="Secondary.TButton", command=close_app).pack(side="left")
-    ttk.Label(main_frame, text="E3 Symbol Automation", font=("Segoe UI", 8)).pack(side="bottom", anchor="e", pady=(15,0))
-    root.protocol("WM_DELETE_WINDOW", close_app)
-
-    root.mainloop()
-
-
-# -------------------------------------------------------
-# CONNECTION-LINE CHECKPOINT
-#
-# This window is only shown when the selected workbook contains
-# at least one shield or twist definition.
-# -------------------------------------------------------
-def wait_for_connection_lines():
-    root = tk.Tk()
-    root.title("Connect Cable Lines")
-    root.geometry("560x360")
-    root.resizable(False, False)
-
-    style = ttk.Style()
-    try:
-        style.theme_use("vista")
-    except:
-        pass
-
-    style.configure("ConnectTitle.TLabel", font=("Segoe UI", 18, "bold"))
-    style.configure("ConnectStep.TLabel", font=("Segoe UI", 10))
-    style.configure(
-        "ConnectButton.TButton",
-        font=("Segoe UI", 11, "bold"),
-        padding=(20, 10)
-    )
-
-    result = {"continue": False}
-
-    def continue_to_symbols():
-        result["continue"] = True
-        root.destroy()
-
-    def cancel():
-        result["continue"] = False
-        root.destroy()
-
-    frame = ttk.Frame(root, padding=25)
-    frame.pack(fill="both", expand=True)
-
-    ttk.Label(
-        frame,
-        text="Connect Cable Lines",
-        style="ConnectTitle.TLabel"
-    ).pack(anchor="w")
-
-    ttk.Label(
-        frame,
-        text="Shield / twist definitions were found in the selected workbook.",
-        style="ConnectStep.TLabel"
-    ).pack(anchor="w", pady=(4, 18))
-
-    instructions = (
-        "1. Return to E3.\n\n"
-        "2. Draw the connection lines between the placed connector pin views.\n\n"
-        "3. Make sure the lines are complete before continuing.\n\n"
-        "4. Return here and click Place Shields / Twists."
-    )
-
-    ttk.Label(
-        frame,
-        text=instructions,
-        justify="left",
-        style="ConnectStep.TLabel"
-    ).pack(anchor="w", fill="x")
-
-    button_frame = ttk.Frame(frame)
-    button_frame.pack(fill="x", pady=(25, 0))
-
-    ttk.Button(
-        button_frame,
-        text="Place Shields / Twists",
-        style="ConnectButton.TButton",
-        command=continue_to_symbols
-    ).pack(fill="x")
-
-    ttk.Button(
-        button_frame,
-        text="Cancel",
-        command=cancel
-    ).pack(pady=(10, 0))
-
-    root.protocol("WM_DELETE_WINDOW", cancel)
-    root.mainloop()
-
-    return result["continue"]
-
-
-def run_ct_code():
-    try:
-        app = win32.gencache.EnsureDispatch('CT.Application')
-        prj = app.CreateJobObject()
-        text = prj.CreateTextObject()
-        dev = prj.CreateDeviceObject()
-        sym = prj.CreateSymbolObject()
-
-        # =====================================================
-        # SCHEMATIC-VIEW ADDITIONAL PART ID
-        #
-        # Keep exactly ONE Additional Part ID across ALL split
-        # schematic pin views.
-        #
-        # The text is attached to the overall top-left main pin
-        # symbol, but moved to the horizontal midpoint between the
-        # LEFT and RIGHT main pin columns and slightly above the
-        # highest main pin.
-        #
-        # This prevents one Additional Part ID from appearing on
-        # both the left and right sides.
-        # =====================================================
-        all_schematic_symbol_locations = {}
-
-        for scan_dev_id in new_dev_ids:
-            dev.SetId(scan_dev_id)
-
-            scan_symbol_info = dev.GetSymbolIds(None)
-            scan_symbol_ids = [
-                x for x in scan_symbol_info[1]
-                if x is not None
-            ]
-
-            for scan_symbol_id in scan_symbol_ids:
-                sym.SetId(scan_symbol_id)
-
-                xloc = [0.0]
-                yloc = [0.0]
-                grid = [""]
-                column = [""]
-                row = [""]
-
-                try:
-                    location = sym.GetSchemaLocation(
-                        xloc,
-                        yloc,
-                        grid,
-                        column,
-                        row
-                    )
-
-                    if isinstance(location, tuple) and len(location) >= 3:
-                        all_schematic_symbol_locations[scan_symbol_id] = (
-                            float(location[1]),
-                            float(location[2])
-                        )
-                except Exception:
-                    pass
-
-        schematic_additional_part_symbol_id = None
-        schematic_additional_part_x = None
-        schematic_additional_part_y = None
-
-        # PINN_LOCS contains the actual main pin-column X locations
-        # generated by the cable placer.  Spare pins use SPARE_X and
-        # therefore are not included here.
-        main_pin_x_values = sorted(set(
-            round(float(location[1]), 6)
-            for location in PINN_LOCS
-        ))
-
-        if all_schematic_symbol_locations and main_pin_x_values:
-            left_main_x = min(main_pin_x_values)
-            right_main_x = max(main_pin_x_values)
-
-            # Center the single label between the two cable sides.
-            schematic_additional_part_x = (
-                left_main_x + right_main_x
-            ) / 2.0
-
-            main_symbol_ids = [
-                symbol_id
-                for symbol_id, location
-                in all_schematic_symbol_locations.items()
-                if (
-                    abs(location[0] - left_main_x) <= 0.001
-                    or abs(location[0] - right_main_x) <= 0.001
-                )
-            ]
-
-            if main_symbol_ids:
-                top_main_y = max(
-                    all_schematic_symbol_locations[symbol_id][1]
-                    for symbol_id in main_symbol_ids
-                )
-
-                # Keep the text just above the top pin.
-                schematic_additional_part_y = top_main_y + 0.25
-
-                # Use the top-most symbol on the LEFT side as the single
-                # owner of the type-1000 text object.
-                left_symbol_ids = [
-                    symbol_id
-                    for symbol_id in main_symbol_ids
-                    if abs(
-                        all_schematic_symbol_locations[symbol_id][0]
-                        - left_main_x
-                    ) <= 0.001
-                ]
-
-                if left_symbol_ids:
-                    schematic_additional_part_symbol_id = max(
-                        left_symbol_ids,
-                        key=lambda symbol_id:
-                            all_schematic_symbol_locations[symbol_id][1]
-                    )
-                else:
-                    schematic_additional_part_symbol_id = max(
-                        main_symbol_ids,
-                        key=lambda symbol_id:
-                            all_schematic_symbol_locations[symbol_id][1]
-                    )
-
-                print(
-                    "SINGLE SCHEMATIC ADDITIONAL PART ID OWNER:",
-                    schematic_additional_part_symbol_id
-                )
-                print(
-                    "SCHEMATIC ADDITIONAL PART ID CENTER:",
-                    schematic_additional_part_x,
-                    schematic_additional_part_y
-                )
-
-        # =====================================================
-        # LOOP THROUGH EACH NEW DEVICE VIEW
-        # =====================================================
-
-        for new_dev_id in new_dev_ids:
-            connector = NEW_DEV_CONNECTORS.get(new_dev_id)
-
-            print("\n======================================")
-            print("NEW VIEW ID:", new_dev_id)
-            print("CONNECTOR:", connector)
-            print("======================================")
-
-            if connector is None:
-                print("WARNING: no connector mapping for view", new_dev_id)
-                continue
-
-            dev.SetId(new_dev_id)
-            symbol_info = dev.GetSymbolIds(None)
-            symbol_ids = [x for x in symbol_info[1] if x is not None]
-            print("NEW VIEW SYMBOL IDS:", symbol_ids)
-
-            for symbol_id in symbol_ids:
-                sym.SetId(symbol_id)
-                print("new view symbol:",  symbol_id, sym.GetName())
-                texinfo = sym.GetTextIds(None)
-                text_ids = [x for x in texinfo[1] if x is not None]
-
-                for t_id in text_ids:
-                    text.SetId(t_id)
-                    text_type = text.GetType()
-
-                    print(
-                        "PIN SYMBOL:",
-                        sym.GetName(),
-                        "| text:",
-                        text.GetText(),
-                        "| type:",
-                        text_type
-                    )
-
-                    if text_type == 5:
-                        text.SetVisibility(0)
-
-                    elif text_type == 1000:
-                        if (
-                            symbol_id
-                            == schematic_additional_part_symbol_id
-                            and schematic_additional_part_x is not None
-                            and schematic_additional_part_y is not None
-                        ):
-                            app.PutMessage(
-                                "Configuring single centered schematic "
-                                "Additional Part ID"
-                            )
-
-                            text.SetVisibility(1)
-                            text.SetStyle(1)
-                            text.SetHeight(0.2)
-                            text.SetColour(0)
-                            text.SetMode(1)
-                            text.SetAlignment(2)
-                            text.SetSchemaLocation(
-                                schematic_additional_part_x,
-                                schematic_additional_part_y
-                            )
-                        else:
-                            # Every other split-view Additional Part ID,
-                            # including the previous top-right one, is hidden.
-                            text.SetVisibility(0)
-
-                    if text_type == 12:
-                        text.SetStyle(1)
-
-            connector_id = CONNECTORS.get(connector)
-            print("CONNECTOR:",  connector, "ID:",  connector_id)
-
-            if connector_id is None:
-                print("WARNING: connector ID not found for", connector)
-                continue
-
-            dev.SetId(connector_id)
-            print("Formatting bulk connector:", dev.GetName())
-
-
-            assydevsymbolinfo = dev.GetSymbolIds(None)
-            assydevsymbolids = [x for x in assydevsymbolinfo[1] if x is not None]
-            print("BULK SYMBOL IDS:", assydevsymbolids)
-
-            for assydevsymbol_id in assydevsymbolids:
-                sym.SetId(assydevsymbol_id)
-                print("BULK SYMBOL:", assydevsymbol_id, "| name:", sym.GetName())
-                assydevsymboltextinfo = sym.GetTextIds(None)
-                assydevsymboltextids = [x for x in assydevsymboltextinfo[1] if x is not None]
-
-                for assydevsymboltext_id in assydevsymboltextids:
-                    text.SetId(assydevsymboltext_id)
-                    print("name:", sym.GetName(), "| text:", text.GetText(), "| type:", text.GetType())
-                    if text.GetType() == 5:
-                        text.SetVisibility(0)
-                    if text.GetType() == 12:
-                        text.SetStyle(1)
-                    if (text.GetType() == 1000 and sym.GetName() == "J1"):
-                        app.PutMessage("Configuring text")
-                        text.SetVisibility(1)
-                        text.SetStyle(1)
-                        text.SetHeight(0.2)
-                        text.SetColour(0)
-                        text.SetMode(1)
-                        text.SetAlignment(2)
-                        xloc = [0.0]
-                        yloc = [0.0]
-                        grid = [""]
-                        column = [""]
-                        row = [""]
-                        result = text.GetSchemaLocation(xloc, yloc, grid,  column, row)
-                        new_x = result[1] + 1.5
-                        new_y = result[2] + 0.25
-                        text.SetSchemaLocation(new_x, new_y)
-
-                    elif text.GetType() == 1000:
-                        text.SetVisibility(0)
-
-        del text
-        del sym
-        del dev
-        del prj
-        del app
-        messagebox.showinfo("Success CT code ran successfully!")
-
-    except Exception as e:
-        messagebox.showerror(f"Error An error occurred:\n{e}")
-
-
+# ================================================
+# HELPER FXN
+# ================================================
 def ask_save_path(default_full_path=""):
     import os
     import tkinter as tk
@@ -570,7 +90,7 @@ def ask_save_path(default_full_path=""):
         # Let user PICK an existing Excel file
         selected_path = filedialog.askopenfilename(
             initialdir=default_folder,
-            filetypes=[("Excel Files", "*.xlsx"), ("All Files", "*.*")]
+            filetypes=[("Excel Files", "*.xlsm"), ("All Files", "*.*")]
         )
     except Exception:
         return None
@@ -583,2431 +103,312 @@ def ask_save_path(default_full_path=""):
     # Return ONLY the file name (not full path)
     return os.path.abspath(selected_path)
 
-def generate_ordered_pin_ids(dict_to_order, dest):
-    return {str(pin): dict_to_order[str(pin)] for pin in dest}
+def generate_master_schematic_layout(PIN_SIGNAL_INFO,x_block,main_block_width):
+    SHEET_DICT = {1:sheet_1_id}
 
-def generate_placement_locations(Pins, layout):
+    # PAGE BOUNDS
     TOP_OF_PAGE = 32.9
     BOTTOM_OF_PAGE = 0.0
     LEFT_OF_PAGE = 0.0
     RIGHT_OF_PAGE = 42.9
 
-    PIN_OFFSET_FROM_CONN = 3.0
-
-    X_START = 1.0
-    Y_START = 32.5
-    main_conn_locs = [] # conn, x, y, flip
-
-    # Center the shorter connector column vertically against the longer one.
-    # Example:
-    #   LEFT  = [P1, P3, P4]
-    #   RIGHT = [P2]
-    # gives P2 the same Y as P3.
-    active_rows = [
-        [conn for conn in row if conn is not None]
-        for row in layout
-    ]
-
-    max_connector_count = max(
-        (len(row) for row in active_rows),
-        default=0
-    )
-
-    for i, row in enumerate(active_rows):
-        vertical_offset = (max_connector_count - len(row)) / 2.0
-
-        for j, conn in enumerate(row):
-            flip = i > 0
-            y_index = j + vertical_offset
-
-            main_conn_locs.append([
-                conn,
-                X_START + (i * 3.0),
-                Y_START - (y_index * 1.0),
-                flip
-            ])
-
-    y_pin_start = 32.9
-    for r in main_conn_locs:
-        if y_pin_start > r[2]:
-            y_pin_start = r[2]
-    y_pin_start -= PIN_OFFSET_FROM_CONN
-
-    print(Pins)
-    print(layout)
-
-    pin_locs = [] # conn, xstart, ystart, flip
-
-    for dictionary in Pins:
-        # connector number from "W1.Pn"
-        conn_key = list(dictionary.keys())[0]
-        conn = int(conn_key.split(".")[1][1:])   # P1 -> 1, P2 -> 2, etc.
-
-        # number of pins = all keys except the "W1.Pn"
-        count = len(dictionary) - 1
-
-        top = True
-        flip = 0
-        xstart = 0
-        ystart = 0
-
-        # find this connector's placement data
-        for r in main_conn_locs:
-            if int(r[0]) == conn:
-                xstart = r[1]
-                ystart = r[2]
-                flip = r[3]
-
-        # determine if connector is below another connector
-        for r in main_conn_locs:
-            if r[3] == flip:       # same flip side (top or bottom)
-                if ystart < r[2]:  # this connector is below another
-                    top = False
-
-        if top:
-            # normal top placement
-            ystart = y_pin_start
-        else:
-            # below another connector:
-            # new rule:
-            #  p_start = top_p_start - pins_above*0.25 - conns_above*1
-
-            pins_above = 0
-            conns_above = 0
-
-            # iterate over all pin dictionaries ABOVE our current connector
-            for r in Pins:
-                r_conn_key = list(r.keys())[0]
-                r_conn = int(r_conn_key.split(".")[1][1:])
-
-                if r_conn == conn:
-                    break  # stop when reaching our connector
-
-                # check if the connector is above AND same flip
-                for c in main_conn_locs:
-                    if int(c[0]) == r_conn and c[3] == flip:
-                        if c[2] > ystart:
-                            pins_above += (len(r) - 1)
-                            conns_above += 1
-
-            ystart = y_pin_start - (pins_above * 0.25) - (conns_above * 0.5)
-
-        pin_locs.append([conn, xstart, ystart, flip])
-
-    return main_conn_locs, pin_locs, y_pin_start + 2
-
-def generate_aligned_pin_y(pinouts, y_start, pin_spacing=0.25, connector_gap=0.5):
-    pin_y = {}
-
-    current_y = y_start
-
-    previous_c1 = None
-    previous_c2 = None
-
-    for row_index, (c1, p1, c2, p2) in enumerate(pinouts):
-        if c1 is None or c2 is None:
-            continue
-
-        # Add a gap whenever we move into a new connector group
-        # on EITHER side of the cable.
-        if previous_c1 is not None:
-            connector_changed = (
-                c1 != previous_c1
-                or c2 != previous_c2
-            )
-
-            if connector_changed:
-                current_y -= connector_gap
-
-        # Both ends of this wire get EXACTLY the same Y.
-        pin_y[(int(c1), str(p1))] = current_y
-        pin_y[(int(c2), str(p2))] = current_y
-
-        current_y -= pin_spacing
-
-        previous_c1 = c1
-        previous_c2 = c2
-
-    return pin_y
-
-def get_spare_pins(pins, pinouts):
-    spares = {}
-
-    # Build quick connector -> pin dictionary lookup
-    pin_lookup = {}
-
-    for pindict in pins:
-        connector = list(pindict.keys())[0]
-        pin_lookup[connector] = pindict
-
-    for c1, p1, c2, p2 in pinouts:
-
-        # ==========================================
-        # SPARE ON SIDE 1
-        # ==========================================
-        if c1 is not None and p1 is not None and c2 is None:
-            connector = f"W1.P{c1}"
-
-            if connector not in spares:
-                spares[connector] = {}
-
-            if connector in pin_lookup:
-                pin_id = pin_lookup[connector].get(str(p1))
-
-                if pin_id is not None:
-                    spares[connector][str(p1)] = pin_id
-
-        # ==========================================
-        # SPARE ON SIDE 2
-        # ==========================================
-        elif c2 is not None and p2 is not None and c1 is None:
-            connector = f"W1.P{c2}"
-
-            if connector not in spares:
-                spares[connector] = {}
-
-            if connector in pin_lookup:
-                pin_id = pin_lookup[connector].get(str(p2))
-
-                if pin_id is not None:
-                    spares[connector][str(p2)] = pin_id
-
-    return spares
-        
-
-# ======================================================================
-# V9 SHIELD / TWIST OVERLAY CORE
-#
-# Supplied V9 shield/twist logic.
-# Placement and sizing behavior is intentionally preserved.
-# ======================================================================
-
-# ======================================================================
-# V9: EXACT WORKING SHIELD CORE RESTORED
-#
-# This file is intentionally based directly on the script the user
-# confirmed resized/placed Shield_Demo correctly.
-#
-# Do NOT change these working E3 behaviors:
-#   - outer shields are attempted FIRST
-#   - inner shields are attempted before twists
-#   - each shield attempt gets a fresh CreateSymbolObject()
-#   - Shield_Demo uses Load -> Place -> immediate SetDisplayLength
-#   - SetId/GetDisplayLength happen only AFTER that immediate stretch attempt
-#
-# Multi-connector outer-shield logic already supports a run spanning
-# connector changes such as LEFT P1 -> P3 -> P4.
-# ======================================================================
-
-
-#====================================================================================================================================
-# EXCEL LAYOUT
-#====================================================================================================================================
-TARGET_SHEET_NAME = None
-DEVICE_NAME_CELL = "B1"
-DATA_FIRST_ROW = 5
-MAX_SCAN_ROWS = 5000
-
-LEFT_TWIST_OFFSET_CELL = "J2"
-RIGHT_TWIST_OFFSET_CELL = "R2"
-
-LEFT_OUTER_SHIELD_COL = "H"
-LEFT_INNER_SHIELD_COL = "I"
-LEFT_TWIST_A_COL = "J"
-LEFT_TWIST_B_COL = "K"
-LEFT_CONNECTOR_COL = "L"
-
-PIN_1_COL = "N"
-PIN_2_COL = "O"
-
-RIGHT_CONNECTOR_COL = "Q"
-RIGHT_TWIST_A_COL = "R"
-RIGHT_TWIST_B_COL = "S"
-RIGHT_INNER_SHIELD_COL = "T"
-RIGHT_OUTER_SHIELD_COL = "U"
-
-
-#====================================================================================================================================
-# E3 CONNECTOR NAMING
-#====================================================================================================================================
-CONNECTOR_ROOT_NAME = "W1"
-
-
-#====================================================================================================================================
-# ZUKEN LIBRARY SYMBOLS
-#====================================================================================================================================
-TWIST_SYMBOL_NAME = "MIL_Twist_ArrowsDown"
-SHIELD_SYMBOL_NAME = "Shield_Demo"
-
-SYMBOL_VERSION = 1
-
-
-#====================================================================================================================================
-# E3 TIMING
-#====================================================================================================================================
-PLACEMENT_DELAY_SECONDS = 0.10
-STRETCH_DELAY_SECONDS = 0.10
-MOVE_DELAY_SECONDS = 0.10
-
-
-#====================================================================================================================================
-# SHIELD FALLBACK STAGING SETTINGS
-#
-# Final placement is attempted first. If E3 rejects the resize there,
-# the same exact Load -> Place -> immediate SetDisplayLength sequence
-# is tried in open staging positions.
-#====================================================================================================================================
-# The known-good standalone stretch test used X=24.0, Y=22.0.
-# Keep X=24 first and choose Y dynamically so long shields remain on-sheet.
-SHIELD_STAGE_X_VALUES = [24.0, 20.0, 28.0, 16.0, 32.0, 12.0, 36.0]
-SHIELD_STAGE_TOP_LIMIT = 32.0
-SHIELD_STAGE_DEFAULT_Y = 22.0
-SHIELD_STAGE_MARGIN = 0.50
-
-
-#====================================================================================================================================
-# SYMBOL LENGTH SETTINGS
-#====================================================================================================================================
-MIN_SYMBOL_LENGTH = 0.10
-
-
-#====================================================================================================================================
-# SHIELD VERTICAL OVERLAP
-#
-# Shield_Demo origin is bottom-center.
-#
-# The symbol extends upward from the insertion point.
-#====================================================================================================================================
-SHIELD_BOTTOM_OVERLAP = 0.125
-SHIELD_TOP_OVERLAP = 0.125
-
-
-#====================================================================================================================================
-# TWIST PLACEMENT
-#
-# TWISTS ARE NOT STRETCHED.
-#
-# E3/database behavior determines the correct display length based on
-# the wires under the twist symbol.
-#====================================================================================================================================
-TWIST_BOTTOM_OVERLAP = 0.00
-
-
-#====================================================================================================================================
-# HORIZONTAL LAYOUT WHEN OFFSET = YES
-#
-# LEFT CONNECTOR EXAMPLE AT X = 1.00:
-#
-# Twist A + Shield A = 1.25
-# Twist B + Shield B = 1.50
-# Outer Shield       = 1.75
-#
-# RIGHT SIDE MIRRORS AUTOMATICALLY.
-#====================================================================================================================================
-OFFSET_YES_TWIST_A = 0.25
-OFFSET_YES_TWIST_B = 0.50
-OFFSET_YES_OUTER_SHIELD = 0.75
-
-
-#====================================================================================================================================
-# HORIZONTAL LAYOUT WHEN OFFSET = NO
-#
-# LEFT CONNECTOR EXAMPLE AT X = 1.00:
-#
-# Twist A + Shield A = 1.25
-# Twist B + Shield B = 1.25
-# Outer Shield       = 1.50
-#
-# RIGHT SIDE MIRRORS AUTOMATICALLY.
-#====================================================================================================================================
-OFFSET_NO_TWIST_LINE = 0.25
-OFFSET_NO_OUTER_SHIELD = 0.50
-
-
-#====================================================================================================================================
-# INNER SHIELD WITHOUT A TWIST
-#====================================================================================================================================
-INNER_SHIELD_ONLY_OFFSET = 0.25
-
-
-#====================================================================================================================================
-# OPTIONS
-#====================================================================================================================================
-DRY_RUN = False
-STRICT_TWIST_VALIDATION = True
-
-SCHEMATIC_MIN_Y_SPAN = 0.05
-COORDINATE_ROUND_DIGITS = 6
-
-
-#====================================================================================================================================
-# FILE PICKER
-#====================================================================================================================================
-def ask_excel_path():
-    root = tk.Tk()
-    root.withdraw()
-    root.attributes("-topmost", True)
-    root.update()
-    selected_path = filedialog.askopenfilename(title="Select Cable Symbol Placement Excel File", filetypes=[("Excel Files", "*.xlsx"), ("Excel Macro Files", "*.xlsm"), ("All Files", "*.*")])
-    root.destroy()
-
-    if not selected_path:
-        return None
-
-    return os.path.abspath(selected_path)
-
-
-#====================================================================================================================================
-# VALUE HELPERS
-#====================================================================================================================================
-def clean_excel_value(value):
-    if value is None:
-        return ""
-
-    if isinstance(value, int):
-        return str(value)
-
-    if isinstance(value, float):
-        if value.is_integer():
-            return str(int(value))
-
-        return str(value).strip()
-
-    return str(value).strip()
-
-
-def normalize_pin_name(value):
-    return clean_excel_value(value).upper()
-
-
-def normalize_connector_token(value):
-    text = clean_excel_value(value).upper().replace(" ", "")
-
-    if text == "":
-        return ""
-
-    root_prefix = CONNECTOR_ROOT_NAME.upper() + "."
-
-    if text.startswith(root_prefix):
-        text = text[len(root_prefix):]
-
-    if "#" in text:
-        text = text.split("#", 1)[0]
-
-    match = re.fullmatch(r"P?0*(\d+)([A-Z]*)", text)
-
-    if match:
-        number = int(match.group(1))
-        suffix = match.group(2)
-        return f"P{number}{suffix}"
-
-    return text
-
-
-def connector_base_name(connector_token):
-    connector = normalize_connector_token(connector_token)
-
-    if connector == "":
-        return ""
-
-    return f"{CONNECTOR_ROOT_NAME}.{connector}"
-
-
-def cell_has_bar(value):
-    return "|" in clean_excel_value(value)
-
-
-#====================================================================================================================================
-# YES / NO SETTING
-#====================================================================================================================================
-def parse_yes_no(value, setting_name):
-    text = clean_excel_value(value).upper()
-
-    if text == "":
-        print("WARNING:", setting_name, "IS BLANK - DEFAULTING TO YES")
-        return True
-
-    if text in ["YES", "Y", "TRUE", "1"]:
-        return True
-
-    if text in ["NO", "N", "FALSE", "0"]:
-        return False
-
-    raise Exception(f"{setting_name} must contain YES or NO. Current value: {value}")
-
-
-#====================================================================================================================================
-# READ TWIST OFFSET SETTINGS
-#
-# J2:K2 merged -> J2
-# R2:S2 merged -> R2
-#====================================================================================================================================
-def read_twist_offset_settings(ws):
-    left_enabled = parse_yes_no(ws[LEFT_TWIST_OFFSET_CELL].value, "LEFT TWIST OFFSET J2:K2")
-    right_enabled = parse_yes_no(ws[RIGHT_TWIST_OFFSET_CELL].value, "RIGHT TWIST OFFSET R2:S2")
-
-    settings = {
-        "LEFT": left_enabled,
-        "RIGHT": right_enabled
-    }
-
-    return settings
-
-
-#====================================================================================================================================
-# FIND LAST DATA ROW
-#====================================================================================================================================
-def get_last_data_row(ws):
-    columns = [LEFT_OUTER_SHIELD_COL, LEFT_INNER_SHIELD_COL, LEFT_TWIST_A_COL, LEFT_TWIST_B_COL, LEFT_CONNECTOR_COL, PIN_1_COL, PIN_2_COL, RIGHT_CONNECTOR_COL, RIGHT_TWIST_A_COL, RIGHT_TWIST_B_COL, RIGHT_INNER_SHIELD_COL, RIGHT_OUTER_SHIELD_COL]
-    scan_end = min(max(ws.max_row, DATA_FIRST_ROW), DATA_FIRST_ROW + MAX_SCAN_ROWS)
-    last_row = DATA_FIRST_ROW - 1
-
-    for row in range(DATA_FIRST_ROW, scan_end + 1):
-        for col in columns:
-            value = clean_excel_value(ws[f"{col}{row}"].value)
-
-            if value != "":
-                last_row = row
-                break
-
-    return last_row
-
-
-#====================================================================================================================================
-# READ LEFT OR RIGHT SIDE
-#====================================================================================================================================
-def read_side_rows(ws, side, last_row):
-    if side == "LEFT":
-        connector_col = LEFT_CONNECTOR_COL
-        pin_col = PIN_1_COL
-        twist_a_col = LEFT_TWIST_A_COL
-        twist_b_col = LEFT_TWIST_B_COL
-        inner_col = LEFT_INNER_SHIELD_COL
-        outer_col = LEFT_OUTER_SHIELD_COL
-    else:
-        connector_col = RIGHT_CONNECTOR_COL
-        pin_col = PIN_2_COL
-        twist_a_col = RIGHT_TWIST_A_COL
-        twist_b_col = RIGHT_TWIST_B_COL
-        inner_col = RIGHT_INNER_SHIELD_COL
-        outer_col = RIGHT_OUTER_SHIELD_COL
-
-    rows = []
-    current_connector = ""
-
-    for excel_row in range(DATA_FIRST_ROW, last_row + 1):
-        connector_value = clean_excel_value(ws[f"{connector_col}{excel_row}"].value)
-        pin_name = normalize_pin_name(ws[f"{pin_col}{excel_row}"].value)
-
-        if connector_value != "":
-            current_connector = normalize_connector_token(connector_value)
-
-        if pin_name == "":
-            continue
-
-        row_info = {
-            "side": side,
-            "excel_row": excel_row,
-            "connector": current_connector,
-            "pin": pin_name,
-            "twist_a": cell_has_bar(ws[f"{twist_a_col}{excel_row}"].value),
-            "twist_b": cell_has_bar(ws[f"{twist_b_col}{excel_row}"].value),
-            "inner_shield": cell_has_bar(ws[f"{inner_col}{excel_row}"].value),
-            "outer_shield": cell_has_bar(ws[f"{outer_col}{excel_row}"].value)
-        }
-
-        rows.append(row_info)
-
-    return rows
-
-
-#====================================================================================================================================
-# SPLIT INTO CONNECTOR SECTIONS
-#====================================================================================================================================
-def split_into_sections(rows):
-    sections = []
-    current = []
-
-    for row in rows:
-        if not current:
-            current = [row]
-            continue
-
-        previous = current[-1]
-        connector_changed = row["connector"] != previous["connector"]
-        row_gap = row["excel_row"] != previous["excel_row"] + 1
-
-        if connector_changed or row_gap:
-            sections.append(current)
-            current = [row]
-        else:
-            current.append(row)
-
-    if current:
-        sections.append(current)
-
-    return sections
-
-
-#====================================================================================================================================
-# CONTIGUOUS MARKED RANGES
-#====================================================================================================================================
-def true_ranges(rows, key):
-    ranges = []
-    start = None
-
-    for index, row in enumerate(rows):
-        marked = bool(row[key])
-
-        if marked and start is None:
-            start = index
-
-        if not marked and start is not None:
-            ranges.append((start, index - 1))
-            start = None
-
-    if start is not None:
-        ranges.append((start, len(rows) - 1))
-
-    return ranges
-
-
-def range_pins(rows, start, end):
-    pins = []
-
-    for index in range(start, end + 1):
-        pins.append(rows[index]["pin"])
-
-    return pins
-
-
-def range_excel_rows(rows, start, end):
-    excel_rows = []
-
-    for index in range(start, end + 1):
-        excel_rows.append(rows[index]["excel_row"])
-
-    return excel_rows
-
-
-
-#====================================================================================================================================
-# BUILD TWIST / INNER-SHIELD JOBS FOR ONE CONNECTOR SECTION
-#
-# INNER SHIELD RULE:
-#   Inner SHLD does NOT create a standalone shield.
-#   It only places Shield_Demo around a twist run when every wire in
-#   that twist run is marked in the inner-SHLD column.
-#
-# OUTER SHIELDS ARE BUILT SEPARATELY ACROSS THE WHOLE SIDE SO THEY MAY
-# CROSS CONNECTOR CHANGES (EXAMPLE: LEFT P1 -> P3 -> P4).
-#====================================================================================================================================
-def build_section_jobs(rows):
-    jobs = []
-    warnings = []
-
-    if not rows:
-        return jobs, warnings
-
-    side = rows[0]["side"]
-    connector = rows[0]["connector"]
-
-    if connector == "":
-        warnings.append(f"{side}: rows {rows[0]['excel_row']}-{rows[-1]['excel_row']} have pins but no connector")
-        return jobs, warnings
-
-    conflicts = []
-
-    for row in rows:
-        if row["twist_a"] and row["twist_b"]:
-            conflicts.append(row["excel_row"])
-
-    if conflicts:
-        message = f"{side} {connector}: same wire marked in both twist columns on Excel rows {conflicts}"
-
-        if STRICT_TWIST_VALIDATION:
-            raise Exception(message)
-
-        warnings.append(message)
-
-    twist_jobs = []
-
-    for key, twist_column in [("twist_a", "A"), ("twist_b", "B")]:
-        ranges = true_ranges(rows, key)
-
-        for start, end in ranges:
-            pins = range_pins(rows, start, end)
-            excel_rows = range_excel_rows(rows, start, end)
-
-            if len(pins) < 2:
-                warnings.append(
-                    f"{side} {connector}: twist {twist_column} only contains one wire "
-                    f"on Excel row {excel_rows[0]}"
-                )
-                continue
-
-            job = {
-                "type": "twist",
-                "side": side,
-                "connector": connector,
-                "twist_column": twist_column,
-                "start": start,
-                "end": end,
-                "pins": pins,
-                "excel_rows": excel_rows,
-                "symbol_name": TWIST_SYMBOL_NAME
-            }
-
-            twist_jobs.append(job)
-            jobs.append(job)
-
-    # Inner SHLD only wraps an existing twist. It never makes its own span.
-    for twist_job in twist_jobs:
-        indexes = list(range(twist_job["start"], twist_job["end"] + 1))
-        inner_marks = [bool(rows[index]["inner_shield"]) for index in indexes]
-
-        if all(inner_marks):
-            jobs.append({
-                "type": "shield_inner",
-                "side": side,
-                "connector": connector,
-                "twist_column": twist_job["twist_column"],
-                "pins": list(twist_job["pins"]),
-                "excel_rows": list(twist_job["excel_rows"]),
-                "symbol_name": SHIELD_SYMBOL_NAME
-            })
-        elif any(inner_marks):
-            warnings.append(
-                f"{side} {connector}: inner SHLD partially covers twist "
-                f"{twist_job['twist_column']} on Excel rows {twist_job['excel_rows']}; "
-                f"inner shield ignored because the full twist must be marked"
-            )
-
-    return jobs, warnings
-
-
-#====================================================================================================================================
-# BUILD OUTER-SHIELD JOBS ACROSS AN ENTIRE SIDE
-#
-# Connector changes DO NOT break an outer shield.
-# Blank Excel row gaps or an unmarked outer-SHLD row DO break it.
-#====================================================================================================================================
-def build_outer_shield_jobs(rows):
-    jobs = []
-
-    if not rows:
-        return jobs
-
-    side = rows[0]["side"]
-    start = None
-
-    def append_job(start_index, end_index):
-        covered_rows = rows[start_index:end_index + 1]
-
-        connectors = []
-        for row in covered_rows:
-            connector = row["connector"]
-            if connector and connector not in connectors:
-                connectors.append(connector)
-
-        jobs.append({
-            "type": "shield_outer",
-            "side": side,
-            "connector": "/".join(connectors),
-            "connectors": connectors,
-            "rows": covered_rows,
-            "pins": [row["pin"] for row in covered_rows],
-            "excel_rows": [row["excel_row"] for row in covered_rows],
-            "twist_column": None,
-            "symbol_name": SHIELD_SYMBOL_NAME
-        })
-
-    for index, row in enumerate(rows):
-        marked = bool(row["outer_shield"])
-
-        if start is not None:
-            previous = rows[index - 1]
-            row_gap = row["excel_row"] != previous["excel_row"] + 1
-
-            if row_gap or not marked:
-                append_job(start, index - 1)
-                start = None
-
-        if marked and start is None:
-            start = index
-
-    if start is not None:
-        append_job(start, len(rows) - 1)
-
-    return jobs
-
-
-#====================================================================================================================================
-# E3 ID EXTRACTOR
-#====================================================================================================================================
-def extract_e3_ids(result):
-    if result is None:
-        return []
-
-    if isinstance(result, int):
-        if result > 0:
-            return [result]
-
-        return []
-
-    if isinstance(result, list):
-        output = []
-
-        for value in result:
-            if value is not None:
-                try:
-                    if int(value) > 0:
-                        output.append(int(value))
-                except Exception:
-                    pass
-
-        return output
-
-    if not isinstance(result, tuple):
-        return []
-
-    if len(result) == 0:
-        return []
-
-    if len(result) >= 2:
-        values = result[1]
-
-        if values is None:
-            return []
-
-        if isinstance(values, int):
-            if values > 0:
-                return [values]
-
-            return []
-
-        try:
-            return [int(value) for value in values if value is not None and int(value) > 0]
-        except Exception:
-            pass
-
-    output = []
-
-    for value in result:
-        try:
-            if int(value) > 0:
-                output.append(int(value))
-        except Exception:
-            pass
-
-    return output
-
-
-#====================================================================================================================================
-# GET ALL BASE DEVICES
-#====================================================================================================================================
-def get_all_devices(prj, dev):
-    info = prj.GetAllDeviceIds(None)
-    ids = extract_e3_ids(info)
-    records = []
-
-    for device_id in ids:
-        dev.SetId(device_id)
-
-        try:
-            name = clean_excel_value(dev.GetName())
-        except Exception:
-            continue
-
-        records.append({"device_id": device_id, "name": name})
-
-    return records
-
-
-#====================================================================================================================================
-# READ PIN SCHEMATIC LOCATION
-#====================================================================================================================================
-def get_pin_location(pin, pin_id):
-    pin.SetId(pin_id)
-
-    xloc = [0.0]
-    yloc = [0.0]
-    grid = [""]
-    column = [""]
-    row = [""]
-
-    try:
-        result = pin.GetSchemaLocation(xloc, yloc, grid, column, row)
-    except Exception:
-        return None
-
-    if not isinstance(result, tuple):
-        return None
-
-    if len(result) < 3:
-        return None
-
-    try:
-        sheet_id = int(result[0])
-        x = float(result[1])
-        y = float(result[2])
-    except Exception:
-        return None
-
-    if sheet_id <= 0:
-        return None
-
-    return {"sheet_id": sheet_id, "x": x, "y": y}
-
-
-#====================================================================================================================================
-# READ SYMBOL SCHEMATIC LOCATION
-#====================================================================================================================================
-def get_symbol_location(sym, symbol_id):
-    sym.SetId(symbol_id)
-
-    xloc = [0.0]
-    yloc = [0.0]
-    grid = [""]
-    column = [""]
-    row = [""]
-
-    try:
-        result = sym.GetSchemaLocation(xloc, yloc, grid, column, row)
-    except Exception:
-        return None
-
-    if not isinstance(result, tuple):
-        return None
-
-    if len(result) < 3:
-        return None
-
-    try:
-        sheet_id = int(result[0])
-        x = float(result[1])
-        y = float(result[2])
-    except Exception:
-        return None
-
-    if sheet_id <= 0:
-        return None
-
-    return {"sheet_id": sheet_id, "x": x, "y": y}
-
-
-#====================================================================================================================================
-# LOAD DEVICE PIN MAP
-#====================================================================================================================================
-def load_device_pin_map(dev, pin, device_id):
-    dev.SetId(device_id)
-
-    try:
-        info = dev.GetAllPinIds(None)
-    except Exception:
-        return {}
-
-    pin_ids = extract_e3_ids(info)
-    pin_map = {}
-
-    for pin_id in pin_ids:
-        pin.SetId(pin_id)
-
-        try:
-            pin_name = normalize_pin_name(pin.GetName())
-        except Exception:
-            continue
-
-        location = get_pin_location(pin, pin_id)
-
-        if pin_name not in pin_map:
-            pin_map[pin_name] = []
-
-        if location is not None:
-            record = {"pin_id": pin_id, "sheet_id": location["sheet_id"], "x": location["x"], "y": location["y"]}
-            pin_map[pin_name].append(record)
-
+    # PAGE MARGINS
+    TOP_MARGIN = 1.0
+    BOTTOM_MARGIN = 1.0
+    LEFT_MARGIN = 1.0
+    RIGHT_MARGIN = 1.0
+
+    # BLOCK SPACING
+    BLOCK_X_SPACING = 1.0
+    BLOCK_Y_SPACING = 1.0
+    SCHEMATIC_BLOCK_WIDTH = 3.0
+    PIN_SPACING = 0.25
+    PIN_START_OFFSET = 2.25
+
+    # USABLE PAGE LIMITS
+    PAGE_TOP = TOP_OF_PAGE - TOP_MARGIN
+    PAGE_BOTTOM = BOTTOM_OF_PAGE + BOTTOM_MARGIN
+    PAGE_LEFT = LEFT_OF_PAGE + LEFT_MARGIN
+    PAGE_RIGHT = RIGHT_OF_PAGE - RIGHT_MARGIN
+    USABLE_PAGE_HEIGHT = PAGE_TOP - PAGE_BOTTOM
+
+    # OUTPUT
+    SPACING_DICT = []
+    sheet = 1
+    # On sheet 1, start to the RIGHT of the main block
+    current_x = (x_block + main_block_width + BLOCK_X_SPACING)
+
+    # Current Y is the TOP edge available for placement
+    current_top_y = PAGE_TOP
+    # Tracks widest block in current column
+    current_column_width = 0.0
+
+    # ================================================
+    # BUILD LAYOUT
+    # ================================================
+    for i in range(len(PIN_SIGNAL_INFO)):
+        connector_name = (PIN_SIGNAL_INFO[i][0]["connector name"])
+        number_of_pins = (PIN_SIGNAL_INFO[i][0]["number of pins"])
+        width = SCHEMATIC_BLOCK_WIDTH
+        height = (PIN_START_OFFSET + (PIN_SPACING * number_of_pins))
+
+        # --------------------------------------------
+        # SAFETY CHECK:
+        # Block cannot physically fit on ANY page
+        # --------------------------------------------
+        if height > USABLE_PAGE_HEIGHT:
+            raise Exception(f"Schematic block for {connector_name} is too tall for a page. Height = {height}, usable page height = {USABLE_PAGE_HEIGHT}")
+
+        # CALCULATE BOTTOM Y IF PLACED HERE
+        candidate_y = current_top_y - height
+
+        # DOES IT FIT VERTICALLY?
+        if candidate_y < PAGE_BOTTOM:
+            next_x = (current_x + current_column_width + BLOCK_X_SPACING)
+
+            # DOES NEXT COLUMN FIT ON THIS PAGE?
+            if next_x + width <= PAGE_RIGHT:
+                current_x = next_x
+                current_top_y = PAGE_TOP
+                current_column_width = 0.0
+
+            else:
+                # PAGE IS FULL -> NEW PAGE
+                sheet += 1
+                sheet_symbol = "ANSI Size E - BAE"
+                res = sht.Create(0, str(sheet), sheet_symbol, 0, 0)
+                if res == 0:
+                    app.PutMessage("failed to create new sheet")
+                    raise Exception("failed to create new sheet")
+                SHEET_DICT[sheet] = res
+                current_x = PAGE_LEFT
+                current_top_y = PAGE_TOP
+                current_column_width = 0.0
+
+            # Recalculate Y at new column/page
+            candidate_y = current_top_y - height
+
+        # CHECK HORIZONTAL FIT
+        if current_x + width > PAGE_RIGHT:
+            sheet += 1
+            res = sht.Create(0, sheet, "DINA3", 0)
+            if res == 0:
+                app.PutMessage("failed to create new sheet")
+                raise Exception("failed to create new sheet")
+            SHEET_DICT[sheet] = res
+            current_x = PAGE_LEFT
+            current_top_y = PAGE_TOP
+            current_column_width = 0.0
+            candidate_y = current_top_y - height
+
+        # SAVE PLACEMENT
+        x_start = current_x
+        y_start = candidate_y
+        SPACING_DICT.append({"connector name": connector_name, "connector index": i, "sheet": sheet, "x start": x_start, "y start": y_start, "x end": x_start + width, "y end": y_start + height, "height": height, "width": width, "number of pins": number_of_pins})
+        # UPDATE CURSOR FOR NEXT BLOCK
+        current_top_y = (y_start - BLOCK_Y_SPACING)
+        current_column_width = max(current_column_width, width)
+
+    return SPACING_DICT, SHEET_DICT
+
+
+
+def generate_schematic_pin_map(connector_info,newpindict,layout,pin_spacing=0.25,pin_start_offset=2.0,edge_offset=0.3):
+    x=layout["x start"]+layout["width"]-0.3
+    y_start=layout["y start"]+layout["height"]-pin_start_offset
+    pin_map=[]
+    for pos,pin_data in enumerate(connector_info[1:]):
+        pin_name=str(pin_data[0])
+        if pin_name not in newpindict: raise Exception(f"Pin {pin_name} not found in new view for {connector_info[0]['connector name']}")
+        pin_map.append({"pin name":pin_name,"pin id":newpindict[pin_name],"x":x,"y":y_start-(pos*pin_spacing),"flip":"/1"})
     return pin_map
 
-
-#====================================================================================================================================
-# FIND BASE CONNECTOR
-#====================================================================================================================================
-def find_base_connector_devices(connector_token, all_devices):
-    expected_name = connector_base_name(connector_token)
-    expected_upper = expected_name.upper()
-    matches = []
-
-    for record in all_devices:
-        if record["name"].upper() == expected_upper:
-            matches.append(record)
-
-    return matches
-
-
-#====================================================================================================================================
-# GET VIEW IDS
-#====================================================================================================================================
-def get_device_view_ids(dev, base_device_id):
-    dev.SetId(base_device_id)
-
-    if not hasattr(dev, "GetViewIds"):
-        print("GetViewIds IS NOT AVAILABLE ON THIS E3 DEVICE OBJECT")
-        return []
-
-    try:
-        result = dev.GetViewIds(None)
-    except Exception as error:
-        print("GetViewIds FAILED FOR BASE ID:", base_device_id, "ERROR:", repr(error))
-        return []
-
-    view_ids = extract_e3_ids(result)
-
-    print("BASE DEVICE ID:", base_device_id, "VIEW IDS:", view_ids)
-
-    return view_ids
-
-
-#====================================================================================================================================
-# GET CHILD DEVICE IDS
-#====================================================================================================================================
-def get_child_device_ids(dev, base_device_id):
-    dev.SetId(base_device_id)
-
-    if not hasattr(dev, "GetDeviceIds"):
-        return []
-
-    try:
-        result = dev.GetDeviceIds(None)
-    except Exception:
-        return []
-
-    return extract_e3_ids(result)
-
-
-#====================================================================================================================================
-# GET SAME NAME ASSEMBLY DEVICES
-#====================================================================================================================================
-def get_same_name_assembly_devices(dev, base_device_id, expected_name):
-    found_ids = []
-
-    dev.SetId(base_device_id)
-
-    try:
-        assembly_id = dev.GetAssemblyId()
-    except Exception:
-        return found_ids
-
-    if assembly_id is None:
-        return found_ids
-
-    try:
-        assembly_id = int(assembly_id)
-    except Exception:
-        return found_ids
-
-    if assembly_id <= 0:
-        return found_ids
-
-    dev.SetId(assembly_id)
-
-    try:
-        device_info = dev.GetDeviceIds(None)
-    except Exception:
-        return found_ids
-
-    device_ids = extract_e3_ids(device_info)
-
-    for device_id in device_ids:
-        dev.SetId(device_id)
-
-        try:
-            name = clean_excel_value(dev.GetName())
-        except Exception:
-            continue
-
-        if name.upper() == expected_name.upper():
-            found_ids.append(device_id)
-
-    return found_ids
-
-
-#====================================================================================================================================
-# COLLECT CONNECTOR CANDIDATES
-#====================================================================================================================================
-def collect_connector_candidate_ids(connector_token, all_devices, dev):
-    expected_name = connector_base_name(connector_token)
-    base_records = find_base_connector_devices(connector_token, all_devices)
-
-    if not base_records:
-        raise Exception(f"Could not find base E3 connector {expected_name}")
-
-    candidate_sources = {}
-
-    for record in base_records:
-        base_id = record["device_id"]
-
-        candidate_sources[base_id] = "BASE"
-
-        view_ids = get_device_view_ids(dev, base_id)
-
-        for view_id in view_ids:
-            candidate_sources[view_id] = "VIEW"
-
-        child_ids = get_child_device_ids(dev, base_id)
-
-        for child_id in child_ids:
-            if child_id not in candidate_sources:
-                candidate_sources[child_id] = "CHILD"
-
-        assembly_ids = get_same_name_assembly_devices(dev, base_id, expected_name)
-
-        for assembly_device_id in assembly_ids:
-            if assembly_device_id not in candidate_sources:
-                candidate_sources[assembly_device_id] = "ASSEMBLY"
-
-    return candidate_sources
-
-
-#====================================================================================================================================
-# ANALYZE CANDIDATE VIEW
-#====================================================================================================================================
-def analyze_candidate(required_pins, pin_map):
-    sheets = {}
-
-    for pin_name in required_pins:
-        locations = pin_map.get(pin_name, [])
-
-        for location in locations:
-            sheet_id = location["sheet_id"]
-
-            if sheet_id not in sheets:
-                sheets[sheet_id] = {"pins": set(), "xs": [], "ys": []}
-
-            sheets[sheet_id]["pins"].add(pin_name)
-            sheets[sheet_id]["xs"].append(location["x"])
-            sheets[sheet_id]["ys"].append(location["y"])
-
-    if not sheets:
-        return None
-
-    results = []
-
-    for sheet_id, data in sheets.items():
-        placed_count = len(data["pins"])
-        unique_x_values = set(round(value, COORDINATE_ROUND_DIGITS) for value in data["xs"])
-        unique_y_values = set(round(value, COORDINATE_ROUND_DIGITS) for value in data["ys"])
-        unique_x_count = len(unique_x_values)
-        unique_y_count = len(unique_y_values)
-        x_span = max(data["xs"]) - min(data["xs"]) if data["xs"] else 0.0
-        y_span = max(data["ys"]) - min(data["ys"]) if data["ys"] else 0.0
-        has_real_y_spread = y_span >= SCHEMATIC_MIN_Y_SPAN and unique_y_count > 1
-        result = {"sheet_id": sheet_id, "placed_count": placed_count, "unique_x_count": unique_x_count, "unique_y_count": unique_y_count, "x_span": x_span, "y_span": y_span, "has_real_y_spread": has_real_y_spread}
-
-        results.append(result)
-
-    results.sort(key=lambda item: (item["has_real_y_spread"], item["placed_count"], item["unique_y_count"], item["y_span"]), reverse=True)
-
-    return results[0]
-
-
-#====================================================================================================================================
-# RESOLVE REAL SCHEMATIC VIEW
-#====================================================================================================================================
-def resolve_connector_schematic_view(connector_token, required_pins, all_devices, dev, pin, cache):
-    expected_name = connector_base_name(connector_token)
-    candidate_sources = collect_connector_candidate_ids(connector_token, all_devices, dev)
-    candidates = []
-
-    print("")
-    print("============================================================")
-    print("E3 CANDIDATES FOR:", expected_name)
-    print("============================================================")
-
-    for candidate_id, source in candidate_sources.items():
-        dev.SetId(candidate_id)
-
-        try:
-            candidate_name = clean_excel_value(dev.GetName())
-        except Exception:
-            candidate_name = "UNKNOWN"
-
-        if candidate_id not in cache:
-            try:
-                cache[candidate_id] = load_device_pin_map(dev, pin, candidate_id)
-            except Exception as error:
-                print("CANDIDATE ID:", candidate_id, "SOURCE:", source, "NAME:", candidate_name, "PIN MAP FAILED:", repr(error))
-                continue
-
-        pin_map = cache[candidate_id]
-        analysis = analyze_candidate(required_pins, pin_map)
-
-        if analysis is None:
-            print("CANDIDATE ID:", candidate_id, "SOURCE:", source, "NAME:", candidate_name, "NO PLACED REQUIRED PINS")
-            continue
-
-        print("CANDIDATE ID:", candidate_id, "SOURCE:", source, "NAME:", candidate_name, "SHEET:", analysis["sheet_id"], "PLACED:", analysis["placed_count"], "UNIQUE X:", analysis["unique_x_count"], "UNIQUE Y:", analysis["unique_y_count"], "X SPAN:", analysis["x_span"], "Y SPAN:", analysis["y_span"])
-
-        candidate = {"device_id": candidate_id, "name": candidate_name, "source": source, "pin_map": pin_map, "analysis": analysis}
-
-        candidates.append(candidate)
-
-    if not candidates:
-        raise Exception(f"No usable E3 device/view candidates found for {expected_name}")
-
-    candidates.sort(key=lambda item: (item["analysis"]["has_real_y_spread"], item["analysis"]["placed_count"], item["analysis"]["unique_y_count"], item["analysis"]["y_span"]), reverse=True)
-
-    best = candidates[0]
-
-    if not best["analysis"]["has_real_y_spread"]:
-        raise Exception(f"Could not locate the split schematic view for {expected_name}")
-
-    sheet_id = best["analysis"]["sheet_id"]
-    missing_pins = []
-
-    for pin_name in required_pins:
-        locations = best["pin_map"].get(pin_name, [])
-        found_on_sheet = False
-
-        for location in locations:
-            if location["sheet_id"] == sheet_id:
-                found_on_sheet = True
-                break
-
-        if not found_on_sheet:
-            missing_pins.append(pin_name)
-
-    if missing_pins:
-        raise Exception(f"Selected schematic view for {expected_name} is missing pins on sheet {sheet_id}: {missing_pins}")
-
-    print("")
-    print("SELECTED SCHEMATIC VIEW ID:", best["device_id"])
-    print("SELECTED SOURCE:", best["source"])
-    print("SELECTED NAME:", best["name"])
-    print("SELECTED SHEET:", sheet_id)
-    print("SELECTED PLACED PIN COUNT:", best["analysis"]["placed_count"])
-    print("SELECTED UNIQUE Y COUNT:", best["analysis"]["unique_y_count"])
-    print("SELECTED Y SPAN:", best["analysis"]["y_span"])
-    print("============================================================")
-
-    record = {"device_id": best["device_id"], "name": best["name"]}
-
-    return record, best["pin_map"], sheet_id
-
-
-#====================================================================================================================================
-# PIN LOCATION ON SELECTED SHEET
-#====================================================================================================================================
-def pin_location_on_sheet(pin_map, pin_name, sheet_id):
-    locations = pin_map.get(pin_name, [])
-
-    for location in locations:
-        if location["sheet_id"] == sheet_id:
-            return location
-
-    return None
-
-
-#====================================================================================================================================
-# PRINT PIN LOCATIONS
-#====================================================================================================================================
-def print_section_pin_locations(required_pins, pin_map, sheet_id):
-    print("")
-    print("ACTUAL SCHEMATIC PIN LOCATIONS")
-
-    for pin_name in required_pins:
-        location = pin_location_on_sheet(pin_map, pin_name, sheet_id)
-
-        if location is None:
-            print("PIN:", pin_name, "LOCATION: NOT FOUND")
-            continue
-
-        print("PIN:", pin_name, "X:", location["x"], "Y:", location["y"])
-
-
-#====================================================================================================================================
-# JOB X OFFSET
-#====================================================================================================================================
-def job_offset(job, twist_offset_settings):
-    offset_enabled = twist_offset_settings[job["side"]]
-
-    if job["type"] == "twist":
-        if not offset_enabled:
-            return OFFSET_NO_TWIST_LINE
-
-        if job["twist_column"] == "A":
-            return OFFSET_YES_TWIST_A
-
-        return OFFSET_YES_TWIST_B
-
-    if job["type"] == "shield_inner":
-        if job["twist_column"] is None:
-            return INNER_SHIELD_ONLY_OFFSET
-
-        if not offset_enabled:
-            return OFFSET_NO_TWIST_LINE
-
-        if job["twist_column"] == "A":
-            return OFFSET_YES_TWIST_A
-
-        return OFFSET_YES_TWIST_B
-
-    if not offset_enabled:
-        return OFFSET_NO_OUTER_SHIELD
-
-    return OFFSET_YES_OUTER_SHIELD
-
-
-#====================================================================================================================================
-# DRAW ORDER
-#
-# ACTUAL WORKING ORDER INSIDE EACH CONNECTOR SECTION:
-# Inner shields first, then twists.
-# Side-wide outer shields are processed separately before connector sections.
-#====================================================================================================================================
-def job_priority(job):
-    # This matches the earlier working dynamic-placement implementation:
-    # shields are created before twists.
-    if job["type"] == "shield_outer":
-        return 0
-
-    if job["type"] == "shield_inner":
-        return 1
-
-    return 2
-
-
-#====================================================================================================================================
-# CALCULATE FINAL SYMBOL PLACEMENT
-#====================================================================================================================================
-def calculate_placement(job, pin_map, sheet_id, twist_offset_settings):
-    locations = []
-
-    for pin_name in job["pins"]:
-        location = pin_location_on_sheet(pin_map, pin_name, sheet_id)
-
-        if location is None:
-            raise Exception(f"{job['side']} {job['connector']}: pin {pin_name} has no schematic location on sheet {sheet_id}")
-
-        locations.append(location)
-
-    x_values = [location["x"] for location in locations]
-    y_values = [location["y"] for location in locations]
-
-    anchor_x = statistics.median(x_values)
-    bottom_y = min(y_values)
-    top_y = max(y_values)
-
-    if top_y - bottom_y < SCHEMATIC_MIN_Y_SPAN and len(job["pins"]) > 1:
-        raise Exception(f"{job['side']} {job['connector']} {job['type']}: pins {job['pins']} all have effectively the same Y coordinate")
-
-    direction = 1.0 if job["side"] == "LEFT" else -1.0
-    offset = job_offset(job, twist_offset_settings)
-    x = anchor_x + direction * offset
-
-    if job["type"] == "twist":
-        y = bottom_y - TWIST_BOTTOM_OVERLAP
-        length = None
-    else:
-        y = bottom_y - SHIELD_BOTTOM_OVERLAP
-        length = top_y - bottom_y + SHIELD_BOTTOM_OVERLAP + SHIELD_TOP_OVERLAP
-
-        if length < MIN_SYMBOL_LENGTH:
-            length = MIN_SYMBOL_LENGTH
-
-    placement = {
-        "sheet_id": sheet_id,
-        "x": x,
-        "y": y,
-        "length": length,
-        "anchor_x": anchor_x,
-        "bottom_y": bottom_y,
-        "top_y": top_y,
-        "direction": direction,
-        "offset_enabled": twist_offset_settings[job["side"]]
-    }
-
-    return placement
-
-
-
-#====================================================================================================================================
-# CALCULATE OUTER SHIELD PLACEMENT ACROSS ONE OR MORE CONNECTORS
-#
-# Each Excel row is resolved through the connector named on that row.
-# This allows one outer shield to span, for example, LEFT P1 + P3 + P4.
-# All covered connector views must resolve to the same E3 sheet.
-#====================================================================================================================================
-def calculate_outer_shield_placement(job, all_devices, dev, pin, cache, twist_offset_settings):
-    resolved_by_connector = {}
-    sheet_ids = set()
-    locations = []
-
-    rows_by_connector = {}
-
-    for row in job["rows"]:
-        connector = row["connector"]
-
-        if connector == "":
-            raise Exception(
-                f"{job['side']} outer shield: Excel row {row['excel_row']} has no connector"
-            )
-
-        rows_by_connector.setdefault(connector, []).append(row)
-
-    for connector, connector_rows in rows_by_connector.items():
-        required_pins = list(dict.fromkeys(row["pin"] for row in connector_rows))
-
-        device_record, pin_map, sheet_id = resolve_connector_schematic_view(
-            connector,
-            required_pins,
-            all_devices,
-            dev,
-            pin,
-            cache
-        )
-
-        resolved_by_connector[connector] = {
-            "device_record": device_record,
-            "pin_map": pin_map,
-            "sheet_id": sheet_id
-        }
-
-        sheet_ids.add(sheet_id)
-
-    if len(sheet_ids) != 1:
-        details = ", ".join(
-            f"{connector}=sheet {data['sheet_id']}"
-            for connector, data in resolved_by_connector.items()
-        )
-        raise Exception(
-            f"{job['side']} outer shield spans connectors on different E3 sheets: {details}"
-        )
-
-    sheet_id = next(iter(sheet_ids))
-
-    for row in job["rows"]:
-        connector = row["connector"]
-        pin_name = row["pin"]
-        pin_map = resolved_by_connector[connector]["pin_map"]
-
-        location = pin_location_on_sheet(pin_map, pin_name, sheet_id)
-
-        if location is None:
-            raise Exception(
-                f"{job['side']} outer shield: {connector} pin {pin_name} "
-                f"has no schematic location on sheet {sheet_id}"
-            )
-
-        locations.append(location)
-
-    if not locations:
-        raise Exception(f"{job['side']} outer shield has no resolved schematic locations")
-
-    x_values = [location["x"] for location in locations]
-    y_values = [location["y"] for location in locations]
-
-    anchor_x = statistics.median(x_values)
-    bottom_y = min(y_values)
-    top_y = max(y_values)
-
-    direction = 1.0 if job["side"] == "LEFT" else -1.0
-
-    if twist_offset_settings[job["side"]]:
-        offset = OFFSET_YES_OUTER_SHIELD
-    else:
-        offset = OFFSET_NO_OUTER_SHIELD
-
-    x = anchor_x + direction * offset
-    y = bottom_y - SHIELD_BOTTOM_OVERLAP
-    length = top_y - bottom_y + SHIELD_BOTTOM_OVERLAP + SHIELD_TOP_OVERLAP
-
-    if length < MIN_SYMBOL_LENGTH:
-        length = MIN_SYMBOL_LENGTH
-
-    return {
-        "sheet_id": sheet_id,
-        "x": x,
-        "y": y,
-        "length": length,
-        "anchor_x": anchor_x,
-        "bottom_y": bottom_y,
-        "top_y": top_y,
-        "direction": direction,
-        "offset_enabled": twist_offset_settings[job["side"]]
-    }
-
-
-#====================================================================================================================================
-# SAFE DISPLAY LENGTH READ
-#====================================================================================================================================
-def get_display_length_safe(sym, symbol_id):
-    sym.SetId(symbol_id)
-
-    try:
-        return float(sym.GetDisplayLength())
-    except Exception:
-        return None
-
-
-#====================================================================================================================================
-# TRY TO SIZE SHIELD AT CURRENT LOCATION
-#====================================================================================================================================
-def try_size_shield(sym, symbol_id, requested_length):
-    # EXACT KNOWN-GOOD E3 SEQUENCE:
-    #   Place -> SetId(placed id) -> GetDisplayLength ->
-    #   SetDisplayLength -> SetId(placed id) -> GetDisplayLength
-    sym.SetId(symbol_id)
-
-    try:
-        before = float(sym.GetDisplayLength())
-    except Exception:
-        before = None
-
-    print("SHIELD LENGTH BEFORE:", before)
-
-    try:
-        stretch_result = sym.SetDisplayLength(float(requested_length))
-    except Exception as error:
-        stretch_result = None
-        print("SHIELD STRETCH EXCEPTION:", repr(error))
-
-    print("SHIELD STRETCH RESULT:", stretch_result)
-
-    # Re-bind exactly like the standalone test that successfully resized.
-    sym.SetId(symbol_id)
-    time.sleep(STRETCH_DELAY_SECONDS)
-
-    try:
-        after = float(sym.GetDisplayLength())
-    except Exception:
-        after = None
-
-    print("SHIELD REQUESTED LENGTH:", requested_length)
-    print("SHIELD LENGTH AFTER:", after)
-
-    return after is not None and abs(after - float(requested_length)) <= 0.001
-
-
-def shield_stage_y_values(requested_length):
-    # Shield_Demo grows upward from its insertion point.
-    # 10.0 at Y=22.0 was proven to resize successfully in the earlier test.
-    # For longer shields, lower the staging Y enough to keep the full symbol on-sheet.
-    safe_y = min(
-        SHIELD_STAGE_DEFAULT_Y,
-        SHIELD_STAGE_TOP_LIMIT - float(requested_length) - SHIELD_STAGE_MARGIN
-    )
-    safe_y = max(0.75, safe_y)
-
-    candidates = [
-        safe_y,
-        max(0.75, safe_y - 0.50),
-        min(SHIELD_STAGE_DEFAULT_Y, safe_y + 0.50),
-        max(0.75, safe_y - 1.00),
-        min(SHIELD_STAGE_DEFAULT_Y, safe_y + 1.00),
-    ]
-
-    output = []
-    for value in candidates:
-        value = round(float(value), 3)
-        if value not in output:
-            output.append(value)
-
-    return output
-
-
-#====================================================================================================================================
-# PLACE TWIST
-#
-# NO STRETCH.
-#
-# E3/database decides display length automatically.
-#====================================================================================================================================
-def place_twist(sym, job, placement):
-    load_result = sym.Load(job["symbol_name"], SYMBOL_VERSION)
-
-    print("TWIST LOAD RESULT:", load_result)
-
-    if load_result == 0:
-        raise Exception(f"Could not load library twist {job['symbol_name']}")
-
-    print("TWIST TARGET X:", placement["x"])
-    print("TWIST TARGET Y:", placement["y"])
-
-    placed_id = sym.Place(placement["sheet_id"], placement["x"], placement["y"], 0, 1.0, 0)
-
-    print("TWIST PLACE RESULT:", placed_id)
-
-    if placed_id == 0:
-        raise Exception(f"Could not place library twist {job['symbol_name']} at X={placement['x']} Y={placement['y']}")
-
-    time.sleep(PLACEMENT_DELAY_SECONDS)
-
-    sym.SetId(placed_id)
-
-    try:
-        placed_name = sym.GetName()
-    except Exception:
-        placed_name = "UNKNOWN"
-
-    try:
-        symbol_type = sym.GetSymbolType()
-    except Exception:
-        symbol_type = "UNKNOWN"
-
-    try:
-        automatic_length = float(sym.GetDisplayLength())
-    except Exception:
-        automatic_length = None
-
-    print("TWIST PLACED ID:", placed_id)
-    print("TWIST PLACED NAME:", placed_name)
-    print("TWIST SYMBOL TYPE:", symbol_type)
-    print("TWIST AUTOMATIC DISPLAY LENGTH:", automatic_length)
-    print("TWIST LEFT AT E3 DATABASE AUTO LENGTH")
-
-    return placed_id
-
-
-#====================================================================================================================================
-# PLACE SHIELD
-#
-# PROCESS:
-#
-# 1. Load Shield_Demo.
-# 2. Search staging coordinates until the symbol can be placed.
-# 3. Try SetDisplayLength at that staging position.
-# 4. If resize fails, move SAME shield to another staging location.
-# 5. Once correct size is reached, move SAME shield to final cable X/Y.
-#
-# No duplicate shields are intentionally created while searching.
-#====================================================================================================================================
-def place_shield(prj, job, placement):
-    """
-    Place a REAL Shield_Demo symbol and resize it with SetDisplayLength.
-
-    CRITICAL E3 BEHAVIOR:
-    The earlier working test called SetDisplayLength IMMEDIATELY after Place()
-    on the SAME symbol object returned from Load/Place.
-
-    Do NOT call SetId() first.
-    Do NOT call GetDisplayLength() first.
-    Do NOT use PlaceDynamic().
-
-    Calling SetId before SetDisplayLength was the important difference in the
-    later broken versions.
-    """
-    requested_length = float(placement["length"])
-    final_x = float(placement["x"])
-    final_y = float(placement["y"])
-    sheet_id = int(placement["sheet_id"])
-
-    print("")
-    print("SHIELD FINAL X:", final_x)
-    print("SHIELD FINAL Y:", final_y)
-    print("SHIELD REQUESTED LENGTH:", requested_length)
-    print("SHIELD LIBRARY SYMBOL:", job["symbol_name"])
-    print("SHIELD MODE: Load -> Place -> IMMEDIATE SetDisplayLength")
-    print("SHIELD NOTE: NO SetId / GetDisplayLength BEFORE STRETCH")
-
-    # Try the final location first.  If E3 rejects the resize there, try the
-    # same exact sequence in a clear staging area and move the resized shield.
-    attempts = [("FINAL", final_x, final_y)]
-
-    # Pick stage Y values that leave enough room for a long shield.
-    max_stage_y = SHIELD_STAGE_TOP_LIMIT - requested_length - SHIELD_STAGE_MARGIN
-    if max_stage_y < 0.5:
-        max_stage_y = 0.5
-
-    stage_base_y = min(SHIELD_STAGE_DEFAULT_Y, max_stage_y)
-    stage_y_values = [
-        stage_base_y,
-        max(0.5, stage_base_y - 0.5),
-        max(0.5, stage_base_y + 0.5),
-        max(0.5, stage_base_y - 1.0),
-        max(0.5, stage_base_y + 1.0),
-    ]
-
-    seen_stage_y = []
-    for y in stage_y_values:
-        y = round(float(y), 6)
-        if y not in seen_stage_y:
-            seen_stage_y.append(y)
-
-    for stage_y in seen_stage_y:
-        for stage_x in SHIELD_STAGE_X_VALUES:
-            attempts.append(("STAGE", float(stage_x), float(stage_y)))
-
-    for attempt_number, (mode, x, y) in enumerate(attempts, start=1):
-        print("")
-        print("SHIELD ATTEMPT:", attempt_number, "MODE:", mode, "X:", x, "Y:", y)
-
-        # Fresh object for each attempt.
-        shield_sym = prj.CreateSymbolObject()
-
-        load_result = shield_sym.Load(job["symbol_name"], SYMBOL_VERSION)
-        print("SHIELD LOAD RESULT:", load_result)
-
-        if load_result == 0:
-            try:
-                del shield_sym
-            except Exception:
-                pass
-            continue
-
-        placed_id = shield_sym.Place(sheet_id, x, y, 0, 1.0, 0)
-        print("SHIELD PLACE RESULT:", placed_id)
-
-        if placed_id == 0:
-            try:
-                del shield_sym
-            except Exception:
-                pass
-            time.sleep(PLACEMENT_DELAY_SECONDS)
-            continue
-
-        # ================================================================
-        # THIS IS THE KEY FIX.
-        #
-        # The old working test did:
-        #     Load(...)
-        #     Place(...)
-        #     SetDisplayLength(...)
-        #
-        # It did NOT SetId() between Place and SetDisplayLength.
-        # It did NOT read GetDisplayLength() before SetDisplayLength.
-        # ================================================================
-        try:
-            stretch_result = shield_sym.SetDisplayLength(requested_length)
-        except Exception as error:
-            stretch_result = None
-            print("SHIELD IMMEDIATE STRETCH EXCEPTION:", repr(error))
-
-        print("SHIELD IMMEDIATE STRETCH RESULT:", stretch_result)
-
-        time.sleep(STRETCH_DELAY_SECONDS)
-
-        try:
-            immediate_length = float(shield_sym.GetDisplayLength())
-        except Exception:
-            immediate_length = None
-
-        print("SHIELD IMMEDIATE LENGTH AFTER:", immediate_length)
-
-        immediate_success = (
-            immediate_length is not None
-            and abs(immediate_length - requested_length) <= 0.001
-        )
-
-        # Only NOW bind by ID, after the resize attempt is already complete.
-        try:
-            set_id_result = shield_sym.SetId(placed_id)
-            print("SHIELD POST-STRETCH SetId RESULT:", set_id_result)
-        except Exception as error:
-            print("SHIELD POST-STRETCH SetId EXCEPTION:", repr(error))
-
-        try:
-            verified_length = float(shield_sym.GetDisplayLength())
-        except Exception:
-            verified_length = immediate_length
-
-        print("SHIELD VERIFIED LENGTH:", verified_length)
-
-        verified_success = (
-            verified_length is not None
-            and abs(verified_length - requested_length) <= 0.001
-        )
-
-        if immediate_success or verified_success:
-            print("SHIELD RESIZE SUCCESS")
-
-            final_id = placed_id
-
-            # If resized in staging, move that SAME real shield to final X/Y.
-            if mode == "STAGE":
-                time.sleep(MOVE_DELAY_SECONDS)
-
-                try:
-                    shield_sym.SetId(placed_id)
-                except Exception:
-                    pass
-
-                move_result = shield_sym.Place(
-                    sheet_id,
-                    final_x,
-                    final_y,
-                    0,
-                    1.0,
-                    0
-                )
-
-                print("SHIELD FINAL MOVE RESULT:", move_result)
-
-                if move_result == 0:
-                    raise Exception(
-                        f"{job['symbol_name']} resized correctly but could not "
-                        f"move to final X={final_x} Y={final_y}"
-                    )
-
-                final_id = move_result
-                time.sleep(PLACEMENT_DELAY_SECONDS)
-
-            # Final verification.
-            try:
-                shield_sym.SetId(final_id)
-            except Exception:
-                pass
-
-            try:
-                final_length = float(shield_sym.GetDisplayLength())
-            except Exception:
-                final_length = None
-
-            try:
-                final_name = shield_sym.GetName()
-            except Exception:
-                final_name = "UNKNOWN"
-
-            try:
-                final_type = shield_sym.GetSymbolType()
-            except Exception:
-                final_type = "UNKNOWN"
-
-            try:
-                final_is_shield = shield_sym.IsShield()
-            except Exception:
-                final_is_shield = "UNKNOWN"
-
-            final_location = get_symbol_location(shield_sym, final_id)
-
-            print("SHIELD FINAL ID:", final_id)
-            print("SHIELD FINAL NAME:", final_name)
-            print("SHIELD FINAL SYMBOL TYPE:", final_type)
-            print("SHIELD FINAL IS SHIELD:", final_is_shield)
-            print("SHIELD FINAL DISPLAY LENGTH:", final_length)
-
-            if final_location is not None:
-                print("SHIELD FINAL SHEET:", final_location["sheet_id"])
-                print("SHIELD FINAL ACTUAL X:", final_location["x"])
-                print("SHIELD FINAL ACTUAL Y:", final_location["y"])
-
-            if final_length is None or abs(final_length - requested_length) > 0.001:
-                raise Exception(
-                    f"{job['symbol_name']} resized successfully but final length "
-                    f"changed. Expected {requested_length}, actual {final_length}"
-                )
-
-            print("SHIELD REAL SYMBOL + LENGTH VERIFIED")
-            return final_id
-
-        print("SHIELD RESIZE FAILED FOR THIS ATTEMPT")
-
-        # Remove the failed trial before trying another position.
-        try:
-            shield_sym.SetId(placed_id)
-            delete_result = shield_sym.Delete()
-            print("FAILED SHIELD DELETE RESULT:", delete_result)
-        except Exception as error:
-            print("FAILED SHIELD DELETE EXCEPTION:", repr(error))
-
-        try:
-            del shield_sym
-        except Exception:
-            pass
-
-        time.sleep(PLACEMENT_DELAY_SECONDS)
-
-    # ================================================================
-    # MANUAL-STRETCH FALLBACK
-    #
-    # If E3 refuses every automatic SetDisplayLength attempt, do not
-    # abandon the shield.  Place one normal, unstretched Shield_Demo at
-    # the correct FINAL bottom insertion point.  The user can stretch it
-    # manually in E3 after the script finishes.
-    #
-    # All failed trial shields above were already deleted, so this leaves
-    # exactly one fallback shield at the intended cable location.
-    # ================================================================
-    print("")
-    print("============================================================")
-    print("SHIELD AUTO-RESIZE FAILED - USING MANUAL-STRETCH FALLBACK")
-    print("============================================================")
-    print("FALLBACK SYMBOL:", job["symbol_name"])
-    print("FALLBACK X:", final_x)
-    print("FALLBACK BOTTOM Y:", final_y)
-    print("TARGET LENGTH FOR MANUAL STRETCH:", requested_length)
-
-    fallback_sym = prj.CreateSymbolObject()
-
-    fallback_load_result = fallback_sym.Load(
-        job["symbol_name"],
-        SYMBOL_VERSION
-    )
-
-    print("FALLBACK LOAD RESULT:", fallback_load_result)
-
-    if fallback_load_result == 0:
-        raise Exception(
-            f"{job['symbol_name']} could not resize and the fallback symbol "
-            f"could not be loaded."
-        )
-
-    fallback_id = fallback_sym.Place(
-        sheet_id,
-        final_x,
-        final_y,
-        0,
-        1.0,
-        0
-    )
-
-    print("FALLBACK PLACE RESULT:", fallback_id)
-
-    if fallback_id == 0:
-        raise Exception(
-            f"{job['symbol_name']} could not resize and the unstretched "
-            f"fallback could not be placed at X={final_x} Y={final_y}."
-        )
-
-    time.sleep(PLACEMENT_DELAY_SECONDS)
-
-    try:
-        fallback_sym.SetId(fallback_id)
-    except Exception:
-        pass
-
-    try:
-        fallback_length = float(fallback_sym.GetDisplayLength())
-    except Exception:
-        fallback_length = None
-
-    print("FALLBACK NATIVE LENGTH:", fallback_length)
-    print("MANUAL ACTION REQUIRED: stretch this shield upward to:", requested_length)
-    print("SHIELD FALLBACK PLACED AT CORRECT BOTTOM LOCATION")
-    print("============================================================")
-
-    return fallback_id
-
-
-#====================================================================================================================================
-# PLACE ONE JOB
-#====================================================================================================================================
-def place_job(prj, sym, job, placement):
-    print("")
-    print("------------------------------------------------------------")
-    print("TYPE:", job["type"])
-    print("SIDE:", job["side"])
-    print("TWIST OFFSET ENABLED:", placement["offset_enabled"])
-    print("CONNECTOR:", job["connector"])
-    print("TWIST COLUMN:", job.get("twist_column"))
-    print("PINS:", job["pins"])
-    print("EXCEL ROWS:", job["excel_rows"])
-    print("LIBRARY SYMBOL:", job["symbol_name"])
-    print("SHEET:", placement["sheet_id"])
-    print("CONNECTOR PIN X:", placement["anchor_x"])
-    print("FINAL SYMBOL X:", placement["x"])
-    print("BOTTOM WIRE Y:", placement["bottom_y"])
-    print("TOP WIRE Y:", placement["top_y"])
-    print("FINAL SYMBOL Y:", placement["y"])
-
-    if placement["length"] is None:
-        print("REQUESTED SYMBOL LENGTH: AUTO")
-    else:
-        print("REQUESTED SYMBOL LENGTH:", placement["length"])
-
-    if DRY_RUN:
-        print("DRY RUN - NOT PLACED")
-        return None
-
-    if job["type"] == "twist":
-        return place_twist(sym, job, placement)
-
-    return place_shield(prj, job, placement)
-
-
-#====================================================================================================================================
-# MAIN
-#====================================================================================================================================
-def run_v9_symbol_overlay(excel_path):
-    if excel_path is None:
-        raise Exception("No Excel file selected")
-
-    workbook = load_workbook(excel_path, data_only=True, read_only=False)
-
-    if TARGET_SHEET_NAME is None:
-        ws = workbook.active
-    else:
-        if TARGET_SHEET_NAME not in workbook.sheetnames:
-            raise Exception(f"Worksheet {TARGET_SHEET_NAME} was not found")
-
-        ws = workbook[TARGET_SHEET_NAME]
-
-    sheet_device_reference = clean_excel_value(ws[DEVICE_NAME_CELL].value)
-    twist_offset_settings = read_twist_offset_settings(ws)
-    last_row = get_last_data_row(ws)
-
-    if last_row < DATA_FIRST_ROW:
-        raise Exception("No cable overlay data found")
-
-    print("")
-    print("============================================================")
-    print("ZUKEN CABLE SHIELD / TWIST OVERLAY")
-    print("============================================================")
-    print("EXCEL:", excel_path)
-    print("WORKSHEET:", ws.title)
-    print("DEVICE REFERENCE FROM B1:", sheet_device_reference)
-    print("CONNECTOR ROOT:", CONNECTOR_ROOT_NAME)
-    print("SHIELD SYMBOL:", SHIELD_SYMBOL_NAME)
-    print("TWIST SYMBOL:", TWIST_SYMBOL_NAME)
-    print("LEFT TWIST OFFSET J2:K2:", "YES" if twist_offset_settings["LEFT"] else "NO")
-    print("RIGHT TWIST OFFSET R2:S2:", "YES" if twist_offset_settings["RIGHT"] else "NO")
-    print("PLACEMENT DELAY:", PLACEMENT_DELAY_SECONDS)
-    print("TWIST STRETCHING: DISABLED")
-    print("SHIELD MODE: REAL Shield_Demo -> Place -> immediate SetDisplayLength")
-    print("DATA ROWS:", DATA_FIRST_ROW, "TO", last_row)
-
-    left_rows = read_side_rows(ws, "LEFT", last_row)
-    right_rows = read_side_rows(ws, "RIGHT", last_row)
-
-    left_sections = split_into_sections(left_rows)
-    right_sections = split_into_sections(right_rows)
-
-    sections = left_sections + right_sections
-
-    packages = []
-    warnings = []
-
-    # Twists and inner shields are connector-specific.
-    for section_rows in sections:
-        jobs, section_warnings = build_section_jobs(section_rows)
-
-        if jobs:
-            packages.append({"rows": section_rows, "jobs": jobs})
-
-        warnings.extend(section_warnings)
-
-    # Outer shields are side-wide and may cross connector changes.
-    outer_jobs = (
-        build_outer_shield_jobs(left_rows) +
-        build_outer_shield_jobs(right_rows)
-    )
-
-    print("")
-    print("CONNECTOR SECTIONS WITH TWIST / INNER-SHIELD SYMBOLS:", len(packages))
-    print("SIDE-WIDE OUTER SHIELD JOBS:", len(outer_jobs))
-
-    if warnings:
-        print("")
-        print("============================================================")
-        print("EXCEL WARNINGS")
-        print("============================================================")
-
-        for warning in warnings:
-            print("WARNING:", warning)
-
-    app = win32.gencache.EnsureDispatch("CT.Application")
+def recreate_e3_objects():
+    app = win32.gencache.EnsureDispatch('CT.Application')
     prj = app.CreateJobObject()
+    text = prj.CreateTextObject()
+    comp = prj.CreateComponentObject()
     dev = prj.CreateDeviceObject()
-    pin = prj.CreatePinObject()
     sym = prj.CreateSymbolObject()
+    pin = prj.CreatePinObject()
+    attr = prj.CreateAttributeObject()
+    sht = prj.CreateSheetObject()
+    return app, prj, text, comp, dev, sym, pin, attr, sht
 
-    app.PutMessage("Starting Cable Shield / Twist Overlay Script")
+def display_main_block_attributes(device_view_id):
+    dev.SetId(device_view_id)
+    syminfo = dev.GetSymbolIds(None)
+    symids = [x for x in syminfo[1] if x is not None]
 
-    all_devices = get_all_devices(prj, dev)
+    for sym_id in symids:
+        sym.SetId(sym_id)
 
-    print("")
-    print("E3 BASE DEVICE ID COUNT:", len(all_devices))
+        res = sym.AddAttributeValue("Equipment Identifacation", ADDITIONAL_PART_ID)
 
-    pin_map_cache = {}
-    placed_ids = []
+        if res == -1:
+            print("Equipment Identification already exists or failed on symbol:", sym_id)
+            attrinfo = sym.GetAttributeIds(None)
+            attrids = [x for x in attrinfo[1] if x is not None]
 
-    # Place side-wide outer shields FIRST. This matches the earlier working dynamic-placement ordering.
-    for job in outer_jobs:
-        try:
-            print("")
-            print("============================================================")
-            print("PROCESSING SIDE-WIDE OUTER SHIELD")
-            print("============================================================")
-            print("SIDE:", job["side"])
-            print("CONNECTORS:", job["connectors"])
-            print("EXCEL ROWS:", job["excel_rows"][0], "TO", job["excel_rows"][-1])
+            for attr_id in attrids:
+                attr.SetId(attr_id)
 
-            placement = calculate_outer_shield_placement(
-                job,
-                all_devices,
-                dev,
-                pin,
-                pin_map_cache,
-                twist_offset_settings
-            )
+                if attr.GetName() == "Equipment Identifacation":
+                    res = attr_id
+                    break
 
-            placed_id = place_job(prj, sym, job, placement)
-
-            if placed_id is not None:
-                placed_ids.append(placed_id)
-
-        except Exception as error:
-            print("ERROR:", str(error))
-            app.PutMessage(f"Cable overlay warning: {error}")
-
-        time.sleep(PLACEMENT_DELAY_SECONDS)
+        if res != -1:
+            attr.SetId(res)
+            display_result = attr.DisplayAttribute()
+            print("DISPLAY ATTRIBUTE:", device_view_id, "SYMBOL:", sym_id, "ATTR:", res, "RESULT:", display_result)
 
 
-    for package in packages:
-        section_rows = package["rows"]
-        jobs = package["jobs"]
+def format_main_block_view(device_view_id, x, y, width, height):
+    print("FORMATTING DEVICE VIEW:", device_view_id)
 
-        side = section_rows[0]["side"]
-        connector = section_rows[0]["connector"]
+    x_center = x + (width / 2.0)
 
-        required_pins = list(dict.fromkeys(row["pin"] for row in section_rows))
+    dev.SetId(device_view_id)
+    syminfo = dev.GetSymbolIds(None)
+    symids = [s for s in syminfo[1] if s is not None]
 
-        print("")
-        print("============================================================")
-        print("PROCESSING CONNECTOR SECTION")
-        print("============================================================")
-        print("SIDE:", side)
-        print("TWIST OFFSET ENABLED:", "YES" if twist_offset_settings[side] else "NO")
-        print("EXCEL CONNECTOR:", connector)
-        print("EXPECTED E3 CONNECTOR:", connector_base_name(connector))
-        print("EXCEL ROWS:", section_rows[0]["excel_row"], "TO", section_rows[-1]["excel_row"])
-        print("REQUIRED PINS:", required_pins)
+    for sym_id in symids:
+        sym.SetId(sym_id)
 
-        device_record, pin_map, sheet_id = resolve_connector_schematic_view(connector, required_pins, all_devices, dev, pin, pin_map_cache)
+        sym.SetBlockHatchColour(58)
+        sym.SetBlockOutlineColour(0)
 
-        print_section_pin_locations(required_pins, pin_map, sheet_id)
+        #=========================================
+        # NORMAL SYMBOL TEXT
+        #=========================================
+        textinfo = sym.GetTextIds(None)
+        textids = [t for t in textinfo[1] if t is not None]
 
-        # Inner shields are placed before twists, matching the earlier working dynamic-placement script.
-        jobs = sorted(jobs, key=job_priority)
+        for text_id in textids:
+            text.SetId(text_id)
+            txt = str(text.GetText()).strip()
 
-        for job in jobs:
-            try:
-                placement = calculate_placement(job, pin_map, sheet_id, twist_offset_settings)
-                placed_id = place_job(prj, sym, job, placement)
+            print("SYMBOL TEXT:", "VIEW:", device_view_id, "SYM:", sym_id, "TEXT ID:", text_id, "VALUE:", repr(txt))
 
-                if placed_id is not None:
-                    placed_ids.append(placed_id)
+            if txt == "BxRxUx":
+                text.SetColour(0)
+                text.SetMode(1)
+                text.SetAlignment(2)
+                text.SetStyle(1)
+                text.SetHeight(0.2)
+                text.SetSchemaLocation(x_center, y + height - 0.3)
 
-            except Exception as error:
-                print("ERROR:", str(error))
-                app.PutMessage(f"Cable overlay warning: {error}")
+            elif txt == str(DEVICE_DESIGNATION).strip() or str(DEVICE_DESIGNATION).strip() in txt:
+                text.SetColour(0)
+                text.SetMode(1)
+                text.SetAlignment(2)
+                text.SetStyle(1)
+                text.SetHeight(0.2)
+                text.SetSchemaLocation(x_center, y + height - 0.7)
 
-            time.sleep(PLACEMENT_DELAY_SECONDS)
+                print("MOVED DEVICE DESIGNATION:", repr(txt), "TO:", x_center, y + height - 0.7)
 
-    print("")
-    print("============================================================")
-    print("OVERLAY COMPLETE")
-    print("============================================================")
-    print("PLACED SYMBOL COUNT:", len(placed_ids))
-    print("PLACED SYMBOL IDS:", placed_ids)
-    print("============================================================")
+            elif DEVICE_FUNCTION is not None and txt == str(DEVICE_FUNCTION).strip():
+                text.SetVisibility(0)
 
-    app.PutMessage(f"Cable Shield / Twist Overlay complete. Placed {len(placed_ids)} symbols.")
+        #=========================================
+        # ATTRIBUTE TEXT
+        #=========================================
+        attrinfo = sym.GetAttributeIds(None)
+        attrids = [a for a in attrinfo[1] if a is not None]
 
-    workbook.close()
+        for attr_id in attrids:
+            attr.SetId(attr_id)
+            attr_name = str(attr.GetName()).strip()
 
-    del sym
-    del pin
-    del dev
-    del prj
-    del app
+            print("ATTRIBUTE:", "VIEW:", device_view_id, "SYM:", sym_id, "ATTR ID:", attr_id, "NAME:", repr(attr_name))
+
+            if attr_name == "Equipment Identifacation":
+                attrtextinfo = attr.GetTextIds(None)
+                attrtextids = [t for t in attrtextinfo[1] if t is not None]
+
+                print("EQUIPMENT IDENTIFICATION TEXT IDS:", attrtextids)
+
+                for text_id in attrtextids:
+                    text.SetId(text_id)
+                    txt = str(text.GetText()).strip()
+
+                    print("ATTRIBUTE TEXT:", "ID:", text_id, "VALUE:", repr(txt))
+
+                    text.SetVisibility(1)
+                    text.SetColour(0)
+                    text.SetMode(1)
+                    text.SetAlignment(2)
+                    text.SetStyle(1)
+                    text.SetHeight(0.2)
+                    text.SetSchemaLocation(x_center, y + height - 1.1)
+
+                    print("MOVED EQUIPMENT IDENTIFICATION:", repr(txt), "TO:", x_center, y + height - 1.1)
 
 
 # ================================================
 # PARSE EXCEL
 # ================================================
-START_MODE = choose_start_mode()
-
-if START_MODE is None:
-    print("Cancelled by user.")
-    sys.exit(0)
-
-if START_MODE == "FORMATTER_ONLY":
-    print("")
-    print("============================================================")
-    print("MODE: SIMPLE FORMATTER RUN")
-    print("============================================================")
-
-    # ------------------------------------------------
-    # FORMATTER-ONLY DISCOVERY
-    #
-    # The normal build/place path creates these globals while it
-    # creates the cable:
-    #
-    #   CONNECTORS
-    #   new_dev_ids
-    #   NEW_DEV_CONNECTORS
-    #   PINN_LOCS
-    #
-    # Formatter-only mode skips that entire build path, so identify
-    # the same objects from the cable that is already open in E3.
-    #
-    # Nothing outside formatter-only mode is changed.
-    # ------------------------------------------------
-    formatter_app = win32.gencache.EnsureDispatch("CT.Application")
-    formatter_prj = formatter_app.CreateJobObject()
-    formatter_dev = formatter_prj.CreateDeviceObject()
-    formatter_sym = formatter_prj.CreateSymbolObject()
-
-    CONNECTORS = {}
-    new_dev_ids = []
-    NEW_DEV_CONNECTORS = {}
-    PINN_LOCS = []
-
-    device_info = formatter_prj.GetAllDeviceIds(None)
-    formatter_device_ids = [
-        x for x in device_info[1]
-        if x is not None
-    ]
-
-    for formatter_device_id in formatter_device_ids:
-        formatter_dev.SetId(formatter_device_id)
-
-        try:
-            formatter_name = str(formatter_dev.GetName()).strip()
-        except Exception:
-            continue
-
-        match = re.fullmatch(r"W1\.P(\d+)", formatter_name.upper())
-
-        if not match:
-            continue
-
-        connector_number = int(match.group(1))
-
-        # A base connector owns its schematic view IDs.
-        try:
-            view_info = formatter_dev.GetViewIds(None)
-            formatter_view_ids = extract_e3_ids(view_info)
-        except Exception:
-            formatter_view_ids = []
-
-        if not formatter_view_ids:
-            continue
-
-        CONNECTORS[formatter_name] = formatter_device_id
-
-        for formatter_view_id in formatter_view_ids:
-            if formatter_view_id in NEW_DEV_CONNECTORS:
-                continue
-
-            formatter_dev.SetId(formatter_view_id)
-
-            # Only use actual placed schematic views.
-            try:
-                symbol_info = formatter_dev.GetSymbolIds(None)
-                formatter_symbol_ids = [
-                    x for x in symbol_info[1]
-                    if x is not None
-                ]
-            except Exception:
-                formatter_symbol_ids = []
-
-            if not formatter_symbol_ids:
-                continue
-
-            symbol_x_values = []
-
-            for formatter_symbol_id in formatter_symbol_ids:
-                formatter_sym.SetId(formatter_symbol_id)
-
-                xloc = [0.0]
-                yloc = [0.0]
-                grid = [""]
-                column = [""]
-                row = [""]
-
-                try:
-                    location = formatter_sym.GetSchemaLocation(
-                        xloc,
-                        yloc,
-                        grid,
-                        column,
-                        row
-                    )
-
-                    if isinstance(location, tuple) and len(location) >= 3:
-                        symbol_x_values.append(float(location[1]))
-                except Exception:
-                    pass
-
-            if not symbol_x_values:
-                continue
-
-            new_dev_ids.append(formatter_view_id)
-            NEW_DEV_CONNECTORS[formatter_view_id] = formatter_name
-
-            # run_ct_code() only needs PINN_LOCS here to recover the
-            # main left/right schematic X columns for centering the
-            # single Additional Part ID.
-            formatter_view_x = statistics.median(symbol_x_values)
-
-            PINN_LOCS.append([
-                connector_number,
-                formatter_view_x,
-                0.0,
-                False
-            ])
-
-            print(
-                "FORMATTER FOUND VIEW:",
-                formatter_view_id,
-                "| CONNECTOR:",
-                formatter_name,
-                "| X:",
-                formatter_view_x
-            )
-
-    del formatter_sym
-    del formatter_dev
-    del formatter_prj
-    del formatter_app
-
-    print("FORMATTER BASE CONNECTORS:", CONNECTORS)
-    print("FORMATTER SCHEMATIC VIEWS:", new_dev_ids)
-
-    if not new_dev_ids:
-        raise Exception(
-            "Formatter-only mode could not find any placed W1.P# "
-            "schematic connector views in the open E3 job."
-        )
-
-    create_gui()
-
-    print("Formatter-only run complete.")
-    sys.exit(0)
-
+BLOCK_OFFSET = 5
 output_path = ask_save_path()
 wb = load_workbook(output_path, data_only=True)
 ws = wb.active
 
-NO_WIRES = int(ws["B10"].value)
-VERSION = ws["B2"].value
-NAME = ws["B1"].value
+ASSY_NAME = ws["C1"].value
+VERSION = ws["C2"].value
+ADDITIONAL_PART_ID = ws["C3"].value
+DEVICE_DESIGNATION = ws["D3"].value
+DEVICE_DESIGNATION = DEVICE_DESIGNATION.strip()
+DEVICE_FUNCTION = ws["C4"].value
+NUMBER_OF_CONNECTORS = ws["C5"].value
 
+CONNECTORS = {}
+for row in ws.iter_rows(min_row=7, max_row=7+NUMBER_OF_CONNECTORS):
+    connector_name = row[1].value
+    connector_type = row[2].value
+    CONNECTORS[connector_name] = connector_type
 
-def placer_connector_number(value):
-    token = normalize_connector_token(value)
+CONNECTORS = {k: v for k, v in CONNECTORS.items() if v is not None}
 
-    if token == "":
-        return None
+MODEL_CHECK = ws["G8"].value
+TITLE_CHECK = ws["E2"].value
+CONNECTOR_MODEL_CHECK = ws["G2"].value
+DUPLICATE_CHECK = ws["G4"].value
+if MODEL_CHECK != "Pass":
+    raise Exception("Model check is failing, fix it")
+if TITLE_CHECK != "Pass":
+    raise Exception("Title check is failing, fix it")
+if CONNECTOR_MODEL_CHECK != "Pass":
+    raise Exception("Connector model check is failing, fix it")
+if DUPLICATE_CHECK != "Pass":
+    raise Exception("Duplicate pin check is failing, fix it")
 
-    match = re.fullmatch(r"P0*(\d+)", token)
-
-    if not match:
-        raise Exception(
-            f"Unsupported connector value in cable table: {value}"
-        )
-
-    return int(match.group(1))
-
-
-# ------------------------------------------------
-# NEW SHEET CABLE MAPPING
-#
-# LEFT connector  = L
-# LEFT pin        = N
-# RIGHT pin       = O
-# RIGHT connector = Q
-# ------------------------------------------------
-pinouts = []
-
-current_connector1 = None
-current_connector2 = None
-
-left_layout = []
-right_layout = []
-
-for r in range(5, 5 + NO_WIRES):
-    connector1_value = ws[f"L{r}"].value
-    pin1 = ws[f"N{r}"].value
-
-    pin2 = ws[f"O{r}"].value
-    connector2_value = ws[f"Q{r}"].value
-
-    # New sheets may only show the connector once at the top of its block.
-    if clean_excel_value(connector1_value) != "":
-        current_connector1 = placer_connector_number(connector1_value)
-
-        if current_connector1 not in left_layout:
-            left_layout.append(current_connector1)
-
-    if clean_excel_value(connector2_value) != "":
-        current_connector2 = placer_connector_number(connector2_value)
-
-        if current_connector2 not in right_layout:
-            right_layout.append(current_connector2)
-
-    # Preserve the old spare-pin behavior: if a pin is blank, that endpoint
-    # is still None even though the connector block itself is known.
-    connector1 = current_connector1 if pin1 is not None else None
-    connector2 = current_connector2 if pin2 is not None else None
-
-    pinouts.append([connector1, pin1, connector2, pin2])
-
-
-# Old sheet used Q4:Q7 and T4:T7 for layout.
-# Those locations are part of the new cable table, so derive the same
-# left/right layout from connector order in the actual cable data.
-LAYOUT = [left_layout, right_layout]
-
-
-# ------------------------------------------------
-# DETECT WHETHER THE SYMBOL STAGE IS NEEDED
-#
-# New symbol columns:
-#   H = left outer shield
-#   I = left inner shield
-#   J/K = left twists
-#   R/S = right twists
-#   T = right inner shield
-#   U = right outer shield
-# ------------------------------------------------
-SYMBOL_DEFINITION_COLUMNS = ["H", "I", "J", "K", "R", "S", "T", "U"]
-
-HAS_SYMBOLS = any(
-    cell_has_bar(ws[f"{column}{row}"].value)
-    for row in range(5, 5 + NO_WIRES)
-    for column in SYMBOL_DEFINITION_COLUMNS
-)
-
-print("NEW SHEET LAYOUT:", LAYOUT)
-print("SHIELD / TWIST DEFINITIONS PRESENT:", HAS_SYMBOLS)
+PIN_SIGNAL_INFO = []
+for i in range(NUMBER_OF_CONNECTORS):
+    pin_col = 9 + (i * BLOCK_OFFSET)
+    signal_col = pin_col + 1
+    in_out_col = pin_col + 2
+    number_of_pins = ws.cell(row=5, column=signal_col).value
+    connector_name = ws.cell(row=6, column=signal_col).value
+    if number_of_pins is None:
+        number_of_pins = 0
+    number_of_pins = int(number_of_pins)
+    connector_type = CONNECTORS[connector_name]
+    temp = [{'connector name': connector_name, 'connector type': connector_type, 'number of pins' : number_of_pins}]
+    end_row = 8 + number_of_pins - 1
+    for r in range(8, end_row + 1):
+        pin = ws.cell(row=r, column=pin_col).value
+        signal = ws.cell(row=r, column=signal_col).value
+        if signal is None:
+            signal = "SPARE"
+        in_out = ws.cell(row=r, column=in_out_col).value
+        if in_out is None:
+            in_out = "NONE"
+        temp.append([pin, signal, in_out])
+    PIN_SIGNAL_INFO.append(temp)
 
 wb.close()
 
-
-# ------------------------------------------------
-# SYMBOLS-ONLY MODE
-#
-# Use the cable already open in E3.  Do not connect to the cable
-# database workflow, do not create/load the cable component, and do
-# not place connector blocks/pin views.
-# ------------------------------------------------
-if START_MODE == "SYMBOLS_ONLY":
-    print("")
-    print("============================================================")
-    print("MODE: ADD SYMBOLS TO OPEN CABLE")
-    print("============================================================")
-
-    if HAS_SYMBOLS:
-        run_v9_symbol_overlay(output_path)
-    else:
-        print("No shield / twist definitions found in the selected workbook.")
-        messagebox.showinfo(
-            "No Symbols Defined",
-            "No shield or twist definitions were found in the selected workbook."
-        )
-
-    print("Symbols-only run complete.")
-    sys.exit(0)
-
-
-PINORDER = defaultdict(list)
-for c1, p1, c2, p2 in pinouts:
-    if c1 is not None and c2 is not None:
-        PINORDER[c1].append(p1)
-        PINORDER[c2].append(p2)
 
 # ================================================
 # CONNECT TO DB
@@ -3035,7 +436,7 @@ attr = prj.CreateAttributeObject()
 #====================================================================================================================================
 # more setup
 #====================================================================================================================================
-app.PutMessage("Starting Pin Ordering Scrpit")
+app.PutMessage("\n Starting Block Making Scrpit")
 
 sht = prj.CreateSheetObject()
 sheet_info = prj.GetAllSheetIds(None)
@@ -3052,290 +453,654 @@ for id in sheet_ids:
 
 sheet1 = sht.SetId(sheet_1_id)
 
-
-#====================================================================================================================================
-# step 1 - get the component from the database
-#====================================================================================================================================
-name = NAME
-ver = VERSION
-res = app.GetDatabaseTableSelectedComponents(name, ver)
-if(res[0] != 0):
-    app.PutMessage(f"step 1 did not work, Result: {res}\n")
-    raise Exception(f"Step 1 failed. No device found in database with name: {name}.\n")
+symbol_name = "CABBLOCK"
+symbol_version = 1
+isLoaded = sym.Load(symbol_name, symbol_version)
+if not isLoaded:
+    app.PutMessage("failed to load symbol.")
 else:
-    app.PutMessage(f"Step 1 success. Device found in database. Result: {res}")
+    app.PutMessage("Symbol loaded successfully.")
 
-#====================================================================================================================================
-# step 2 - place the component from the library into the device tree
-#====================================================================================================================================
-res = dev.Create("", "", "", name, ver, 0)
-if(res == 0):
-    app.PutMessage(f"step 2 did not work, Result: {res}\n")
-    raise Exception("Step 2 failed. Device failed to be added to device tree.\n")
+PIN_VIEW_SPACING = 0.75
+TOP_OF_PAGE = 32.9
+TOP_MARIGIN = 1.0
+LEFT_OF_PAGE = 0.0
+LEFT_MARIGIN = 1.0
+left_target = LEFT_OF_PAGE + LEFT_MARIGIN
+top_target = TOP_OF_PAGE - TOP_MARIGIN
+
+HALF_NUMBER_OF_CONNECTORS = int(NUMBER_OF_CONNECTORS/2.0) + 1
+block_width = 3.0
+if NUMBER_OF_CONNECTORS < 6:
+    block_height = 1.75 + (PIN_VIEW_SPACING * NUMBER_OF_CONNECTORS)
 else:
-    app.PutMessage(f"Step 2 success. Device added to device tree. Result: {res}")
+    block_height = 1.75 + (PIN_VIEW_SPACING * HALF_NUMBER_OF_CONNECTORS)    
 
+x_block = left_target
+y_block = top_target - (block_height)
+x_block_center = x_block + block_width/2.0
+res = sym.PlaceBlock(sheet_1_id, x_block, y_block, block_width, block_height)
 
-#====================================================================================================================================
-# step 3 - get the device, and pin info from tree and order it
-#====================================================================================================================================
+if DEVICE_FUNCTION is not None:
+    y_start = y_block + block_height - 2.25
+    block_height += 0.5
+else:
+    y_start = y_block + block_height - 2.0
+
+# CREATE MAPPING HERE
+CONNECTOR_MAP = []
+if NUMBER_OF_CONNECTORS < 6:
+    for i, connector in enumerate(PIN_SIGNAL_INFO):
+        connector_name = connector[0]['connector name']
+        CONNECTOR_MAP.append({'connector name' : connector_name, 'connector position' : i, 'connector flip' : 0})
+else:
+    left_count = (NUMBER_OF_CONNECTORS + 1) // 2
+    for i, connector in enumerate(PIN_SIGNAL_INFO):
+        connector_name = connector[0]['connector name']
+        if i < left_count: 
+            connector_position = i
+            connector_flip = 0
+        else:
+            connector_position = i - left_count
+            connector_flip = 1
+
+        CONNECTOR_MAP.append({'connector name' : connector_name, 'connector position' : connector_position, 'connector flip' : connector_flip})
+
+if res == 0:
+    app.PutMessage(f"Place block failed: {res}")
+    raise Exception(f"place block failed: {res}")
+else:
+    app.PutMessage(f"Placed block: {res}")
+
+if DEVICE_FUNCTION is not None:
+    function_spacing = 0.5
+else:
+    function_spacing = 0.0
+
 devinfo = prj.GetAllDeviceIds(None)
-devcount = devinfo[0]
-devids   = devinfo[1]
-devids   = [x for x in devids if x is not None]
-dev_total = len(devids)
+devids = [x for x in devinfo[1] if x is not None]
+for dev_id in devids:
+    dev.SetId(dev_id)
+    if dev.GetName() == "A1":
+        res = dev.SetName(DEVICE_DESIGNATION)
+        if res == 0:
+            app.PutMessage("failed to set name")
 
-if(dev_total == 0):
-    app.PutMessage("Step 3 error, no devices found.\n")
-    raise Exception("Step 3 failed. No devices found.\n")
-else:
-    app.PutMessage("Getting pin info now.")
+        res = dev.SetLocation("BxRxUx")
+        if res == 0:
+            app.PutMessage("failed to set location")
 
-
-CONNECTORS = {"W1.P1" : None, "W1.P2" : None, "W1.P3" : None, "W1.P4" : None, "W1.P5" : None}
-for id in devids:
-    dev.SetId(id)
-    name = dev.GetName()
-    print(name)
-    match name:
-        case "W1.P1":
-            CONNECTORS["W1.P1"] = id
-        case "W1.P2":
-            CONNECTORS["W1.P2"] = id
-        case "W1.P3":
-            CONNECTORS["W1.P3"] = id
-        case "W1.P4":
-            CONNECTORS["W1.P4"] = id
-        case "W1.P5":
-            CONNECTORS["W1.P5"] = id
-        case _:
-            pass
+        res = dev.AddAttributeValue("Additional Part ID", ADDITIONAL_PART_ID)
+        if res == -1:
+            app.PutMessage("failed to add Additional Part ID")
+        else:
+            attr.SetId(res)
+            attr.DisplayAttribute()
+        if DEVICE_FUNCTION is not None:
+            res = dev.AddAttributeValue("Device Function", DEVICE_FUNCTION)
+            if res == -1:
+                app.PutMessage("failed to add Device Function")
 
 
-PINS = []
-for key, value in CONNECTORS.items():
-    if value is not None:
-        dev.SetId(value)
-        pininfo = dev.GetAllPinIds(None)
-        pincount = pininfo[0]
-        pinids = [x for x in pininfo[1] if x is not None]
+        attrinfo = dev.GetAttributeIds(None)    
+        attrids = [x for x in attrinfo[1] if x is not None]
+        for att_id in attrids:
+            attr.SetId(att_id)
+            textinfo = attr.GetTextIds(None)
+            textids = [x for x in textinfo[1] if x is not None]
+            for text_id in textids:
+                text.SetId(text_id)
+                if text.GetText() == ADDITIONAL_PART_ID:
+                    text.SetColour(0)
+                    text.SetMode(1)
+                    text.SetAlignment(2)
+                    text.SetStyle(1)
+                    text.SetHeight(0.2)
+                    xloc = [0.0]
+                    yloc = [0.0]
+                    grid = [""]
+                    column = [""]
+                    row = [""]
+                    result = text.GetSchemaLocation(xloc, yloc, grid,  column, row)
+                    new_x = x_block_center
+                    new_y = y_block + block_height - 1.1 - function_spacing
+                    text.SetSchemaLocation(new_x, new_y)
+                if text.GetText() == DEVICE_FUNCTION:
+                    text.SetColour(0)
+                    text.SetMode(1)
+                    text.SetAlignment(2)
+                    text.SetStyle(1)
+                    text.SetHeight(0.2)
+                    xloc = [0.0]
+                    yloc = [0.0]
+                    grid = [""]
+                    column = [""]
+                    row = [""]
+                    result = text.GetSchemaLocation(xloc, yloc, grid,  column, row)
+                    new_x = x_block_center
+                    new_y = y_block + block_height - 1.5 - function_spacing
+                    text.SetSchemaLocation(new_x, new_y)
+                    
+        syminfo = dev.GetSymbolIds(None)
+        symids = [x for x in syminfo[1] if x is not None]
+        for sym_id in symids:
+            sym.SetId(sym_id)
+            sym.SetBlockHatchColour(58)
+            textinfo = sym.GetTextIds(None)
+            textids = [x for x in textinfo[1] if x is not None]
+            for text_id in textids:
+                text.SetId(text_id)
+                if text.GetText() == "BxRxUx":
+                    text.SetColour(0)
+                    text.SetMode(1)
+                    text.SetAlignment(2)
+                    text.SetStyle(1)
+                    text.SetHeight(0.2)
+                    xloc = [0.0]
+                    yloc = [0.0]
+                    grid = [""]
+                    column = [""]
+                    row = [""]
+                    result = text.GetSchemaLocation(xloc, yloc, grid,  column, row)
+                    new_x = x_block_center
+                    new_y = y_block + block_height - 0.3 - function_spacing
+                    text.SetSchemaLocation(new_x, new_y)
+                if text.GetText() == DEVICE_DESIGNATION:
+                    text.SetColour(0)
+                    text.SetMode(1)
+                    text.SetAlignment(2)
+                    text.SetStyle(1)
+                    text.SetHeight(0.2) 
+                    text.SetAlignment(2)
+                    xloc = [0.0]
+                    yloc = [0.0]
+                    grid = [""]
+                    column = [""]
+                    row = [""]
+                    result = text.GetSchemaLocation(xloc, yloc, grid,  column, row)
+                    new_x = x_block_center
+                    new_y = y_block + block_height - 0.7 - function_spacing
+                    text.SetSchemaLocation(new_x, new_y)         
+          
+# front side green - 58
+# back side green  - 74
+sym.SetBlockHatchPattern(1, 45.0, 135.0)
+sym.SetBlockHatchStyle(0)
+sym.SetBlockHatchWidth(0.25)
+sym.SetBlockHatchDistance(1.0)
+sym.SetBlockHatchColour(58)
 
-        pindict = {key: value}
-        for id in pinids:
-            pin.SetId(id)
-            name = pin.GetName()
-            pindict.update({name : id})
 
-        PINS.append(pindict)
+res = sym.SetBlockOutlineColour(0)
+if res != -1:
+    app.PutMessage("failed to set block hatch outline color")
+time.sleep(0.25)
 
-MAIN_CONN_LOCS, PINN_LOCS, Y_START = generate_placement_locations(PINS, LAYOUT)
-SPARES = get_spare_pins(PINS, pinouts)
-print("spare pins: ", SPARES)
-print('main_conn: ', MAIN_CONN_LOCS)
-print('pin: ', PINN_LOCS)
+# print('pin signal info: ', PIN_SIGNAL_INFO)
+# print('\n connectors: ', CONNECTORS)
+# print('n connector map: ', CONNECTOR_MAP)
+CONNECTOR_DEVICE_IDS = {}
+#====================================================================================================================================
+# LOAD AND PLACE CONNECTOR LOOP
+#====================================================================================================================================
+for i in range(len(PIN_SIGNAL_INFO)):
+    # step 1 - get the component from the database
+    conn_type = PIN_SIGNAL_INFO[i][0]['connector type']
+    conn_name = PIN_SIGNAL_INFO[i][0]['connector name']
+    ver = 1
+    res = app.GetDatabaseTableSelectedComponents(conn_type, ver)
+    if(res[0] != 0):
+        app.PutMessage(f"step 1 did not work, Result: {res}\n")
+        raise Exception(f"Step 1 failed. No device found in database with name: {conn_type}.\n")
+    else:
+        app.PutMessage(f"Step 1 success. Device found in database. Result: {res}")
 
-PIN_Y = generate_aligned_pin_y(
-    pinouts,
-    y_start=Y_START,
-    pin_spacing=0.25,
-    connector_gap=0.5
-)
+    # step 2 - place the component from the library into the device tree
+    # print(f'Placing connector name: {conn_name} type: {conn_type} into device tree\n')
+    res = dev.Create(conn_name, "", "", conn_type, ver, 0)
+    if(res == 0):
+        app.PutMessage(f"step 2 did not work, Result: {res}\n")
+        raise Exception("Step 2 failed. Device failed to be added to device tree.\n")
+    else:
+        app.PutMessage(f"Step 2 success. Device added to device tree. Result: {res}")
 
-SPARE_X = 8.0
-SPARE_Y = Y_START
-SPARE_PIN_SPACING = 0.25
-SPARE_CONN_GAP = 0.5
 
-# print("ALIGNED PIN Y:")
-# for key, value in PIN_Y.items():
-#     print(key, value)
+    # step 3 - get the device, and pin info from tree and order it
+    devinfo = prj.GetAllDeviceIds(None)
+    devcount = devinfo[0]
+    devids   = devinfo[1]
+    devids   = [x for x in devids if x is not None]
+    dev_total = len(devids)
 
-# BIG POPULATION LOOP==================================
-new_dev_ids = []
-NEW_DEV_CONNECTORS = {}
-j = 1
-for i, (connector, conn_id) in enumerate(CONNECTORS.items()):
-    if conn_id is None:
-        continue
+    CURRENT_CONNECTOR_ID = None
+    for id in devids:
+        dev.SetId(id)
+        name = dev.GetName()
+        if name == PIN_SIGNAL_INFO[i][0]['connector name']:
+            CURRENT_CONNECTOR_ID = id
+            break
+    CONNECTOR_DEVICE_IDS[conn_name] = CURRENT_CONNECTOR_ID
+    # assign signal name
+    dev.SetId(CURRENT_CONNECTOR_ID)
+    pininfo = dev.GetPinIds(None)
+    pindids = [x for x in pininfo[1] if x is not None]
+    PINDICT = []
+    pins = []
+    for pin_id in pindids:
+        pin.SetId(pin_id)
+        name = pin.GetName()
+        pins.append(pin_id)
+        current_pin_info = None
+        for pin_data in PIN_SIGNAL_INFO[i][1:]:
+            if str(pin_data[0]) == str(name):
+                current_pin_info = pin_data
+                break
 
-    if j == 1:
-        for _, (connector_loop, conn_id_loop) in enumerate(CONNECTORS.items()):
-            if conn_id_loop == None:
-                continue
+        if current_pin_info is not None:
+            signal = current_pin_info[1] if len(current_pin_info) > 1 else None
+            in_out = current_pin_info[2] if len(current_pin_info) > 2 else None
+        else:
+            signal = None
+            in_out = None
 
-            ids = []
-            for pindict in PINS:
-                if connector_loop in pindict:
-                    for key, value in pindict.items():
-                        if key != connector_loop:
-                            ids.append(value)
-                    break
+        if signal is not None:
+            pin.SetAttributeValue("Local Signal Name", signal)
 
-            symname = "MilSymbolReceptacle¶FULL"
-            p = int(connector_loop.split(".P")[1])
-            for c in MAIN_CONN_LOCS:
-                if c[0] == int(p):
-                    x = c[1]
-                    y = c[2]
-                    flip = c[3]
-            if flip == 1:
-                flip = "/1"
-            else:
-                flip = 0
-
-            print("bulk: ", connector_loop, " conn_id: ", conn_id_loop, " pins: ", ids, " x: ", x, " y: ", y, " flip: ", flip, "\n")
-            res = sym.PlacePins(ids, symname, ver, sheet_1_id, x, y, flip, 1.0)
-            time.sleep(1)
-
-            if res == 0:
-                app.PutMessage(f"Step 3 not working. Result: {res}\n")
-                raise Exception("Step 3 failed. Place failed.\n")
-            else:
-                app.PutMessage(f"Step 3 success. Pins Placed. Result: {res}\n")
-
+        if in_out is not None:
+            pin.SetAttributeValue("Signal Types", in_out)
+        attrinfo = pin.GetAttributeIds(None)
+        attids = [x for x in attrinfo[1] if x is not None]
+        for att_id in attids:
+            attr.SetId(att_id)
+            if attr.GetName() == "Local Signal Name" or attr.GetName() == "Signal Types":
+                attr.DisplayAttribute()
+        PINDICT.append(pin_id)
 
     # step 4 - create the pin # view
     devinfo = prj.GetAllDeviceIds(None)
     dev_ids = [x for x in devinfo[1] if x is not None]
     for id in dev_ids:
         dev.SetId(id)
-        if dev.GetName() == connector:
+        if dev.GetName() == PIN_SIGNAL_INFO[i][0]['connector name']:
             device_id = id
+            break
 
-    res = dev.CreateView(device_id, 1, 0, 0)
-    if res == 0:
-        app.PutMessage(f"Step 4 not working. Result: {res}\n")
-        raise Exception(f"Step 4 failed. No new device view created.\n")
+    symname = "MilBlockSymbolReceptacleInt¶FULL"
+
+    connector_map_info = CONNECTOR_MAP[i]
+    connector_position = connector_map_info['connector position']
+    flip = connector_map_info['connector flip']
+
+    if flip == 0:
+        x = x_block + 0.3
+        y = y_start - (connector_position * PIN_VIEW_SPACING)
     else:
-        app.PutMessage(f"Step 4 success. New device view placed. Result: {res}")
+        x = x_block + block_width - 0.3
+        y = y_start - (connector_position * PIN_VIEW_SPACING)
+        flip = "/1"
 
-    new_device_view_id = res
-    new_dev_ids.append(new_device_view_id)
-    NEW_DEV_CONNECTORS[new_device_view_id] = connector
-    print("new_device_view_id ", res)
-    dev.SetId(new_device_view_id)
-    newpininfo = dev.GetAllPinIds(None)
-    newpinids = [x for x in newpininfo[1] if x is not None]
-    newpindict = {}
-    for id in newpinids:
-        pin.SetId(id)
-        name = pin.GetName()
-        newpindict.update({name : id})
+    # print(f'placing {PIN_SIGNAL_INFO[i][0]['connector name']} at x = {x}, y = {y}, flip = {flip} when block_x = {x_block} block_y: {y_block} start: {y_start}')
+    app.PutMessage(f'placing {PIN_SIGNAL_INFO[i][0]['connector name']} at x = {x}, y = {y}, flip = {flip}')
+    res = sym.PlacePins(PINDICT, symname, ver, sheet_1_id, x, y, flip, 1.0)
+    sym.SetId(res[0])
+    textinfo = sym.GetTextIds(None)
+    textids = [x for x in textinfo[1] if x is not None]
+    for text_id in textids:
+        text.SetId(text_id)
+        if PIN_SIGNAL_INFO[i][0]['connector name'] == text.GetText():
+            text.SetColour(0)
+            text.SetMode(1)
+            text.SetStyle(1)
+            text.SetHeight(0.2)
+    time.sleep(0.5)
 
-    # PINS ARE GETTING ORDERED HERE
-    ordered_pin_ids = generate_ordered_pin_ids(newpindict, PINORDER[j])
+#=========================================
+# LOAD AND PLACE SCHEMATIC VIEWS
+#=========================================
+MAIN_DEVICE_ID = None
+devinfo = prj.GetAllDeviceIds(None)
+devids = [x for x in devinfo[1] if x is not None]
+for dev_id in devids:
+    dev.SetId(dev_id)
+    name = dev.GetName()
+    if name == DEVICE_DESIGNATION:
+        MAIN_DEVICE_ID = dev_id
+        break
 
-    p = connector[-1]
-    for c in PINN_LOCS:
-        if c[0] == int(p):
-            xp = c[1]
-            yp = c[2]
-            pflip = c[3]
-    if pflip == 1:
-        pflip = "/1"
+if MAIN_DEVICE_ID is None:
+    raise Exception(f"Could not find main device {DEVICE_DESIGNATION}")
+
+MASTER_SCHEMATIC_LAYOUT, SHEET_DICT = generate_master_schematic_layout(PIN_SIGNAL_INFO, x_block, block_width)
+
+SCHEMATIC_DATA = []
+#=========================================
+# PHASE 1 - CREATE ALL BLOCKS AND VIEWS
+#=========================================
+for i in range(len(PIN_SIGNAL_INFO)):
+    conn_name = PIN_SIGNAL_INFO[i][0]["connector name"]
+    conn_layout_dict = MASTER_SCHEMATIC_LAYOUT[i]
+    current_sheet_id = SHEET_DICT[conn_layout_dict["sheet"]]
+
+    xp = conn_layout_dict["x start"]
+    yp = conn_layout_dict["y start"]
+    xwidth = conn_layout_dict["width"]
+    yheight = conn_layout_dict["height"]
+
+    view_number = i + 1
+
+    dev.SetId(MAIN_DEVICE_ID)
+    parent_block = dev.CreateView(MAIN_DEVICE_ID, view_number, 0, "0")
+
+    if parent_block == 0:
+        raise Exception(f"Failed creating main view {view_number} for {conn_name}")
+
+    print("MAIN VIEW:", conn_name, "SOURCE:", MAIN_DEVICE_ID, "VIEW:", view_number, "RESULT:", parent_block)
+
+    # Fresh symbol object ONLY for this block
+    block_sym = prj.CreateSymbolObject()
+    is_loaded = block_sym.Load("CABBLOCK", 1)
+
+    if not is_loaded:
+        raise Exception(f"Failed loading CABBLOCK for {conn_name}")
+
+    actual_yp = yp
+    block_symbol_id = block_sym.PlaceBlock(current_sheet_id, xp, actual_yp, xwidth, yheight, parent_block)
+
+    if block_symbol_id == 0:
+        for retry_offset in range(1, 5):
+            actual_yp = yp - retry_offset
+
+            block_symbol_id = block_sym.PlaceBlock(
+                current_sheet_id,
+                xp,
+                actual_yp,
+                xwidth,
+                yheight,
+                parent_block
+            )
+
+            if block_symbol_id != 0:
+                break
+
+        if block_symbol_id == 0:
+            raise Exception(f"Failed placing main block for {conn_name}")
+
+    # Keep the layout synchronized with where the block was ACTUALLY placed.
+    # The later pin map and text formatter both use this layout Y.
+    conn_layout_dict["y start"] = actual_yp
+    conn_layout_dict["y end"] = actual_yp + yheight
+
+    # =========================================
+    # SET COLOR
+    # =========================================
+    block_sym.SetId(block_symbol_id)
+    block_sym.SetBlockHatchPattern(1, 45.0, 135.0)
+    block_sym.SetBlockHatchStyle(0)
+    block_sym.SetBlockHatchWidth(0.25)
+    block_sym.SetBlockHatchDistance(1.0)
+    block_sym.SetBlockHatchColour(58)
+
+    print("BLOCK:", conn_name, "DEVICE VIEW:", parent_block, "SYMBOL:", block_symbol_id)
+
+    # =========================================
+    # ADD EQUIPMENT IDENTIFACATION DIRECTLY TO
+    # THE EXACT SECONDARY BLOCK SYMBOL WE JUST PLACED
+    # =========================================
+    block_sym.SetId(block_symbol_id)
+
+    equipment_attr_id = block_sym.AddAttributeValue("Equipment Identifacation", ADDITIONAL_PART_ID)
+
+    if equipment_attr_id == -1:
+        print("ADD EQUIPMENT IDENTIFACATION RETURNED -1:", "CONNECTOR:", conn_name, "VIEW:", parent_block, "SYMBOL:", block_symbol_id)
     else:
-        pflip = 0
+        print("ADDED EQUIPMENT IDENTIFACATION:", "CONNECTOR:", conn_name, "VIEW:", parent_block, "SYMBOL:", block_symbol_id, "ATTR ID:", equipment_attr_id, "VALUE:", repr(ADDITIONAL_PART_ID))
 
-    symname = "MilSymbolReceptacle¶END_SPLIT"
-    for key, value in ordered_pin_ids.items():
-        pin_key = (int(p), str(key))
-        if pin_key not in PIN_Y:
-            app.PutMessage(f"WARNING: No aligned Y position found forConnector {p} Pin {key}")
+    # =========================================
+    # VERIFY IT IS ACTUALLY ON THIS SYMBOL
+    # DO NOT DISPLAY OR FORMAT IT
+    # =========================================
+    verify_attr_info = block_sym.GetAttributeIds(None)
+    verify_attr_ids = [x for x in verify_attr_info[1] if x is not None]
+
+    equipment_attr_found = False
+
+    for verify_attr_id in verify_attr_ids:
+        attr.SetId(verify_attr_id)
+
+        try:
+            verify_attr_name = str(attr.GetName()).strip()
+        except Exception:
             continue
-        pin_y = PIN_Y[pin_key]
-        res = sym.PlacePins(value, symname, ver,  sheet_1_id, xp, pin_y, pflip, 1.0)
-        app.PutMessage(f"placing pin: {key} id: {value} symbol: {symname} y: {pin_y} x: {xp}, rot: {pflip} conn: {p}")
-        symname = "MilSymbolReceptacle¶SPLIT_BOTTOM"
-        time.sleep(0.5)
 
-    connector_spares = SPARES.get(connector, {})
-    if connector_spares:
-        symname = "MilSymbolReceptacle¶END_SPLIT"
-        app.PutMessage(f"placing {len(connector_spares)} spare pins for connector {connector}")
-        for spare_pin_name in connector_spares.keys():
-            # IMPORTANT: Use the pin ID from the NEW DEVICE VIEW, not the original connector pin ID.
-            spare_pin_id = newpindict.get(str(spare_pin_name))
-            if spare_pin_id is None:
-                app.PutMessage(f"WARNING: Could not find spare pin {spare_pin_name} in new view for {connector}")
-                continue
-            res = sym.PlacePins(spare_pin_id, symname, ver, sheet_1_id, SPARE_X, SPARE_Y, 0, 1.0)
-            app.PutMessage(f"placing spare pin: {spare_pin_name} id: {spare_pin_id} symbol: {symname} y: {SPARE_Y} x: {SPARE_X}, rot: {0} conn: {connector}")
-            if res == 0:
-                app.PutMessage(f"WARNING: Spare pin placement failed for {connector} pin {spare_pin_name} id {spare_pin_id}")
-            SPARE_Y -= SPARE_PIN_SPACING
-            symname = "MilSymbolReceptacle¶SPLIT_BOTTOM"
-            time.sleep(0.55)
-            app.PutMessage(f"Result: {res}")
-        SPARE_Y -= SPARE_CONN_GAP
+        if verify_attr_name == "Equipment Identifacation":
+            equipment_attr_found = True
+            print("VERIFIED EQUIPMENT IDENTIFACATION ON BLOCK SYMBOL:", "CONNECTOR:", conn_name, "VIEW:", parent_block, "SYMBOL:", block_symbol_id, "ATTR ID:", verify_attr_id)
+            break
 
+    if not equipment_attr_found:
+        print("WARNING - EQUIPMENT IDENTIFACATION NOT FOUND AFTER ADD:", "CONNECTOR:", conn_name, "VIEW:", parent_block, "SYMBOL:", block_symbol_id)
 
+    # IMPORTANT - release this symbol object NOW
+    del block_sym
+    time.sleep(0.25)
 
-    dev.SetId(new_device_view_id)
-    symbol_info = dev.GetSymbolIds(None)
-    symbol_ids = [x for x in symbol_info[1] if x is not None]
-    for id in symbol_ids:
-        sym.SetId(id)
-        texinfo = sym.GetTextIds(None)
-        text_ids = [x for x in texinfo[1] if x is not None]
-        for t_id in text_ids:
-            text.SetId(t_id)
-            if text.GetType() == 5:
-                text.SetVisibility(0)
-            if text.GetType() == 12:
-                text.SetStyle(1) # bold
-            
+    connector_device_id = CONNECTOR_DEVICE_IDS[conn_name]
 
-    dev.SetId(dev.GetAssemblyId())
-    assydevinfo = dev.GetDeviceIds(None)
-    assydevids = [x for x in assydevinfo[1] if x is not None]
-    for assydev_id in assydevids:
-        dev.SetId(assydev_id)
-        if(dev.GetName() == connector): # if it is W1.P#
-            assydevsymbolinfo = dev.GetSymbolIds(None)
-            assydevsymbolids = [x for x in assydevsymbolinfo[1] if x is not None]
-            for assydevsymbol_id in assydevsymbolids:
-                sym.SetId(assydevsymbol_id)
-                assydevsymboltextinfo = sym.GetTextIds(None)
-                assydevsymboltextids = [x for x in assydevsymboltextinfo[1] if x is not None]
-                for assydevsymboltext_id in assydevsymboltextids:
-                    text.SetId(assydevsymboltext_id)
-                    if text.GetType() == 5:
-                        text.SetVisibility(0)
-                    if text.GetType() == 12:
-                        text.SetStyle(1)
+    dev.SetId(connector_device_id)
+    connector_view_number = view_number
+    connector_view_id = dev.CreateView(connector_device_id, connector_view_number, parent_block)
 
+    if connector_view_id == 0:
+        raise Exception(f"Failed creating connector view for {conn_name}")
 
-    j += 1
-    time.sleep(2.0)
+    print("CONNECTOR VIEW:", conn_name, "SOURCE:", connector_device_id, "PARENT:", parent_block, "RESULT:", connector_view_id)
 
+    SCHEMATIC_DATA.append({
+        "index": i,
+        "name": conn_name,
+        "parent_block": parent_block,
+        "block_symbol_id": block_symbol_id,
+        "connector_view": connector_view_id,
+        "sheet_id": current_sheet_id,
+        "layout": conn_layout_dict
+    })
+
+    time.sleep(0.5)
+
+#=========================================
+# SAVE EXACT SECONDARY BLOCK SYMBOL IDS
+# FOR THE FRESH-PROCESS FORMATTER
+#=========================================
+secondary_block_file = os.environ.get("E3_SECONDARY_BLOCK_FILE")
+
+if not secondary_block_file:
+    raise RuntimeError("E3_SECONDARY_BLOCK_FILE was not provided by launcher.py")
+
+secondary_block_data = []
+
+for data in SCHEMATIC_DATA:
+    secondary_block_data.append({
+        "name": data["name"],
+        "parent_block": data["parent_block"],
+        "block_symbol_id": data["block_symbol_id"],
+        "sheet_id": data["sheet_id"],
+        "x": data["layout"]["x start"],
+        "y": data["layout"]["y start"],
+        "width": data["layout"]["width"],
+        "height": data["layout"]["height"]
+    })
+
+with open(secondary_block_file, "w", encoding="utf-8") as secondary_block_handle:
+    json.dump(secondary_block_data, secondary_block_handle, indent=2)
+
+print("SAVED SECONDARY BLOCK METADATA:", secondary_block_file)
+print("SECONDARY BLOCK COUNT:", len(secondary_block_data))
+
+#=========================================
+# COMPLETELY RELEASE E3 OBJECTS
+#=========================================
 del attr
 del text
 del sym
 del pin
 del comp
 del dev
+del sht
 del prj
 del app
 
-# Existing equipment-identification / formatter checkpoint.
-create_gui()
+time.sleep(1.5)
+
+#=========================================
+# RECREATE CLEAN E3 OBJECTS
+#=========================================
+app = win32.gencache.EnsureDispatch("CT.Application")
+prj = app.CreateJobObject()
+text = prj.CreateTextObject()
+comp = prj.CreateComponentObject()
+dev = prj.CreateDeviceObject()
+sym = prj.CreateSymbolObject()
+pin = prj.CreatePinObject()
+attr = prj.CreateAttributeObject()
+sht = prj.CreateSheetObject()
+
+#=========================================
+# PHASE 2 - PLACE ALL PINS
+# RESET E3 OBJECTS FOR EVERY CONNECTOR
+#=========================================
+for data in SCHEMATIC_DATA:
+    del attr
+    del text
+    del sym
+    del pin
+    del comp
+    del dev
+    del sht
+    del prj
+    del app
+
+    time.sleep(1.0)
+
+    app = win32.gencache.EnsureDispatch("CT.Application")
+    prj = app.CreateJobObject()
+    text = prj.CreateTextObject()
+    comp = prj.CreateComponentObject()
+    dev = prj.CreateDeviceObject()
+    sym = prj.CreateSymbolObject()
+    pin = prj.CreatePinObject()
+    attr = prj.CreateAttributeObject()
+    sht = prj.CreateSheetObject()
+
+    i = data["index"]
+    conn_name = data["name"]
+    connector_view_id = data["connector_view"]
+    current_sheet_id = data["sheet_id"]
+    conn_layout_dict = data["layout"]
+
+    print("=========================================")
+    print("STARTING CONNECTOR:", conn_name)
+    print("CONNECTOR VIEW:", connector_view_id)
+    print("SHEET:", current_sheet_id)
+    print("=========================================")
+
+    dev.SetId(connector_view_id)
+
+    newpininfo = dev.GetAllPinIds(None)
+    newpinids = [x for x in newpininfo[1] if x is not None]
+
+    newpindict = {}
+
+    for pin_id in newpinids:
+        pin.SetId(pin_id)
+        pin_name = str(pin.GetName())
+        newpindict[pin_name] = pin_id
+
+    print("PIN VIEW:", conn_name, "VIEW:", connector_view_id, "PINS:", newpindict)
+
+    SCHEMATIC_PIN_MAP = generate_schematic_pin_map(PIN_SIGNAL_INFO[i], newpindict, conn_layout_dict)
+    data["placed_pin_symbols"] = []
+
+    symname = "MilSymbolReceptacle¶END_SPLIT"
+
+    for pin_data in SCHEMATIC_PIN_MAP:
+        print("ATTEMPTING:", conn_name, "PIN:", pin_data["pin name"], "ID:", pin_data["pin id"], "X:", pin_data["x"], "Y:", pin_data["y"])
+
+        res = sym.PlacePins(pin_data["pin id"], symname, "1", current_sheet_id, pin_data["x"], pin_data["y"], pin_data["flip"], 1.0)
+
+        print("PLACEPINS RESULT:", repr(res))
+
+        status = res[0] if isinstance(res, (tuple, list)) else res
+
+        if status == 0:
+            raise Exception(f"Failed placing {conn_name} pin {pin_data['pin name']}")
+
+        data["placed_pin_symbols"].append({"symbol_id": status, "pin_id": pin_data["pin id"], "pin_name": pin_data["pin name"]})
+
+        app.PutMessage(f"Placed {conn_name} pin {pin_data['pin name']} x={pin_data['x']} y={pin_data['y']}")
+
+        symname = "MilSymbolReceptacle¶SPLIT_BOTTOM"
+
+        time.sleep(0.25)
+
+    print("FINISHED CONNECTOR:", conn_name)
+    time.sleep(0.5)
+
+#=========================================
+# RESET BEFORE MAIN BLOCK FORMATTING
+#=========================================
+del attr
+del text
+del sym
+del pin
+del comp
+del dev
+del sht
+del prj
+del app
+
+time.sleep(1.0)
+
+app = win32.gencache.EnsureDispatch("CT.Application")
+prj = app.CreateJobObject()
+text = prj.CreateTextObject()
+comp = prj.CreateComponentObject()
+dev = prj.CreateDeviceObject()
+sym = prj.CreateSymbolObject()
+pin = prj.CreatePinObject()
+attr = prj.CreateAttributeObject()
+sht = prj.CreateSheetObject()
+
+#=========================================
+# FORMAT SECONDARY MAIN BLOCK TEXT
+#=========================================
+for data in SCHEMATIC_DATA:
+    layout = data["layout"]
+    format_main_block_view(data["parent_block"], layout["x start"], layout["y start"], layout["width"], layout["height"])
+
+#=========================================
+# MAIN CREATION PHASE COMPLETE
+#
+# IMPORTANT:
+# main.py does NOT launch test.py and does NOT import utils.
+# launcher.py waits for this entire Python process to exit,
+# then launcher.py starts test.py in a fresh Python process.
+#=========================================
+print("")
+print("============================================================")
+print("MAIN E3 CREATION COMPLETE")
+print("MAIN.PY WILL NOW END")
+print("============================================================")
+
+# Close the SQL handles if possible.
+# Do not run the final text formatter here.
+try:
+    cur.close()
+except Exception:
+    pass
+
+try:
+    conn.close()
+except Exception:
+    pass
 
 
-# Only require manual connection lines when V9 actually has something
-# to place.  No symbol definitions = no extra window and no V9 run.
-if HAS_SYMBOLS:
-    if wait_for_connection_lines():
-        print("")
-        print("============================================================")
-        print("RUNNING V9 SHIELD / TWIST OVERLAY")
-        print("============================================================")
-
-        run_v9_symbol_overlay(output_path)
-    else:
-        print("Shield / twist placement cancelled by user.")
-else:
-    print("")
-    print("No shield / twist definitions found.")
-    print("Skipping connection-line GUI and V9 symbol placement.")
-
-print("Cable placer complete.")
