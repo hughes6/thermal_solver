@@ -1,65 +1,3 @@
-
-
-
-BLOCK: PMOD HEADER-2 DEVICE VIEW: 124454 SYMBOL: 124359
-ADDED EQUIPMENT IDENTIFACATION: CONNECTOR: PMOD HEADER-2 VIEW: 124454 SYMBOL: 124359 ATTR ID: 124020 VALUE: 'XXXX'
-VERIFIED EQUIPMENT IDENTIFACATION ON BLOCK SYMBOL: CONNECTOR: PMOD HEADER-2 VIEW: 124454 SYMBOL: 124359 ATTR ID: 124020
-CONNECTOR VIEW: PMOD HEADER-2 SOURCE: 133878 PARENT: 124454 RESULT: 123995
-SAVED SECONDARY BLOCK METADATA: C:\Users\CONNER~1.HUG\AppData\Local\Temp\e3_block_maker_du3bv5xa\secondary_blocks.json
-SECONDARY BLOCK COUNT: 18
-=========================================
-STARTING CONNECTOR: ETH
-CONNECTOR VIEW: 132686
-SHEET: 204828
-=========================================
-PIN VIEW: ETH VIEW: 132686 PINS: {'1': 132684, '2': 132683, '3': 132682, '4': 132681, '5': 132678, '6': 132675, '7': 132672, '8': 132669}
-ATTEMPTING: ETH PIN: 1 ID: 132684 X: 7.7 Y: 29.9
-PLACEPINS RESULT: (148783, 132684)
-ATTEMPTING: ETH PIN: 2 ID: 132683 X: 7.7 Y: 29.65
-PLACEPINS RESULT: (147460, 132683)
-ATTEMPTING: ETH PIN: 3 ID: 132682 X: 7.7 Y: 29.4
-PLACEPINS RESULT: (147133, 132682)
-ATTEMPTING: ETH PIN: 4 ID: 132681 X: 7.7 Y: 29.15
-PLACEPINS RESULT: (146758, 132681)
-ATTEMPTING: ETH PIN: 5 ID: 132678 X: 7.7 Y: 28.9
-PLACEPINS RESULT: (146268, 132678)
-ATTEMPTING: ETH PIN: 6 ID: 132675 X: 7.7 Y: 28.65
-PLACEPINS RESULT: (145899, 132675)
-ATTEMPTING: ETH PIN: 7 ID: 132672 X: 7.7 Y: 28.4
-PLACEPINS RESULT: (145501, 132672)
-ATTEMPTING: ETH PIN: 8 ID: 132669 X: 7.7 Y: 28.15
-PLACEPINS RESULT: (144866, 132669)
-FINISHED CONNECTOR: ETH
-=========================================
-STARTING CONNECTOR: CLK INPUT
-CONNECTOR VIEW: 132185
-SHEET: 204828
-=========================================
-PIN VIEW: CLK INPUT VIEW: 132185 PINS: {'1-C': 132183, '2-S': 132182}
-Traceback (most recent call last):
-  File "C:\Users\conner.hughes\OneDrive\Documents\Python\Block Maker\launcher.py", line 37, in <module>
-    run_builder_child()
-    ~~~~~~~~~~~~~~~~~^^
-  File "C:\Users\conner.hughes\OneDriv\Documents\Python\Block Maker\launcher.py", line 27, in run_builder_child
-    import main
-  File "C:\Users\conner.hughes\OneDrive\Documents\Python\Block Maker\main.py", line 958, in <module>
-    SCHEMATIC_PIN_MAP = generate_schematic_pin_map(PIN_SIGNAL_INFO[i], newpindict, conn_layout_dict)
-  File "C:\Users\conner.hughes\OneDrive\Documents\Python\Block Maker\main.py", line 160, in generate_schematic_pin_map
-    if pin_name not in newpindict: raise Exception(f"Pin {pin_name} not found in new view for {connector_info[0]['connector name']}")
-                                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-Exception: Pin 1 not found in new view for CLK INPUT
-
-
-
-
-
-
-
-
-
-
-
-
 from openpyxl import load_workbook
 import time
 import pyodbc
@@ -218,9 +156,35 @@ def generate_schematic_pin_map(connector_info,newpindict,layout,pin_spacing=0.25
     y_start=layout["y start"]+layout["height"]-pin_start_offset
     pin_map=[]
     for pos,pin_data in enumerate(connector_info[1:]):
-        pin_name=str(pin_data[0])
-        if pin_name not in newpindict: raise Exception(f"Pin {pin_name} not found in new view for {connector_info[0]['connector name']}")
-        pin_map.append({"pin name":pin_name,"pin id":newpindict[pin_name],"x":x,"y":y_start-(pos*pin_spacing),"flip":"/1"})
+        pin_name=str(pin_data[0]).strip()
+        resolved_pin_name = pin_name
+
+        # Normal case: the Excel pin name exactly matches the E3 view pin name.
+        if resolved_pin_name not in newpindict:
+            # Minimal fallback for library pins such as "1-C" / "2-S" when
+            # Excel identifies those same pins as "1" / "2".  Only use the
+            # fallback when there is exactly one unambiguous match.
+            prefix_matches = [
+                e3_pin_name
+                for e3_pin_name in newpindict
+                if str(e3_pin_name).strip().split("-", 1)[0] == pin_name
+            ]
+
+            if len(prefix_matches) == 1:
+                resolved_pin_name = prefix_matches[0]
+                print(
+                    "PIN NAME FALLBACK:",
+                    connector_info[0]['connector name'],
+                    "EXCEL:", pin_name,
+                    "E3:", resolved_pin_name
+                )
+            else:
+                raise Exception(
+                    f"Pin {pin_name} not found in new view for {connector_info[0]['connector name']}. "
+                    f"Available E3 pins: {list(newpindict.keys())}"
+                )
+
+        pin_map.append({"pin name":pin_name,"pin id":newpindict[resolved_pin_name],"x":x,"y":y_start-(pos*pin_spacing),"flip":"/1"})
     return pin_map
 
 def recreate_e3_objects():
@@ -824,6 +788,25 @@ for i in range(len(PIN_SIGNAL_INFO)):
 
         if block_symbol_id == 0:
             raise Exception(f"Failed placing main block for {conn_name}")
+
+    # If this block had to move down, move every still-unplaced block below it
+    # in the SAME sheet/column by the same amount.  This keeps the original
+    # spacing intact instead of letting a retry move on top of the next block.
+    placement_shift = yp - actual_yp
+    if placement_shift > 0:
+        for future_layout in MASTER_SCHEMATIC_LAYOUT[i + 1:]:
+            if (
+                future_layout["sheet"] == conn_layout_dict["sheet"]
+                and abs(future_layout["x start"] - conn_layout_dict["x start"]) < 0.000001
+            ):
+                future_layout["y start"] -= placement_shift
+                future_layout["y end"] -= placement_shift
+
+        print(
+            "SHIFTED REMAINING BLOCKS IN COLUMN:",
+            conn_name,
+            "SHIFT:", placement_shift
+        )
 
     # Keep the layout synchronized with where the block was ACTUALLY placed.
     # The later pin map and text formatter both use this layout Y.
