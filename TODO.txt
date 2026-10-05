@@ -295,6 +295,96 @@ def run_ct_code():
             symbol_ids = [x for x in symbol_info[1] if x is not None]
             print("NEW VIEW SYMBOL IDS:", symbol_ids)
 
+            # =====================================================
+            # ADDITIONAL PART ID ON SCHEMATIC PIN VIEW
+            #
+            # Assembly Properties -> Additional Part ID exposes a
+            # type-1000 text item on every placed pin symbol.
+            #
+            # Keep it visible ONLY on the top-left pin symbol in the
+            # schematic view.  Hide it on every other pin symbol.
+            #
+            # The visible text is centered directly above the main
+            # pin column.
+            # =====================================================
+            symbol_locations = {}
+
+            for symbol_id in symbol_ids:
+                sym.SetId(symbol_id)
+
+                xloc = [0.0]
+                yloc = [0.0]
+                grid = [""]
+                column = [""]
+                row = [""]
+
+                try:
+                    location = sym.GetSchemaLocation(
+                        xloc,
+                        yloc,
+                        grid,
+                        column,
+                        row
+                    )
+
+                    if isinstance(location, tuple) and len(location) >= 3:
+                        symbol_locations[symbol_id] = (
+                            float(location[1]),
+                            float(location[2])
+                        )
+                except Exception:
+                    pass
+
+            top_left_symbol_id = None
+            additional_part_x = None
+            additional_part_y = None
+
+            if symbol_locations:
+                # The main schematic pin stack is the left-most X column.
+                # This also avoids selecting spare pins that are placed
+                # farther to the right.
+                left_x = min(
+                    location[0]
+                    for location in symbol_locations.values()
+                )
+
+                main_column_ids = [
+                    symbol_id
+                    for symbol_id, location in symbol_locations.items()
+                    if abs(location[0] - left_x) <= 0.001
+                ]
+
+                if main_column_ids:
+                    top_left_symbol_id = max(
+                        main_column_ids,
+                        key=lambda symbol_id: symbol_locations[symbol_id][1]
+                    )
+
+                    main_column_x_values = [
+                        symbol_locations[symbol_id][0]
+                        for symbol_id in main_column_ids
+                    ]
+
+                    main_column_y_values = [
+                        symbol_locations[symbol_id][1]
+                        for symbol_id in main_column_ids
+                    ]
+
+                    additional_part_x = (
+                        min(main_column_x_values)
+                        + max(main_column_x_values)
+                    ) / 2.0
+
+                    additional_part_y = max(main_column_y_values) + 0.25
+
+                    print(
+                        "TOP-LEFT SCHEMATIC PIN SYMBOL:",
+                        top_left_symbol_id,
+                        "TEXT CENTER:",
+                        additional_part_x,
+                        additional_part_y
+                    )
+
             for symbol_id in symbol_ids:
                 sym.SetId(symbol_id)
                 print("new view symbol:",  symbol_id, sym.GetName())
@@ -303,11 +393,45 @@ def run_ct_code():
 
                 for t_id in text_ids:
                     text.SetId(t_id)
-                    print("PIN SYMBOL:", sym.GetName(), "| text:", text.GetText(), "| type:", text.GetType())
+                    text_type = text.GetType()
 
-                    if (text.GetType() == 5 or text.GetType() == 1000):
+                    print(
+                        "PIN SYMBOL:",
+                        sym.GetName(),
+                        "| text:",
+                        text.GetText(),
+                        "| type:",
+                        text_type
+                    )
+
+                    if text_type == 5:
                         text.SetVisibility(0)
-                    if text.GetType() == 12:
+
+                    elif text_type == 1000:
+                        if (
+                            symbol_id == top_left_symbol_id
+                            and additional_part_x is not None
+                            and additional_part_y is not None
+                        ):
+                            app.PutMessage(
+                                f"Configuring schematic Additional Part ID "
+                                f"for {connector}"
+                            )
+
+                            text.SetVisibility(1)
+                            text.SetStyle(1)
+                            text.SetHeight(0.2)
+                            text.SetColour(0)
+                            text.SetMode(1)
+                            text.SetAlignment(2)
+                            text.SetSchemaLocation(
+                                additional_part_x,
+                                additional_part_y
+                            )
+                        else:
+                            text.SetVisibility(0)
+
+                    if text_type == 12:
                         text.SetStyle(1)
 
             connector_id = CONNECTORS.get(connector)
