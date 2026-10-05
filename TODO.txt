@@ -3,9 +3,12 @@ import time
 import pyodbc
 import tkinter as tk
 import pythoncom
+import os
+import re
+import statistics
 from openpyxl import load_workbook
 from collections import defaultdict
-from tkinter import messagebox, ttk
+from tkinter import messagebox, ttk, filedialog
 
 
 
@@ -77,6 +80,93 @@ def create_gui():
     root.protocol("WM_DELETE_WINDOW", close_app)
 
     root.mainloop()
+
+
+# -------------------------------------------------------
+# CONNECTION-LINE CHECKPOINT
+#
+# This window is only shown when the selected workbook contains
+# at least one shield or twist definition.
+# -------------------------------------------------------
+def wait_for_connection_lines():
+    root = tk.Tk()
+    root.title("Connect Cable Lines")
+    root.geometry("560x360")
+    root.resizable(False, False)
+
+    style = ttk.Style()
+    try:
+        style.theme_use("vista")
+    except:
+        pass
+
+    style.configure("ConnectTitle.TLabel", font=("Segoe UI", 18, "bold"))
+    style.configure("ConnectStep.TLabel", font=("Segoe UI", 10))
+    style.configure(
+        "ConnectButton.TButton",
+        font=("Segoe UI", 11, "bold"),
+        padding=(20, 10)
+    )
+
+    result = {"continue": False}
+
+    def continue_to_symbols():
+        result["continue"] = True
+        root.destroy()
+
+    def cancel():
+        result["continue"] = False
+        root.destroy()
+
+    frame = ttk.Frame(root, padding=25)
+    frame.pack(fill="both", expand=True)
+
+    ttk.Label(
+        frame,
+        text="Connect Cable Lines",
+        style="ConnectTitle.TLabel"
+    ).pack(anchor="w")
+
+    ttk.Label(
+        frame,
+        text="Shield / twist definitions were found in the selected workbook.",
+        style="ConnectStep.TLabel"
+    ).pack(anchor="w", pady=(4, 18))
+
+    instructions = (
+        "1. Return to E3.\n\n"
+        "2. Draw the connection lines between the placed connector pin views.\n\n"
+        "3. Make sure the lines are complete before continuing.\n\n"
+        "4. Return here and click Place Shields / Twists."
+    )
+
+    ttk.Label(
+        frame,
+        text=instructions,
+        justify="left",
+        style="ConnectStep.TLabel"
+    ).pack(anchor="w", fill="x")
+
+    button_frame = ttk.Frame(frame)
+    button_frame.pack(fill="x", pady=(25, 0))
+
+    ttk.Button(
+        button_frame,
+        text="Place Shields / Twists",
+        style="ConnectButton.TButton",
+        command=continue_to_symbols
+    ).pack(fill="x")
+
+    ttk.Button(
+        button_frame,
+        text="Cancel",
+        command=cancel
+    ).pack(pady=(10, 0))
+
+    root.protocol("WM_DELETE_WINDOW", cancel)
+    root.mainloop()
+
+    return result["continue"]
 
 
 def run_ct_code():
@@ -174,7 +264,6 @@ def run_ct_code():
 
         del text
         del sym
-        del pin
         del dev
         del prj
         del app
@@ -382,38 +471,1979 @@ def get_spare_pins(pins, pinouts):
 
     return spares
         
+
+# ======================================================================
+# V9 SHIELD / TWIST OVERLAY CORE
+#
+# Supplied V9 shield/twist logic.
+# Placement and sizing behavior is intentionally preserved.
+# ======================================================================
+
+# ======================================================================
+# V9: EXACT WORKING SHIELD CORE RESTORED
+#
+# This file is intentionally based directly on the script the user
+# confirmed resized/placed Shield_Demo correctly.
+#
+# Do NOT change these working E3 behaviors:
+#   - outer shields are attempted FIRST
+#   - inner shields are attempted before twists
+#   - each shield attempt gets a fresh CreateSymbolObject()
+#   - Shield_Demo uses Load -> Place -> immediate SetDisplayLength
+#   - SetId/GetDisplayLength happen only AFTER that immediate stretch attempt
+#
+# Multi-connector outer-shield logic already supports a run spanning
+# connector changes such as LEFT P1 -> P3 -> P4.
+# ======================================================================
+
+
+#====================================================================================================================================
+# EXCEL LAYOUT
+#====================================================================================================================================
+TARGET_SHEET_NAME = None
+DEVICE_NAME_CELL = "B1"
+DATA_FIRST_ROW = 5
+MAX_SCAN_ROWS = 5000
+
+LEFT_TWIST_OFFSET_CELL = "J2"
+RIGHT_TWIST_OFFSET_CELL = "R2"
+
+LEFT_OUTER_SHIELD_COL = "H"
+LEFT_INNER_SHIELD_COL = "I"
+LEFT_TWIST_A_COL = "J"
+LEFT_TWIST_B_COL = "K"
+LEFT_CONNECTOR_COL = "L"
+
+PIN_1_COL = "N"
+PIN_2_COL = "O"
+
+RIGHT_CONNECTOR_COL = "Q"
+RIGHT_TWIST_A_COL = "R"
+RIGHT_TWIST_B_COL = "S"
+RIGHT_INNER_SHIELD_COL = "T"
+RIGHT_OUTER_SHIELD_COL = "U"
+
+
+#====================================================================================================================================
+# E3 CONNECTOR NAMING
+#====================================================================================================================================
+CONNECTOR_ROOT_NAME = "W1"
+
+
+#====================================================================================================================================
+# ZUKEN LIBRARY SYMBOLS
+#====================================================================================================================================
+TWIST_SYMBOL_NAME = "MIL_Twist_ArrowsDown"
+SHIELD_SYMBOL_NAME = "Shield_Demo"
+
+SYMBOL_VERSION = 1
+
+
+#====================================================================================================================================
+# E3 TIMING
+#====================================================================================================================================
+PLACEMENT_DELAY_SECONDS = 0.10
+STRETCH_DELAY_SECONDS = 0.10
+MOVE_DELAY_SECONDS = 0.10
+
+
+#====================================================================================================================================
+# SHIELD FALLBACK STAGING SETTINGS
+#
+# Final placement is attempted first. If E3 rejects the resize there,
+# the same exact Load -> Place -> immediate SetDisplayLength sequence
+# is tried in open staging positions.
+#====================================================================================================================================
+# The known-good standalone stretch test used X=24.0, Y=22.0.
+# Keep X=24 first and choose Y dynamically so long shields remain on-sheet.
+SHIELD_STAGE_X_VALUES = [24.0, 20.0, 28.0, 16.0, 32.0, 12.0, 36.0]
+SHIELD_STAGE_TOP_LIMIT = 32.0
+SHIELD_STAGE_DEFAULT_Y = 22.0
+SHIELD_STAGE_MARGIN = 0.50
+
+
+#====================================================================================================================================
+# SYMBOL LENGTH SETTINGS
+#====================================================================================================================================
+MIN_SYMBOL_LENGTH = 0.10
+
+
+#====================================================================================================================================
+# SHIELD VERTICAL OVERLAP
+#
+# Shield_Demo origin is bottom-center.
+#
+# The symbol extends upward from the insertion point.
+#====================================================================================================================================
+SHIELD_BOTTOM_OVERLAP = 0.125
+SHIELD_TOP_OVERLAP = 0.125
+
+
+#====================================================================================================================================
+# TWIST PLACEMENT
+#
+# TWISTS ARE NOT STRETCHED.
+#
+# E3/database behavior determines the correct display length based on
+# the wires under the twist symbol.
+#====================================================================================================================================
+TWIST_BOTTOM_OVERLAP = 0.00
+
+
+#====================================================================================================================================
+# HORIZONTAL LAYOUT WHEN OFFSET = YES
+#
+# LEFT CONNECTOR EXAMPLE AT X = 1.00:
+#
+# Twist A + Shield A = 1.25
+# Twist B + Shield B = 1.50
+# Outer Shield       = 1.75
+#
+# RIGHT SIDE MIRRORS AUTOMATICALLY.
+#====================================================================================================================================
+OFFSET_YES_TWIST_A = 0.25
+OFFSET_YES_TWIST_B = 0.50
+OFFSET_YES_OUTER_SHIELD = 0.75
+
+
+#====================================================================================================================================
+# HORIZONTAL LAYOUT WHEN OFFSET = NO
+#
+# LEFT CONNECTOR EXAMPLE AT X = 1.00:
+#
+# Twist A + Shield A = 1.25
+# Twist B + Shield B = 1.25
+# Outer Shield       = 1.50
+#
+# RIGHT SIDE MIRRORS AUTOMATICALLY.
+#====================================================================================================================================
+OFFSET_NO_TWIST_LINE = 0.25
+OFFSET_NO_OUTER_SHIELD = 0.50
+
+
+#====================================================================================================================================
+# INNER SHIELD WITHOUT A TWIST
+#====================================================================================================================================
+INNER_SHIELD_ONLY_OFFSET = 0.25
+
+
+#====================================================================================================================================
+# OPTIONS
+#====================================================================================================================================
+DRY_RUN = False
+STRICT_TWIST_VALIDATION = True
+
+SCHEMATIC_MIN_Y_SPAN = 0.05
+COORDINATE_ROUND_DIGITS = 6
+
+
+#====================================================================================================================================
+# FILE PICKER
+#====================================================================================================================================
+def ask_excel_path():
+    root = tk.Tk()
+    root.withdraw()
+    root.attributes("-topmost", True)
+    root.update()
+    selected_path = filedialog.askopenfilename(title="Select Cable Symbol Placement Excel File", filetypes=[("Excel Files", "*.xlsx"), ("Excel Macro Files", "*.xlsm"), ("All Files", "*.*")])
+    root.destroy()
+
+    if not selected_path:
+        return None
+
+    return os.path.abspath(selected_path)
+
+
+#====================================================================================================================================
+# VALUE HELPERS
+#====================================================================================================================================
+def clean_excel_value(value):
+    if value is None:
+        return ""
+
+    if isinstance(value, int):
+        return str(value)
+
+    if isinstance(value, float):
+        if value.is_integer():
+            return str(int(value))
+
+        return str(value).strip()
+
+    return str(value).strip()
+
+
+def normalize_pin_name(value):
+    return clean_excel_value(value).upper()
+
+
+def normalize_connector_token(value):
+    text = clean_excel_value(value).upper().replace(" ", "")
+
+    if text == "":
+        return ""
+
+    root_prefix = CONNECTOR_ROOT_NAME.upper() + "."
+
+    if text.startswith(root_prefix):
+        text = text[len(root_prefix):]
+
+    if "#" in text:
+        text = text.split("#", 1)[0]
+
+    match = re.fullmatch(r"P?0*(\d+)([A-Z]*)", text)
+
+    if match:
+        number = int(match.group(1))
+        suffix = match.group(2)
+        return f"P{number}{suffix}"
+
+    return text
+
+
+def connector_base_name(connector_token):
+    connector = normalize_connector_token(connector_token)
+
+    if connector == "":
+        return ""
+
+    return f"{CONNECTOR_ROOT_NAME}.{connector}"
+
+
+def cell_has_bar(value):
+    return "|" in clean_excel_value(value)
+
+
+#====================================================================================================================================
+# YES / NO SETTING
+#====================================================================================================================================
+def parse_yes_no(value, setting_name):
+    text = clean_excel_value(value).upper()
+
+    if text == "":
+        print("WARNING:", setting_name, "IS BLANK - DEFAULTING TO YES")
+        return True
+
+    if text in ["YES", "Y", "TRUE", "1"]:
+        return True
+
+    if text in ["NO", "N", "FALSE", "0"]:
+        return False
+
+    raise Exception(f"{setting_name} must contain YES or NO. Current value: {value}")
+
+
+#====================================================================================================================================
+# READ TWIST OFFSET SETTINGS
+#
+# J2:K2 merged -> J2
+# R2:S2 merged -> R2
+#====================================================================================================================================
+def read_twist_offset_settings(ws):
+    left_enabled = parse_yes_no(ws[LEFT_TWIST_OFFSET_CELL].value, "LEFT TWIST OFFSET J2:K2")
+    right_enabled = parse_yes_no(ws[RIGHT_TWIST_OFFSET_CELL].value, "RIGHT TWIST OFFSET R2:S2")
+
+    settings = {
+        "LEFT": left_enabled,
+        "RIGHT": right_enabled
+    }
+
+    return settings
+
+
+#====================================================================================================================================
+# FIND LAST DATA ROW
+#====================================================================================================================================
+def get_last_data_row(ws):
+    columns = [LEFT_OUTER_SHIELD_COL, LEFT_INNER_SHIELD_COL, LEFT_TWIST_A_COL, LEFT_TWIST_B_COL, LEFT_CONNECTOR_COL, PIN_1_COL, PIN_2_COL, RIGHT_CONNECTOR_COL, RIGHT_TWIST_A_COL, RIGHT_TWIST_B_COL, RIGHT_INNER_SHIELD_COL, RIGHT_OUTER_SHIELD_COL]
+    scan_end = min(max(ws.max_row, DATA_FIRST_ROW), DATA_FIRST_ROW + MAX_SCAN_ROWS)
+    last_row = DATA_FIRST_ROW - 1
+
+    for row in range(DATA_FIRST_ROW, scan_end + 1):
+        for col in columns:
+            value = clean_excel_value(ws[f"{col}{row}"].value)
+
+            if value != "":
+                last_row = row
+                break
+
+    return last_row
+
+
+#====================================================================================================================================
+# READ LEFT OR RIGHT SIDE
+#====================================================================================================================================
+def read_side_rows(ws, side, last_row):
+    if side == "LEFT":
+        connector_col = LEFT_CONNECTOR_COL
+        pin_col = PIN_1_COL
+        twist_a_col = LEFT_TWIST_A_COL
+        twist_b_col = LEFT_TWIST_B_COL
+        inner_col = LEFT_INNER_SHIELD_COL
+        outer_col = LEFT_OUTER_SHIELD_COL
+    else:
+        connector_col = RIGHT_CONNECTOR_COL
+        pin_col = PIN_2_COL
+        twist_a_col = RIGHT_TWIST_A_COL
+        twist_b_col = RIGHT_TWIST_B_COL
+        inner_col = RIGHT_INNER_SHIELD_COL
+        outer_col = RIGHT_OUTER_SHIELD_COL
+
+    rows = []
+    current_connector = ""
+
+    for excel_row in range(DATA_FIRST_ROW, last_row + 1):
+        connector_value = clean_excel_value(ws[f"{connector_col}{excel_row}"].value)
+        pin_name = normalize_pin_name(ws[f"{pin_col}{excel_row}"].value)
+
+        if connector_value != "":
+            current_connector = normalize_connector_token(connector_value)
+
+        if pin_name == "":
+            continue
+
+        row_info = {
+            "side": side,
+            "excel_row": excel_row,
+            "connector": current_connector,
+            "pin": pin_name,
+            "twist_a": cell_has_bar(ws[f"{twist_a_col}{excel_row}"].value),
+            "twist_b": cell_has_bar(ws[f"{twist_b_col}{excel_row}"].value),
+            "inner_shield": cell_has_bar(ws[f"{inner_col}{excel_row}"].value),
+            "outer_shield": cell_has_bar(ws[f"{outer_col}{excel_row}"].value)
+        }
+
+        rows.append(row_info)
+
+    return rows
+
+
+#====================================================================================================================================
+# SPLIT INTO CONNECTOR SECTIONS
+#====================================================================================================================================
+def split_into_sections(rows):
+    sections = []
+    current = []
+
+    for row in rows:
+        if not current:
+            current = [row]
+            continue
+
+        previous = current[-1]
+        connector_changed = row["connector"] != previous["connector"]
+        row_gap = row["excel_row"] != previous["excel_row"] + 1
+
+        if connector_changed or row_gap:
+            sections.append(current)
+            current = [row]
+        else:
+            current.append(row)
+
+    if current:
+        sections.append(current)
+
+    return sections
+
+
+#====================================================================================================================================
+# CONTIGUOUS MARKED RANGES
+#====================================================================================================================================
+def true_ranges(rows, key):
+    ranges = []
+    start = None
+
+    for index, row in enumerate(rows):
+        marked = bool(row[key])
+
+        if marked and start is None:
+            start = index
+
+        if not marked and start is not None:
+            ranges.append((start, index - 1))
+            start = None
+
+    if start is not None:
+        ranges.append((start, len(rows) - 1))
+
+    return ranges
+
+
+def range_pins(rows, start, end):
+    pins = []
+
+    for index in range(start, end + 1):
+        pins.append(rows[index]["pin"])
+
+    return pins
+
+
+def range_excel_rows(rows, start, end):
+    excel_rows = []
+
+    for index in range(start, end + 1):
+        excel_rows.append(rows[index]["excel_row"])
+
+    return excel_rows
+
+
+
+#====================================================================================================================================
+# BUILD TWIST / INNER-SHIELD JOBS FOR ONE CONNECTOR SECTION
+#
+# INNER SHIELD RULE:
+#   Inner SHLD does NOT create a standalone shield.
+#   It only places Shield_Demo around a twist run when every wire in
+#   that twist run is marked in the inner-SHLD column.
+#
+# OUTER SHIELDS ARE BUILT SEPARATELY ACROSS THE WHOLE SIDE SO THEY MAY
+# CROSS CONNECTOR CHANGES (EXAMPLE: LEFT P1 -> P3 -> P4).
+#====================================================================================================================================
+def build_section_jobs(rows):
+    jobs = []
+    warnings = []
+
+    if not rows:
+        return jobs, warnings
+
+    side = rows[0]["side"]
+    connector = rows[0]["connector"]
+
+    if connector == "":
+        warnings.append(f"{side}: rows {rows[0]['excel_row']}-{rows[-1]['excel_row']} have pins but no connector")
+        return jobs, warnings
+
+    conflicts = []
+
+    for row in rows:
+        if row["twist_a"] and row["twist_b"]:
+            conflicts.append(row["excel_row"])
+
+    if conflicts:
+        message = f"{side} {connector}: same wire marked in both twist columns on Excel rows {conflicts}"
+
+        if STRICT_TWIST_VALIDATION:
+            raise Exception(message)
+
+        warnings.append(message)
+
+    twist_jobs = []
+
+    for key, twist_column in [("twist_a", "A"), ("twist_b", "B")]:
+        ranges = true_ranges(rows, key)
+
+        for start, end in ranges:
+            pins = range_pins(rows, start, end)
+            excel_rows = range_excel_rows(rows, start, end)
+
+            if len(pins) < 2:
+                warnings.append(
+                    f"{side} {connector}: twist {twist_column} only contains one wire "
+                    f"on Excel row {excel_rows[0]}"
+                )
+                continue
+
+            job = {
+                "type": "twist",
+                "side": side,
+                "connector": connector,
+                "twist_column": twist_column,
+                "start": start,
+                "end": end,
+                "pins": pins,
+                "excel_rows": excel_rows,
+                "symbol_name": TWIST_SYMBOL_NAME
+            }
+
+            twist_jobs.append(job)
+            jobs.append(job)
+
+    # Inner SHLD only wraps an existing twist. It never makes its own span.
+    for twist_job in twist_jobs:
+        indexes = list(range(twist_job["start"], twist_job["end"] + 1))
+        inner_marks = [bool(rows[index]["inner_shield"]) for index in indexes]
+
+        if all(inner_marks):
+            jobs.append({
+                "type": "shield_inner",
+                "side": side,
+                "connector": connector,
+                "twist_column": twist_job["twist_column"],
+                "pins": list(twist_job["pins"]),
+                "excel_rows": list(twist_job["excel_rows"]),
+                "symbol_name": SHIELD_SYMBOL_NAME
+            })
+        elif any(inner_marks):
+            warnings.append(
+                f"{side} {connector}: inner SHLD partially covers twist "
+                f"{twist_job['twist_column']} on Excel rows {twist_job['excel_rows']}; "
+                f"inner shield ignored because the full twist must be marked"
+            )
+
+    return jobs, warnings
+
+
+#====================================================================================================================================
+# BUILD OUTER-SHIELD JOBS ACROSS AN ENTIRE SIDE
+#
+# Connector changes DO NOT break an outer shield.
+# Blank Excel row gaps or an unmarked outer-SHLD row DO break it.
+#====================================================================================================================================
+def build_outer_shield_jobs(rows):
+    jobs = []
+
+    if not rows:
+        return jobs
+
+    side = rows[0]["side"]
+    start = None
+
+    def append_job(start_index, end_index):
+        covered_rows = rows[start_index:end_index + 1]
+
+        connectors = []
+        for row in covered_rows:
+            connector = row["connector"]
+            if connector and connector not in connectors:
+                connectors.append(connector)
+
+        jobs.append({
+            "type": "shield_outer",
+            "side": side,
+            "connector": "/".join(connectors),
+            "connectors": connectors,
+            "rows": covered_rows,
+            "pins": [row["pin"] for row in covered_rows],
+            "excel_rows": [row["excel_row"] for row in covered_rows],
+            "twist_column": None,
+            "symbol_name": SHIELD_SYMBOL_NAME
+        })
+
+    for index, row in enumerate(rows):
+        marked = bool(row["outer_shield"])
+
+        if start is not None:
+            previous = rows[index - 1]
+            row_gap = row["excel_row"] != previous["excel_row"] + 1
+
+            if row_gap or not marked:
+                append_job(start, index - 1)
+                start = None
+
+        if marked and start is None:
+            start = index
+
+    if start is not None:
+        append_job(start, len(rows) - 1)
+
+    return jobs
+
+
+#====================================================================================================================================
+# E3 ID EXTRACTOR
+#====================================================================================================================================
+def extract_e3_ids(result):
+    if result is None:
+        return []
+
+    if isinstance(result, int):
+        if result > 0:
+            return [result]
+
+        return []
+
+    if isinstance(result, list):
+        output = []
+
+        for value in result:
+            if value is not None:
+                try:
+                    if int(value) > 0:
+                        output.append(int(value))
+                except Exception:
+                    pass
+
+        return output
+
+    if not isinstance(result, tuple):
+        return []
+
+    if len(result) == 0:
+        return []
+
+    if len(result) >= 2:
+        values = result[1]
+
+        if values is None:
+            return []
+
+        if isinstance(values, int):
+            if values > 0:
+                return [values]
+
+            return []
+
+        try:
+            return [int(value) for value in values if value is not None and int(value) > 0]
+        except Exception:
+            pass
+
+    output = []
+
+    for value in result:
+        try:
+            if int(value) > 0:
+                output.append(int(value))
+        except Exception:
+            pass
+
+    return output
+
+
+#====================================================================================================================================
+# GET ALL BASE DEVICES
+#====================================================================================================================================
+def get_all_devices(prj, dev):
+    info = prj.GetAllDeviceIds(None)
+    ids = extract_e3_ids(info)
+    records = []
+
+    for device_id in ids:
+        dev.SetId(device_id)
+
+        try:
+            name = clean_excel_value(dev.GetName())
+        except Exception:
+            continue
+
+        records.append({"device_id": device_id, "name": name})
+
+    return records
+
+
+#====================================================================================================================================
+# READ PIN SCHEMATIC LOCATION
+#====================================================================================================================================
+def get_pin_location(pin, pin_id):
+    pin.SetId(pin_id)
+
+    xloc = [0.0]
+    yloc = [0.0]
+    grid = [""]
+    column = [""]
+    row = [""]
+
+    try:
+        result = pin.GetSchemaLocation(xloc, yloc, grid, column, row)
+    except Exception:
+        return None
+
+    if not isinstance(result, tuple):
+        return None
+
+    if len(result) < 3:
+        return None
+
+    try:
+        sheet_id = int(result[0])
+        x = float(result[1])
+        y = float(result[2])
+    except Exception:
+        return None
+
+    if sheet_id <= 0:
+        return None
+
+    return {"sheet_id": sheet_id, "x": x, "y": y}
+
+
+#====================================================================================================================================
+# READ SYMBOL SCHEMATIC LOCATION
+#====================================================================================================================================
+def get_symbol_location(sym, symbol_id):
+    sym.SetId(symbol_id)
+
+    xloc = [0.0]
+    yloc = [0.0]
+    grid = [""]
+    column = [""]
+    row = [""]
+
+    try:
+        result = sym.GetSchemaLocation(xloc, yloc, grid, column, row)
+    except Exception:
+        return None
+
+    if not isinstance(result, tuple):
+        return None
+
+    if len(result) < 3:
+        return None
+
+    try:
+        sheet_id = int(result[0])
+        x = float(result[1])
+        y = float(result[2])
+    except Exception:
+        return None
+
+    if sheet_id <= 0:
+        return None
+
+    return {"sheet_id": sheet_id, "x": x, "y": y}
+
+
+#====================================================================================================================================
+# LOAD DEVICE PIN MAP
+#====================================================================================================================================
+def load_device_pin_map(dev, pin, device_id):
+    dev.SetId(device_id)
+
+    try:
+        info = dev.GetAllPinIds(None)
+    except Exception:
+        return {}
+
+    pin_ids = extract_e3_ids(info)
+    pin_map = {}
+
+    for pin_id in pin_ids:
+        pin.SetId(pin_id)
+
+        try:
+            pin_name = normalize_pin_name(pin.GetName())
+        except Exception:
+            continue
+
+        location = get_pin_location(pin, pin_id)
+
+        if pin_name not in pin_map:
+            pin_map[pin_name] = []
+
+        if location is not None:
+            record = {"pin_id": pin_id, "sheet_id": location["sheet_id"], "x": location["x"], "y": location["y"]}
+            pin_map[pin_name].append(record)
+
+    return pin_map
+
+
+#====================================================================================================================================
+# FIND BASE CONNECTOR
+#====================================================================================================================================
+def find_base_connector_devices(connector_token, all_devices):
+    expected_name = connector_base_name(connector_token)
+    expected_upper = expected_name.upper()
+    matches = []
+
+    for record in all_devices:
+        if record["name"].upper() == expected_upper:
+            matches.append(record)
+
+    return matches
+
+
+#====================================================================================================================================
+# GET VIEW IDS
+#====================================================================================================================================
+def get_device_view_ids(dev, base_device_id):
+    dev.SetId(base_device_id)
+
+    if not hasattr(dev, "GetViewIds"):
+        print("GetViewIds IS NOT AVAILABLE ON THIS E3 DEVICE OBJECT")
+        return []
+
+    try:
+        result = dev.GetViewIds(None)
+    except Exception as error:
+        print("GetViewIds FAILED FOR BASE ID:", base_device_id, "ERROR:", repr(error))
+        return []
+
+    view_ids = extract_e3_ids(result)
+
+    print("BASE DEVICE ID:", base_device_id, "VIEW IDS:", view_ids)
+
+    return view_ids
+
+
+#====================================================================================================================================
+# GET CHILD DEVICE IDS
+#====================================================================================================================================
+def get_child_device_ids(dev, base_device_id):
+    dev.SetId(base_device_id)
+
+    if not hasattr(dev, "GetDeviceIds"):
+        return []
+
+    try:
+        result = dev.GetDeviceIds(None)
+    except Exception:
+        return []
+
+    return extract_e3_ids(result)
+
+
+#====================================================================================================================================
+# GET SAME NAME ASSEMBLY DEVICES
+#====================================================================================================================================
+def get_same_name_assembly_devices(dev, base_device_id, expected_name):
+    found_ids = []
+
+    dev.SetId(base_device_id)
+
+    try:
+        assembly_id = dev.GetAssemblyId()
+    except Exception:
+        return found_ids
+
+    if assembly_id is None:
+        return found_ids
+
+    try:
+        assembly_id = int(assembly_id)
+    except Exception:
+        return found_ids
+
+    if assembly_id <= 0:
+        return found_ids
+
+    dev.SetId(assembly_id)
+
+    try:
+        device_info = dev.GetDeviceIds(None)
+    except Exception:
+        return found_ids
+
+    device_ids = extract_e3_ids(device_info)
+
+    for device_id in device_ids:
+        dev.SetId(device_id)
+
+        try:
+            name = clean_excel_value(dev.GetName())
+        except Exception:
+            continue
+
+        if name.upper() == expected_name.upper():
+            found_ids.append(device_id)
+
+    return found_ids
+
+
+#====================================================================================================================================
+# COLLECT CONNECTOR CANDIDATES
+#====================================================================================================================================
+def collect_connector_candidate_ids(connector_token, all_devices, dev):
+    expected_name = connector_base_name(connector_token)
+    base_records = find_base_connector_devices(connector_token, all_devices)
+
+    if not base_records:
+        raise Exception(f"Could not find base E3 connector {expected_name}")
+
+    candidate_sources = {}
+
+    for record in base_records:
+        base_id = record["device_id"]
+
+        candidate_sources[base_id] = "BASE"
+
+        view_ids = get_device_view_ids(dev, base_id)
+
+        for view_id in view_ids:
+            candidate_sources[view_id] = "VIEW"
+
+        child_ids = get_child_device_ids(dev, base_id)
+
+        for child_id in child_ids:
+            if child_id not in candidate_sources:
+                candidate_sources[child_id] = "CHILD"
+
+        assembly_ids = get_same_name_assembly_devices(dev, base_id, expected_name)
+
+        for assembly_device_id in assembly_ids:
+            if assembly_device_id not in candidate_sources:
+                candidate_sources[assembly_device_id] = "ASSEMBLY"
+
+    return candidate_sources
+
+
+#====================================================================================================================================
+# ANALYZE CANDIDATE VIEW
+#====================================================================================================================================
+def analyze_candidate(required_pins, pin_map):
+    sheets = {}
+
+    for pin_name in required_pins:
+        locations = pin_map.get(pin_name, [])
+
+        for location in locations:
+            sheet_id = location["sheet_id"]
+
+            if sheet_id not in sheets:
+                sheets[sheet_id] = {"pins": set(), "xs": [], "ys": []}
+
+            sheets[sheet_id]["pins"].add(pin_name)
+            sheets[sheet_id]["xs"].append(location["x"])
+            sheets[sheet_id]["ys"].append(location["y"])
+
+    if not sheets:
+        return None
+
+    results = []
+
+    for sheet_id, data in sheets.items():
+        placed_count = len(data["pins"])
+        unique_x_values = set(round(value, COORDINATE_ROUND_DIGITS) for value in data["xs"])
+        unique_y_values = set(round(value, COORDINATE_ROUND_DIGITS) for value in data["ys"])
+        unique_x_count = len(unique_x_values)
+        unique_y_count = len(unique_y_values)
+        x_span = max(data["xs"]) - min(data["xs"]) if data["xs"] else 0.0
+        y_span = max(data["ys"]) - min(data["ys"]) if data["ys"] else 0.0
+        has_real_y_spread = y_span >= SCHEMATIC_MIN_Y_SPAN and unique_y_count > 1
+        result = {"sheet_id": sheet_id, "placed_count": placed_count, "unique_x_count": unique_x_count, "unique_y_count": unique_y_count, "x_span": x_span, "y_span": y_span, "has_real_y_spread": has_real_y_spread}
+
+        results.append(result)
+
+    results.sort(key=lambda item: (item["has_real_y_spread"], item["placed_count"], item["unique_y_count"], item["y_span"]), reverse=True)
+
+    return results[0]
+
+
+#====================================================================================================================================
+# RESOLVE REAL SCHEMATIC VIEW
+#====================================================================================================================================
+def resolve_connector_schematic_view(connector_token, required_pins, all_devices, dev, pin, cache):
+    expected_name = connector_base_name(connector_token)
+    candidate_sources = collect_connector_candidate_ids(connector_token, all_devices, dev)
+    candidates = []
+
+    print("")
+    print("============================================================")
+    print("E3 CANDIDATES FOR:", expected_name)
+    print("============================================================")
+
+    for candidate_id, source in candidate_sources.items():
+        dev.SetId(candidate_id)
+
+        try:
+            candidate_name = clean_excel_value(dev.GetName())
+        except Exception:
+            candidate_name = "UNKNOWN"
+
+        if candidate_id not in cache:
+            try:
+                cache[candidate_id] = load_device_pin_map(dev, pin, candidate_id)
+            except Exception as error:
+                print("CANDIDATE ID:", candidate_id, "SOURCE:", source, "NAME:", candidate_name, "PIN MAP FAILED:", repr(error))
+                continue
+
+        pin_map = cache[candidate_id]
+        analysis = analyze_candidate(required_pins, pin_map)
+
+        if analysis is None:
+            print("CANDIDATE ID:", candidate_id, "SOURCE:", source, "NAME:", candidate_name, "NO PLACED REQUIRED PINS")
+            continue
+
+        print("CANDIDATE ID:", candidate_id, "SOURCE:", source, "NAME:", candidate_name, "SHEET:", analysis["sheet_id"], "PLACED:", analysis["placed_count"], "UNIQUE X:", analysis["unique_x_count"], "UNIQUE Y:", analysis["unique_y_count"], "X SPAN:", analysis["x_span"], "Y SPAN:", analysis["y_span"])
+
+        candidate = {"device_id": candidate_id, "name": candidate_name, "source": source, "pin_map": pin_map, "analysis": analysis}
+
+        candidates.append(candidate)
+
+    if not candidates:
+        raise Exception(f"No usable E3 device/view candidates found for {expected_name}")
+
+    candidates.sort(key=lambda item: (item["analysis"]["has_real_y_spread"], item["analysis"]["placed_count"], item["analysis"]["unique_y_count"], item["analysis"]["y_span"]), reverse=True)
+
+    best = candidates[0]
+
+    if not best["analysis"]["has_real_y_spread"]:
+        raise Exception(f"Could not locate the split schematic view for {expected_name}")
+
+    sheet_id = best["analysis"]["sheet_id"]
+    missing_pins = []
+
+    for pin_name in required_pins:
+        locations = best["pin_map"].get(pin_name, [])
+        found_on_sheet = False
+
+        for location in locations:
+            if location["sheet_id"] == sheet_id:
+                found_on_sheet = True
+                break
+
+        if not found_on_sheet:
+            missing_pins.append(pin_name)
+
+    if missing_pins:
+        raise Exception(f"Selected schematic view for {expected_name} is missing pins on sheet {sheet_id}: {missing_pins}")
+
+    print("")
+    print("SELECTED SCHEMATIC VIEW ID:", best["device_id"])
+    print("SELECTED SOURCE:", best["source"])
+    print("SELECTED NAME:", best["name"])
+    print("SELECTED SHEET:", sheet_id)
+    print("SELECTED PLACED PIN COUNT:", best["analysis"]["placed_count"])
+    print("SELECTED UNIQUE Y COUNT:", best["analysis"]["unique_y_count"])
+    print("SELECTED Y SPAN:", best["analysis"]["y_span"])
+    print("============================================================")
+
+    record = {"device_id": best["device_id"], "name": best["name"]}
+
+    return record, best["pin_map"], sheet_id
+
+
+#====================================================================================================================================
+# PIN LOCATION ON SELECTED SHEET
+#====================================================================================================================================
+def pin_location_on_sheet(pin_map, pin_name, sheet_id):
+    locations = pin_map.get(pin_name, [])
+
+    for location in locations:
+        if location["sheet_id"] == sheet_id:
+            return location
+
+    return None
+
+
+#====================================================================================================================================
+# PRINT PIN LOCATIONS
+#====================================================================================================================================
+def print_section_pin_locations(required_pins, pin_map, sheet_id):
+    print("")
+    print("ACTUAL SCHEMATIC PIN LOCATIONS")
+
+    for pin_name in required_pins:
+        location = pin_location_on_sheet(pin_map, pin_name, sheet_id)
+
+        if location is None:
+            print("PIN:", pin_name, "LOCATION: NOT FOUND")
+            continue
+
+        print("PIN:", pin_name, "X:", location["x"], "Y:", location["y"])
+
+
+#====================================================================================================================================
+# JOB X OFFSET
+#====================================================================================================================================
+def job_offset(job, twist_offset_settings):
+    offset_enabled = twist_offset_settings[job["side"]]
+
+    if job["type"] == "twist":
+        if not offset_enabled:
+            return OFFSET_NO_TWIST_LINE
+
+        if job["twist_column"] == "A":
+            return OFFSET_YES_TWIST_A
+
+        return OFFSET_YES_TWIST_B
+
+    if job["type"] == "shield_inner":
+        if job["twist_column"] is None:
+            return INNER_SHIELD_ONLY_OFFSET
+
+        if not offset_enabled:
+            return OFFSET_NO_TWIST_LINE
+
+        if job["twist_column"] == "A":
+            return OFFSET_YES_TWIST_A
+
+        return OFFSET_YES_TWIST_B
+
+    if not offset_enabled:
+        return OFFSET_NO_OUTER_SHIELD
+
+    return OFFSET_YES_OUTER_SHIELD
+
+
+#====================================================================================================================================
+# DRAW ORDER
+#
+# ACTUAL WORKING ORDER INSIDE EACH CONNECTOR SECTION:
+# Inner shields first, then twists.
+# Side-wide outer shields are processed separately before connector sections.
+#====================================================================================================================================
+def job_priority(job):
+    # This matches the earlier working dynamic-placement implementation:
+    # shields are created before twists.
+    if job["type"] == "shield_outer":
+        return 0
+
+    if job["type"] == "shield_inner":
+        return 1
+
+    return 2
+
+
+#====================================================================================================================================
+# CALCULATE FINAL SYMBOL PLACEMENT
+#====================================================================================================================================
+def calculate_placement(job, pin_map, sheet_id, twist_offset_settings):
+    locations = []
+
+    for pin_name in job["pins"]:
+        location = pin_location_on_sheet(pin_map, pin_name, sheet_id)
+
+        if location is None:
+            raise Exception(f"{job['side']} {job['connector']}: pin {pin_name} has no schematic location on sheet {sheet_id}")
+
+        locations.append(location)
+
+    x_values = [location["x"] for location in locations]
+    y_values = [location["y"] for location in locations]
+
+    anchor_x = statistics.median(x_values)
+    bottom_y = min(y_values)
+    top_y = max(y_values)
+
+    if top_y - bottom_y < SCHEMATIC_MIN_Y_SPAN and len(job["pins"]) > 1:
+        raise Exception(f"{job['side']} {job['connector']} {job['type']}: pins {job['pins']} all have effectively the same Y coordinate")
+
+    direction = 1.0 if job["side"] == "LEFT" else -1.0
+    offset = job_offset(job, twist_offset_settings)
+    x = anchor_x + direction * offset
+
+    if job["type"] == "twist":
+        y = bottom_y - TWIST_BOTTOM_OVERLAP
+        length = None
+    else:
+        y = bottom_y - SHIELD_BOTTOM_OVERLAP
+        length = top_y - bottom_y + SHIELD_BOTTOM_OVERLAP + SHIELD_TOP_OVERLAP
+
+        if length < MIN_SYMBOL_LENGTH:
+            length = MIN_SYMBOL_LENGTH
+
+    placement = {
+        "sheet_id": sheet_id,
+        "x": x,
+        "y": y,
+        "length": length,
+        "anchor_x": anchor_x,
+        "bottom_y": bottom_y,
+        "top_y": top_y,
+        "direction": direction,
+        "offset_enabled": twist_offset_settings[job["side"]]
+    }
+
+    return placement
+
+
+
+#====================================================================================================================================
+# CALCULATE OUTER SHIELD PLACEMENT ACROSS ONE OR MORE CONNECTORS
+#
+# Each Excel row is resolved through the connector named on that row.
+# This allows one outer shield to span, for example, LEFT P1 + P3 + P4.
+# All covered connector views must resolve to the same E3 sheet.
+#====================================================================================================================================
+def calculate_outer_shield_placement(job, all_devices, dev, pin, cache, twist_offset_settings):
+    resolved_by_connector = {}
+    sheet_ids = set()
+    locations = []
+
+    rows_by_connector = {}
+
+    for row in job["rows"]:
+        connector = row["connector"]
+
+        if connector == "":
+            raise Exception(
+                f"{job['side']} outer shield: Excel row {row['excel_row']} has no connector"
+            )
+
+        rows_by_connector.setdefault(connector, []).append(row)
+
+    for connector, connector_rows in rows_by_connector.items():
+        required_pins = list(dict.fromkeys(row["pin"] for row in connector_rows))
+
+        device_record, pin_map, sheet_id = resolve_connector_schematic_view(
+            connector,
+            required_pins,
+            all_devices,
+            dev,
+            pin,
+            cache
+        )
+
+        resolved_by_connector[connector] = {
+            "device_record": device_record,
+            "pin_map": pin_map,
+            "sheet_id": sheet_id
+        }
+
+        sheet_ids.add(sheet_id)
+
+    if len(sheet_ids) != 1:
+        details = ", ".join(
+            f"{connector}=sheet {data['sheet_id']}"
+            for connector, data in resolved_by_connector.items()
+        )
+        raise Exception(
+            f"{job['side']} outer shield spans connectors on different E3 sheets: {details}"
+        )
+
+    sheet_id = next(iter(sheet_ids))
+
+    for row in job["rows"]:
+        connector = row["connector"]
+        pin_name = row["pin"]
+        pin_map = resolved_by_connector[connector]["pin_map"]
+
+        location = pin_location_on_sheet(pin_map, pin_name, sheet_id)
+
+        if location is None:
+            raise Exception(
+                f"{job['side']} outer shield: {connector} pin {pin_name} "
+                f"has no schematic location on sheet {sheet_id}"
+            )
+
+        locations.append(location)
+
+    if not locations:
+        raise Exception(f"{job['side']} outer shield has no resolved schematic locations")
+
+    x_values = [location["x"] for location in locations]
+    y_values = [location["y"] for location in locations]
+
+    anchor_x = statistics.median(x_values)
+    bottom_y = min(y_values)
+    top_y = max(y_values)
+
+    direction = 1.0 if job["side"] == "LEFT" else -1.0
+
+    if twist_offset_settings[job["side"]]:
+        offset = OFFSET_YES_OUTER_SHIELD
+    else:
+        offset = OFFSET_NO_OUTER_SHIELD
+
+    x = anchor_x + direction * offset
+    y = bottom_y - SHIELD_BOTTOM_OVERLAP
+    length = top_y - bottom_y + SHIELD_BOTTOM_OVERLAP + SHIELD_TOP_OVERLAP
+
+    if length < MIN_SYMBOL_LENGTH:
+        length = MIN_SYMBOL_LENGTH
+
+    return {
+        "sheet_id": sheet_id,
+        "x": x,
+        "y": y,
+        "length": length,
+        "anchor_x": anchor_x,
+        "bottom_y": bottom_y,
+        "top_y": top_y,
+        "direction": direction,
+        "offset_enabled": twist_offset_settings[job["side"]]
+    }
+
+
+#====================================================================================================================================
+# SAFE DISPLAY LENGTH READ
+#====================================================================================================================================
+def get_display_length_safe(sym, symbol_id):
+    sym.SetId(symbol_id)
+
+    try:
+        return float(sym.GetDisplayLength())
+    except Exception:
+        return None
+
+
+#====================================================================================================================================
+# TRY TO SIZE SHIELD AT CURRENT LOCATION
+#====================================================================================================================================
+def try_size_shield(sym, symbol_id, requested_length):
+    # EXACT KNOWN-GOOD E3 SEQUENCE:
+    #   Place -> SetId(placed id) -> GetDisplayLength ->
+    #   SetDisplayLength -> SetId(placed id) -> GetDisplayLength
+    sym.SetId(symbol_id)
+
+    try:
+        before = float(sym.GetDisplayLength())
+    except Exception:
+        before = None
+
+    print("SHIELD LENGTH BEFORE:", before)
+
+    try:
+        stretch_result = sym.SetDisplayLength(float(requested_length))
+    except Exception as error:
+        stretch_result = None
+        print("SHIELD STRETCH EXCEPTION:", repr(error))
+
+    print("SHIELD STRETCH RESULT:", stretch_result)
+
+    # Re-bind exactly like the standalone test that successfully resized.
+    sym.SetId(symbol_id)
+    time.sleep(STRETCH_DELAY_SECONDS)
+
+    try:
+        after = float(sym.GetDisplayLength())
+    except Exception:
+        after = None
+
+    print("SHIELD REQUESTED LENGTH:", requested_length)
+    print("SHIELD LENGTH AFTER:", after)
+
+    return after is not None and abs(after - float(requested_length)) <= 0.001
+
+
+def shield_stage_y_values(requested_length):
+    # Shield_Demo grows upward from its insertion point.
+    # 10.0 at Y=22.0 was proven to resize successfully in the earlier test.
+    # For longer shields, lower the staging Y enough to keep the full symbol on-sheet.
+    safe_y = min(
+        SHIELD_STAGE_DEFAULT_Y,
+        SHIELD_STAGE_TOP_LIMIT - float(requested_length) - SHIELD_STAGE_MARGIN
+    )
+    safe_y = max(0.75, safe_y)
+
+    candidates = [
+        safe_y,
+        max(0.75, safe_y - 0.50),
+        min(SHIELD_STAGE_DEFAULT_Y, safe_y + 0.50),
+        max(0.75, safe_y - 1.00),
+        min(SHIELD_STAGE_DEFAULT_Y, safe_y + 1.00),
+    ]
+
+    output = []
+    for value in candidates:
+        value = round(float(value), 3)
+        if value not in output:
+            output.append(value)
+
+    return output
+
+
+#====================================================================================================================================
+# PLACE TWIST
+#
+# NO STRETCH.
+#
+# E3/database decides display length automatically.
+#====================================================================================================================================
+def place_twist(sym, job, placement):
+    load_result = sym.Load(job["symbol_name"], SYMBOL_VERSION)
+
+    print("TWIST LOAD RESULT:", load_result)
+
+    if load_result == 0:
+        raise Exception(f"Could not load library twist {job['symbol_name']}")
+
+    print("TWIST TARGET X:", placement["x"])
+    print("TWIST TARGET Y:", placement["y"])
+
+    placed_id = sym.Place(placement["sheet_id"], placement["x"], placement["y"], 0, 1.0, 0)
+
+    print("TWIST PLACE RESULT:", placed_id)
+
+    if placed_id == 0:
+        raise Exception(f"Could not place library twist {job['symbol_name']} at X={placement['x']} Y={placement['y']}")
+
+    time.sleep(PLACEMENT_DELAY_SECONDS)
+
+    sym.SetId(placed_id)
+
+    try:
+        placed_name = sym.GetName()
+    except Exception:
+        placed_name = "UNKNOWN"
+
+    try:
+        symbol_type = sym.GetSymbolType()
+    except Exception:
+        symbol_type = "UNKNOWN"
+
+    try:
+        automatic_length = float(sym.GetDisplayLength())
+    except Exception:
+        automatic_length = None
+
+    print("TWIST PLACED ID:", placed_id)
+    print("TWIST PLACED NAME:", placed_name)
+    print("TWIST SYMBOL TYPE:", symbol_type)
+    print("TWIST AUTOMATIC DISPLAY LENGTH:", automatic_length)
+    print("TWIST LEFT AT E3 DATABASE AUTO LENGTH")
+
+    return placed_id
+
+
+#====================================================================================================================================
+# PLACE SHIELD
+#
+# PROCESS:
+#
+# 1. Load Shield_Demo.
+# 2. Search staging coordinates until the symbol can be placed.
+# 3. Try SetDisplayLength at that staging position.
+# 4. If resize fails, move SAME shield to another staging location.
+# 5. Once correct size is reached, move SAME shield to final cable X/Y.
+#
+# No duplicate shields are intentionally created while searching.
+#====================================================================================================================================
+def place_shield(prj, job, placement):
+    """
+    Place a REAL Shield_Demo symbol and resize it with SetDisplayLength.
+
+    CRITICAL E3 BEHAVIOR:
+    The earlier working test called SetDisplayLength IMMEDIATELY after Place()
+    on the SAME symbol object returned from Load/Place.
+
+    Do NOT call SetId() first.
+    Do NOT call GetDisplayLength() first.
+    Do NOT use PlaceDynamic().
+
+    Calling SetId before SetDisplayLength was the important difference in the
+    later broken versions.
+    """
+    requested_length = float(placement["length"])
+    final_x = float(placement["x"])
+    final_y = float(placement["y"])
+    sheet_id = int(placement["sheet_id"])
+
+    print("")
+    print("SHIELD FINAL X:", final_x)
+    print("SHIELD FINAL Y:", final_y)
+    print("SHIELD REQUESTED LENGTH:", requested_length)
+    print("SHIELD LIBRARY SYMBOL:", job["symbol_name"])
+    print("SHIELD MODE: Load -> Place -> IMMEDIATE SetDisplayLength")
+    print("SHIELD NOTE: NO SetId / GetDisplayLength BEFORE STRETCH")
+
+    # Try the final location first.  If E3 rejects the resize there, try the
+    # same exact sequence in a clear staging area and move the resized shield.
+    attempts = [("FINAL", final_x, final_y)]
+
+    # Pick stage Y values that leave enough room for a long shield.
+    max_stage_y = SHIELD_STAGE_TOP_LIMIT - requested_length - SHIELD_STAGE_MARGIN
+    if max_stage_y < 0.5:
+        max_stage_y = 0.5
+
+    stage_base_y = min(SHIELD_STAGE_DEFAULT_Y, max_stage_y)
+    stage_y_values = [
+        stage_base_y,
+        max(0.5, stage_base_y - 0.5),
+        max(0.5, stage_base_y + 0.5),
+        max(0.5, stage_base_y - 1.0),
+        max(0.5, stage_base_y + 1.0),
+    ]
+
+    seen_stage_y = []
+    for y in stage_y_values:
+        y = round(float(y), 6)
+        if y not in seen_stage_y:
+            seen_stage_y.append(y)
+
+    for stage_y in seen_stage_y:
+        for stage_x in SHIELD_STAGE_X_VALUES:
+            attempts.append(("STAGE", float(stage_x), float(stage_y)))
+
+    for attempt_number, (mode, x, y) in enumerate(attempts, start=1):
+        print("")
+        print("SHIELD ATTEMPT:", attempt_number, "MODE:", mode, "X:", x, "Y:", y)
+
+        # Fresh object for each attempt.
+        shield_sym = prj.CreateSymbolObject()
+
+        load_result = shield_sym.Load(job["symbol_name"], SYMBOL_VERSION)
+        print("SHIELD LOAD RESULT:", load_result)
+
+        if load_result == 0:
+            try:
+                del shield_sym
+            except Exception:
+                pass
+            continue
+
+        placed_id = shield_sym.Place(sheet_id, x, y, 0, 1.0, 0)
+        print("SHIELD PLACE RESULT:", placed_id)
+
+        if placed_id == 0:
+            try:
+                del shield_sym
+            except Exception:
+                pass
+            time.sleep(PLACEMENT_DELAY_SECONDS)
+            continue
+
+        # ================================================================
+        # THIS IS THE KEY FIX.
+        #
+        # The old working test did:
+        #     Load(...)
+        #     Place(...)
+        #     SetDisplayLength(...)
+        #
+        # It did NOT SetId() between Place and SetDisplayLength.
+        # It did NOT read GetDisplayLength() before SetDisplayLength.
+        # ================================================================
+        try:
+            stretch_result = shield_sym.SetDisplayLength(requested_length)
+        except Exception as error:
+            stretch_result = None
+            print("SHIELD IMMEDIATE STRETCH EXCEPTION:", repr(error))
+
+        print("SHIELD IMMEDIATE STRETCH RESULT:", stretch_result)
+
+        time.sleep(STRETCH_DELAY_SECONDS)
+
+        try:
+            immediate_length = float(shield_sym.GetDisplayLength())
+        except Exception:
+            immediate_length = None
+
+        print("SHIELD IMMEDIATE LENGTH AFTER:", immediate_length)
+
+        immediate_success = (
+            immediate_length is not None
+            and abs(immediate_length - requested_length) <= 0.001
+        )
+
+        # Only NOW bind by ID, after the resize attempt is already complete.
+        try:
+            set_id_result = shield_sym.SetId(placed_id)
+            print("SHIELD POST-STRETCH SetId RESULT:", set_id_result)
+        except Exception as error:
+            print("SHIELD POST-STRETCH SetId EXCEPTION:", repr(error))
+
+        try:
+            verified_length = float(shield_sym.GetDisplayLength())
+        except Exception:
+            verified_length = immediate_length
+
+        print("SHIELD VERIFIED LENGTH:", verified_length)
+
+        verified_success = (
+            verified_length is not None
+            and abs(verified_length - requested_length) <= 0.001
+        )
+
+        if immediate_success or verified_success:
+            print("SHIELD RESIZE SUCCESS")
+
+            final_id = placed_id
+
+            # If resized in staging, move that SAME real shield to final X/Y.
+            if mode == "STAGE":
+                time.sleep(MOVE_DELAY_SECONDS)
+
+                try:
+                    shield_sym.SetId(placed_id)
+                except Exception:
+                    pass
+
+                move_result = shield_sym.Place(
+                    sheet_id,
+                    final_x,
+                    final_y,
+                    0,
+                    1.0,
+                    0
+                )
+
+                print("SHIELD FINAL MOVE RESULT:", move_result)
+
+                if move_result == 0:
+                    raise Exception(
+                        f"{job['symbol_name']} resized correctly but could not "
+                        f"move to final X={final_x} Y={final_y}"
+                    )
+
+                final_id = move_result
+                time.sleep(PLACEMENT_DELAY_SECONDS)
+
+            # Final verification.
+            try:
+                shield_sym.SetId(final_id)
+            except Exception:
+                pass
+
+            try:
+                final_length = float(shield_sym.GetDisplayLength())
+            except Exception:
+                final_length = None
+
+            try:
+                final_name = shield_sym.GetName()
+            except Exception:
+                final_name = "UNKNOWN"
+
+            try:
+                final_type = shield_sym.GetSymbolType()
+            except Exception:
+                final_type = "UNKNOWN"
+
+            try:
+                final_is_shield = shield_sym.IsShield()
+            except Exception:
+                final_is_shield = "UNKNOWN"
+
+            final_location = get_symbol_location(shield_sym, final_id)
+
+            print("SHIELD FINAL ID:", final_id)
+            print("SHIELD FINAL NAME:", final_name)
+            print("SHIELD FINAL SYMBOL TYPE:", final_type)
+            print("SHIELD FINAL IS SHIELD:", final_is_shield)
+            print("SHIELD FINAL DISPLAY LENGTH:", final_length)
+
+            if final_location is not None:
+                print("SHIELD FINAL SHEET:", final_location["sheet_id"])
+                print("SHIELD FINAL ACTUAL X:", final_location["x"])
+                print("SHIELD FINAL ACTUAL Y:", final_location["y"])
+
+            if final_length is None or abs(final_length - requested_length) > 0.001:
+                raise Exception(
+                    f"{job['symbol_name']} resized successfully but final length "
+                    f"changed. Expected {requested_length}, actual {final_length}"
+                )
+
+            print("SHIELD REAL SYMBOL + LENGTH VERIFIED")
+            return final_id
+
+        print("SHIELD RESIZE FAILED FOR THIS ATTEMPT")
+
+        # Remove the failed trial before trying another position.
+        try:
+            shield_sym.SetId(placed_id)
+            delete_result = shield_sym.Delete()
+            print("FAILED SHIELD DELETE RESULT:", delete_result)
+        except Exception as error:
+            print("FAILED SHIELD DELETE EXCEPTION:", repr(error))
+
+        try:
+            del shield_sym
+        except Exception:
+            pass
+
+        time.sleep(PLACEMENT_DELAY_SECONDS)
+
+    raise Exception(
+        f"{job['symbol_name']} could not resize to {requested_length}. "
+        f"All attempts used Load -> Place -> immediate SetDisplayLength "
+        f"without SetId before the stretch."
+    )
+
+
+#====================================================================================================================================
+# PLACE ONE JOB
+#====================================================================================================================================
+def place_job(prj, sym, job, placement):
+    print("")
+    print("------------------------------------------------------------")
+    print("TYPE:", job["type"])
+    print("SIDE:", job["side"])
+    print("TWIST OFFSET ENABLED:", placement["offset_enabled"])
+    print("CONNECTOR:", job["connector"])
+    print("TWIST COLUMN:", job.get("twist_column"))
+    print("PINS:", job["pins"])
+    print("EXCEL ROWS:", job["excel_rows"])
+    print("LIBRARY SYMBOL:", job["symbol_name"])
+    print("SHEET:", placement["sheet_id"])
+    print("CONNECTOR PIN X:", placement["anchor_x"])
+    print("FINAL SYMBOL X:", placement["x"])
+    print("BOTTOM WIRE Y:", placement["bottom_y"])
+    print("TOP WIRE Y:", placement["top_y"])
+    print("FINAL SYMBOL Y:", placement["y"])
+
+    if placement["length"] is None:
+        print("REQUESTED SYMBOL LENGTH: AUTO")
+    else:
+        print("REQUESTED SYMBOL LENGTH:", placement["length"])
+
+    if DRY_RUN:
+        print("DRY RUN - NOT PLACED")
+        return None
+
+    if job["type"] == "twist":
+        return place_twist(sym, job, placement)
+
+    return place_shield(prj, job, placement)
+
+
+#====================================================================================================================================
+# MAIN
+#====================================================================================================================================
+def run_v9_symbol_overlay(excel_path):
+    if excel_path is None:
+        raise Exception("No Excel file selected")
+
+    workbook = load_workbook(excel_path, data_only=True, read_only=False)
+
+    if TARGET_SHEET_NAME is None:
+        ws = workbook.active
+    else:
+        if TARGET_SHEET_NAME not in workbook.sheetnames:
+            raise Exception(f"Worksheet {TARGET_SHEET_NAME} was not found")
+
+        ws = workbook[TARGET_SHEET_NAME]
+
+    sheet_device_reference = clean_excel_value(ws[DEVICE_NAME_CELL].value)
+    twist_offset_settings = read_twist_offset_settings(ws)
+    last_row = get_last_data_row(ws)
+
+    if last_row < DATA_FIRST_ROW:
+        raise Exception("No cable overlay data found")
+
+    print("")
+    print("============================================================")
+    print("ZUKEN CABLE SHIELD / TWIST OVERLAY")
+    print("============================================================")
+    print("EXCEL:", excel_path)
+    print("WORKSHEET:", ws.title)
+    print("DEVICE REFERENCE FROM B1:", sheet_device_reference)
+    print("CONNECTOR ROOT:", CONNECTOR_ROOT_NAME)
+    print("SHIELD SYMBOL:", SHIELD_SYMBOL_NAME)
+    print("TWIST SYMBOL:", TWIST_SYMBOL_NAME)
+    print("LEFT TWIST OFFSET J2:K2:", "YES" if twist_offset_settings["LEFT"] else "NO")
+    print("RIGHT TWIST OFFSET R2:S2:", "YES" if twist_offset_settings["RIGHT"] else "NO")
+    print("PLACEMENT DELAY:", PLACEMENT_DELAY_SECONDS)
+    print("TWIST STRETCHING: DISABLED")
+    print("SHIELD MODE: REAL Shield_Demo -> Place -> immediate SetDisplayLength")
+    print("DATA ROWS:", DATA_FIRST_ROW, "TO", last_row)
+
+    left_rows = read_side_rows(ws, "LEFT", last_row)
+    right_rows = read_side_rows(ws, "RIGHT", last_row)
+
+    left_sections = split_into_sections(left_rows)
+    right_sections = split_into_sections(right_rows)
+
+    sections = left_sections + right_sections
+
+    packages = []
+    warnings = []
+
+    # Twists and inner shields are connector-specific.
+    for section_rows in sections:
+        jobs, section_warnings = build_section_jobs(section_rows)
+
+        if jobs:
+            packages.append({"rows": section_rows, "jobs": jobs})
+
+        warnings.extend(section_warnings)
+
+    # Outer shields are side-wide and may cross connector changes.
+    outer_jobs = (
+        build_outer_shield_jobs(left_rows) +
+        build_outer_shield_jobs(right_rows)
+    )
+
+    print("")
+    print("CONNECTOR SECTIONS WITH TWIST / INNER-SHIELD SYMBOLS:", len(packages))
+    print("SIDE-WIDE OUTER SHIELD JOBS:", len(outer_jobs))
+
+    if warnings:
+        print("")
+        print("============================================================")
+        print("EXCEL WARNINGS")
+        print("============================================================")
+
+        for warning in warnings:
+            print("WARNING:", warning)
+
+    app = win32.gencache.EnsureDispatch("CT.Application")
+    prj = app.CreateJobObject()
+    dev = prj.CreateDeviceObject()
+    pin = prj.CreatePinObject()
+    sym = prj.CreateSymbolObject()
+
+    app.PutMessage("Starting Cable Shield / Twist Overlay Script")
+
+    all_devices = get_all_devices(prj, dev)
+
+    print("")
+    print("E3 BASE DEVICE ID COUNT:", len(all_devices))
+
+    pin_map_cache = {}
+    placed_ids = []
+
+    # Place side-wide outer shields FIRST. This matches the earlier working dynamic-placement ordering.
+    for job in outer_jobs:
+        try:
+            print("")
+            print("============================================================")
+            print("PROCESSING SIDE-WIDE OUTER SHIELD")
+            print("============================================================")
+            print("SIDE:", job["side"])
+            print("CONNECTORS:", job["connectors"])
+            print("EXCEL ROWS:", job["excel_rows"][0], "TO", job["excel_rows"][-1])
+
+            placement = calculate_outer_shield_placement(
+                job,
+                all_devices,
+                dev,
+                pin,
+                pin_map_cache,
+                twist_offset_settings
+            )
+
+            placed_id = place_job(prj, sym, job, placement)
+
+            if placed_id is not None:
+                placed_ids.append(placed_id)
+
+        except Exception as error:
+            print("ERROR:", str(error))
+            app.PutMessage(f"Cable overlay warning: {error}")
+
+        time.sleep(PLACEMENT_DELAY_SECONDS)
+
+
+    for package in packages:
+        section_rows = package["rows"]
+        jobs = package["jobs"]
+
+        side = section_rows[0]["side"]
+        connector = section_rows[0]["connector"]
+
+        required_pins = list(dict.fromkeys(row["pin"] for row in section_rows))
+
+        print("")
+        print("============================================================")
+        print("PROCESSING CONNECTOR SECTION")
+        print("============================================================")
+        print("SIDE:", side)
+        print("TWIST OFFSET ENABLED:", "YES" if twist_offset_settings[side] else "NO")
+        print("EXCEL CONNECTOR:", connector)
+        print("EXPECTED E3 CONNECTOR:", connector_base_name(connector))
+        print("EXCEL ROWS:", section_rows[0]["excel_row"], "TO", section_rows[-1]["excel_row"])
+        print("REQUIRED PINS:", required_pins)
+
+        device_record, pin_map, sheet_id = resolve_connector_schematic_view(connector, required_pins, all_devices, dev, pin, pin_map_cache)
+
+        print_section_pin_locations(required_pins, pin_map, sheet_id)
+
+        # Inner shields are placed before twists, matching the earlier working dynamic-placement script.
+        jobs = sorted(jobs, key=job_priority)
+
+        for job in jobs:
+            try:
+                placement = calculate_placement(job, pin_map, sheet_id, twist_offset_settings)
+                placed_id = place_job(prj, sym, job, placement)
+
+                if placed_id is not None:
+                    placed_ids.append(placed_id)
+
+            except Exception as error:
+                print("ERROR:", str(error))
+                app.PutMessage(f"Cable overlay warning: {error}")
+
+            time.sleep(PLACEMENT_DELAY_SECONDS)
+
+    print("")
+    print("============================================================")
+    print("OVERLAY COMPLETE")
+    print("============================================================")
+    print("PLACED SYMBOL COUNT:", len(placed_ids))
+    print("PLACED SYMBOL IDS:", placed_ids)
+    print("============================================================")
+
+    app.PutMessage(f"Cable Shield / Twist Overlay complete. Placed {len(placed_ids)} symbols.")
+
+    workbook.close()
+
+    del sym
+    del pin
+    del dev
+    del prj
+    del app
+
+
 # ================================================
 # PARSE EXCEL
 # ================================================
 output_path = ask_save_path()
 wb = load_workbook(output_path, data_only=True)
 ws = wb.active
-NO_WIRES = ws["B10"].value
-q4 = ws["Q4"].value
-q5 = ws["Q5"].value
-q6 = ws["Q6"].value
-q7 = ws["Q7"].value
-t4 = ws["T4"].value
-t5 = ws["T5"].value
-t6 = ws["T6"].value
-t7 = ws["T7"].value
-LAYOUT = [[q4, q5, q6, q7], [t4, t5, t6, t7]]
+
+NO_WIRES = int(ws["B10"].value)
 VERSION = ws["B2"].value
 NAME = ws["B1"].value
 
-pinouts = []
-for r in range(5, 5 + NO_WIRES):
-    connector1 = ws[r][7].value
-    pin1 = ws[r][9].value
-    connector2 = ws[r][12].value
-    pin2 = ws[r][10].value
 
-    if connector1 is not None:
-        connector1 = int(connector1)
-    if connector2 is not None:
-        connector2 = int(connector2)
+def placer_connector_number(value):
+    token = normalize_connector_token(value)
+
+    if token == "":
+        return None
+
+    match = re.fullmatch(r"P0*(\d+)", token)
+
+    if not match:
+        raise Exception(
+            f"Unsupported connector value in cable table: {value}"
+        )
+
+    return int(match.group(1))
+
+
+# ------------------------------------------------
+# NEW SHEET CABLE MAPPING
+#
+# LEFT connector  = L
+# LEFT pin        = N
+# RIGHT pin       = O
+# RIGHT connector = Q
+# ------------------------------------------------
+pinouts = []
+
+current_connector1 = None
+current_connector2 = None
+
+left_layout = []
+right_layout = []
+
+for r in range(5, 5 + NO_WIRES):
+    connector1_value = ws[f"L{r}"].value
+    pin1 = ws[f"N{r}"].value
+
+    pin2 = ws[f"O{r}"].value
+    connector2_value = ws[f"Q{r}"].value
+
+    # New sheets may only show the connector once at the top of its block.
+    if clean_excel_value(connector1_value) != "":
+        current_connector1 = placer_connector_number(connector1_value)
+
+        if current_connector1 not in left_layout:
+            left_layout.append(current_connector1)
+
+    if clean_excel_value(connector2_value) != "":
+        current_connector2 = placer_connector_number(connector2_value)
+
+        if current_connector2 not in right_layout:
+            right_layout.append(current_connector2)
+
+    # Preserve the old spare-pin behavior: if a pin is blank, that endpoint
+    # is still None even though the connector block itself is known.
+    connector1 = current_connector1 if pin1 is not None else None
+    connector2 = current_connector2 if pin2 is not None else None
 
     pinouts.append([connector1, pin1, connector2, pin2])
+
+
+# Old sheet used Q4:Q7 and T4:T7 for layout.
+# Those locations are part of the new cable table, so derive the same
+# left/right layout from connector order in the actual cable data.
+LAYOUT = [left_layout, right_layout]
+
+
+# ------------------------------------------------
+# DETECT WHETHER THE SYMBOL STAGE IS NEEDED
+#
+# New symbol columns:
+#   H = left outer shield
+#   I = left inner shield
+#   J/K = left twists
+#   R/S = right twists
+#   T = right inner shield
+#   U = right outer shield
+# ------------------------------------------------
+SYMBOL_DEFINITION_COLUMNS = ["H", "I", "J", "K", "R", "S", "T", "U"]
+
+HAS_SYMBOLS = any(
+    cell_has_bar(ws[f"{column}{row}"].value)
+    for row in range(5, 5 + NO_WIRES)
+    for column in SYMBOL_DEFINITION_COLUMNS
+)
+
+print("NEW SHEET LAYOUT:", LAYOUT)
+print("SHIELD / TWIST DEFINITIONS PRESENT:", HAS_SYMBOLS)
 
 wb.close()
 
@@ -731,6 +2761,25 @@ del dev
 del prj
 del app
 
+# Existing equipment-identification / formatter checkpoint.
 create_gui()
 
-print("after gui creation")
+
+# Only require manual connection lines when V9 actually has something
+# to place.  No symbol definitions = no extra window and no V9 run.
+if HAS_SYMBOLS:
+    if wait_for_connection_lines():
+        print("")
+        print("============================================================")
+        print("RUNNING V9 SHIELD / TWIST OVERLAY")
+        print("============================================================")
+
+        run_v9_symbol_overlay(output_path)
+    else:
+        print("Shield / twist placement cancelled by user.")
+else:
+    print("")
+    print("No shield / twist definitions found.")
+    print("Skipping connection-line GUI and V9 symbol placement.")
+
+print("Cable placer complete.")
