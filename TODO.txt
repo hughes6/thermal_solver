@@ -642,24 +642,12 @@ def get_connector_pin_ids(dev, device_id, connector_name="", prefer_all=False):
 
 def connector_designation_from_device_name(value):
     """
-    Convert an E3 connector device name such as W1.P9B to the layout
-    designation used by the workbook, e.g. "9B".
+    Convert an E3 connector name/reference to the workbook layout designation.
 
-    This intentionally keeps the designation as a STRING so connectors do
-    not have to be numbered 1, 2, 3, ...
+    Current cable-maker output uses W1.<designation>, e.g. W1.9B.  The older
+    W1.9B / P9B form is still accepted for numeric designations.
     """
-    text = str(value).strip().upper()
-
-    if "." in text:
-        text = text.split(".")[-1]
-
-    if "#" in text:
-        text = text.split("#", 1)[0]
-
-    if text.startswith("P"):
-        text = text[1:]
-
-    return text
+    return normalize_connector_token(value)
 
 
 def generate_placement_locations(Pins, layout):
@@ -716,11 +704,11 @@ def generate_placement_locations(Pins, layout):
 
     for dictionary in Pins:
         # Actual connector designation from the E3 device name.
-        # Examples: W1.P1 -> "1", W1.P9B -> "9B".
+        # Examples: W1.1 -> "1", W1.9B -> "9B".
         conn_key = list(dictionary.keys())[0]
         conn = connector_designation_from_device_name(conn_key)
 
-        # number of pins = all keys except the "W1.Pn"
+        # number of pins = all keys except the "W1.<designation>"
         count = len(dictionary) - 1
 
         top = True
@@ -823,7 +811,7 @@ def get_spare_pins(pins, pinouts):
         # SPARE ON SIDE 1
         # ==========================================
         if c1 is not None and p1 is not None and c2 is None:
-            connector = f"W1.P{c1}"
+            connector = f"W1.{c1}"
 
             if connector not in spares:
                 spares[connector] = {}
@@ -838,7 +826,7 @@ def get_spare_pins(pins, pinouts):
         # SPARE ON SIDE 2
         # ==========================================
         elif c2 is not None and p2 is not None and c1 is None:
-            connector = f"W1.P{c2}"
+            connector = f"W1.{c2}"
 
             if connector not in spares:
                 spares[connector] = {}
@@ -1058,6 +1046,21 @@ def normalize_pin_name(value):
 
 
 def normalize_connector_token(value):
+    """
+    Normalize an Excel/E3 connector reference to the layout designation only.
+
+    Examples:
+        3       -> "3"
+        P3      -> "3"
+        W1.3    -> "3"
+        W1.P3   -> "3"
+        9B      -> "9B"
+        P9B     -> "9B"
+        W1.9B   -> "9B"
+
+    A leading P is removed only for the old P<number> form.  Names such as
+    PMOD are left alone.
+    """
     text = clean_excel_value(value).upper().replace(" ", "")
 
     if text == "":
@@ -1076,7 +1079,7 @@ def normalize_connector_token(value):
     if match:
         number = int(match.group(1))
         suffix = match.group(2)
-        return f"P{number}{suffix}"
+        return f"{number}{suffix}"
 
     return text
 
@@ -1087,6 +1090,8 @@ def connector_base_name(connector_token):
     if connector == "":
         return ""
 
+    # Cable-maker assembly members are named %.<designation>, so E3 exposes
+    # them as W1.<designation> (for example W1.3 and W1.9B), NOT W1.P3.
     return f"{CONNECTOR_ROOT_NAME}.{connector}"
 
 
@@ -2845,12 +2850,17 @@ if START_MODE == "FORMATTER_ONLY":
         except Exception:
             continue
 
-        match = re.fullmatch(r"W1\.P(.+)", formatter_name.upper())
-
-        if not match:
+        if not formatter_name.upper().startswith(
+            f"{CONNECTOR_ROOT_NAME.upper()}."
+        ):
             continue
 
-        connector_designation = match.group(1).strip()
+        connector_designation = connector_designation_from_device_name(
+            formatter_name
+        )
+
+        if connector_designation == "":
+            continue
 
         # A base connector owns its schematic view IDs.
         try:
@@ -2945,7 +2955,7 @@ if START_MODE == "FORMATTER_ONLY":
 
     if not new_dev_ids:
         raise Exception(
-            "Formatter-only mode could not find any placed W1.P<designation> "
+            "Formatter-only mode could not find any placed W1.<designation> "
             "schematic connector views in the open E3 job."
         )
 
@@ -2965,28 +2975,12 @@ NAME = ws["B1"].value
 
 def placer_connector_designation(value):
     """
-    Return the actual connector designation from Excel without forcing it
-    to an integer.  Examples:
-        9       -> "9"
-        9B      -> "9B"
-        P9B     -> "9B"
-        W1.P9B  -> "9B"
+    Return the actual connector layout designation as a string.
+
+    Accepts 9, 9B, P9B, W1.9B, or W1.9B.  The canonical result is 9B.
     """
-    text = clean_excel_value(value).upper().replace(" ", "")
-
-    if text == "":
-        return None
-
-    if "." in text:
-        text = text.split(".")[-1]
-
-    if "#" in text:
-        text = text.split("#", 1)[0]
-
-    if text.startswith("P"):
-        text = text[1:]
-
-    return text
+    text = normalize_connector_token(value)
+    return text if text != "" else None
 
 
 # ------------------------------------------------
@@ -3071,7 +3065,7 @@ for connector_designation in CONNECTOR_LAYOUT:
 # RIGHT pin       = O
 # RIGHT connector = Q
 #
-# L/Q may contain 9, P9, W1.P9, 9B, P9B, W1.P9B, etc.
+# L/Q may contain 9, P9, W1.P9, 9B, P9B, W1.9B, etc.
 # They resolve back to the actual layout designation.
 # ------------------------------------------------
 pinouts = []
@@ -3256,26 +3250,34 @@ else:
 
 
 # Build the connector device map directly from the populated layout.
-# Example designation 9B -> expected E3 device W1.P9B.
+# Example designation 9B -> expected E3 device W1.9B.
 CONNECTORS = {
-    f"W1.P{designation}": None
+    f"W1.{designation}": None
     for designation in CONNECTOR_LAYOUT
 }
 
-connector_name_lookup = {
-    connector_name.upper(): connector_name
-    for connector_name in CONNECTORS
-}
-
+# Match devices by their normalized layout designation instead of requiring
+# one exact historical spelling.  New cable-maker output is W1.3 / W1.9B,
+# while older cables may still contain W1.P3 / W1.P9B.
 for id in devids:
     dev.SetId(id)
     name = str(dev.GetName()).strip()
     print(name)
 
-    connector_key = connector_name_lookup.get(name.upper())
+    if not name.upper().startswith(f"{CONNECTOR_ROOT_NAME.upper()}."):
+        continue
 
-    if connector_key is not None:
+    designation = connector_designation_from_device_name(name)
+    connector_key = f"W1.{designation}"
+
+    if connector_key in CONNECTORS:
         CONNECTORS[connector_key] = id
+        print(
+            "MATCHED CONNECTOR DEVICE:",
+            name,
+            "->", connector_key,
+            "DEVICE ID:", id
+        )
 
 
 PINS = []
@@ -3489,7 +3491,7 @@ for i, (connector, conn_id) in enumerate(CONNECTORS.items()):
     assydevids = [x for x in assydevinfo[1] if x is not None]
     for assydev_id in assydevids:
         dev.SetId(assydev_id)
-        if(dev.GetName() == connector): # if it is W1.P#
+        if(dev.GetName() == connector): # if it is W1.<designation>
             assydevsymbolinfo = dev.GetSymbolIds(None)
             assydevsymbolids = [x for x in assydevsymbolinfo[1] if x is not None]
             for assydevsymbol_id in assydevsymbolids:
