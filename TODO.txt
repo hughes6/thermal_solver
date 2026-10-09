@@ -87,8 +87,8 @@ ws = wb.active
 ASSY_NAME = ws["B1"].value
 VERSION = ws["B2"].value
 
-# Connector PART NUMBERS stay in B3:B10.
-CONNECTOR_PARTS = [ws[f"B{r}"].value for r in range(3, 11)]
+# Connector PART NUMBERS: up to 12 in B3:B14.
+CONNECTOR_PARTS = [ws[f"B{r}"].value for r in range(3, 15)]
 CONNECTOR_PARTS = [part for part in CONNECTOR_PARTS if part is not None and str(part).strip() != ""]
 
 
@@ -119,9 +119,9 @@ def clean_connector_designation(value):
 
 
 # Connector DESIGNATIONS come from the connector layout window.
-# Up to 5 may be on either side.  Blank layout cells are ignored.
-LEFT_CONNECTOR_LAYOUT = [clean_connector_designation(ws[f"W{r}"].value) for r in range(4, 9)]
-RIGHT_CONNECTOR_LAYOUT = [clean_connector_designation(ws[f"Z{r}"].value) for r in range(4, 9)]
+# Up to 6 may be on either side. Blank layout cells are ignored.
+LEFT_CONNECTOR_LAYOUT = [clean_connector_designation(ws[f"W{r}"].value) for r in range(4, 10)]
+RIGHT_CONNECTOR_LAYOUT = [clean_connector_designation(ws[f"Z{r}"].value) for r in range(4, 10)]
 
 LEFT_CONNECTOR_LAYOUT = [x for x in LEFT_CONNECTOR_LAYOUT if x is not None]
 RIGHT_CONNECTOR_LAYOUT = [x for x in RIGHT_CONNECTOR_LAYOUT if x is not None]
@@ -130,7 +130,7 @@ CONNECTOR_LAYOUT = LEFT_CONNECTOR_LAYOUT + RIGHT_CONNECTOR_LAYOUT
 if len(CONNECTOR_LAYOUT) != len(CONNECTOR_PARTS):
     raise Exception(
         f"Connector layout count ({len(CONNECTOR_LAYOUT)}) does not match connector part count ({len(CONNECTOR_PARTS)}). "
-        "Check B3:B10 and W4:W8 / Z4:Z8."
+        "Check B3:B14 and W4:W9 / Z4:Z9."
     )
 
 if len(set(CONNECTOR_LAYOUT)) != len(CONNECTOR_LAYOUT):
@@ -148,15 +148,16 @@ print("LEFT CONNECTOR LAYOUT:", LEFT_CONNECTOR_LAYOUT)
 print("RIGHT CONNECTOR LAYOUT:", RIGHT_CONNECTOR_LAYOUT)
 print("CONNECTOR PART MAP:", CONNECTORS)
 print("CONNECTOR COPY MAP:", CONNECTOR_COPIES)
-print("CONNECTOR ASSIGNMENT ORDER (B3:B10 -> W4:W8 then Z4:Z8):")
+print("CONNECTOR ASSIGNMENT ORDER (B3:B14 -> W4:W9 then Z4:Z9):")
 for designation in CONNECTOR_LAYOUT:
     print(f"  {designation} -> {CONNECTORS[designation]} (COPY {CONNECTOR_COPIES[designation]})")
 
 
-NO_WIRES = ws["B11"].value
-NO_SECTIONS = ws["B12"].value
+NO_WIRES = int(ws["B15"].value)
+NO_SECTIONS = int(ws["B16"].value)
 
-MODEL_CHECK = ws["F16"].value
+# Model check moved down with the additional connector rows.
+MODEL_CHECK = ws["B20"].value
 print(MODEL_CHECK)
 
 if MODEL_CHECK != "Pass":
@@ -165,7 +166,7 @@ print(output_path)
 
 
 wire_definitions = []  
-for r in range(14, 14 + NO_SECTIONS):
+for r in range(18, 18 + NO_SECTIONS):
     wire_type = ws[r][1].value
     wire_no = ws[r][3].value
     wires = ws[r][2].value
