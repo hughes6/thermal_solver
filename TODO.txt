@@ -2968,7 +2968,7 @@ output_path = ask_save_path()
 wb = load_workbook(output_path, data_only=True)
 ws = wb.active
 
-NO_WIRES = int(ws["B11"].value)
+NO_WIRES = int(ws["B15"].value)
 VERSION = ws["B2"].value
 NAME = ws["B1"].value
 
@@ -2986,27 +2986,27 @@ def placer_connector_designation(value):
 # ------------------------------------------------
 # CONNECTOR PART / TYPE ASSIGNMENT
 #
-# B3:B10 contains connector part numbers/types.
+# B3:B14 contains connector part numbers/types.
 # Populated layout cells consume those parts in this exact order:
-#   W4:W8 top-to-bottom, then Z4:Z8 top-to-bottom.
+#   W4:W9 top-to-bottom, then Z4:Z9 top-to-bottom.
 #
 # The layout value is the actual connector designation.  It does NOT have
-# to be 1-8.  Examples: 1, 9, 9B, 12A.
+# to be 1-12.  Examples: 1, 9, 9B, 12A.
 # ------------------------------------------------
 CONNECTOR_PARTS = [
     ws[f"B{r}"].value
-    for r in range(3, 11)
+    for r in range(3, 15)
     if ws[f"B{r}"].value is not None
     and str(ws[f"B{r}"].value).strip() != ""
 ]
 
 LEFT_CONNECTOR_LAYOUT = [
     placer_connector_designation(ws[f"W{r}"].value)
-    for r in range(4, 9)
+    for r in range(4, 10)
 ]
 RIGHT_CONNECTOR_LAYOUT = [
     placer_connector_designation(ws[f"Z{r}"].value)
-    for r in range(4, 9)
+    for r in range(4, 10)
 ]
 
 LEFT_CONNECTOR_LAYOUT = [
@@ -3020,19 +3020,19 @@ RIGHT_CONNECTOR_LAYOUT = [
 
 CONNECTOR_LAYOUT = LEFT_CONNECTOR_LAYOUT + RIGHT_CONNECTOR_LAYOUT
 
-if len(CONNECTOR_LAYOUT) > 8:
+if len(CONNECTOR_LAYOUT) > 12:
     raise Exception(
-        f"Cable placer supports up to 8 connectors. Found {len(CONNECTOR_LAYOUT)}."
+        f"Cable placer supports up to 12 connectors. Found {len(CONNECTOR_LAYOUT)}."
     )
 
-if len(LEFT_CONNECTOR_LAYOUT) > 5 or len(RIGHT_CONNECTOR_LAYOUT) > 5:
-    raise Exception("No more than 5 connectors may be placed on either side.")
+if len(LEFT_CONNECTOR_LAYOUT) > 6 or len(RIGHT_CONNECTOR_LAYOUT) > 6:
+    raise Exception("No more than 6 connectors may be placed on either side.")
 
 if len(CONNECTOR_LAYOUT) != len(CONNECTOR_PARTS):
     raise Exception(
         f"Connector layout count ({len(CONNECTOR_LAYOUT)}) does not match "
         f"connector part/type count ({len(CONNECTOR_PARTS)}). "
-        "Check B3:B10 and W4:W8 / Z4:Z8."
+        "Check B3:B14 and W4:W9 / Z4:Z9."
     )
 
 if len(set(CONNECTOR_LAYOUT)) != len(CONNECTOR_LAYOUT):
@@ -3049,7 +3049,7 @@ LAYOUT = [
 
 print("LEFT CONNECTOR LAYOUT:", LEFT_CONNECTOR_LAYOUT)
 print("RIGHT CONNECTOR LAYOUT:", RIGHT_CONNECTOR_LAYOUT)
-print("CONNECTOR ASSIGNMENT ORDER (B3:B10 -> W4:W8 then Z4:Z8):")
+print("CONNECTOR ASSIGNMENT ORDER (B3:B14 -> W4:W9 then Z4:Z9):")
 for connector_designation in CONNECTOR_LAYOUT:
     print(
         f"  {connector_designation} -> "
@@ -3105,7 +3105,7 @@ for c1, _, c2, _ in pinouts:
         ):
             raise Exception(
                 f"Cable table references connector {connector_designation}, "
-                "but that designation is not present in W4:W8 / Z4:Z8."
+                "but that designation is not present in W4:W9 / Z4:Z9."
             )
 
 
