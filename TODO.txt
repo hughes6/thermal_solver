@@ -293,6 +293,9 @@ def discover_current_connector_pin_symbols(prj, sht, connector_name, block_geome
         identity = read_symbol_identity(prj, candidate_id)
         if identity is None:
             continue
+        if (identity["location"] is None or
+                identity["location"]["sheet_id"] != block_geometry["sheet_id"]):
+            continue
         pin_number = identity["pin_number"]
         device_text = identity["device_text"]
         if pin_number in (None, ""):
@@ -426,72 +429,251 @@ def get_sorted_live_pin_records(snapshot):
         })
     records.sort(key=lambda item: item["y"], reverse=True)
     return records
-def get_connector_block_geometry(prj, dev, connector_device_id, main_device_id):
-    connector_view_ids = get_device_view_ids(dev, connector_device_id)
-    if not connector_view_ids:
-        raise RuntimeError("Connector has no device view IDs.")
-    connector_view_numbers = []
-    for connector_view_id in connector_view_ids:
-        view_number = get_view_number(dev, connector_view_id)
-        if view_number is not None and view_number not in connector_view_numbers:
-            connector_view_numbers.append(view_number)
-    if len(connector_view_numbers) != 1:
-        raise RuntimeError(f"Expected one connector view number, found {connector_view_numbers}.")
-    connector_view_number = connector_view_numbers[0]
-    main_view_ids = get_device_view_ids(dev, main_device_id)
-    matching_main_view_id = None
-    for main_view_id in main_view_ids:
-        main_view_number = get_view_number(dev, main_view_id)
-        if main_view_number == connector_view_number:
-            matching_main_view_id = main_view_id
-            break
-    if matching_main_view_id is None:
-        raise RuntimeError(f"Could not find main-device view number {connector_view_number}.")
-    main_view_symbol_ids = get_device_symbol_ids(dev, matching_main_view_id)
-    block_symbol_id = None
-    block_symbol_type = None
-    block_location = None
-    block_area = None
-    for symbol_id in main_view_symbol_ids:
-        local_sym = prj.CreateSymbolObject()
+def normalize_optional_text(value):
+    """Blank Excel cells mean no restriction; numbers like 2.0 mean '2'."""
+    value = normalize_pin_value(value)
+    return value if value not in (None, "") else None
+
+
+def find_device_ids(prj, dev, target_name, all_device_ids=None):
+    """Unlike find_device_id, keep duplicates so they cannot be selected silently."""
+    ids = all_device_ids if all_device_ids is not None else get_device_ids(prj)
+    matches = []
+    for device_id in ids:
         try:
-            set_result = local_sym.SetId(symbol_id)
+            dev.SetId(device_id)
+            name = str(dev.GetName()).strip()
         except Exception:
             continue
-        if not set_result:
-            continue
+        if name == target_name:
+            matches.append(device_id)
+    return matches
+
+
+def get_sheet_metadata(prj, sht):
+    """Resolve user-facing sheet names/numbers to E3's internal sheet IDs."""
+    sheets = []
+    for sheet_id in call_id_array(prj.GetAllSheetIds):
         try:
-            symbol_type_name = str(local_sym.GetSymbolTypeName())
+            sht.SetId(sheet_id)
+            name = str(sht.GetName()).strip()
         except Exception:
-            symbol_type_name = ""
-        if "CABBLOCK" not in symbol_type_name.upper():
             continue
-        block_symbol_id = symbol_id
-        block_symbol_type = symbol_type_name
-        block_location = get_symbol_schema_location(local_sym)
-        block_area = get_symbol_placed_area(local_sym)
-        break
-    if block_symbol_id is None:
-        raise RuntimeError(f"Main-device view {connector_view_number} has no CABBLOCK symbol.")
-    if block_area is None:
-        raise RuntimeError(f"CABBLOCK symbol {block_symbol_id} did not return a valid placed area.")
-    return {
-        "connector_view_number": connector_view_number,
-        "connector_view_ids": connector_view_ids,
-        "main_view_id": matching_main_view_id,
-        "block_symbol_id": block_symbol_id,
-        "block_symbol_type": block_symbol_type,
-        "block_schema_location": block_location,
-        "block_left": block_area["left"],
-        "block_right": block_area["right"],
-        "block_bottom": block_area["bottom"],
-        "block_top": block_area["top"],
-        "block_width": block_area["width"],
-        "block_height": block_area["height"],
-        "block_center_x": block_area["center_x"],
-        "block_center_y": block_area["center_y"],
-        "sheet_id": block_location["sheet_id"] if block_location is not None else None,
-    }
+        aliases = [name]
+        # The installed E3 API version may or may not provide these methods.
+        for method_name in ("GetSheetNumber", "GetNumber"):
+            raw = call_noarg(sht, method_name)
+            alias = normalize_optional_text(raw)
+            if alias is not None:
+                aliases.append(alias)
+        sheets.append({"sheet_id": sheet_id, "name": name, "aliases": aliases})
+    if not sheets:
+        raise RuntimeError("No sheets were found in the current E3 project.")
+    return sheets
+
+
+def same_sheet_label(left, right):
+    a = str(left).strip().casefold()
+    b = str(right).strip().casefold()
+    if a == b:
+        return True
+    # Only treat whole-number names like '02' and '2' as equivalent.
+    try:
+        return a.isdecimal() and b.isdecimal() and int(a) == int(b)
+    except Exception:
+        return False
+
+
+def resolve_optional_sheet_id(sheet_metadata, requested_page):
+    if requested_page is None:
+        return None
+    matches = [
+        sheet for sheet in sheet_metadata
+        if any(same_sheet_label(alias, requested_page) for alias in sheet["aliases"])
+    ]
+    if len(matches) == 1:
+        return matches[0]["sheet_id"]
+    if not matches:
+        available = ", ".join(repr(item["name"]) for item in sheet_metadata)
+        raise RuntimeError(
+            f"Excel J2 page {requested_page!r} does not match an E3 sheet name/number. "
+            f"Available E3 sheets: {available}"
+        )
+    raise RuntimeError(
+        f"Excel J2 page {requested_page!r} matches multiple E3 sheets. "
+        "Use a unique sheet name/number in J2."
+    )
+
+
+def get_live_connector_pin_locations(prj, dev, pin, connector_device_id):
+    """Find where THIS logical connector's live pin views are actually placed.
+
+    Avoid connector text scans for initial disambiguation: a populated E3
+    project may reuse both pin numbers and connector names.
+    """
+    locations = []
+    dev.SetId(connector_device_id)
+    logical_pin_ids = get_pin_ids(dev)
+    for logical_pin_id in logical_pin_ids:
+        try:
+            pin.SetId(logical_pin_id)
+            pin_name = normalize_pin_value(pin.GetName())
+            pin_view_ids = get_view_ids(pin)
+        except Exception:
+            continue
+        for pin_view_id in pin_view_ids:
+            live = resolve_live_symbol_from_pin_view(prj, pin_view_id)
+            if live is None:
+                continue
+            location = get_symbol_schema_location(live["symbol_object"])
+            if location is not None:
+                locations.append({"pin_name": pin_name, "location": location})
+    return locations
+
+
+def collect_candidate_cabblocks(prj, dev, main_device_ids, requested_sheet_id=None):
+    """Collect EVERY CABBLOCK in matching device views, never the first one."""
+    blocks = []
+    for main_device_id in main_device_ids:
+        for main_view_id in get_device_view_ids(dev, main_device_id):
+            main_view_number = get_view_number(dev, main_view_id)
+            if main_view_number is None:
+                continue
+            for symbol_id in get_device_symbol_ids(dev, main_view_id):
+                local_sym = prj.CreateSymbolObject()
+                try:
+                    if not local_sym.SetId(symbol_id):
+                        continue
+                    symbol_type_name = str(local_sym.GetSymbolTypeName())
+                except Exception:
+                    continue
+                if "CABBLOCK" not in symbol_type_name.upper():
+                    continue
+                location = get_symbol_schema_location(local_sym)
+                if location is None:
+                    continue
+                sheet_id = location["sheet_id"]
+                if requested_sheet_id is not None and sheet_id != requested_sheet_id:
+                    continue
+                area = get_symbol_placed_area(local_sym)
+                if area is None:
+                    continue
+                blocks.append({
+                    "main_device_id": main_device_id,
+                    "main_view_id": main_view_id,
+                    "connector_view_number": main_view_number,
+                    "block_symbol_id": symbol_id,
+                    "block_symbol_type": symbol_type_name,
+                    "block_schema_location": location,
+                    "block_left": area["left"],
+                    "block_right": area["right"],
+                    "block_bottom": area["bottom"],
+                    "block_top": area["top"],
+                    "block_width": area["width"],
+                    "block_height": area["height"],
+                    "block_center_x": area["center_x"],
+                    "block_center_y": area["center_y"],
+                    "sheet_id": sheet_id,
+                })
+    return blocks
+
+
+def select_connector_and_block(prj, dev, pin, connector_name,
+                               connector_device_ids, block_candidates,
+                               requested_page=None, requested_device=None,
+                               sheet_names=None):
+    """Use view number + live pin location + optional C4/J2 to pick one target.
+
+    This is intentionally strict. Picking the first candidate can silently
+    change an unrelated block when the project contains repeated names.
+    """
+    matches = []
+    for connector_device_id in connector_device_ids:
+        connector_view_ids = get_device_view_ids(dev, connector_device_id)
+        view_numbers = set()
+        for connector_view_id in connector_view_ids:
+            view_number = get_view_number(dev, connector_view_id)
+            if view_number is not None:
+                view_numbers.add(view_number)
+        if not view_numbers:
+            continue
+        anchors = get_live_connector_pin_locations(prj, dev, pin, connector_device_id)
+        for block in block_candidates:
+            if block["connector_view_number"] not in view_numbers:
+                continue
+            # A pin on another sheet or outside this CABBLOCK is positive
+            # evidence this is NOT the connector/block combination we want.
+            if anchors and not all(
+                location_is_inside_block(anchor["location"], block)
+                for anchor in anchors
+            ):
+                continue
+            geometry = dict(block)
+            geometry["connector_view_ids"] = connector_view_ids
+            matches.append({
+                "connector_device_id": connector_device_id,
+                "main_device_id": block["main_device_id"],
+                "block_geometry": geometry,
+                "confirmed_pin_count": len(anchors),
+            })
+
+    # A block can sometimes surface twice from the E3 COM view structure.
+    unique = {}
+    for match in matches:
+        key = (match["connector_device_id"], match["block_geometry"]["block_symbol_id"])
+        unique[key] = match
+    matches = list(unique.values())
+
+    if len(matches) == 1:
+        selected = matches[0]
+        if selected["confirmed_pin_count"] == 0:
+            log(f"WARNING: {connector_name}: no live pin locations were available for "
+                "preselection; the single block match will be verified in the snapshot.")
+        return selected
+
+    filters = f"C4={requested_device or '<blank>'}, J2={requested_page or '<blank>'}"
+    if not matches:
+        raise RuntimeError(
+            f"No uniquely matching placed block for connector {connector_name!r} "
+            f"({filters}). Check the connector name, device designation, page, "
+            "and whether its E3 pin views are placed inside the CABBLOCK."
+        )
+
+    details = []
+    for match in matches:
+        block = match["block_geometry"]
+        sheet_name = (sheet_names or {}).get(block["sheet_id"], str(block["sheet_id"]))
+        details.append(
+            f"connector device ID {match['connector_device_id']}, "
+            f"main device ID {match['main_device_id']}, "
+            f"sheet {sheet_name!r}, view {block['connector_view_number']}, "
+            f"block ID {block['block_symbol_id']}, "
+            f"live pins verified {match['confirmed_pin_count']}"
+        )
+    raise RuntimeError(
+        f"AMBIGUOUS connector {connector_name!r} ({filters}): {len(matches)} matches. "
+        "Specify C4 and/or J2 rather than modifying an arbitrary block. "
+        "Matches: " + " | ".join(details)
+    )
+
+
+def validate_connector_snapshot_location(connector_name, sorted_pin_records, block_geometry):
+    """Final read-only preflight before anything is deleted or replaced."""
+    if not sorted_pin_records:
+        raise RuntimeError(f"{connector_name}: no live connector pins were found.")
+    for record in sorted_pin_records:
+        location = {
+            "sheet_id": record["sheet_id"],
+            "x": record["x"],
+            "y": record["y"],
+        }
+        if not location_is_inside_block(location, block_geometry):
+            raise RuntimeError(
+                f"{connector_name} pin {record['pin_name']}: live pin at "
+                f"sheet {record['sheet_id']} ({record['x']}, {record['y']}) "
+                f"is not inside selected CABBLOCK {block_geometry['block_symbol_id']} "
+                f"on sheet {block_geometry['sheet_id']}. No pins were modified."
+            )
 def derive_pin_geometry(block_geometry, sorted_pin_records, connector_excel_record):
     y_differences = []
     for index in range(len(sorted_pin_records) - 1):
@@ -710,6 +892,13 @@ def peel_all_pins_to_staging(prj, dev, pin, sht, connector_device_id, connector_
         if live is not None:
             live_symbol_id = live["live_symbol_id"]
             live_sym = live["symbol_object"]
+            current_location = get_symbol_schema_location(live_sym)
+            if not location_is_inside_block(current_location, block_geometry):
+                raise RuntimeError(
+                    f"Refusing to move {connector_name} pin {pin_name}: "
+                    f"the live symbol {live_symbol_id} is outside selected block "
+                    f"{block_geometry['block_symbol_id']}."
+                )
             live_resolution_source = "stable pin-view ID"
         else:
             scanned = resolve_current_live_pin_symbol(prj, sht, connector_name, pin_name, block_geometry)
@@ -786,6 +975,9 @@ def resolve_symbol_at_location(prj, sht, sheet_id, connector_name, pin_name, x, 
     for candidate_id in candidate_ids:
         identity = read_symbol_identity(prj, candidate_id)
         if identity is None:
+            continue
+        if (identity["location"] is None or
+                identity["location"]["sheet_id"] != sheet_id):
             continue
         if identity["pin_number"] != pin_name:
             continue
@@ -899,6 +1091,9 @@ def resolve_final_symbol(prj, candidate_ids, connector_name, staged_record):
         identity = read_symbol_identity(prj, candidate_id)
         if identity is None:
             continue
+        if (identity["location"] is None or
+                identity["location"]["sheet_id"] != staged_record["sheet_id"]):
+            continue
         if identity["pin_number"] != staged_record["pin_name"]:
             continue
         score = 100
@@ -976,7 +1171,8 @@ def resolve_and_format_final_pins(prj, sht, connector_name, staged_records):
 # PIN ORDERING SETTINGS
 # ================================================
 
-MAIN_DEVICE_NAME = "TEST_NAME_100000"
+# C4 (device designation) and J2 (sheet/page) are read from Excel below.
+# Leave either blank to search without that restriction.
 
 PIN_EDGE_INSET = 0.30
 
@@ -1011,6 +1207,10 @@ if output_path is None:
 
 wb = load_workbook(output_path, data_only=True)
 ws = wb.active
+
+# Optional restrictions: blank cells behave like unrestricted project search.
+REQUESTED_DEVICE_DESIGNATION = normalize_optional_text(ws["C4"].value)
+REQUESTED_PAGE = normalize_optional_text(ws["J2"].value)
 
 NUMBER_OF_CONNECTORS = ws["C5"].value
 
@@ -1115,30 +1315,38 @@ attr = prj.CreateAttributeObject()
 app.PutMessage("\n Starting Block Pin Ordering Script")
 
 sht = prj.CreateSheetObject()
-sheet_info = prj.GetAllSheetIds(None)
-sheet_count = sheet_info[0]
-sheet_ids = sheet_info[1]
-sheet_ids = [x for x in sheet_ids if x is not None]
+SHEETS = get_sheet_metadata(prj, sht)
+SHEET_NAME_BY_ID = {sheet["sheet_id"]: sheet["name"] for sheet in SHEETS}
+REQUESTED_SHEET_ID = resolve_optional_sheet_id(SHEETS, REQUESTED_PAGE)
 
-SHEET_ID_DICT = {}
+ALL_DEVICE_IDS = get_device_ids(prj)
+if REQUESTED_DEVICE_DESIGNATION is not None:
+    MAIN_DEVICE_IDS = find_device_ids(prj, dev, REQUESTED_DEVICE_DESIGNATION, ALL_DEVICE_IDS)
+    if not MAIN_DEVICE_IDS:
+        raise RuntimeError(
+            f"C4 device designation {REQUESTED_DEVICE_DESIGNATION!r} was not found in E3."
+        )
+else:
+    # Without C4, find all placed CABBLOCKs and let the connector's
+    # view number + actual pin locations narrow the correct main device.
+    MAIN_DEVICE_IDS = ALL_DEVICE_IDS
 
-for id in sheet_ids:
+section("OPTIONAL PROJECT TARGET FILTERS")
+log(f"C4 device designation: {REQUESTED_DEVICE_DESIGNATION or '<blank - automatic>'}")
+log(f"J2 sheet/page: {REQUESTED_PAGE or '<blank - any sheet>'}")
+if REQUESTED_SHEET_ID is not None:
+    log(f"Resolved sheet: {SHEET_NAME_BY_ID[REQUESTED_SHEET_ID]!r} (E3 ID {REQUESTED_SHEET_ID})")
 
-    sht.SetId(id)
-
-    name = sht.GetName()
-
-    SHEET_ID_DICT[name] = id
-
-    if sht.GetName() == "1":
-        sheet_1_id = id
-
-sheet1 = sht.SetId(sheet_1_id)
-
-main_device_id = find_device_id(prj, dev, MAIN_DEVICE_NAME)
-
-if main_device_id is None:
-    raise Exception(f"Could not find main device {MAIN_DEVICE_NAME}")
+# This read-only scan is completed before pin movement begins.
+BLOCK_CANDIDATES = collect_candidate_cabblocks(
+    prj, dev, MAIN_DEVICE_IDS, REQUESTED_SHEET_ID
+)
+if not BLOCK_CANDIDATES:
+    raise RuntimeError(
+        "No placed CABBLOCKs match the optional C4/J2 restrictions. "
+        "Check that the device and sheet identify the intended cable drawing."
+    )
+log(f"Placed CABBLOCK candidates found: {len(BLOCK_CANDIDATES)}")
 
 verify_detached_symbol_load(prj)
 
@@ -1154,16 +1362,24 @@ for connector_group in CONNECTOR_PIN_INFO:
     connector_excel_record = connector_group[0]
     connector_name = connector_excel_record["connector name"]
 
-    connector_device_id = find_device_id(prj, dev, connector_name)
+    connector_device_ids = find_device_ids(prj, dev, connector_name, ALL_DEVICE_IDS)
+    if not connector_device_ids:
+        raise RuntimeError(f"Could not find connector {connector_name!r} in the E3 project.")
 
-    if connector_device_id is None:
-        raise Exception(f"Could not find connector {connector_name}")
-
-    block_geometry = get_connector_block_geometry(prj, dev, connector_device_id, main_device_id)
+    target = select_connector_and_block(
+        prj, dev, pin, connector_name, connector_device_ids, BLOCK_CANDIDATES,
+        requested_page=REQUESTED_PAGE,
+        requested_device=REQUESTED_DEVICE_DESIGNATION,
+        sheet_names=SHEET_NAME_BY_ID,
+    )
+    connector_device_id = target["connector_device_id"]
+    main_device_id = target["main_device_id"]
+    block_geometry = target["block_geometry"]
 
     initial_snapshot = snapshot_connector(prj, dev, pin, sht, connector_device_id, connector_name, block_geometry)
     sorted_pin_records = get_sorted_live_pin_records(initial_snapshot)
 
+    validate_connector_snapshot_location(connector_name, sorted_pin_records, block_geometry)
     validate_excel_against_e3(connector_excel_record, sorted_pin_records)
 
     pin_geometry = derive_pin_geometry(block_geometry, sorted_pin_records, connector_excel_record)
@@ -1180,6 +1396,7 @@ for connector_group in CONNECTOR_PIN_INFO:
         "connector_excel_record": connector_excel_record,
         "connector_name": connector_name,
         "connector_device_id": connector_device_id,
+        "main_device_id": main_device_id,
         "initial_snapshot": initial_snapshot,
         "sorted_pin_records": sorted_pin_records,
         "block_geometry": block_geometry,
@@ -1191,11 +1408,22 @@ for connector_group in CONNECTOR_PIN_INFO:
         "skip_reorder": already_matches,
     }
 
+    # Detect duplicate input groups resolving to the SAME physical connector/block
+    # before any modification begins.
+    for previous in CONNECTOR_WORK_INFO:
+        if (previous["connector_device_id"] == connector_device_id or
+                previous["block_geometry"]["block_symbol_id"] == block_geometry["block_symbol_id"]):
+            raise RuntimeError(
+                f"Excel connectors {previous['connector_name']!r} and {connector_name!r} "
+                "resolve to the same E3 device or block; aborting before pin changes."
+            )
     CONNECTOR_WORK_INFO.append(work_record)
 
     log()
     log(f"CONNECTOR: {connector_name}")
     log(f"CONNECTOR DEVICE ID: {connector_device_id}")
+    log(f"SELECTED MAIN DEVICE ID: {main_device_id}")
+    log(f"SELECTED SHEET: {SHEET_NAME_BY_ID[block_geometry['sheet_id']]!r} (E3 ID {block_geometry['sheet_id']})")
     log(f"CONNECTOR VIEW NUMBER: {block_geometry['connector_view_number']}")
     log(f"MAIN VIEW ID: {block_geometry['main_view_id']}")
     log(f"BLOCK SYMBOL ID: {block_geometry['block_symbol_id']}")
