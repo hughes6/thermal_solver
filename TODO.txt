@@ -1462,16 +1462,28 @@ def move_pin_by_delete_recreate(prj, pin_view_id, current_live_symbol_id, sheet_
         before_scale = float(before_scale)
     except Exception:
         before_scale = scaling
+    t_delete = time.perf_counter()
     delete_live_symbol(prj, current_live_symbol_id)
+    delete_seconds = time.perf_counter() - t_delete
     time.sleep(0.15)
-    if not verify_ghost(prj, pin_view_id):
+    t_ghost = time.perf_counter()
+    ghost_ok = verify_ghost(prj, pin_view_id)
+    ghost_seconds = time.perf_counter() - t_ghost
+    if not ghost_ok:
         raise RuntimeError(f"Pin-view ID {pin_view_id} did not become a ghost after delete.")
     try:
+        t_place = time.perf_counter()
         new_symbol_id = place_ghost_pin_view(prj, pin_view_id, sheet_id, x, y, rotation, scaling, symbol_name)
+        place_seconds = time.perf_counter() - t_place
         time.sleep(0.15)
+        t_inspect = time.perf_counter()
         metadata = inspect_live_symbol_by_id(prj, new_symbol_id)
+        inspect_seconds = time.perf_counter() - t_inspect
         if metadata is None:
             raise RuntimeError(f"Returned symbol ID {new_symbol_id} could not be resolved.")
+        log(f'    COM MOVE TIMING VIEW {pin_view_id}: '
+            f'Delete={delete_seconds:.2f}s | GhostCheck={ghost_seconds:.2f}s | '
+            f'PlacePinView={place_seconds:.2f}s | Inspect={inspect_seconds:.2f}s')
         return new_symbol_id, metadata
     except Exception as stage_exc:
         try:
@@ -1720,6 +1732,69 @@ def find_staged_record(staged_records, pin_name):
         if record["pin_name"] == pin_name:
             return record
     raise RuntimeError(f"Could not find staged record for pin {pin_name}.")
+def resolve_placed_pin_fast(prj, sht, connector_name, staged_record, phase):
+    """Fast, *verified* E3 pin resolution, with the original scan as fallback.
+
+    After E3 processes a placement, the returned symbol ID may remain usable,
+    and the stable pin-view ID can usually be resolved directly. E3 may also
+    rebuild neighboring symbols, so neither ID is trusted without reading the
+    current live symbol's actual pin name, designation, sheet, and coordinates.
+    The project-wide scan runs only when BOTH targeted methods fail.
+    """
+    if phase == 'STAGE':
+        x, y = staged_record['stage_x'], staged_record['stage_y']
+        previously_returned = staged_record.get('last_returned_stage_symbol_id')
+    elif phase == 'FINAL':
+        x, y = staged_record['final_x'], staged_record['final_y']
+        previously_returned = staged_record.get('final_returned_symbol_id')
+    else:
+        raise ValueError(f'Unknown pin-resolution phase: {phase}')
+
+    sheet_id = int(staged_record['sheet_id'])
+    pin_name = staged_record['pin_name']
+    candidates = []
+    # Prefer the verified stable logical pin-view association over a returned
+    # transient symbol ID; E3 occasionally reassigns symbols after a placement.
+    view_id = staged_record.get('pin_view_id')
+    if view_id is not None:
+        live = resolve_live_symbol_from_pin_view(prj, view_id)
+        if live is not None:
+            candidates.append(('PIN-VIEW', live['live_symbol_id']))
+    if previously_returned is not None:
+        candidates.append(('PLACEMENT-RETURN', previously_returned))
+
+    seen = set()
+    for source, symbol_id in candidates:
+        try:
+            symbol_id = int(symbol_id)
+        except (ValueError, TypeError):
+            continue
+        if symbol_id <= 0 or symbol_id in seen:
+            continue
+        seen.add(symbol_id)
+        identity = read_symbol_identity(prj, symbol_id)
+        if identity is None:
+            continue
+        location = identity.get('location')
+        if (identity.get('pin_number') == pin_name
+                and location is not None
+                and int(location['sheet_id']) == sheet_id
+                and coordinates_close(location, x, y)
+                and match_connector_designation(identity.get('device_text'), connector_name)):
+            return identity
+
+    # Never guess from a stale symbol ID or pin name alone. The *original*
+    # exhaustive lookup remains available for tricky split-block E3 behavior.
+    t0 = time.perf_counter()
+    log(f'    LOOKUP FALLBACK {phase} PIN {pin_name}: stable view and placement '
+        'IDs did not verify; scanning live E3 symbols on the expected sheet.')
+    found = resolve_symbol_at_location(
+        prj, sht, sheet_id, connector_name, pin_name, x, y)
+    log(f'    LOOKUP FALLBACK {phase} PIN {pin_name}: '
+        f'{time.perf_counter() - t0:.2f}s; result '
+        f'{found["symbol_id"] if found else "NOT FOUND"}')
+    return found
+
 def resolve_symbol_at_location(prj, sht, sheet_id, connector_name, pin_name, x, y):
     candidate_ids = collect_live_symbol_candidates(prj, sht, sheet_id)
     matches = []
@@ -1761,7 +1836,11 @@ def move_center_stacks_to_final(prj, sht, connector_name, staged_records, global
     for index, final_item in enumerate(global_final_sequence):
         staged_record = find_staged_record(staged_records, final_item["pin_name"])
         log(f"FINAL {index + 1}/{len(global_final_sequence)} | PIN {final_item['pin_name']} | FROM {staged_record['stage_lane']} ROW {staged_record['stage_row']} -> {final_item['side']} ROW {final_item['row']} | FLIP {final_item['flip']} -> ({final_item['x']}, {final_item['y']})")
-        identity = resolve_symbol_at_location(prj, sht, staged_record["sheet_id"], connector_name, staged_record["pin_name"], staged_record["stage_x"], staged_record["stage_y"])
+        t_lookup = time.perf_counter()
+        identity = resolve_placed_pin_fast(prj, sht, connector_name,
+                                           staged_record, 'STAGE')
+        log(f'    TIMING STAGED PIN LOOKUP {staged_record["pin_name"]}: '
+            f'{time.perf_counter() - t_lookup:.2f}s')
         if identity is None:
             raise RuntimeError(f"Could not rediscover live temporary edge symbol for pin {staged_record['pin_name']} at ({staged_record['stage_x']}, {staged_record['stage_y']}).")
         if identity["characteristic"] not in allowed_center_endpoint_characteristics:
@@ -1903,9 +1982,12 @@ def apply_text_tweaks(prj, symbol_id, side, is_top_of_side):
 def resolve_and_format_final_pins(prj, sht, connector_name, staged_records):
     if not staged_records:
         return
-    candidate_ids = collect_live_symbol_candidates(prj, sht, staged_records[0]["sheet_id"])
     for staged_record in staged_records:
-        identity = resolve_final_symbol(prj, candidate_ids, connector_name, staged_record)
+        t_lookup = time.perf_counter()
+        identity = resolve_placed_pin_fast(prj, sht, connector_name,
+                                           staged_record, 'FINAL')
+        log(f'    TIMING FINAL PIN LOOKUP {staged_record["pin_name"]}: '
+            f'{time.perf_counter() - t_lookup:.2f}s')
         if identity is None:
             raise RuntimeError(f"Could not rediscover final symbol for {connector_name} pin {staged_record['pin_name']}.")
         side = staged_record["final_side"]
@@ -1917,7 +1999,14 @@ def resolve_and_format_final_pins(prj, sht, connector_name, staged_records):
         log(f"FORMAT PIN {staged_record['pin_name']} | SIDE {side} | ROW {staged_record['final_row']} | SYMBOL {identity['symbol_id']} | SIGNAL ALIGNMENT {signal_text_alignment} | DEVICE DESIGNATION {'ON' if is_top_of_side else 'OFF'}")
         apply_text_tweaks(prj, identity["symbol_id"], side, is_top_of_side)
         staged_record["final_resolved_symbol_id"] = identity["symbol_id"]
-# ZUKEN SAFE EDGE-ONLY STAGING
+# FAST VERIFIED E3 PIN LOOKUPS + SAFE EDGE-ONLY STAGING
+# Previously, EACH staged -> final pin required scanning and reading symbols
+# throughout the entire E3 project. We now resolve a pin by its already-verified
+# stable pin-view ID or the most recently returned placed symbol ID, validate
+# exact name/designation/coordinates, and scan only when those identities fail.
+# COM MOVE TIMING lines show whether Zuken itself is spending time on Delete/
+# PlacePinView, which cannot be accelerated through Python-only lookup changes.
+# DRY RUN DEFAULT IS UNCHANGED. No COM worker/process termination.
 # No center placement probe. No subprocess, worker killing, or COM Surrogate
 # management. C4/J2 are optional; only use the unused block edge, after full
 # preflight validation of every connector. On placement failure, STOP and
