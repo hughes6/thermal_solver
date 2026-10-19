@@ -578,6 +578,234 @@ def collect_candidate_cabblocks(prj, dev, main_device_ids, requested_sheet_id=No
     return blocks
 
 
+
+# ================================================
+# READ-ONLY TARGET DEBUGGING (NO E3 CHANGES)
+# ================================================
+
+def get_device_debug_identity(dev, device_id):
+    """Capture the real E3 fields; absent methods are shown as unavailable."""
+    try:
+        # Some E3 COM builds return None on success. Read the actual
+        # identity rather than interpreting a falsy return as failure.
+        dev.SetId(device_id)
+    except Exception as exc:
+        return {"name": f"<SetId error: {exc}>"}
+    identity = {"name": call_noarg(dev, "GetName")}
+    for name in ("GetDesignation", "GetDeviceDesignation", "GetAssignment", "GetLocation"):
+        value = call_noarg(dev, name)
+        if value not in (None, ""):
+            identity[name] = str(value)
+    return identity
+
+
+def get_symbol_debug_texts(prj, symbol_id, limit=18):
+    """Return text type + text as E3 actually stores them on a symbol."""
+    local_sym = prj.CreateSymbolObject()
+    try:
+        if not local_sym.SetId(symbol_id):
+            return []
+    except Exception:
+        return []
+    try:
+        local_text = prj.CreateTextObject()
+        text_ids = get_text_ids(local_sym)
+    except Exception:
+        return []
+    rows = []
+    for text_id in text_ids[:limit]:
+        try:
+            local_text.SetId(text_id)
+            typ = local_text.GetType()
+            value = str(local_text.GetText())
+            if value.strip():
+                rows.append((typ, value.replace("\n", " ").strip()[:160]))
+        except Exception:
+            continue
+    return rows
+
+
+def get_sheet_debug_symbol_ids(prj, sht, sheet_id):
+    """Use sheet symbol IDs if provided; otherwise fall back to project IDs."""
+    try:
+        sht.SetId(sheet_id)
+        sheet_ids = call_id_array(sht.GetSymbolIds)
+    except Exception:
+        sheet_ids = []
+    if sheet_ids:
+        return sheet_ids
+    try:
+        return call_id_array(prj.GetSymbolIds)
+    except Exception:
+        return []
+
+
+def print_candidate_block_details(prj, dev, sht, block_candidates, sheet_names,
+                                  excel_connector_names, nearby_limit=18):
+    """Print all prospective blocks and a small sample of nearby pin labels.
+
+    This runs before any pins are moved and is deliberately diagnostic only.
+    It prints visible text rather than assuming the E3 device's GetName()
+    equals the connector label printed on the schematic.
+    """
+    section("PROSPECTIVE CABBLOCK CANDIDATES - E3 DEBUG")
+    log(f"Excel connector names: {excel_connector_names}")
+    log(f"Number of CABBLOCK candidates: {len(block_candidates)}")
+    sheet_cache = {}
+    for index, block in enumerate(block_candidates, 1):
+        main_id = block["main_device_id"]
+        ident = get_device_debug_identity(dev, main_id)
+        sheet_id = block["sheet_id"]
+        sheet_name = sheet_names.get(sheet_id, f"<unknown sheet: {sheet_id}>")
+        symbol_id = block["block_symbol_id"]
+        center = block["block_schema_location"]
+        log()
+        log(f"CABBLOCK CANDIDATE {index}/{len(block_candidates)}")
+        log(f"  E3 main device ID: {main_id}")
+        log(f"  E3 main device GetName(): {ident.get('name')!r}")
+        for field in ("GetDesignation", "GetDeviceDesignation", "GetAssignment", "GetLocation"):
+            if field in ident:
+                log(f"  E3 main device {field}(): {ident[field]!r}")
+        log(f"  Main device view ID: {block['main_view_id']}")
+        log(f"  Main device view number: {block['connector_view_number']}")
+        log(f"  Sheet/page name: {sheet_name!r} | internal sheet ID: {sheet_id}")
+        log(f"  CABBLOCK symbol ID: {symbol_id}")
+        log(f"  CABBLOCK symbol type: {block['block_symbol_type']!r}")
+        if center is not None:
+            log(f"  Symbol origin: ({center['x']:.3f}, {center['y']:.3f})")
+        log(f"  Block bounds: L={block['block_left']:.3f}, R={block['block_right']:.3f}, "
+            f"B={block['block_bottom']:.3f}, T={block['block_top']:.3f}")
+        local_sym = prj.CreateSymbolObject()
+        try:
+            if local_sym.SetId(symbol_id):
+                log(f"  CABBLOCK bound IDs: {get_bound_ids(local_sym)}")
+        except Exception:
+            pass
+        block_text = get_symbol_debug_texts(prj, symbol_id)
+        if block_text:
+            log(f"  Text attached to CABBLOCK: {block_text}")
+        else:
+            log("  Text attached to CABBLOCK: <none/read failed>")
+
+        # Print visible connector / pin texts inside the actual block. These
+        # are often more useful than logical-device names in large jobs.
+        if sheet_id not in sheet_cache:
+            ids = get_sheet_debug_symbol_ids(prj, sht, sheet_id)
+            sheet_cache[sheet_id] = ids
+            log(f"  Sheet symbol scan size: {len(ids)}")
+        candidate_symbol_ids = sheet_cache[sheet_id]
+        inside = []
+        pin_entries = []
+        device_labels = {}
+        for nearby_id in candidate_symbol_ids:
+            if nearby_id == symbol_id:
+                continue
+            local = prj.CreateSymbolObject()
+            try:
+                if not local.SetId(nearby_id):
+                    continue
+            except Exception:
+                continue
+            loc = get_symbol_schema_location(local)
+            if not location_is_inside_block(loc, block, tolerance=0.03):
+                continue
+            inside.append(nearby_id)
+            texts = get_symbol_debug_texts(prj, nearby_id, limit=14)
+            label = [v for t, v in texts if t == 12]
+            pin_name = [v for t, v in texts if t == 203]
+            if label:
+                for val in label:
+                    device_labels[val] = device_labels.get(val, 0) + 1
+            if (label or pin_name) and len(pin_entries) < nearby_limit:
+                pin_entries.append((nearby_id, call_noarg(local, "GetSymbolTypeName"),
+                                    label[:2], pin_name[:2]))
+        log(f"  Other symbols whose origins are inside block: {len(inside)}")
+        if device_labels:
+            labels = sorted(device_labels.items(), key=lambda pair: (-pair[1], pair[0]))
+            log(f"  DEVICE DESIGNATION LABELS (text type 12): {labels[:20]}")
+        else:
+            log("  DEVICE DESIGNATION LABELS (text type 12): <none found>")
+        if pin_entries:
+            log(f"  Nearby pin / connector symbols (up to {nearby_limit}):")
+            for sid, typ, labels, pins in pin_entries:
+                log(f"    SYMBOL {sid} | type {typ!r} | device labels {labels} | pin numbers {pins}")
+        else:
+            log("  Nearby pin / connector symbols: <none with readable labels>")
+    log("END OF CABBLOCK CANDIDATE DETAILS")
+
+
+def print_connector_name_lookup_failure(prj, dev, connector_name, device_ids,
+                                        block_candidates, sheet_names, top_n=30):
+    """Explain an unsuccessful *exact* GetName lookup using real E3 names."""
+    import difflib
+    section(f"CONNECTOR LOOKUP FAILED - {connector_name!r} - NAME DIAGNOSTICS")
+    log(f"  Excel requested connector name: {connector_name!r}")
+    log("  Lookup currently requires EXACT dev.GetName() == Excel name.")
+    requested = connector_name.strip().casefold()
+    device_info = []
+    for device_id in device_ids:
+        ident = get_device_debug_identity(dev, device_id)
+        raw_name = ident.get("name")
+        name = str(raw_name).strip() if raw_name is not None else ""
+        if not name:
+            continue
+        lower = name.casefold()
+        exact_ignoring_case = lower == requested
+        contains = bool(requested) and (requested in lower or lower in requested)
+        similarity = difflib.SequenceMatcher(None, requested, lower).ratio()
+        # Favor contained names before loose fuzzy similarity.
+        score = (200 if exact_ignoring_case else 100 if contains else 0) + similarity
+        device_info.append((score, device_id, name, ident, exact_ignoring_case, contains))
+    device_info.sort(key=lambda info: (-info[0], info[2]))
+    log(f"  Nonempty E3 device GetName() values scanned: {len(device_info)}")
+    log(f"  Closest E3 device-name matches (top {top_n}):")
+    for _, device_id, name, ident, same, contains in device_info[:top_n]:
+        flag = 'CASE DIFFERENCE' if same else 'CONTAINS NAME' if contains else 'FUZZY'
+        log(f"    E3 device ID {device_id} | GetName()={name!r} | match={flag}")
+        for field in ("GetDesignation", "GetDeviceDesignation"):
+            if field in ident:
+                log(f"      {field}()={ident[field]!r}")
+    log("  CABBLOCK owners on selected page/device:")
+    for block in block_candidates:
+        ident = get_device_debug_identity(dev, block["main_device_id"])
+        page = sheet_names.get(block["sheet_id"], str(block["sheet_id"]))
+        log(f"    PAGE {page!r} | BLOCK {block['block_symbol_id']} | "
+            f"OWNER ID {block['main_device_id']} | OWNER NAME {ident.get('name')!r} "
+            f"| VIEW NUMBER {block['connector_view_number']}")
+    log("  NO CHANGES MADE: E3 connector resolution stopped before pin movement.")
+
+
+def print_connector_block_rejection_reasons(prj, dev, pin, connector_name,
+                                            connector_device_ids, block_candidates,
+                                            sheet_names):
+    """If name was found but selection fails, show EACH pair's exclusion reason."""
+    section(f"CONNECTOR/BLOCK PAIR CHECK - {connector_name!r}")
+    for device_id in connector_device_ids:
+        ident = get_device_debug_identity(dev, device_id)
+        views = get_device_view_ids(dev, device_id)
+        numbers = sorted(set(v for v in (get_view_number(dev, x) for x in views) if v is not None))
+        anchors = get_live_connector_pin_locations(prj, dev, pin, device_id)
+        log(f"  CONNECTOR DEVICE ID {device_id} | GetName()={ident.get('name')!r} "
+            f"| view IDs {views} | view numbers {numbers} | live pin anchors {len(anchors)}")
+        for anchor in anchors[:12]:
+            loc = anchor['location']
+            log(f"    PIN {anchor['pin_name']!r} -> sheet ID {loc['sheet_id']}, "
+                f"X={loc['x']:.3f}, Y={loc['y']:.3f}")
+        if len(anchors) > 12:
+            log(f"    ... {len(anchors)-12} additional anchors not printed")
+        for block in block_candidates:
+            page = sheet_names.get(block['sheet_id'], str(block['sheet_id']))
+            bad = [a for a in anchors if not location_is_inside_block(a['location'], block)]
+            if block['connector_view_number'] not in numbers:
+                status = 'REJECTED: E3 view number mismatch'
+            elif bad:
+                status = f'REJECTED: {len(bad)}/{len(anchors)} pin anchors outside block/sheet'
+            else:
+                status = 'MATCH (preliminary; pin count still needs verification)'
+            log(f"    PAIR -> page {page!r}, block ID {block['block_symbol_id']}, "
+                f"block view {block['connector_view_number']}: {status}")
+
+
 def select_connector_and_block(prj, dev, pin, connector_name,
                                connector_device_ids, block_candidates,
                                requested_page=None, requested_device=None,
@@ -1348,6 +1576,12 @@ if not BLOCK_CANDIDATES:
     )
 log(f"Placed CABBLOCK candidates found: {len(BLOCK_CANDIDATES)}")
 
+# Diagnostic data is printed unconditionally whether C4/J2 are blank or filled.
+print_candidate_block_details(
+    prj, dev, sht, BLOCK_CANDIDATES, SHEET_NAME_BY_ID,
+    [group[0]["connector name"] for group in CONNECTOR_PIN_INFO],
+)
+
 verify_detached_symbol_load(prj)
 
 
@@ -1364,8 +1598,19 @@ for connector_group in CONNECTOR_PIN_INFO:
 
     connector_device_ids = find_device_ids(prj, dev, connector_name, ALL_DEVICE_IDS)
     if not connector_device_ids:
-        raise RuntimeError(f"Could not find connector {connector_name!r} in the E3 project.")
+        print_connector_name_lookup_failure(
+            prj, dev, connector_name, ALL_DEVICE_IDS,
+            BLOCK_CANDIDATES, SHEET_NAME_BY_ID,
+        )
+        raise RuntimeError(
+            f"Could not find connector {connector_name!r} as an EXACT E3 device name. "
+            "See the CABBLOCK candidate list and connector lookup name diagnostics above."
+        )
 
+    print_connector_block_rejection_reasons(
+        prj, dev, pin, connector_name, connector_device_ids,
+        BLOCK_CANDIDATES, SHEET_NAME_BY_ID,
+    )
     target = select_connector_and_block(
         prj, dev, pin, connector_name, connector_device_ids, BLOCK_CANDIDATES,
         requested_page=REQUESTED_PAGE,
