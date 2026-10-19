@@ -1190,46 +1190,131 @@ def build_global_final_sequence(final_plan):
         else:
             item["stage_lane"] = "CENTER B"
     return sequence
-def build_staging_map(global_final_sequence, pin_geometry):
+def build_center_staging_map(global_final_sequence, pin_geometry):
+    """Original two-column interior staging, attempted first.
+
+    COM/E3 can reject this placement for certain block-pin symbol families.
+    In that case the caller restores every changed pin and uses edge staging
+    only if a safe, unused edge was established in the original snapshot.
+    """
     staging_map = {}
     if not global_final_sequence:
         return staging_map
-    lane_a_count = len([item for item in global_final_sequence if item["stage_lane_index"] == 0])
-    lane_b_count = len([item for item in global_final_sequence if item["stage_lane_index"] == 1])
-    max_lane_count = max(lane_a_count, lane_b_count)
-    if max_lane_count <= 1:
-        first_row_y = pin_geometry["staging_center_y"]
-    else:
-        total_height = (max_lane_count - 1) * pin_geometry["pin_pitch"]
-        first_row_y = pin_geometry["staging_center_y"] + (total_height / 2.0)
-    minimum_stage_y = first_row_y - ((max_lane_count - 1) * pin_geometry["pin_pitch"])
-    maximum_stage_y = first_row_y
-    lane_a_x = pin_geometry["staging_center_x"] - STAGING_LANE_OFFSET
-    lane_b_x = pin_geometry["staging_center_x"] + STAGING_LANE_OFFSET
-    allowed_left_x = pin_geometry["block_left"] + STAGING_EDGE_CLEARANCE
-    allowed_right_x = pin_geometry["block_right"] - STAGING_EDGE_CLEARANCE
-    allowed_bottom_y = pin_geometry["block_bottom"] + STAGING_TOP_BOTTOM_CLEARANCE
-    allowed_top_y = pin_geometry["block_top"] - STAGING_TOP_BOTTOM_CLEARANCE
-    if lane_a_x < allowed_left_x:
-        raise RuntimeError(f"Center A staging X {lane_a_x} is outside the usable block area.")
-    if lane_b_x > allowed_right_x:
-        raise RuntimeError(f"Center B staging X {lane_b_x} is outside the usable block area.")
-    if minimum_stage_y < allowed_bottom_y or maximum_stage_y > allowed_top_y:
-        raise RuntimeError(f"Two center stacks do not fit vertically inside the block. Need {max_lane_count} pins in the taller temporary stack. Staging Y range is {minimum_stage_y} to {maximum_stage_y}. Allowed range is {allowed_bottom_y} to {allowed_top_y}.")
+    lane_counts = [sum(item['stage_lane_index'] == lane for item in global_final_sequence)
+                   for lane in (0, 1)]
+    max_lane_count = max(lane_counts)
+    center_y = pin_geometry['staging_center_y']
+    pitch = pin_geometry['pin_pitch']
+    first_y = center_y + (max_lane_count - 1) * pitch / 2.0
+    last_y = first_y - (max_lane_count - 1) * pitch
+    lane_xs = (pin_geometry['staging_center_x'] - STAGING_LANE_OFFSET,
+               pin_geometry['staging_center_x'] + STAGING_LANE_OFFSET)
+    if lane_xs[0] < pin_geometry['block_left'] + STAGING_EDGE_CLEARANCE:
+        raise RuntimeError('CENTER A staging lane is outside usable block.')
+    if lane_xs[1] > pin_geometry['block_right'] - STAGING_EDGE_CLEARANCE:
+        raise RuntimeError('CENTER B staging lane is outside usable block.')
+    if (last_y < pin_geometry['block_bottom'] + STAGING_TOP_BOTTOM_CLEARANCE
+            or first_y > pin_geometry['block_top'] - STAGING_TOP_BOTTOM_CLEARANCE):
+        raise RuntimeError(
+            f'Center staging does not fit: Y {last_y:.4f} to {first_y:.4f}; '
+            f'block Y {pin_geometry["block_bottom"]:.4f} to '
+            f'{pin_geometry["block_top"]:.4f}.')
     for item in global_final_sequence:
-        if item["stage_lane_index"] == 0:
-            x = lane_a_x
-        else:
-            x = lane_b_x
-        y = first_row_y - (item["stage_row"] * pin_geometry["pin_pitch"])
-        staging_map[item["pin_name"]] = {
-            "x": round(x, 6),
-            "y": round(y, 6),
-            "lane_index": item["stage_lane_index"],
-            "lane": item["stage_lane"],
-            "row": item["stage_row"],
-            "sequence_index": item["sequence_index"],
+        lane = item['stage_lane_index']
+        staging_map[item['pin_name']] = {
+            'x': round(lane_xs[lane], 6),
+            'y': round(first_y - item['stage_row'] * pitch, 6),
+            # For interior staging use original live-pin rotation instead of
+            # the forced left/right flips used for boundary staging.
+            'flip': None,
+            'lane_index': lane,
+            'lane': f'CENTER {"A" if lane == 0 else "B"}',
+            'row': item['stage_row'],
+            'sequence_index': item['sequence_index'],
         }
+    return staging_map
+
+
+def build_edge_staging_map(global_final_sequence, pin_geometry, connector_excel_record=None, sorted_pin_records=None):
+    """Stage on the UNUSED CABBLOCK boundary, never inside the block.
+
+    Zuken only allows block-connector pins at the block border. This guarded
+    workflow supports an all-left or all-right connector, with all *current*
+    pins on that same occupied edge. Mixed-sided connectors need a separate
+    non-overlapping placement algorithm, so they are rejected BEFORE edits.
+    """
+    staging_map = {}
+    if not global_final_sequence:
+        return staging_map
+    if connector_excel_record is None or sorted_pin_records is None:
+        raise RuntimeError('Edge staging requires Excel side and current pin-location preflight.')
+    left_count = len(connector_excel_record['left pins'])
+    right_count = len(connector_excel_record['right pins'])
+    connector_name = connector_excel_record['connector name']
+    if bool(left_count) == bool(right_count):
+        raise RuntimeError(
+            f'{connector_name}: edge staging only supports pins on ONE final side; '
+            f'Excel has {left_count} left and {right_count} right. '
+            'Edge fallback is unavailable for mixed final-side layouts.'
+        )
+
+    if left_count:
+        source_x = pin_geometry['left_x']
+        stage_x = pin_geometry['right_x']
+        stage_flip = RIGHT_FLIP
+        stage_name = 'TEMP RIGHT EDGE'
+    else:
+        source_x = pin_geometry['right_x']
+        stage_x = pin_geometry['left_x']
+        stage_flip = LEFT_FLIP
+        stage_name = 'TEMP LEFT EDGE'
+
+    # Do not risk placement collisions on a half-reordered block. The initial
+    # pin-origin coordinates should all be on the currently occupied edge.
+    edge_tolerance = 0.12
+    outliers = [
+        (rec['pin_name'], rec['x'], rec['y']) for rec in sorted_pin_records
+        if abs(float(rec['x']) - float(source_x)) > edge_tolerance
+    ]
+    if outliers:
+        raise RuntimeError(
+            f'{connector_name}: cannot reserve {stage_name}. '
+            f'{len(outliers)} existing pin(s) are not on the expected opposite '
+            f'edge X={source_x:.4f}; examples: {outliers[:8]}. '
+            'No changes made; inspect for partially staged pins or an unexpected symbol offset.'
+        )
+
+    # Use one column on the unused CABBLOCK boundary, from top down.
+    # Edge staging is a fallback if center staging is rejected by E3.
+    stage_top_y = pin_geometry['original_top_y']
+    pitch = pin_geometry['pin_pitch']
+    bottom_y = stage_top_y - (len(global_final_sequence) - 1) * pitch
+    if bottom_y < pin_geometry['block_bottom'] + BLOCK_BOTTOM_CLEARANCE:
+        raise RuntimeError(
+            f'{connector_name}: {len(global_final_sequence)} pins do not fit on '
+            f'{stage_name} at pitch {pitch:.5f}. '
+            f'Last stage Y={bottom_y:.5f}, block bottom={pin_geometry["block_bottom"]:.5f}. '
+            'No changes made.'
+        )
+    if stage_top_y > pin_geometry['block_top'] - 0.10:
+        raise RuntimeError(f'{connector_name}: stage top exceeds block boundary. No changes made.')
+
+    for index, item in enumerate(global_final_sequence):
+        # Do NOT mutate global_final_sequence: it is also used by the primary
+        # center-staging strategy and the final-placement sequence.
+        y = stage_top_y - index * pitch
+        staging_map[item['pin_name']] = {
+            'x': round(stage_x, 6),
+            'y': round(y, 6),
+            'flip': stage_flip,
+            'lane_index': 0,
+            'lane': stage_name,
+            'row': index,
+            'sequence_index': item['sequence_index'],
+        }
+    log(f'{connector_name}: guarded staging on {stage_name} '
+        f'(X={stage_x:.5f}, Y={stage_top_y:.5f} to {bottom_y:.5f}); '
+        'no interior placement.')
     return staging_map
 def connector_already_matches_final_plan(sorted_pin_records, final_plan, tolerance=0.06):
     current_by_pin = {}
@@ -1282,27 +1367,125 @@ def verify_ghost(prj, pin_view_id):
     except Exception:
         set_result = 0
     return set_result == 0
-def place_ghost_pin_view(prj, pin_view_id, sheet_id, x, y, rotation, scaling):
+def choose_compatible_pin_symbol(prj, sorted_pin_records, connector_name):
+    """Find a loadable symbol from the placed block-pin family, if possible.
+
+    The old hardcoded detached symbol belongs to MilSymbolReceptacle; the
+    supplied E3 project uses MilBlockSymbolReceptacleIInt for block pins.
+    An incompatible symbol is another reason why PlacePinView may fail.
+    """
+    original_types = [str(item.get('symbol_type_name') or '').strip()
+                      for item in sorted_pin_records]
+    candidates = []
+    for kind in original_types:
+        if not kind:
+            continue
+        if '¶' in kind:
+            family, suffix = kind.rsplit('¶', 1)
+            if 'BLOCK' in family.upper():
+                candidates.extend((family + '¶CONNECTOR_PIN',
+                                   family + '¶END_SPLIT', kind))
+        else:
+            candidates.append(kind)
+    candidates.append(DETACHED_SYMBOL_NAME)
+    seen = set()
+    for name in candidates:
+        if name in seen:
+            continue
+        seen.add(name)
+        probe = prj.CreateSymbolObject()
+        try:
+            load_result = probe.Load(name, int(DETACHED_SYMBOL_VERSION))
+        except Exception:
+            load_result = 0
+        if load_result:
+            log(f'{connector_name}: stage/restore symbol {name!r} loaded '
+                f'(source pin types {sorted(set(original_types))})')
+            return name
+    raise RuntimeError(
+        f'{connector_name}: no compatible connector pin symbol loaded in E3. '
+        f'Original pin symbol types: {sorted(set(original_types))}. '
+        'Aborting before pin deletion.'
+    )
+
+
+def place_ghost_pin_view(prj, pin_view_id, sheet_id, x, y, rotation, scaling, symbol_name=None):
     placement = prj.CreateSymbolObject()
-    new_symbol_id = placement.PlacePinView(pin_view_id, sheet_id, DETACHED_SYMBOL_NAME, DETACHED_SYMBOL_VERSION, x, y, rotation, scaling, MAINTAIN_TEXT_SIZE)
+    name = symbol_name or DETACHED_SYMBOL_NAME
+    new_symbol_id = placement.PlacePinView(pin_view_id, sheet_id, name, DETACHED_SYMBOL_VERSION, x, y, rotation, scaling, MAINTAIN_TEXT_SIZE)
     try:
         new_symbol_id = int(new_symbol_id)
     except Exception:
         new_symbol_id = 0
     if new_symbol_id <= 0:
-        raise RuntimeError(f"PlacePinView failed for pin-view ID {pin_view_id} at ({x}, {y}).")
+        raise RuntimeError(
+            f"PlacePinView failed for pin-view ID {pin_view_id} on sheet {sheet_id} "
+            f"at ({x}, {y}), symbol {name!r}. "
+            "For block connectors, E3 requires a valid boundary attachment. "
+            "Also verify that this detached symbol is a block-pin type supported "
+            "by the project's E3 database; the pin is now unplaced/ghost."
+        )
     return new_symbol_id
-def move_pin_by_delete_recreate(prj, pin_view_id, current_live_symbol_id, sheet_id, x, y, rotation, scaling):
+class StagingPlacementRejected(RuntimeError):
+    """E3 refused placement but successfully restored the original pin."""
+
+
+def move_pin_by_delete_recreate(prj, pin_view_id, current_live_symbol_id, sheet_id, x, y, rotation, scaling, symbol_name=None):
+    # Cache the original position/orientation *before* the destructive COM call.
+    # If the placement is disallowed, attempt to restore the original symbol.
+    before_sym = prj.CreateSymbolObject()
+    if not before_sym.SetId(current_live_symbol_id):
+        raise RuntimeError(f"Cannot inspect live symbol {current_live_symbol_id} before move.")
+    before_location = get_symbol_schema_location(before_sym)
+    before_rotation = call_noarg(before_sym, 'GetRotation')
+    before_scale = call_noarg(before_sym, 'GetScaling')
+    if before_location is None:
+        raise RuntimeError(f"Symbol {current_live_symbol_id} has no original location; refusing deletion.")
+    if not isinstance(before_rotation, str) or not before_rotation:
+        before_rotation = rotation
+    try:
+        before_scale = float(before_scale)
+    except Exception:
+        before_scale = scaling
     delete_live_symbol(prj, current_live_symbol_id)
     time.sleep(0.15)
     if not verify_ghost(prj, pin_view_id):
         raise RuntimeError(f"Pin-view ID {pin_view_id} did not become a ghost after delete.")
-    new_symbol_id = place_ghost_pin_view(prj, pin_view_id, sheet_id, x, y, rotation, scaling)
-    time.sleep(0.15)
-    metadata = inspect_live_symbol_by_id(prj, new_symbol_id)
-    if metadata is None:
-        raise RuntimeError(f"Returned symbol ID {new_symbol_id} could not be resolved.")
-    return new_symbol_id, metadata
+    try:
+        new_symbol_id = place_ghost_pin_view(prj, pin_view_id, sheet_id, x, y, rotation, scaling, symbol_name)
+        time.sleep(0.15)
+        metadata = inspect_live_symbol_by_id(prj, new_symbol_id)
+        if metadata is None:
+            raise RuntimeError(f"Returned symbol ID {new_symbol_id} could not be resolved.")
+        return new_symbol_id, metadata
+    except Exception as stage_exc:
+        try:
+            restored_id = place_ghost_pin_view(
+                prj, pin_view_id, before_location['sheet_id'],
+                before_location['x'], before_location['y'],
+                before_rotation, before_scale, symbol_name)
+            log(f"RESTORED original pin view {pin_view_id} as symbol {restored_id} "
+                f"at ({before_location['x']}, {before_location['y']}).")
+            raise StagingPlacementRejected(
+                f"STAGING FAILED for pin view {pin_view_id}, but original "
+                f"location was restored. Original error: {stage_exc}"
+            ) from stage_exc
+        except RuntimeError as restore_exception:
+            if isinstance(restore_exception, StagingPlacementRejected):
+                raise
+            raise RuntimeError(
+                f"CRITICAL: failed to stage pin view {pin_view_id} AND failed to "
+                f"restore it automatically. Pin may be UNPLACED. "
+                f"Staging error: {stage_exc}; restoration error: {restore_exception}. "
+                "Do not rerun until you recover the pin in the saved project."
+            ) from restore_exception
+        except Exception as restore_exception:
+            raise RuntimeError(
+                f"CRITICAL: failed to stage pin view {pin_view_id} AND failed to "
+                f"restore it automatically. Pin may be UNPLACED. "
+                f"Staging error: {stage_exc}; restoration error: {restore_exception}. "
+                "Do not rerun until you recover the pin in the saved project."
+            ) from restore_exception
 def find_logical_pin(dev, pin, connector_device_id, pin_name):
     target_name = normalize_pin_value(pin_name)
     dev.SetId(connector_device_id)
@@ -1316,8 +1499,9 @@ def find_logical_pin(dev, pin, connector_device_id, pin_name):
                 "view_ids": get_view_ids(pin),
             }
     return None
-def peel_all_pins_to_staging(prj, dev, pin, sht, connector_device_id, connector_name, block_geometry, sorted_pin_records, staging_map, pin_geometry):
-    staged_records = []
+def peel_all_pins_to_staging(prj, dev, pin, sht, connector_device_id, connector_name, block_geometry, sorted_pin_records, staging_map, pin_geometry, placement_symbol_name, staged_records=None):
+    if staged_records is None:
+        staged_records = []
     allowed_characteristics = {
         "END_TOP",
         "END_BOTTOM",
@@ -1382,15 +1566,20 @@ def peel_all_pins_to_staging(prj, dev, pin, sht, connector_device_id, connector_
             scaling = 1.0
         stage = staging_map[pin_name]
         log(f"STAGE {index + 1}/{len(sorted_pin_records)} | PIN {pin_name} | VIEW {pin_view_id} | LIVE {live_symbol_id} | SOURCE {live_resolution_source} | {characteristic} -> {stage['lane']} ROW {stage['row']} -> ({stage['x']}, {stage['y']})")
-        new_symbol_id, metadata = move_pin_by_delete_recreate(prj, pin_view_id, live_symbol_id, pin_geometry["sheet_id"], stage["x"], stage["y"], rotation, scaling)
-        if metadata["characteristic"] not in allowed_staged_characteristics:
-            raise RuntimeError(f"Pin {pin_name} returned unexpected staged characteristic {metadata['characteristic']}.")
+        stage_flip = stage['flip'] if stage.get('flip') is not None else rotation
+        new_symbol_id, metadata = move_pin_by_delete_recreate(
+            prj, pin_view_id, live_symbol_id, pin_geometry['sheet_id'],
+            stage['x'], stage['y'], stage_flip, scaling, placement_symbol_name)
+        # Record *before* validating so even an unexpected E3 return is
+        # included in recovery if subsequent validation fails.
         staged_records.append({
             "pin_name": pin_name,
             "logical_pin_id": original_record["logical_pin_id"],
             "pin_view_id": pin_view_id,
             "last_returned_stage_symbol_id": new_symbol_id,
             "rotation": rotation,
+            "stage_flip": stage_flip,
+            "placement_symbol_name": placement_symbol_name,
             "scaling": scaling,
             "sheet_id": pin_geometry["sheet_id"],
             "stage_x": stage["x"],
@@ -1400,8 +1589,157 @@ def peel_all_pins_to_staging(prj, dev, pin, sht, connector_device_id, connector_
             "stage_row": stage["row"],
             "stage_metadata_immediate": metadata,
         })
+        if metadata['characteristic'] not in allowed_staged_characteristics:
+            raise RuntimeError(f"Pin {pin_name} returned unexpected staged characteristic {metadata['characteristic']}.")
+        actual_location = metadata['schema_location']
+        if (actual_location is None or
+                actual_location['sheet_id'] != int(pin_geometry['sheet_id']) or
+                not coordinates_close(actual_location, stage['x'], stage['y'])):
+            raise RuntimeError(
+                f"Pin {pin_name} was reported placed at a different location "
+                f"than expected: requested ({stage['x']}, {stage['y']}), "
+                f"actual {actual_location!r}. Must restore before trying a fallback.")
         log(f"    RETURNED SYMBOL {new_symbol_id} | TYPE {metadata['symbol_type_name']} | CHARACTERISTIC {metadata['characteristic']} | BOUNDS {metadata['bound_ids']}")
     return staged_records
+def check_original_pin_positions(prj, sht, connector_name, sorted_pin_records):
+    """Verify restoration using original per-pin view associations and locations."""
+    differences = []
+    for original in sorted_pin_records:
+        view_id = original['pin_view_id']
+        live = resolve_live_symbol_from_pin_view(prj, view_id)
+        location = None
+        if live is not None:
+            location = get_symbol_schema_location(live['symbol_object'])
+        expected = (int(original['sheet_id']), float(original['x']), float(original['y']))
+        if location is None or location['sheet_id'] != expected[0] or not coordinates_close(
+                location, expected[1], expected[2]):
+            # Stable view association isn't reliable on all E3 builds;
+            # scan specifically for the unique labeled connector/pin/location.
+            identity = resolve_symbol_at_location(
+                prj, sht, expected[0], connector_name, original['pin_name'],
+                expected[1], expected[2])
+            if identity is None:
+                differences.append((original['pin_name'], view_id, location, expected))
+    return differences
+
+
+def rollback_staged_connector(prj, sht, connector_name, staged_records,
+                              sorted_pin_records, placement_symbol_name):
+    """Restore all successfully staged pins before changing staging method.
+
+    If a restore or any position verification fails, ABORT. Never try the
+    fallback from a mixed original/partially staged block.
+    """
+    original_by_pin = {r['pin_name']: r for r in sorted_pin_records}
+    log(f'{connector_name}: RESTORING {len(staged_records)} already-staged pin(s) '
+        'in reverse peel order before changing strategies.')
+    for staged in reversed(staged_records):
+        pin_name = staged['pin_name']
+        original = original_by_pin[pin_name]
+        view_id = original['pin_view_id']
+        live = resolve_live_symbol_from_pin_view(prj, view_id)
+        live_id = None
+        if live is not None:
+            location = get_symbol_schema_location(live['symbol_object'])
+            if (location is not None and
+                    int(location['sheet_id']) == int(staged['sheet_id']) and
+                    coordinates_close(location, staged['stage_x'], staged['stage_y'])):
+                live_id = live['live_symbol_id']
+        if live_id is None:
+            scanned = resolve_symbol_at_location(
+                prj, sht, staged['sheet_id'], connector_name, pin_name,
+                staged['stage_x'], staged['stage_y'])
+            if scanned is not None:
+                live_id = scanned['symbol_id']
+        if live_id is None:
+            raise RuntimeError(
+                f'CRITICAL: rollback cannot identify staged {connector_name} '
+                f'pin {pin_name} at ({staged["stage_x"]}, {staged["stage_y"]}). '
+                'Do not run the fallback; recover the saved project.')
+        try:
+            move_pin_by_delete_recreate(
+                prj, view_id, live_id, original['sheet_id'],
+                original['x'], original['y'],
+                (original['rotation'] if isinstance(original['rotation'], str)
+                 and original['rotation'] else 'y'),
+                float(original['scaling']) if original['scaling'] else 1.0,
+                placement_symbol_name)
+        except Exception as exc:
+            raise RuntimeError(
+                f'CRITICAL: rollback failed for {connector_name} pin {pin_name}. '
+                'Fallback was NOT attempted; recover the saved project. '
+                f'Reason: {exc}') from exc
+        log(f'    RESTORED {pin_name} to ({original["x"]}, {original["y"]})')
+    issues = check_original_pin_positions(prj, sht, connector_name, sorted_pin_records)
+    if issues:
+        raise RuntimeError(
+            f'CRITICAL: {connector_name} rollback could not verify original '
+            f'locations for {len(issues)} pin(s): {issues[:10]!r}. '
+            'Fallback was NOT attempted; recover the saved project.')
+    log(f'{connector_name}: restored original pin positions VERIFIED.')
+
+
+def stage_connector_center_then_edge(prj, dev, pin, sht, work_record):
+    """Try center first, recover completely, and then try one unused edge."""
+    connector_name = work_record['connector_name']
+    common = (
+        prj, dev, pin, sht, work_record['connector_device_id'], connector_name,
+        work_record['block_geometry'], work_record['sorted_pin_records'])
+    tail = (work_record['pin_geometry'], work_record['placement_symbol_name'])
+    primary_records = []
+    log(f'{connector_name}: trying original TWO-CENTER-LANE staging FIRST.')
+    try:
+        if work_record['center_staging_error'] is not None:
+            # Pure geometry preflight failure, so no pin was moved.
+            raise StagingPlacementRejected(
+                'Center staging cannot fit inside the selected CABBLOCK: '
+                + work_record['center_staging_error'])
+        peel_all_pins_to_staging(*common, work_record['center_staging_map'],
+                                 *tail, staged_records=primary_records)
+        work_record['staging_method'] = 'CENTER'
+        log(f'{connector_name}: CENTER staging completed; no fallback needed.')
+        return primary_records
+    except Exception as primary_error:
+        log(f'{connector_name}: CENTER staging failed: {primary_error}')
+        # Only a confirmed rejection of a PlacePinView call (with the last
+        # pin successfully restored) authorizes trying another method.
+        fallback_ok = isinstance(primary_error, StagingPlacementRejected)
+        rollback_staged_connector(
+            prj, sht, connector_name, primary_records,
+            work_record['sorted_pin_records'], work_record['placement_symbol_name'])
+        if not fallback_ok:
+            raise RuntimeError(
+                f'{connector_name}: center staging failed for a reason OTHER '
+                f'than a recoverable E3 placement rejection. Original positions '
+                f'were restored; edge fallback will NOT be attempted. '
+                f'Error: {primary_error}') from primary_error
+        if work_record['edge_staging_error'] is not None:
+            raise RuntimeError(
+                f'{connector_name}: E3 rejected CENTER staging; original pins '
+                f'were restored, but no safe one-edge fallback exists. '
+                f'{work_record["edge_staging_error"]}') from primary_error
+        log(f'{connector_name}: SWITCHING TO '
+            f'{work_record["edge_staging_name"]} staging on unused block edge.')
+        edge_records = []
+        try:
+            peel_all_pins_to_staging(*common, work_record['edge_staging_map'],
+                                     *tail, staged_records=edge_records)
+            work_record['staging_method'] = 'EDGE'
+            work_record['staging_map'] = work_record['edge_staging_map']
+            log(f'{connector_name}: EDGE staging completed: '
+                f'{len(edge_records)} pins on one block edge.')
+            return edge_records
+        except Exception as edge_error:
+            log(f'{connector_name}: EDGE staging failed: {edge_error}')
+            rollback_staged_connector(
+                prj, sht, connector_name, edge_records,
+                work_record['sorted_pin_records'], work_record['placement_symbol_name'])
+            raise RuntimeError(
+                f'{connector_name}: center and edge staging both failed. '
+                f'Original pin locations were restored; no final ordering '
+                f'was attempted. Edge error: {edge_error}') from edge_error
+
+
 def build_final_plan(connector_excel_record, pin_geometry):
     final_plan = []
     for row_index, pin_name in enumerate(connector_excel_record["left pins"]):
@@ -1460,22 +1798,27 @@ def move_center_stacks_to_final(prj, sht, connector_name, staged_records, global
         "END_TOP",
         "END_SPLIT",
         "END_BOTTOM",
+        # The MilBlockSymbolReceptacleIInt family can return connector-pin
+        # and split-bottom variants. Pin name + sheet + exact location must
+        # still match uniquely before touching the symbol.
+        "CONNECTOR_PIN",
+        "SPLIT_BOTTOM",
     }
     for index, final_item in enumerate(global_final_sequence):
         staged_record = find_staged_record(staged_records, final_item["pin_name"])
         log(f"FINAL {index + 1}/{len(global_final_sequence)} | PIN {final_item['pin_name']} | FROM {staged_record['stage_lane']} ROW {staged_record['stage_row']} -> {final_item['side']} ROW {final_item['row']} | FLIP {final_item['flip']} -> ({final_item['x']}, {final_item['y']})")
         identity = resolve_symbol_at_location(prj, sht, staged_record["sheet_id"], connector_name, staged_record["pin_name"], staged_record["stage_x"], staged_record["stage_y"])
         if identity is None:
-            raise RuntimeError(f"Could not rediscover live center-stack symbol for pin {staged_record['pin_name']} at ({staged_record['stage_x']}, {staged_record['stage_y']}).")
+            raise RuntimeError(f"Could not rediscover live temporary edge symbol for pin {staged_record['pin_name']} at ({staged_record['stage_x']}, {staged_record['stage_y']}).")
         if identity["characteristic"] not in allowed_center_endpoint_characteristics:
             raise RuntimeError(f"Pin {staged_record['pin_name']} is not exposed at the top/end of {staged_record['stage_lane']}. Current characteristic is {identity['characteristic']}.")
         current_live_symbol_id = identity["symbol_id"]
-        log(f"    CURRENT CENTER SYMBOL: {current_live_symbol_id} | TYPE {identity['symbol_type_name']} | CHARACTERISTIC {identity['characteristic']}")
+        log(f"    CURRENT STAGED EDGE SYMBOL: {current_live_symbol_id} | TYPE {identity['symbol_type_name']} | CHARACTERISTIC {identity['characteristic']}")
         delete_live_symbol(prj, current_live_symbol_id)
         time.sleep(0.15)
         if not verify_ghost(prj, staged_record["pin_view_id"]):
-            raise RuntimeError(f"Pin {staged_record['pin_name']} did not become ghost/unplaced after deleting it from the center stack.")
-        new_symbol_id = place_ghost_pin_view(prj, staged_record["pin_view_id"], staged_record["sheet_id"], final_item["x"], final_item["y"], final_item["flip"], staged_record["scaling"])
+            raise RuntimeError(f"Pin {staged_record['pin_name']} did not become ghost/unplaced after deleting it from the temporary block edge.")
+        new_symbol_id = place_ghost_pin_view(prj, staged_record["pin_view_id"], staged_record["sheet_id"], final_item["x"], final_item["y"], final_item["flip"], staged_record["scaling"], staged_record["placement_symbol_name"])
         time.sleep(0.15)
         metadata = inspect_live_symbol_by_id(prj, new_symbol_id)
         if metadata is None:
@@ -1624,6 +1967,13 @@ def resolve_and_format_final_pins(prj, sht, connector_name, staged_records):
         log(f"FORMAT PIN {staged_record['pin_name']} | SIDE {side} | ROW {staged_record['final_row']} | SYMBOL {identity['symbol_id']} | SIGNAL ALIGNMENT {signal_text_alignment} | DEVICE DESIGNATION {'ON' if is_top_of_side else 'OFF'}")
         apply_text_tweaks(prj, identity["symbol_id"], side, is_top_of_side)
         staged_record["final_resolved_symbol_id"] = identity["symbol_id"]
+# CENTER-FIRST STAGING WITH GUARDED EDGE FALLBACK:
+# Attempt original two-center-lane staging. If Zuken rejects placement,
+# restore ALL pins and verify positions, then stage in one column on the
+# unused left/right edge when existing and final layouts are one-sided.
+# No automatic fallback after an incomplete restore or an unrelated failure.
+# Run on a SAVED COPY; COM pin-view placement is not tested on live E3.
+
 # ================================================
 # PIN ORDERING SETTINGS
 # ================================================
@@ -1811,7 +2161,13 @@ print_candidate_block_details(
     [group[0]["connector name"] for group in CONNECTOR_PIN_INFO],
 )
 
-verify_detached_symbol_load(prj)
+# The detached MilSymbolReceptacle symbol is an optional backup. Do not
+# block MilBlockSymbolReceptacle projects if that old family cannot load:
+# choose_compatible_pin_symbol() validates the actual per-connector family.
+try:
+    verify_detached_symbol_load(prj)
+except RuntimeError as exc:
+    log(f'LEGACY SYMBOL OPTIONAL: {exc}; will try placed pin symbol family.')
 
 
 # generate pin location maps, get block dimensions and find the block centers
@@ -1847,10 +2203,40 @@ for connector_group in CONNECTOR_PIN_INFO:
 
     if already_matches:
         staging_map = {}
+        center_staging_map = {}
+        center_staging_error = None
+        edge_staging_map = {}
+        edge_staging_error = None
+        edge_staging_name = None
     else:
-        staging_map = build_staging_map(global_final_sequence, pin_geometry)
+        try:
+            center_staging_map = build_center_staging_map(
+                global_final_sequence, pin_geometry)
+            center_staging_error = None
+        except RuntimeError as exc:
+            center_staging_map = {}
+            center_staging_error = str(exc)
+            log(f'{connector_name}: center staging preflight unavailable: {exc}')
+        staging_map = center_staging_map  # primary strategy, if feasible
+        try:
+            edge_staging_map = build_edge_staging_map(
+                global_final_sequence, pin_geometry, connector_excel_record,
+                sorted_pin_records)
+            edge_staging_error = None
+            edge_staging_name = next(iter(edge_staging_map.values()))['lane']
+        except RuntimeError as exc:
+            edge_staging_map = {}
+            edge_staging_error = str(exc)
+            edge_staging_name = None
+            log(f'{connector_name}: edge fallback preflight unavailable: {exc}')
+
+    placement_symbol_name = (
+        choose_compatible_pin_symbol(prj, sorted_pin_records, connector_name)
+        if not already_matches else None
+    )
 
     work_record = {
+        "placement_symbol_name": placement_symbol_name,
         "connector_excel_record": connector_excel_record,
         "connector_name": connector_name,
         "connector_device_id": connector_device_id,
@@ -1862,6 +2248,12 @@ for connector_group in CONNECTOR_PIN_INFO:
         "final_plan": final_plan,
         "global_final_sequence": global_final_sequence,
         "staging_map": staging_map,
+        "center_staging_map": center_staging_map,
+        "center_staging_error": center_staging_error,
+        "edge_staging_map": edge_staging_map,
+        "edge_staging_error": edge_staging_error,
+        "edge_staging_name": edge_staging_name,
+        "staging_method": None,
         "staged_records": [],
         "skip_reorder": already_matches,
     }
@@ -1911,7 +2303,7 @@ for connector_group in CONNECTOR_PIN_INFO:
         for item in global_final_sequence:
             log(f"    STEP {item['sequence_index'] + 1} -> PIN {item['pin_name']} -> {item['side']} ROW {item['row']} -> {item['stage_lane']} ROW {item['stage_row']}")
 
-        log("CENTER STACK MAP:")
+        log("PRIMARY CENTER STAGING MAP (fallback to unused edge on E3 placement failure):")
 
         for item in global_final_sequence:
 
@@ -1920,9 +2312,9 @@ for connector_group in CONNECTOR_PIN_INFO:
             log(f"    PIN {item['pin_name']} -> {stage['lane']} ROW {stage['row']} -> ({stage['x']}, {stage['y']})")
 
 
-# place all pins peel order on block centers
-
-section("BUILD TWO UNIVERSAL CENTER STACKS")
+# Try center staging first; if E3 rejects a placement, restore every
+# previously moved pin, verify the original state, and try the unused edge.
+section("STAGE PINS: CENTER FIRST, GUARDED EDGE FALLBACK")
 
 for work_record in CONNECTOR_WORK_INFO:
 
@@ -1934,9 +2326,8 @@ for work_record in CONNECTOR_WORK_INFO:
 
     log(f"STAGING {work_record['connector_name']}")
 
-    staged_records = peel_all_pins_to_staging(prj, dev, pin, sht, work_record["connector_device_id"], work_record["connector_name"], work_record["block_geometry"], work_record["sorted_pin_records"], work_record["staging_map"], work_record["pin_geometry"])
-
-    work_record["staged_records"] = staged_records
+    work_record['staged_records'] = stage_connector_center_then_edge(
+        prj, dev, pin, sht, work_record)
 
 
 # based on pin maps and block geom generated -> start populating pins based on excel parsed data
