@@ -1194,8 +1194,8 @@ def build_center_staging_map(global_final_sequence, pin_geometry):
     """Original two-column interior staging, attempted first.
 
     COM/E3 can reject this placement for certain block-pin symbol families.
-    In that case the caller restores every changed pin and uses edge staging
-    only if a safe, unused edge was established in the original snapshot.
+    If COM placement fails, pause for the user to Ctrl+Z, verify the original
+    block is restored and then use the unused-edge plan if one exists.
     """
     staging_map = {}
     if not global_final_sequence:
@@ -1430,7 +1430,11 @@ class StagingPlacementRejected(RuntimeError):
     """E3 refused placement but successfully restored the original pin."""
 
 
-def move_pin_by_delete_recreate(prj, pin_view_id, current_live_symbol_id, sheet_id, x, y, rotation, scaling, symbol_name=None):
+class CenterStageManualUndoRequired(RuntimeError):
+    """A center-stage COM move may have deleted a pin view; pause for E3 Undo."""
+
+
+def move_pin_by_delete_recreate(prj, pin_view_id, current_live_symbol_id, sheet_id, x, y, rotation, scaling, symbol_name=None, manual_undo_on_failure=False):
     # Cache the original position/orientation *before* the destructive COM call.
     # If the placement is disallowed, attempt to restore the original symbol.
     before_sym = prj.CreateSymbolObject()
@@ -1447,6 +1451,33 @@ def move_pin_by_delete_recreate(prj, pin_view_id, current_live_symbol_id, sheet_
         before_scale = float(before_scale)
     except Exception:
         before_scale = scaling
+    # CENTER probe: any failure after beginning the delete/replace operation
+    # MUST stop this peel immediately. Do NOT try to auto-restore a deleted
+    # view: some Zuken projects require Ctrl+Z to restore the pin/view itself.
+    if manual_undo_on_failure:
+        try:
+            delete_live_symbol(prj, current_live_symbol_id)
+            time.sleep(0.15)
+            if not verify_ghost(prj, pin_view_id):
+                raise RuntimeError(f"Pin-view ID {pin_view_id} did not become a ghost after delete.")
+            new_symbol_id = place_ghost_pin_view(
+                prj, pin_view_id, sheet_id, x, y, rotation, scaling, symbol_name)
+            time.sleep(0.15)
+            metadata = inspect_live_symbol_by_id(prj, new_symbol_id)
+            if metadata is None:
+                raise RuntimeError(f"Returned symbol ID {new_symbol_id} could not be resolved.")
+            return new_symbol_id, metadata
+        except Exception as stage_exc:
+            raise CenterStageManualUndoRequired(
+                f"Center staging rejected pin-view {pin_view_id} "
+                f"(live symbol {current_live_symbol_id}) at ({x}, {y}). "
+                f"Zuken may have DELETED its view. STOPPING the peel now; "
+                f"use Ctrl+Z in E3 until every original connector pin is "
+                f"restored. Cause: {stage_exc}"
+            ) from stage_exc
+
+    # Non-center moves retain the previous behavior, including the older
+    # recovery path. The center-to-edge switch NEVER invokes this path.
     delete_live_symbol(prj, current_live_symbol_id)
     time.sleep(0.15)
     if not verify_ghost(prj, pin_view_id):
@@ -1499,7 +1530,7 @@ def find_logical_pin(dev, pin, connector_device_id, pin_name):
                 "view_ids": get_view_ids(pin),
             }
     return None
-def peel_all_pins_to_staging(prj, dev, pin, sht, connector_device_id, connector_name, block_geometry, sorted_pin_records, staging_map, pin_geometry, placement_symbol_name, staged_records=None):
+def peel_all_pins_to_staging(prj, dev, pin, sht, connector_device_id, connector_name, block_geometry, sorted_pin_records, staging_map, pin_geometry, placement_symbol_name, staged_records=None, manual_undo_on_failure=False):
     if staged_records is None:
         staged_records = []
     allowed_characteristics = {
@@ -1567,9 +1598,17 @@ def peel_all_pins_to_staging(prj, dev, pin, sht, connector_device_id, connector_
         stage = staging_map[pin_name]
         log(f"STAGE {index + 1}/{len(sorted_pin_records)} | PIN {pin_name} | VIEW {pin_view_id} | LIVE {live_symbol_id} | SOURCE {live_resolution_source} | {characteristic} -> {stage['lane']} ROW {stage['row']} -> ({stage['x']}, {stage['y']})")
         stage_flip = stage['flip'] if stage.get('flip') is not None else rotation
-        new_symbol_id, metadata = move_pin_by_delete_recreate(
-            prj, pin_view_id, live_symbol_id, pin_geometry['sheet_id'],
-            stage['x'], stage['y'], stage_flip, scaling, placement_symbol_name)
+        try:
+            new_symbol_id, metadata = move_pin_by_delete_recreate(
+                prj, pin_view_id, live_symbol_id, pin_geometry['sheet_id'],
+                stage['x'], stage['y'], stage_flip, scaling, placement_symbol_name,
+                manual_undo_on_failure=manual_undo_on_failure)
+        except CenterStageManualUndoRequired as exc:
+            raise CenterStageManualUndoRequired(
+                f"{connector_name}: PEEL {index + 1}/{len(sorted_pin_records)} "
+                f"PIN {pin_name} could not be placed at the center. "
+                f"STOPPED BEFORE PIN {index + 2}. {exc}"
+            ) from exc
         # Record *before* validating so even an unexpected E3 return is
         # included in recovery if subsequent validation fails.
         staged_records.append({
@@ -1679,65 +1718,251 @@ def rollback_staged_connector(prj, sht, connector_name, staged_records,
     log(f'{connector_name}: restored original pin positions VERIFIED.')
 
 
+def check_original_block_for_manual_undo(prj, sht, work_record):
+    """Read-only check after Ctrl+Z: all original labeled pins at original XY.
+
+    This intentionally uses the physical pin symbol + text and geometry, not
+    the possibly deleted/stale pin-view IDs that triggered the error.
+    """
+    name = work_record['connector_name']
+    block = work_record['block_geometry']
+    original = work_record['sorted_pin_records']
+    expected_by_pin = {r['pin_name']: r for r in original}
+    try:
+        cabblock = inspect_live_symbol_by_id(prj, block['block_symbol_id'])
+        if cabblock is None:
+            return False, f"CABBLOCK {block['block_symbol_id']} is missing. Undo more."
+        scan = collect_labeled_block_pins(prj, sht, block, name, {})
+    except Exception as exc:
+        return False, f"Cannot scan the original connector: {exc}"
+    seen = scan['pins']
+    missing = sorted(set(expected_by_pin) - set(seen))
+    extra = sorted(set(seen) - set(expected_by_pin))
+    positions = []
+    for pin_name in sorted(set(seen) & set(expected_by_pin)):
+        symbol_location = seen[pin_name]['location']
+        original_pin = expected_by_pin[pin_name]
+        if (symbol_location is None or
+                int(symbol_location['sheet_id']) != int(original_pin['sheet_id']) or
+                not coordinates_close(symbol_location, original_pin['x'], original_pin['y'])):
+            positions.append(pin_name)
+    problems = []
+    if scan['duplicates']:
+        problems.append(f"duplicated pins: {scan['duplicates'][:5]}")
+    if missing:
+        problems.append(f"missing pins: {missing[:15]} ({len(missing)} total)")
+    if extra:
+        problems.append(f"unexpected pins: {extra[:15]}")
+    if positions:
+        problems.append(f"pins not at original positions: {positions[:15]} ({len(positions)} total)")
+    if problems:
+        return False, '; '.join(problems)
+    return True, f"Verified all {len(original)} {name} pins on original sheet and locations."
+
+
+def wait_for_manual_undo(prj, sht, work_record, failure):
+    """Pause the Python staging operation without closing the E3 project.
+
+    A regular Tk window deliberately has NO global grab or always-on-top flag:
+    user must be able to activate Zuken and press Ctrl+Z. The only way to
+    continue is the user's explicit Verify action followed by a full read-only
+    per-pin position validation. Cancel stops; script never guesses.
+    """
+    name = work_record['connector_name']
+    heading = f"{name}: CENTER STAGING FAILED - MANUAL UNDO REQUIRED"
+    section(heading)
+    log(str(failure))
+    log('THE CENTER PEEL HAS STOPPED. No automatic pin recreation/rollback.')
+    log('1. Switch to Zuken E3 (leave this Python script running).')
+    log('2. Press Ctrl+Z until the attempted pin AND EVERY previous moved pin')
+    log('   on this connector are back in their ORIGINAL positions.')
+    log('3. Return to this dialog and press VERIFY & CONTINUE.')
+    log('   If verification succeeds, the script rebinds the pin views and')
+    log('   attempts the unused LEFT/RIGHT block edge.')
+    log('4. Press STOP SCRIPT if you cannot restore the complete connector.')
+    log('Do not save Zuken while the pin view is missing.')
+    try:
+        import tkinter as tk
+        from tkinter import ttk
+        root = tk.Tk()
+    except Exception as exc:
+        # Console fallback is only usable in an interactive Python process.
+        log(f"Cannot open recovery window ({exc}); trying console prompt.")
+        while True:
+            try:
+                answer = input('Undo in Zuken, then type V to verify, or Q to stop: ').strip().lower()
+            except (EOFError, KeyboardInterrupt) as ex:
+                raise RuntimeError('Manual Undo confirmation unavailable; stopped without edge fallback.') from ex
+            if answer in ('q', 'quit', 'stop'):
+                raise RuntimeError(f'{name}: User stopped after center failure. Edge peel NOT attempted.')
+            if answer not in ('v', 'verify'):
+                continue
+            okay, detail = check_original_block_for_manual_undo(prj, sht, work_record)
+            log(('VERIFIED: ' if okay else 'NOT RESTORED: ') + detail)
+            if okay:
+                return
+
+    root.title('Zuken - Manual Ctrl+Z required before edge staging')
+    root.geometry('720x380')
+    root.minsize(600, 310)
+    root.attributes('-topmost', False)
+    root.resizable(True, True)
+    result = {'verified': False}
+
+    outer = ttk.Frame(root, padding=16)
+    outer.pack(fill='both', expand=True)
+    ttk.Label(outer, text=heading, font=('Segoe UI', 12, 'bold'),
+              wraplength=660).pack(anchor='w', pady=(0, 10))
+    instructions = (
+        'The center placement was rejected. Zuken may have deleted the pin view.\n'
+        'This script is PAUSED; it will NOT recreate the pin automatically.\n\n'
+        '1. Switch to Zuken E3.\n'
+        '2. Press Ctrl+Z until ALL connector pins (including the first peeled pin)\n'
+        '   are back in their ORIGINAL locations.\n'
+        '3. Return here and click VERIFY RESTORATION & CONTINUE.\n'
+        '4. The script will then try staging on the unused left/right block edge.\n\n'
+        'If Zuken cannot undo the changes, click STOP SCRIPT.'
+    )
+    ttk.Label(outer, text=instructions, justify='left', wraplength=665).pack(
+        anchor='w', fill='x')
+    status_text = tk.StringVar(value='Waiting for manual Undo in Zuken...')
+    status_label = ttk.Label(outer, textvariable=status_text, wraplength=660,
+                             foreground='#a04221')
+    status_label.pack(anchor='w', fill='x', pady=(12, 8))
+    buttons = ttk.Frame(outer)
+    buttons.pack(fill='x', side='bottom', pady=(10, 0))
+
+    def verify():
+        ok, detail = check_original_block_for_manual_undo(prj, sht, work_record)
+        log(('UNDO VERIFIED: ' if ok else 'UNDO INCOMPLETE: ') + detail)
+        if ok:
+            result['verified'] = True
+            root.destroy()
+        else:
+            status_text.set('NOT YET RESTORED: ' + detail + '\nCtrl+Z in Zuken and verify again.')
+
+    def stop():
+        result['verified'] = False
+        root.destroy()
+
+    ttk.Button(buttons, text='STOP SCRIPT', command=stop).pack(side='right')
+    ttk.Button(buttons, text='VERIFY RESTORATION & CONTINUE',
+               command=verify).pack(side='right', padx=(0, 12))
+    root.protocol('WM_DELETE_WINDOW', stop)
+    root.mainloop()
+    if not result['verified']:
+        raise RuntimeError(f'{name}: Manual Undo was not verified. Script stopped; no edge peel attempted.')
+
+
+def refresh_after_manual_undo(prj, dev, pin, sht, work_record):
+    """Reacquire E3 pin IDs/views after the user has undone the center probe."""
+    name = work_record['connector_name']
+    okay, detail = check_original_block_for_manual_undo(prj, sht, work_record)
+    if not okay:
+        raise RuntimeError(f'{name}: Undo verification was lost: {detail}. No fallback.')
+    selected = select_labeled_block(
+        prj, sht, work_record['connector_excel_record'],
+        [work_record['block_geometry']], SHEET_NAME_BY_ID)
+    bindings = locate_logical_pin_bindings(prj, dev, pin, selected, get_device_ids(prj))
+    snapshot = snapshot_selected_pin_bindings(prj, bindings, selected)
+    fresh_records = get_sorted_live_pin_records(snapshot)
+    validate_connector_snapshot_location(name, fresh_records, work_record['block_geometry'])
+    validate_excel_against_e3(work_record['connector_excel_record'], fresh_records)
+    # We verify again AFTER reverse pin lookups because undo can change pin
+    # view IDs. A stale or half-undo state must never reach edge staging.
+    original_by_pin = {r['pin_name']: r for r in work_record['sorted_pin_records']}
+    for record in fresh_records:
+        previous = original_by_pin[record['pin_name']]
+        if (int(record['sheet_id']) != int(previous['sheet_id']) or
+                abs(record['x'] - previous['x']) > SYMBOL_SCAN_COORDINATE_TOLERANCE or
+                abs(record['y'] - previous['y']) > SYMBOL_SCAN_COORDINATE_TOLERANCE):
+            raise RuntimeError(f'{name} pin {record["pin_name"]}: new view not at original location. No fallback.')
+    geometry = derive_pin_geometry(work_record['block_geometry'], fresh_records,
+                                    work_record['connector_excel_record'])
+    final_plan = build_final_plan(work_record['connector_excel_record'], geometry)
+    final_sequence = build_global_final_sequence(final_plan)
+    edge_map = build_edge_staging_map(final_sequence, geometry,
+                                      work_record['connector_excel_record'], fresh_records)
+    work_record['sorted_pin_records'] = fresh_records
+    work_record['initial_snapshot'] = snapshot
+    work_record['pin_geometry'] = geometry
+    work_record['final_plan'] = final_plan
+    work_record['global_final_sequence'] = final_sequence
+    work_record['edge_staging_map'] = edge_map
+    work_record['edge_staging_name'] = next(iter(edge_map.values()))['lane']
+    work_record['edge_staging_error'] = None
+    work_record['placement_symbol_name'] = choose_compatible_pin_symbol(prj, fresh_records, name)
+    work_record['skip_reorder'] = connector_already_matches_final_plan(fresh_records, final_plan)
+    log(f'{name}: Undo VERIFIED and all logical pin/view IDs REBOUND. '
+        f"Proceeding with {work_record['edge_staging_name']} only.")
+    for record in fresh_records:
+        log(f"  REBOUND PIN {record['pin_name']} | logical {record['logical_pin_id']} "
+            f"| view {record['pin_view_id']} | sheet {record['sheet_id']}")
+
+
 def stage_connector_center_then_edge(prj, dev, pin, sht, work_record):
-    """Try center first, recover completely, and then try one unused edge."""
-    connector_name = work_record['connector_name']
+    """Probe center, pause for manual undo on a destructive failure, use edge."""
+    name = work_record['connector_name']
     common = (
-        prj, dev, pin, sht, work_record['connector_device_id'], connector_name,
+        prj, dev, pin, sht, work_record['connector_device_id'], name,
         work_record['block_geometry'], work_record['sorted_pin_records'])
     tail = (work_record['pin_geometry'], work_record['placement_symbol_name'])
-    primary_records = []
-    log(f'{connector_name}: trying original TWO-CENTER-LANE staging FIRST.')
-    try:
-        if work_record['center_staging_error'] is not None:
-            # Pure geometry preflight failure, so no pin was moved.
-            raise StagingPlacementRejected(
-                'Center staging cannot fit inside the selected CABBLOCK: '
-                + work_record['center_staging_error'])
-        peel_all_pins_to_staging(*common, work_record['center_staging_map'],
-                                 *tail, staged_records=primary_records)
-        work_record['staging_method'] = 'CENTER'
-        log(f'{connector_name}: CENTER staging completed; no fallback needed.')
-        return primary_records
-    except Exception as primary_error:
-        log(f'{connector_name}: CENTER staging failed: {primary_error}')
-        # Only a confirmed rejection of a PlacePinView call (with the last
-        # pin successfully restored) authorizes trying another method.
-        fallback_ok = isinstance(primary_error, StagingPlacementRejected)
-        rollback_staged_connector(
-            prj, sht, connector_name, primary_records,
-            work_record['sorted_pin_records'], work_record['placement_symbol_name'])
-        if not fallback_ok:
-            raise RuntimeError(
-                f'{connector_name}: center staging failed for a reason OTHER '
-                f'than a recoverable E3 placement rejection. Original positions '
-                f'were restored; edge fallback will NOT be attempted. '
-                f'Error: {primary_error}') from primary_error
-        if work_record['edge_staging_error'] is not None:
-            raise RuntimeError(
-                f'{connector_name}: E3 rejected CENTER staging; original pins '
-                f'were restored, but no safe one-edge fallback exists. '
-                f'{work_record["edge_staging_error"]}') from primary_error
-        log(f'{connector_name}: SWITCHING TO '
-            f'{work_record["edge_staging_name"]} staging on unused block edge.')
-        edge_records = []
+    center_records = []
+    if work_record['center_staging_error'] is None:
+        log(f'{name}: attempting CENTER staging first. Any rejected COM placement '
+            'requires user Ctrl+Z before switching to an edge.')
         try:
-            peel_all_pins_to_staging(*common, work_record['edge_staging_map'],
-                                     *tail, staged_records=edge_records)
-            work_record['staging_method'] = 'EDGE'
-            work_record['staging_map'] = work_record['edge_staging_map']
-            log(f'{connector_name}: EDGE staging completed: '
-                f'{len(edge_records)} pins on one block edge.')
-            return edge_records
-        except Exception as edge_error:
-            log(f'{connector_name}: EDGE staging failed: {edge_error}')
-            rollback_staged_connector(
-                prj, sht, connector_name, edge_records,
-                work_record['sorted_pin_records'], work_record['placement_symbol_name'])
-            raise RuntimeError(
-                f'{connector_name}: center and edge staging both failed. '
-                f'Original pin locations were restored; no final ordering '
-                f'was attempted. Edge error: {edge_error}') from edge_error
+            peel_all_pins_to_staging(
+                *common, work_record['center_staging_map'], *tail,
+                staged_records=center_records, manual_undo_on_failure=True)
+            work_record['staging_method'] = 'CENTER'
+            log(f'{name}: CENTER staging completed; no fallback needed.')
+            return center_records
+        except Exception as primary_error:
+            log(f'{name}: CENTER STAGING STOPPED: {primary_error}')
+            if not (isinstance(primary_error, CenterStageManualUndoRequired) or center_records):
+                # Nothing has been moved/deleted by the script; this was a
+                # pre-edit validation failure, not a placement rejection.
+                raise RuntimeError(f'{name}: center peel failed BEFORE placing any pin. '
+                                   f'No edge fallback attempted: {primary_error}') from primary_error
+            # NO automatic rollback or further COM placement/delete before
+            # explicit confirmation that Ctrl+Z restored *all* original pins.
+            wait_for_manual_undo(prj, sht, work_record, primary_error)
+            refresh_after_manual_undo(prj, dev, pin, sht, work_record)
+    else:
+        log(f'{name}: center staging geometry unavailable without moving pins: '
+            f"{work_record['center_staging_error']}. Trying prevalidated edge.")
+
+    # Existing edge staging can be used only after fresh verification (or if
+    # the center plan failed pure geometry preflight before any E3 change).
+    if work_record['edge_staging_error'] is not None:
+        raise RuntimeError(f'{name}: no safe unused edge available. '
+                           f"{work_record['edge_staging_error']}")
+    if work_record['skip_reorder']:
+        log(f'{name}: restored connector already matches requested order. Skipping.')
+        work_record['staging_method'] = 'SKIP'
+        return []
+    log(f'{name}: SWITCHING TO {work_record["edge_staging_name"]} staging.')
+    edge_records = []
+    fresh_common = (
+        prj, dev, pin, sht, work_record['connector_device_id'], name,
+        work_record['block_geometry'], work_record['sorted_pin_records'])
+    fresh_tail = (work_record['pin_geometry'], work_record['placement_symbol_name'])
+    try:
+        peel_all_pins_to_staging(
+            *fresh_common, work_record['edge_staging_map'], *fresh_tail,
+            staged_records=edge_records)
+        work_record['staging_method'] = 'EDGE'
+        work_record['staging_map'] = work_record['edge_staging_map']
+        log(f'{name}: EDGE staging completed: {len(edge_records)} pins.')
+        return edge_records
+    except Exception as edge_error:
+        log(f'{name}: EDGE staging failed: {edge_error}')
+        rollback_staged_connector(
+            prj, sht, name, edge_records,
+            work_record['sorted_pin_records'], work_record['placement_symbol_name'])
+        raise RuntimeError(f'{name}: edge staging failed; script stopped. '
+                           f'Error: {edge_error}') from edge_error
 
 
 def build_final_plan(connector_excel_record, pin_geometry):
@@ -1968,10 +2193,11 @@ def resolve_and_format_final_pins(prj, sht, connector_name, staged_records):
         apply_text_tweaks(prj, identity["symbol_id"], side, is_top_of_side)
         staged_record["final_resolved_symbol_id"] = identity["symbol_id"]
 # CENTER-FIRST STAGING WITH GUARDED EDGE FALLBACK:
-# Attempt original two-center-lane staging. If Zuken rejects placement,
-# restore ALL pins and verify positions, then stage in one column on the
-# unused left/right edge when existing and final layouts are one-sided.
-# No automatic fallback after an incomplete restore or an unrelated failure.
+# Attempt original two-center-lane staging. If a center COM placement fails,
+# PAUSE WITHOUT AUTOMATIC RESTORATION. Ask the user to Ctrl+Z in Zuken until
+# EVERY original pin has returned; then verify physical locations AND rebind
+# view IDs before staging on the unused left/right edge. Never continue from
+# an unplaced/half-undone connector.
 # Run on a SAVED COPY; COM pin-view placement is not tested on live E3.
 
 # ================================================
@@ -2303,18 +2529,24 @@ for connector_group in CONNECTOR_PIN_INFO:
         for item in global_final_sequence:
             log(f"    STEP {item['sequence_index'] + 1} -> PIN {item['pin_name']} -> {item['side']} ROW {item['row']} -> {item['stage_lane']} ROW {item['stage_row']}")
 
-        log("PRIMARY CENTER STAGING MAP (fallback to unused edge on E3 placement failure):")
+        if center_staging_error is None:
+            log("PRIMARY CENTER STAGING MAP (manual Ctrl+Z checkpoint on E3 placement failure):")
+            for item in global_final_sequence:
+                stage = center_staging_map[item['pin_name']]
+                log(f"    PIN {item['pin_name']} -> {stage['lane']} ROW {stage['row']} -> ({stage['x']}, {stage['y']})")
+        else:
+            log(f"CENTER GEOMETRY PREFLIGHT UNAVAILABLE: {center_staging_error}")
+            log("No pin will be moved at center; edge staging can be used directly if safe.")
+        if edge_staging_error is None:
+            log(f"EDGE FALLBACK AVAILABLE: {edge_staging_name}")
+        else:
+            log(f"EDGE FALLBACK UNAVAILABLE: {edge_staging_error}")
 
-        for item in global_final_sequence:
 
-            stage = staging_map[item["pin_name"]]
-
-            log(f"    PIN {item['pin_name']} -> {stage['lane']} ROW {stage['row']} -> ({stage['x']}, {stage['y']})")
-
-
-# Try center staging first; if E3 rejects a placement, restore every
-# previously moved pin, verify the original state, and try the unused edge.
-section("STAGE PINS: CENTER FIRST, GUARDED EDGE FALLBACK")
+# Try center staging first. On a rejected pin placement, STOP CENTER PEEL,
+# ask the user to Ctrl+Z until the original block is fully restored, and
+# verify + REBIND all pin views before attempting the edge fallback.
+section("STAGE PINS: CENTER, MANUAL CTRL+Z, THEN EDGE")
 
 for work_record in CONNECTOR_WORK_INFO:
 
@@ -2328,6 +2560,8 @@ for work_record in CONNECTOR_WORK_INFO:
 
     work_record['staged_records'] = stage_connector_center_then_edge(
         prj, dev, pin, sht, work_record)
+    if work_record.get('staging_method') == 'SKIP':
+        work_record['skip_reorder'] = True
 
 
 # based on pin maps and block geom generated -> start populating pins based on excel parsed data
