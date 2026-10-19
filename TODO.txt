@@ -3,6 +3,168 @@ import math
 import time
 import pyodbc
 import win32com.client as win32
+import os
+import sys
+import json
+import hashlib
+import subprocess
+import tempfile
+
+# The launcher NEVER creates a Zuken COM object. Every E3 operation runs in a
+# separate Python worker process, which really exits before the Ctrl+Z prompt.
+HANDOFF_NEEDS_UNDO = 20
+HANDOFF_UNDO_INCOMPLETE = 21
+
+
+def _excel_digest(path):
+    with open(path, "rb") as source:
+        digest = hashlib.sha256()
+        for chunk in iter(lambda: source.read(1024 * 1024), b""):
+            digest.update(chunk)
+        return digest.hexdigest()
+
+
+def _exit_worker(code):
+    # Force the *Python COM worker* to exit, NOT E3 or Windows COM Surrogate.
+    # No live Python COM proxy is kept by the standalone launcher.
+    try:
+        sys.stdout.flush()
+        sys.stderr.flush()
+    finally:
+        os._exit(int(code))
+
+
+def _undo_instruction_window(checkpoint):
+    name = checkpoint["connector_name"]
+    failure = checkpoint.get("failure", "Unknown center placement failure")
+    print("\n" + "=" * 90)
+    print(f"{name}: ZUKEN COM WORKER HAS EXITED. UNDO CAN NOW BE ATTEMPTED.")
+    print(f"Cause: {failure}")
+    print("Switch to E3 and Ctrl+Z until EVERY original connector pin is back.")
+    print("Do not save while a connector pin/view is missing.")
+    print("=" * 90, flush=True)
+    try:
+        import tkinter as tk
+        from tkinter import ttk
+        root = tk.Tk()
+    except Exception as exc:
+        print(f"Could not create recovery window ({exc}).")
+        try:
+            answer = input("Ctrl+Z in E3, then type V to RECONNECT+VERIFY, or Q to STOP: ")
+        except (EOFError, KeyboardInterrupt):
+            return False
+        return answer.strip().lower() in ("v", "verify", "y", "yes")
+
+    root.title(f"E3: Undo {name} - COM worker disconnected")
+    root.geometry("760x410")
+    root.minsize(650, 340)
+    root.attributes("-topmost", False)
+    decision = {"retry": False}
+    outer = ttk.Frame(root, padding=20)
+    outer.pack(fill="both", expand=True)
+    ttk.Label(outer, text=f"{name}: CENTER PIN PLACEMENT FAILED",
+              font=("Segoe UI", 12, "bold")).pack(anchor="w", pady=(0, 12))
+    info = (
+        "The separate Python COM worker has FULLY EXITED. The launcher has "
+        "NO open Zuken COM connection.\n\n"
+        "1. Switch to E3 and press Ctrl+Z until the failed pin AND any earlier "
+        "staged pins are back at their ORIGINAL positions.\n"
+        "2. Return here and select RECONNECT, VERIFY & PEEL ON EDGE.\n"
+        "3. A NEW Python worker will open E3 and verify every original pin "
+        "before it moves anything.\n"
+        "4. If Undo is incomplete, the new worker exits again and this "
+        "window reappears.\n\n"
+        "Do NOT close E3. Do NOT save the incomplete project. "
+        "If Ctrl+Z does not work after the worker exits, stop."
+    )
+    ttk.Label(outer, text=info, justify="left", wraplength=705).pack(
+        anchor="w", fill="x")
+    ttk.Label(outer, text=f"Failure: {failure}", wraplength=705,
+              foreground="#a04221").pack(anchor="w", fill="x", pady=(13, 10))
+    controls = ttk.Frame(outer)
+    controls.pack(side="bottom", fill="x", pady=(12, 0))
+
+    def proceed():
+        decision["retry"] = True
+        root.destroy()
+
+    def stop():
+        decision["retry"] = False
+        root.destroy()
+
+    ttk.Button(controls, text="STOP - DON'T MODIFY ANYTHING",
+               command=stop).pack(side="right")
+    ttk.Button(controls, text="RECONNECT, VERIFY & PEEL ON EDGE",
+               command=proceed).pack(side="right", padx=(0, 12))
+    root.protocol("WM_DELETE_WINDOW", stop)
+    root.mainloop()
+    return decision["retry"]
+
+
+def _run_com_worker(excel, index, mode, checkpoint_path):
+    args = [sys.executable, os.path.abspath(__file__), "--zuken-worker",
+            os.path.abspath(excel), str(index), mode, checkpoint_path]
+    print(f"\nLAUNCHING isolated E3 worker: connector {index+1}, mode={mode}", flush=True)
+    return subprocess.run(args, check=False).returncode
+
+
+def _launch_without_com():
+    excel = ask_save_path()
+    if not excel:
+        print("No Excel file selected; nothing changed.")
+        return
+    wb = load_workbook(excel, data_only=True, read_only=True)
+    try:
+        count = int(wb.active["C5"].value)
+    finally:
+        wb.close()
+    if count <= 0:
+        raise RuntimeError("Excel C5 must contain a positive connector count.")
+    print("ZUKEN SUPERVISOR: no COM objects created in this parent process.")
+    print("Center fails -> worker EXITS -> Ctrl+Z -> NEW worker verifies -> edge.")
+    # Retain the checkpoint only while supervising this run. Worker exits are
+    # awaited before dialogs appear so COM references are genuinely released.
+    with tempfile.TemporaryDirectory(prefix="zuken_pin_undo_") as tempdir:
+        for index in range(count):
+            checkpoint_path = os.path.join(tempdir, f"connector_{index}.json")
+            result = _run_com_worker(excel, index, "center", checkpoint_path)
+            if result == 0:
+                continue
+            if result != HANDOFF_NEEDS_UNDO:
+                raise RuntimeError(
+                    f"E3 worker returned {result} on connector {index+1}; "
+                    "no automatic continuation. Check the Python output and E3 project."
+                )
+            if not os.path.exists(checkpoint_path):
+                raise RuntimeError("Worker exited for Undo, but did not write its checkpoint.")
+            with open(checkpoint_path, encoding="utf-8") as f:
+                checkpoint = json.load(f)
+            if checkpoint.get("connector_index") != index or \
+                    checkpoint.get("excel_sha256") != _excel_digest(excel):
+                raise RuntimeError("Undo checkpoint does not match the selected workbook/connector.")
+            while True:
+                # Parent has NO COM connection. Child already terminated.
+                if not _undo_instruction_window(checkpoint):
+                    raise RuntimeError("Stopped at manual Undo checkpoint. No edge peel attempted.")
+                result = _run_com_worker(excel, index, "edge-resume", checkpoint_path)
+                if result == 0:
+                    break
+                if result == HANDOFF_UNDO_INCOMPLETE:
+                    print("E3 verification failed. COM worker has exited AGAIN; "
+                          "undo more before retrying.", flush=True)
+                    continue
+                raise RuntimeError(
+                    f"Edge-resume E3 worker returned {result} on connector {index+1}. "
+                    "No automatic retry. Check the error and recover the project."
+                )
+    print("ALL CONNECTORS COMPLETE. No E3 COM objects were held by supervisor.")
+
+
+# Standalone launcher (one script to run). The worker starts the legacy E3
+# logic below only when explicitly given --zuken-worker by this launcher.
+if __name__ == "__main__" and (len(sys.argv) < 2 or sys.argv[1] != "--zuken-worker"):
+    _launch_without_com()
+    raise SystemExit(0)
 
 # ================================================
 # HELPER FXN
@@ -1760,144 +1922,96 @@ def check_original_block_for_manual_undo(prj, sht, work_record):
     return True, f"Verified all {len(original)} {name} pins on original sheet and locations."
 
 
-def wait_for_manual_undo(prj, sht, work_record, failure):
-    """Pause the Python staging operation without closing the E3 project.
+def _write_undo_handoff_and_exit(work_record, failure):
+    """Persist original pin coordinates, then terminate entire COM child.
 
-    A regular Tk window deliberately has NO global grab or always-on-top flag:
-    user must be able to activate Zuken and press Ctrl+Z. The only way to
-    continue is the user's explicit Verify action followed by a full read-only
-    per-pin position validation. Cancel stops; script never guesses.
+    Does NOT call wait_for_manual_undo while COM is still connected.
+    Supervisor is a completely separate Python process with no E3 proxy.
     """
-    name = work_record['connector_name']
-    heading = f"{name}: CENTER STAGING FAILED - MANUAL UNDO REQUIRED"
-    section(heading)
-    log(str(failure))
-    log('THE CENTER PEEL HAS STOPPED. No automatic pin recreation/rollback.')
-    log('1. Switch to Zuken E3 (leave this Python script running).')
-    log('2. Press Ctrl+Z until the attempted pin AND EVERY previous moved pin')
-    log('   on this connector are back in their ORIGINAL positions.')
-    log('3. Return to this dialog and press VERIFY & CONTINUE.')
-    log('   If verification succeeds, the script rebinds the pin views and')
-    log('   attempts the unused LEFT/RIGHT block edge.')
-    log('4. Press STOP SCRIPT if you cannot restore the complete connector.')
-    log('Do not save Zuken while the pin view is missing.')
-    try:
-        import tkinter as tk
-        from tkinter import ttk
-        root = tk.Tk()
-    except Exception as exc:
-        # Console fallback is only usable in an interactive Python process.
-        log(f"Cannot open recovery window ({exc}); trying console prompt.")
-        while True:
-            try:
-                answer = input('Undo in Zuken, then type V to verify, or Q to stop: ').strip().lower()
-            except (EOFError, KeyboardInterrupt) as ex:
-                raise RuntimeError('Manual Undo confirmation unavailable; stopped without edge fallback.') from ex
-            if answer in ('q', 'quit', 'stop'):
-                raise RuntimeError(f'{name}: User stopped after center failure. Edge peel NOT attempted.')
-            if answer not in ('v', 'verify'):
-                continue
-            okay, detail = check_original_block_for_manual_undo(prj, sht, work_record)
-            log(('VERIFIED: ' if okay else 'NOT RESTORED: ') + detail)
-            if okay:
-                return
-
-    root.title('Zuken - Manual Ctrl+Z required before edge staging')
-    root.geometry('720x380')
-    root.minsize(600, 310)
-    root.attributes('-topmost', False)
-    root.resizable(True, True)
-    result = {'verified': False}
-
-    outer = ttk.Frame(root, padding=16)
-    outer.pack(fill='both', expand=True)
-    ttk.Label(outer, text=heading, font=('Segoe UI', 12, 'bold'),
-              wraplength=660).pack(anchor='w', pady=(0, 10))
-    instructions = (
-        'The center placement was rejected. Zuken may have deleted the pin view.\n'
-        'This script is PAUSED; it will NOT recreate the pin automatically.\n\n'
-        '1. Switch to Zuken E3.\n'
-        '2. Press Ctrl+Z until ALL connector pins (including the first peeled pin)\n'
-        '   are back in their ORIGINAL locations.\n'
-        '3. Return here and click VERIFY RESTORATION & CONTINUE.\n'
-        '4. The script will then try staging on the unused left/right block edge.\n\n'
-        'If Zuken cannot undo the changes, click STOP SCRIPT.'
-    )
-    ttk.Label(outer, text=instructions, justify='left', wraplength=665).pack(
-        anchor='w', fill='x')
-    status_text = tk.StringVar(value='Waiting for manual Undo in Zuken...')
-    status_label = ttk.Label(outer, textvariable=status_text, wraplength=660,
-                             foreground='#a04221')
-    status_label.pack(anchor='w', fill='x', pady=(12, 8))
-    buttons = ttk.Frame(outer)
-    buttons.pack(fill='x', side='bottom', pady=(10, 0))
-
-    def verify():
-        ok, detail = check_original_block_for_manual_undo(prj, sht, work_record)
-        log(('UNDO VERIFIED: ' if ok else 'UNDO INCOMPLETE: ') + detail)
-        if ok:
-            result['verified'] = True
-            root.destroy()
-        else:
-            status_text.set('NOT YET RESTORED: ' + detail + '\nCtrl+Z in Zuken and verify again.')
-
-    def stop():
-        result['verified'] = False
-        root.destroy()
-
-    ttk.Button(buttons, text='STOP SCRIPT', command=stop).pack(side='right')
-    ttk.Button(buttons, text='VERIFY RESTORATION & CONTINUE',
-               command=verify).pack(side='right', padx=(0, 12))
-    root.protocol('WM_DELETE_WINDOW', stop)
-    root.mainloop()
-    if not result['verified']:
-        raise RuntimeError(f'{name}: Manual Undo was not verified. Script stopped; no edge peel attempted.')
+    block = work_record['block_geometry']
+    checkpoint = {
+        "format": 1,
+        "excel_path": os.path.abspath(output_path),
+        "excel_sha256": _excel_digest(output_path),
+        "connector_index": WORKER_CONNECTOR_INDEX,
+        "connector_name": work_record['connector_name'],
+        "failure": str(failure),
+        "requested_device": REQUESTED_DEVICE_DESIGNATION,
+        "requested_page": REQUESTED_PAGE,
+        "original_block": {
+            "main_device_id": int(block['main_device_id']),
+            "sheet_name": SHEET_NAME_BY_ID[block['sheet_id']],
+            "view_number": int(block['connector_view_number']),
+            "center_x": float(block['block_center_x']),
+            "center_y": float(block['block_center_y']),
+            "block_symbol_id_debug_only": int(block['block_symbol_id']),
+        },
+        "original_pin_positions": {
+            record['pin_name']: {
+                "x": float(record['x']),
+                "y": float(record['y']),
+            }
+            for record in work_record['sorted_pin_records']
+        },
+    }
+    if not WORKER_CHECKPOINT_PATH:
+        raise RuntimeError("No handoff checkpoint configured; refusing to continue.")
+    partial_path = WORKER_CHECKPOINT_PATH + ".tmp"
+    with open(partial_path, 'w', encoding='utf-8') as handle:
+        json.dump(checkpoint, handle, indent=2)
+        handle.flush()
+        os.fsync(handle.fileno())
+    os.replace(partial_path, WORKER_CHECKPOINT_PATH)
+    section('CENTER STAGING FAILED - TERMINATING E3 COM WORKER')
+    log(f"{work_record['connector_name']}: {failure}")
+    log('Original block/pin locations written to: ' + WORKER_CHECKPOINT_PATH)
+    log('The Python COM worker is EXITING NOW. Do NOT kill Zuken or dllhost.exe.')
+    log('The supervisor will ask you to Ctrl+Z AFTER the worker has exited.')
+    _exit_worker(HANDOFF_NEEDS_UNDO)
 
 
-def refresh_after_manual_undo(prj, dev, pin, sht, work_record):
-    """Reacquire E3 pin IDs/views after the user has undone the center probe."""
-    name = work_record['connector_name']
-    okay, detail = check_original_block_for_manual_undo(prj, sht, work_record)
-    if not okay:
-        raise RuntimeError(f'{name}: Undo verification was lost: {detail}. No fallback.')
-    selected = select_labeled_block(
-        prj, sht, work_record['connector_excel_record'],
-        [work_record['block_geometry']], SHEET_NAME_BY_ID)
-    bindings = locate_logical_pin_bindings(prj, dev, pin, selected, get_device_ids(prj))
-    snapshot = snapshot_selected_pin_bindings(prj, bindings, selected)
-    fresh_records = get_sorted_live_pin_records(snapshot)
-    validate_connector_snapshot_location(name, fresh_records, work_record['block_geometry'])
-    validate_excel_against_e3(work_record['connector_excel_record'], fresh_records)
-    # We verify again AFTER reverse pin lookups because undo can change pin
-    # view IDs. A stale or half-undo state must never reach edge staging.
-    original_by_pin = {r['pin_name']: r for r in work_record['sorted_pin_records']}
-    for record in fresh_records:
-        previous = original_by_pin[record['pin_name']]
-        if (int(record['sheet_id']) != int(previous['sheet_id']) or
-                abs(record['x'] - previous['x']) > SYMBOL_SCAN_COORDINATE_TOLERANCE or
-                abs(record['y'] - previous['y']) > SYMBOL_SCAN_COORDINATE_TOLERANCE):
-            raise RuntimeError(f'{name} pin {record["pin_name"]}: new view not at original location. No fallback.')
-    geometry = derive_pin_geometry(work_record['block_geometry'], fresh_records,
-                                    work_record['connector_excel_record'])
-    final_plan = build_final_plan(work_record['connector_excel_record'], geometry)
-    final_sequence = build_global_final_sequence(final_plan)
-    edge_map = build_edge_staging_map(final_sequence, geometry,
-                                      work_record['connector_excel_record'], fresh_records)
-    work_record['sorted_pin_records'] = fresh_records
-    work_record['initial_snapshot'] = snapshot
-    work_record['pin_geometry'] = geometry
-    work_record['final_plan'] = final_plan
-    work_record['global_final_sequence'] = final_sequence
-    work_record['edge_staging_map'] = edge_map
-    work_record['edge_staging_name'] = next(iter(edge_map.values()))['lane']
-    work_record['edge_staging_error'] = None
-    work_record['placement_symbol_name'] = choose_compatible_pin_symbol(prj, fresh_records, name)
-    work_record['skip_reorder'] = connector_already_matches_final_plan(fresh_records, final_plan)
-    log(f'{name}: Undo VERIFIED and all logical pin/view IDs REBOUND. '
-        f"Proceeding with {work_record['edge_staging_name']} only.")
-    for record in fresh_records:
-        log(f"  REBOUND PIN {record['pin_name']} | logical {record['logical_pin_id']} "
-            f"| view {record['pin_view_id']} | sheet {record['sheet_id']}")
+def _verify_undo_in_new_process(prj, sht, candidates, sheet_names, checkpoint):
+    """Read-only verification BEFORE any destructive E3 call in edge worker.
+
+    Do not rely on old pin-view or symbol IDs across Ctrl+Z/COM restarts.
+    Require one physical CABBLOCK with the same owner, sheet, view and XY,
+    plus every connector pin back at its original coordinates. No partial
+    restoration is ever allowed to reach edge staging.
+    """
+    details = checkpoint['original_block']
+    expected = checkpoint['original_pin_positions']
+    name = checkpoint['connector_name']
+    matches = [b for b in candidates
+        if b['main_device_id'] == details['main_device_id']
+        and sheet_names.get(b['sheet_id']) == details['sheet_name']
+        and b['connector_view_number'] == details['view_number']
+        and abs(float(b['block_center_x']) - details['center_x']) <= SYMBOL_SCAN_COORDINATE_TOLERANCE
+        and abs(float(b['block_center_y']) - details['center_y']) <= SYMBOL_SCAN_COORDINATE_TOLERANCE]
+    if len(matches) != 1:
+        return False, (f"Expected ONE original {name} block (owner "
+            f"{details['main_device_id']}, page {details['sheet_name']!r}, "
+            f"view {details['view_number']}); found {len(matches)}. Undo more.")
+    found = collect_labeled_block_pins(prj, sht, matches[0], name, {})
+    actual = found['pins']
+    missing = sorted(set(expected) - set(actual))
+    extra = sorted(set(actual) - set(expected))
+    off_location = []
+    for pn, original in expected.items():
+        if pn not in actual:
+            continue
+        location = actual[pn]['location']
+        if (location is None or
+            not coordinates_close(location, original['x'], original['y']) or
+            sheet_names.get(location['sheet_id']) != details['sheet_name']):
+            off_location.append(pn)
+    if found['duplicates'] or missing or extra or off_location:
+        return False, (
+            f"{name}: incomplete Ctrl+Z. "
+            f"Missing={missing[:20]}, extra={extra[:20]}, "
+            f"moved={off_location[:20]}, duplicates={found['duplicates'][:8]}. "
+            "All pins must be restored before edge staging.")
+    return True, (f"{name}: verified ALL {len(expected)} connector pins "
+                  "at their original positions on the original block.")
 
 
 def stage_connector_center_then_edge(prj, dev, pin, sht, work_record):
@@ -1925,10 +2039,10 @@ def stage_connector_center_then_edge(prj, dev, pin, sht, work_record):
                 # pre-edit validation failure, not a placement rejection.
                 raise RuntimeError(f'{name}: center peel failed BEFORE placing any pin. '
                                    f'No edge fallback attempted: {primary_error}') from primary_error
-            # NO automatic rollback or further COM placement/delete before
-            # explicit confirmation that Ctrl+Z restored *all* original pins.
-            wait_for_manual_undo(prj, sht, work_record, primary_error)
-            refresh_after_manual_undo(prj, dev, pin, sht, work_record)
+            # Immediately EXIT this entire worker process; while COM proxies
+            # remain alive Zuken may refuse Ctrl+Z. The no-COM supervisor
+            # handles manual Undo, then launches a fresh edge worker.
+            _write_undo_handoff_and_exit(work_record, primary_error)
     else:
         log(f'{name}: center staging geometry unavailable without moving pins: '
             f"{work_record['center_staging_error']}. Trying prevalidated edge.")
@@ -2194,10 +2308,10 @@ def resolve_and_format_final_pins(prj, sht, connector_name, staged_records):
         staged_record["final_resolved_symbol_id"] = identity["symbol_id"]
 # CENTER-FIRST STAGING WITH GUARDED EDGE FALLBACK:
 # Attempt original two-center-lane staging. If a center COM placement fails,
-# PAUSE WITHOUT AUTOMATIC RESTORATION. Ask the user to Ctrl+Z in Zuken until
-# EVERY original pin has returned; then verify physical locations AND rebind
-# view IDs before staging on the unused left/right edge. Never continue from
-# an unplaced/half-undone connector.
+# EXIT THE COM WORKER without restoring automatically. The separate, COM-free
+# launcher asks the user to Ctrl+Z in Zuken until EVERY pin is restored.
+# It then starts a fresh COM worker to verify physical locations, rebind
+# view IDs, and stage on the unused edge. Never continue from partial Undo.
 # Run on a SAVED COPY; COM pin-view placement is not tested on live E3.
 
 # ================================================
@@ -2233,10 +2347,18 @@ COM_MISSING = -2147352572
 
 BLOCK_OFFSET = 4
 
-output_path = ask_save_path()
-
-if output_path is None:
-    raise Exception("No Excel file selected")
+# Worker-only section. The launcher selected the workbook in a process
+# without any COM objects and passed it to this isolated child.
+if len(sys.argv) != 6 or sys.argv[1] != '--zuken-worker':
+    raise RuntimeError('This file must be started without arguments (launcher mode).')
+output_path = os.path.abspath(sys.argv[2])
+WORKER_CONNECTOR_INDEX = int(sys.argv[3])
+WORKER_MODE = sys.argv[4]
+WORKER_CHECKPOINT_PATH = os.path.abspath(sys.argv[5])
+if WORKER_MODE not in ('center', 'edge-resume'):
+    raise RuntimeError(f'Unsupported COM worker mode: {WORKER_MODE!r}')
+if not os.path.isfile(output_path):
+    raise RuntimeError(f'Excel workbook missing: {output_path!r}')
 
 wb = load_workbook(output_path, data_only=True)
 ws = wb.active
@@ -2311,6 +2433,12 @@ for i in range(NUMBER_OF_CONNECTORS):
 
 wb.close()
 
+if not (0 <= WORKER_CONNECTOR_INDEX < len(CONNECTOR_PIN_INFO)):
+    raise RuntimeError(f'Connector index {WORKER_CONNECTOR_INDEX} out of range.')
+# One connector per COM process: finish each connector before the next one,
+# so manual Ctrl+Z never accidentally rolls back another active staging job.
+CONNECTOR_PIN_INFO = [CONNECTOR_PIN_INFO[WORKER_CONNECTOR_INDEX]]
+
 print(CONNECTOR_PIN_INFO)
 
 
@@ -2380,6 +2508,43 @@ if not BLOCK_CANDIDATES:
         "Check that the device and sheet identify the intended cable drawing."
     )
 log(f"Placed CABBLOCK candidates found: {len(BLOCK_CANDIDATES)}")
+
+# EDGE RESUME: the old worker is gone. Verify the restored E3 state from
+# physical labels and coordinates BEFORE searching for logical pin views.
+# If Undo is incomplete, exit this new worker immediately, freeing COM again.
+if WORKER_MODE == 'edge-resume':
+    try:
+        with open(WORKER_CHECKPOINT_PATH, encoding='utf-8') as f:
+            UNDO_CHECKPOINT = json.load(f)
+        if (UNDO_CHECKPOINT.get('format') != 1 or
+            UNDO_CHECKPOINT.get('connector_index') != WORKER_CONNECTOR_INDEX or
+            UNDO_CHECKPOINT.get('excel_path') != output_path or
+            UNDO_CHECKPOINT.get('excel_sha256') != _excel_digest(output_path) or
+            UNDO_CHECKPOINT.get('requested_device') != REQUESTED_DEVICE_DESIGNATION or
+            UNDO_CHECKPOINT.get('requested_page') != REQUESTED_PAGE or
+            UNDO_CHECKPOINT.get('connector_name') != CONNECTOR_PIN_INFO[0][0]['connector name']):
+            raise RuntimeError('Checkpoint/workbook/project restrictions mismatch.')
+    except Exception as exc:
+        raise RuntimeError(f'Cannot trust edge-resume checkpoint: {exc}') from exc
+    ok, detail = _verify_undo_in_new_process(
+        prj, sht, BLOCK_CANDIDATES, SHEET_NAME_BY_ID, UNDO_CHECKPOINT)
+    section('AFTER-UNDO PHYSICAL CONNECTOR VERIFICATION')
+    log(detail)
+    if not ok:
+        log('NO PINS MOVED. EXITING COM WORKER so Zuken Ctrl+Z can be used again.')
+        _exit_worker(HANDOFF_UNDO_INCOMPLETE)
+    # The checkpoint identifies one exact original block. Even if a second
+    # connector with the same printed label exists elsewhere, do not let the
+    # subsequent selection accidentally choose or reject the wrong one.
+    original = UNDO_CHECKPOINT['original_block']
+    BLOCK_CANDIDATES = [candidate for candidate in BLOCK_CANDIDATES
+        if candidate['main_device_id'] == original['main_device_id']
+        and SHEET_NAME_BY_ID.get(candidate['sheet_id']) == original['sheet_name']
+        and candidate['connector_view_number'] == original['view_number']
+        and abs(candidate['block_center_x'] - original['center_x']) <= SYMBOL_SCAN_COORDINATE_TOLERANCE
+        and abs(candidate['block_center_y'] - original['center_y']) <= SYMBOL_SCAN_COORDINATE_TOLERANCE]
+    if len(BLOCK_CANDIDATES) != 1:
+        raise RuntimeError('Checkpointed connector block became ambiguous after Undo.')
 
 # Diagnostic data is printed unconditionally whether C4/J2 are blank or filled.
 print_candidate_block_details(
@@ -2558,10 +2723,31 @@ for work_record in CONNECTOR_WORK_INFO:
 
     log(f"STAGING {work_record['connector_name']}")
 
-    work_record['staged_records'] = stage_connector_center_then_edge(
-        prj, dev, pin, sht, work_record)
-    if work_record.get('staging_method') == 'SKIP':
-        work_record['skip_reorder'] = True
+    if WORKER_MODE == 'edge-resume':
+        if work_record['edge_staging_error'] is not None:
+            raise RuntimeError(f"{work_record['connector_name']}: no safe edge staging "
+                               f"available after Undo: {work_record['edge_staging_error']}")
+        # Recheck baseline after complete logical pin/view rebind; all edits are
+        # forbidden until original positions were confirmed in the new process.
+        _original = UNDO_CHECKPOINT['original_pin_positions']
+        for _record in work_record['sorted_pin_records']:
+            _before = _original[_record['pin_name']]
+            if not coordinates_close({'x': _record['x'], 'y': _record['y']},
+                                     _before['x'], _before['y']):
+                raise RuntimeError('Pin view changed since Ctrl+Z verification. STOP.')
+        log(f"{work_record['connector_name']}: NEW COM worker - edge peel ONLY "
+            '(center will NOT be retried).')
+        work_record['staged_records'] = peel_all_pins_to_staging(
+            prj, dev, pin, sht, work_record['connector_device_id'],
+            work_record['connector_name'], work_record['block_geometry'],
+            work_record['sorted_pin_records'], work_record['edge_staging_map'],
+            work_record['pin_geometry'], work_record['placement_symbol_name'])
+        work_record['staging_method'] = 'EDGE'
+    else:
+        work_record['staged_records'] = stage_connector_center_then_edge(
+            prj, dev, pin, sht, work_record)
+        if work_record.get('staging_method') == 'SKIP':
+            work_record['skip_reorder'] = True
 
 
 # based on pin maps and block geom generated -> start populating pins based on excel parsed data
