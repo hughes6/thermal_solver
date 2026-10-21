@@ -751,7 +751,7 @@ SCHEMATIC_DATA = []
 # All connector blocks belong to this SAME logical main-device view.
 # Each call to PlaceBlock reuses that main-device view ID. Whether E3
 # treats the resulting symbols as true split blocks must be verified in E3.
-# Connector views are still created per connector below, as before.
+# Each connector gets a new device view from its original parent connector.
 #=========================================
 SHARED_MAIN_VIEW_NUMBER = 1
 
@@ -905,15 +905,31 @@ for i in range(len(PIN_SIGNAL_INFO)):
 
     connector_device_id = CONNECTOR_DEVICE_IDS[conn_name]
 
-    # IMPORTANT: Do NOT create a connector DEVICE VIEW here.
-    # That would put every pin of this connector into a single connector
-    # view.  The pins below are placed individually using the ORIGINAL
-    # connector's logical pin IDs, so E3 can make PIN VIEWS instead.
-    #
-    # This leaves the shared MAIN BLOCK view/split blocks untouched.
-    print("INDIVIDUAL PIN VIEWS:", conn_name,
-          "ORIGINAL CONNECTOR:", connector_device_id,
-          "SPLIT BLOCK:", block_symbol_id, flush=True)
+    # Create a NEW DEVICE VIEW OF THE ORIGINAL/PARENT CONNECTOR.
+    # The shared CABBLOCK main device still has only ONE view; each
+    # connector has its own separate view number 1 underneath it.
+    # Zuken requires that block connector views have the same view number
+    # as their block, so do not increment this view number per pin.
+    dev.SetId(connector_device_id)
+    connector_view_number = SHARED_MAIN_VIEW_NUMBER
+    connector_view_id = dev.CreateView(
+        connector_device_id,
+        connector_view_number,
+        parent_block
+    )
+    if not connector_view_id:
+        raise Exception(
+            f"Failed creating new view from parent connector {conn_name} "
+            f"(source ID {connector_device_id}, view number "
+            f"{connector_view_number}, parent block {parent_block})"
+        )
+
+    print("CREATED VIEW OF PARENT CONNECTOR:",
+          "CONNECTOR:", conn_name,
+          "ORIGINAL ID:", connector_device_id,
+          "NEW VIEW ID:", connector_view_id,
+          "VIEW NUMBER:", connector_view_number,
+          "SHARED BLOCK:", parent_block, flush=True)
 
     SCHEMATIC_DATA.append({
         "index": i,
@@ -921,6 +937,7 @@ for i in range(len(PIN_SIGNAL_INFO)):
         "parent_block": parent_block,
         "block_symbol_id": block_symbol_id,
         "connector_device_id": connector_device_id,
+        "connector_view": connector_view_id,
         "sheet_id": current_sheet_id,
         "layout": conn_layout_dict
     })
@@ -1013,85 +1030,97 @@ for data in SCHEMATIC_DATA:
 
     i = data["index"]
     conn_name = data["name"]
-    connector_device_id = data["connector_device_id"]
+    parent_connector_id = data["connector_device_id"]
+    connector_view_id = data["connector_view"]
     current_sheet_id = data["sheet_id"]
     conn_layout_dict = data["layout"]
 
     print("=========================================")
     print("STARTING CONNECTOR:", conn_name, flush=True)
-    print("PIN VIEW SOURCE CONNECTOR:", connector_device_id,
-          "TARGET BLOCK SYMBOL:", data["block_symbol_id"],
+    print("PARENT CONNECTOR:", parent_connector_id,
+          "NEW CONNECTOR VIEW:", connector_view_id,
+          "BLOCK SYMBOL:", data["block_symbol_id"],
           "SHARED MAIN VIEW:", data["parent_block"], flush=True)
     print("SHEET:", current_sheet_id, flush=True)
     print("=========================================")
 
-    # Source the ORIGINAL connector pins, rather than the pin IDs of a
-    # newly created connector-wide device view.  PlacePins is called with
-    # exactly one original pin ID per symbol below.
-    dev.SetId(connector_device_id)
+    # IMPORTANT: resolve PIN IDs FROM THE NEW CONNECTOR VIEW, not from
+    # the logical/original connector. This is the actual E3 view hierarchy:
+    #   original connector -> connector device view -> separate pin symbols.
+    dev.SetId(connector_view_id)
+    view_pin_result = dev.GetAllPinIds(None)
+    view_pin_ids = [pid for pid in view_pin_result[1] if pid is not None]
+    view_pin_map = {}
+    for view_pin_id in view_pin_ids:
+        pin.SetId(view_pin_id)
+        view_pin_name = str(pin.GetName()).strip()
+        if view_pin_name in view_pin_map:
+            raise Exception(f"Duplicate pin name {view_pin_name!r} in new connector view {connector_view_id}")
+        view_pin_map[view_pin_name] = view_pin_id
 
-    original_pin_info = dev.GetPinIds(None)
-    original_pin_ids = [x for x in original_pin_info[1] if x is not None]
-
-    newpindict = {}
-
-    for pin_id in original_pin_ids:
-        pin.SetId(pin_id)
-        pin_name = str(pin.GetName())
-        newpindict[pin_name] = pin_id
-
-    print("INDIVIDUAL PIN VIEW SOURCE:", conn_name,
-          "ORIGINAL CONNECTOR ID:", connector_device_id,
-          "ORIGINAL PINS:", newpindict, flush=True)
-
-    SCHEMATIC_PIN_MAP = generate_schematic_pin_map(PIN_SIGNAL_INFO[i], newpindict, conn_layout_dict)
+    print("PARENT CONNECTOR VIEW PINS:", conn_name,
+          "VIEW:", connector_view_id, "PINS:", view_pin_map, flush=True)
+    SCHEMATIC_PIN_MAP = generate_schematic_pin_map(
+        PIN_SIGNAL_INFO[i], view_pin_map, conn_layout_dict
+    )
     data["placed_pin_symbols"] = []
+    placed_pin_symbol_ids = set()
 
     symname = "MilSymbolReceptacle¶END_SPLIT"
-
     for pin_index, pin_data in enumerate(SCHEMATIC_PIN_MAP, start=1):
-        print("ATTEMPTING INDIVIDUAL PIN VIEW:", conn_name,
+        print("PLACING PIN FROM PARENT CONNECTOR VIEW:",
+              "CONNECTOR:", conn_name,
               "PIN:", pin_data["pin name"],
-              "ORIGINAL PIN ID:", pin_data["pin id"],
-              "X:", pin_data["x"], "Y:", pin_data["y"], flush=True)
+              "VIEW ID:", connector_view_id,
+              "VIEW PIN ID:", pin_data["pin id"],
+              "X:", pin_data["x"],
+              "Y:", pin_data["y"], flush=True)
 
-        # One pin per call (NEVER a pin-ID array).  This targets the pin
-        # itself, NOT a connector-wide device view created by CreateView().
-        res = sym.PlacePins(pin_data["pin id"], symname, "1", current_sheet_id, pin_data["x"], pin_data["y"], pin_data["flip"], 1.0)
-
+        # CRITICAL: ONE view pin per PlacePins call, so each pin gets its
+        # own placed symbol, rather than one combined pin-group symbol.
+        res = sym.PlacePins(
+            pin_data["pin id"], symname, "1", current_sheet_id,
+            pin_data["x"], pin_data["y"], pin_data["flip"], 1.0
+        )
         print("PLACEPINS RESULT:", repr(res), flush=True)
-
-        status = res[0] if isinstance(res, (tuple, list)) else res
-
-        if status == 0:
+        placed_sym_id = res[0] if isinstance(res, (tuple, list)) else res
+        if not placed_sym_id:
             raise Exception(
-                f"Individual pin-view placement failed for connector {conn_name}, "
-                f"pin {pin_data['pin name']}, original pin ID {pin_data['pin id']}, "
-                f"shared block view {data['parent_block']}, "
-                f"block symbol {data['block_symbol_id']}, sheet {current_sheet_id}, "
-                f"coordinates ({pin_data['x']}, {pin_data['y']}), result {res!r}"
+                f"Cannot place {conn_name} pin {pin_data['pin name']} "
+                f"from connector view {connector_view_id}, "
+                f"pin ID {pin_data['pin id']}, "
+                f"block {data['block_symbol_id']}, sheet {current_sheet_id}; "
+                f"E3 response {res!r}"
             )
-
+        if placed_sym_id in placed_pin_symbol_ids:
+            raise Exception(
+                f"E3 reused pin symbol {placed_sym_id} for {conn_name} "
+                f"pin {pin_data['pin name']}; expected a separate symbol"
+            )
+        placed_pin_symbol_ids.add(placed_sym_id)
         data["placed_pin_symbols"].append({
-            "symbol_id": status,
+            "symbol_id": placed_sym_id,
             "pin_id": pin_data["pin id"],
             "pin_name": pin_data["pin name"],
             "position": pin_index,
+            "connector_view_id": connector_view_id,
+            "parent_connector_id": parent_connector_id,
         })
-
-        app.PutMessage(f"Placed {conn_name} pin {pin_data['pin name']} x={pin_data['x']} y={pin_data['y']}")
-
+        app.PutMessage(
+            f"Placed {conn_name} pin {pin_data['pin name']} "
+            f"x={pin_data['x']} y={pin_data['y']}"
+        )
         symname = "MilSymbolReceptacle¶SPLIT_BOTTOM"
-
         time.sleep(0.25)
 
+    print("VALIDATED DISTINCT PIN SYMBOL IDS:", conn_name,
+          len(placed_pin_symbol_ids), flush=True)
     print("FINISHED CONNECTOR:", conn_name)
     time.sleep(0.5)
 
 #=========================================
-# UPDATE METADATA WITH INDIVIDUAL PIN SYMBOL IDs
-# Used by the formatter to access pin views directly (pin.GetViewIds()
-# does not enumerate all types of E3 individual pin views).
+# UPDATE METADATA WITH INDEPENDENT PIN SYMBOL IDS AND THEIR PARENT VIEW.
+# The formatter can access each symbol by its exact placed symbol ID.
 #=========================================
 for saved_block_data, data in zip(secondary_block_data, SCHEMATIC_DATA):
     saved_block_data["placed_pin_symbols"] = data.get("placed_pin_symbols", [])
@@ -1099,7 +1128,7 @@ for saved_block_data, data in zip(secondary_block_data, SCHEMATIC_DATA):
 with open(secondary_block_file, "w", encoding="utf-8") as secondary_block_handle:
     json.dump(secondary_block_data, secondary_block_handle, indent=2)
 
-print("SAVED INDIVIDUAL PIN VIEW METADATA:", secondary_block_file, flush=True)
+print("SAVED CONNECTOR-VIEW PIN SYMBOL METADATA:", secondary_block_file, flush=True)
 
 #=========================================
 # RESET BEFORE MAIN BLOCK FORMATTING
