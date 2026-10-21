@@ -1,72 +1,78 @@
-import time
-import tkinter as tk
-
-from utils import runn
-
-
-def wait_for_equipment_identification():
-    root = tk.Tk()
-    root.title("Equipment Identification")
-    root.attributes("-topmost", True)
-    root.resizable(False, False)
-
-    window_width = 620
-    window_height = 260
-
-    screen_width = root.winfo_screenwidth()
-    screen_height = root.winfo_screenheight()
-
-    x_position = int((screen_width - window_width) / 2)
-    y_position = int((screen_height - window_height) / 2)
-
-    root.geometry(f"{window_width}x{window_height}+{x_position}+{y_position}")
-
-    message = "Turn ON all Equipment Identifications from symbol properties for all SCH blocks.\n\nOnce every Equipment Identification is visible,\ncome back here and click DONE.\n\nThe formatter will then run again automatically."
-
-    label = tk.Label(root, text=message, font=("Arial", 12), justify="center")
-    label.pack(pady=32)
-
-    done_button = tk.Button(root, text="DONE - RUN FORMATTER AGAIN", width=34, height=2, command=root.destroy)
-    done_button.pack(pady=8)
-
-    root.lift()
-    root.focus_force()
-    root.mainloop()
+import os
+import sys
+import tempfile
+import subprocess
+from pathlib import Path
 
 
-print("")
-print("============================================================", flush=True)
-print("FIRST FORMATTER PASS", flush=True)
-print("============================================================", flush=True)
+ROLE_ENV = "BLOCK_MAKER_ROLE"
+METADATA_ENV = "E3_SECONDARY_BLOCK_FILE"
 
-runn()
 
-print("")
-print("============================================================", flush=True)
-print("FIRST FORMATTER PASS COMPLETE", flush=True)
-print("TURN ON ALL EQUIPMENT IDENTIFICATIONS IN E3", flush=True)
-print("THEN CLICK DONE IN THE GUI", flush=True)
-print("============================================================", flush=True)
+def get_application_directory():
+    if getattr(sys, "frozen", False):
+        return Path(sys.executable).resolve().parent
 
-wait_for_equipment_identification()
+    return Path(__file__).resolve().parent
 
-print("")
-print("============================================================", flush=True)
-print("GUI COMPLETE", flush=True)
-print("WAITING FOR E3 TO SETTLE", flush=True)
-print("============================================================", flush=True)
 
-time.sleep(1.0)
+def get_child_command():
+    if getattr(sys, "frozen", False):
+        return [sys.executable]
 
-print("")
-print("============================================================", flush=True)
-print("SECOND FORMATTER PASS", flush=True)
-print("============================================================", flush=True)
+    return [sys.executable, str(Path(__file__).resolve())]
 
-runn(True)
 
-print("")
-print("============================================================", flush=True)
-print("SECOND FORMATTER PASS COMPLETE", flush=True)
-print("TEST.PY COMPLETE", flush=True)
-print("============================================================", flush=True)
+def run_builder_child():
+    import main
+
+
+def run_formatter_child():
+    import test
+
+
+role = os.environ.get(ROLE_ENV, "").strip().lower()
+
+if role == "main":
+    run_builder_child()
+    sys.exit(0)
+
+if role == "formatter":
+    run_formatter_child()
+    sys.exit(0)
+
+
+application_directory = get_application_directory()
+child_command = get_child_command()
+
+with tempfile.TemporaryDirectory(prefix="e3_block_maker_") as temp_directory:
+    metadata_path = str(Path(temp_directory) / "secondary_blocks.json")
+
+    main_environment = os.environ.copy()
+    main_environment[ROLE_ENV] = "main"
+    main_environment[METADATA_ENV] = metadata_path
+
+    print("")
+    print("============================================================")
+    print("STARTING MAIN E3 BUILDER")
+    print("============================================================")
+    print("TEMP METADATA:", metadata_path)
+
+    main_result = subprocess.run(child_command, cwd=str(application_directory), env=main_environment)
+
+    if main_result.returncode != 0:
+        sys.exit(main_result.returncode)
+
+    formatter_environment = os.environ.copy()
+    formatter_environment[ROLE_ENV] = "formatter"
+    formatter_environment[METADATA_ENV] = metadata_path
+
+    print("")
+    print("============================================================")
+    print("MAIN BUILDER COMPLETE")
+    print("STARTING FORMATTER")
+    print("============================================================")
+
+    formatter_result = subprocess.run(child_command, cwd=str(application_directory), env=formatter_environment)
+
+    sys.exit(formatter_result.returncode)
