@@ -2424,19 +2424,47 @@ def format_worker_run(manifest_path):
         log('Formatter E3 COM proxies released.')
 
 
+def build_worker_command(mode, manifest_path):
+    """Start an isolated worker from .py or a PyInstaller --onefile exe.
+
+    In frozen builds sys.executable IS the bundled .exe; adding __file__
+    would pass the bundled script as an unexpected command-line argument,
+    preventing both --order-worker and --format-worker from ever starting.
+    """
+    if mode not in ('--order-worker', '--format-worker'):
+        raise ValueError(f'Unsupported worker mode: {mode!r}')
+    manifest_path = os.path.abspath(manifest_path)
+    if getattr(sys, 'frozen', False):
+        # PyInstaller -F: re-launch our own executable, NOT main.py.
+        return [sys.executable, mode, manifest_path]
+    # Normal Python: run the same .py file as a child interpreter.
+    return [sys.executable, os.path.abspath(__file__), mode, manifest_path]
+
+
+def run_worker_process(mode, manifest_path):
+    command = build_worker_command(mode, manifest_path)
+    log(f'WORKER LAUNCH: mode={mode} | frozen={bool(getattr(sys, "frozen", False))}')
+    log(f'WORKER COMMAND: {command!r}')
+    # No hard exit or COM Surrogate termination. The child exits normally.
+    result = subprocess.run(command, check=False)
+    log(f'WORKER EXIT: mode={mode} | exit_code={result.returncode}')
+    return result
+
+
 def gui_two_phase_launcher():
     """This PARENT never connects to E3, so E3 can accept manual settings."""
     import tkinter as tk
     from tkinter import messagebox
     session_dir = tempfile.mkdtemp(prefix='zuken_pin_order_')
     manifest = os.path.join(session_dir, 'formatter_manifest.json')
-    script = os.path.abspath(__file__)
     section('PHASE 1: ORDER PINS (SEPARATE COM SESSION)')
-    proc = subprocess.run([sys.executable, script, '--order-worker', manifest])
+    proc = run_worker_process('--order-worker', manifest)
     if proc.returncode != 0:
         messagebox.showerror('Zuken Pin Ordering',
-                             'Pin ordering failed. Review the terminal output. '
-                             'Formatter has NOT been started.')
+                             f'Pin ordering worker exited with code {proc.returncode}.\n'
+                             'Formatter has NOT been started.\n\n'
+                             'Run the executable from Command Prompt to see the '
+                             'actual worker error.')
         return 1
     if not os.path.isfile(manifest):
         messagebox.showinfo('Zuken Pin Ordering - Dry Run',
@@ -2466,7 +2494,7 @@ def gui_two_phase_launcher():
     def run_formatter():
         run_button.config(state='disabled')
         root.update_idletasks()
-        result = subprocess.run([sys.executable, script, '--format-worker', manifest])
+        result = run_worker_process('--format-worker', manifest)
         if result.returncode == 0:
             messagebox.showinfo('Zuken Symbol Formatter',
                                 'Symbol formatting completed. See terminal for details.', parent=root)
