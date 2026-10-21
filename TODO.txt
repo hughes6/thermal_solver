@@ -1,78 +1,113 @@
-import os
-import sys
-import tempfile
-import subprocess
-from pathlib import Path
+e3Job.SetBlockReferenceType( newtype ) 
+
+Syntax
+
+Integer SetBlockReferenceType( [in]Integer newtype )
+
+Description
+
+Sets the value of the block reference type setting.
+
+Parameters
 
 
-ROLE_ENV = "BLOCK_MAKER_ROLE"
-METADATA_ENV = "E3_SECONDARY_BLOCK_FILE"
 
 
-def get_application_directory():
-    if getattr(sys, "frozen", False):
-        return Path(sys.executable).resolve().parent
 
-    return Path(__file__).resolve().parent
+Type Parameter Description 
+[in]Integer newtype Setting value to apply 
 
-
-def get_child_command():
-    if getattr(sys, "frozen", False):
-        return [sys.executable]
-
-    return [sys.executable, str(Path(__file__).resolve())]
+Return Values
 
 
-def run_builder_child():
-    import main
 
 
-def run_formatter_child():
-    import test
+
+Value Status Description 
+1..3 Success Previous block reference type setting value 
+0 Failure Error occurred 
+
+Remarks
+
+The setting value can also be modified using SetSettingValue() with a setting value name of BLOCKREFSORT
+
+The setting location within E³.series is Settings → Placement → Block → Type.
+
+valid values for newtype and the return value can be one of the following values:
 
 
-role = os.environ.get(ROLE_ENV, "").strip().lower()
-
-if role == "main":
-    run_builder_child()
-    sys.exit(0)
-
-if role == "formatter":
-    run_formatter_child()
-    sys.exit(0)
 
 
-application_directory = get_application_directory()
-child_command = get_child_command()
+Value Description 
+1 All 
+Every block symbol contains references to all other split block symbols
+ 
+2 Origin 
+One block symbol is defined as the source and all other blocks as destinations
 
-with tempfile.TemporaryDirectory(prefix="e3_block_maker_") as temp_directory:
-    metadata_path = str(Path(temp_directory) / "secondary_blocks.json")
+The source references all destinations and all destinations reference the source
+ 
+3 Position 
+Refers to the previous block symbol and to the next block symbol for each block symbol
 
-    main_environment = os.environ.copy()
-    main_environment[ROLE_ENV] = "main"
-    main_environment[METADATA_ENV] = metadata_path
+The reference calculation takes place according to the page number and block position
+ 
 
-    print("")
-    print("============================================================")
-    print("STARTING MAIN E3 BUILDER")
-    print("============================================================")
-    print("TEMP METADATA:", metadata_path)
+The value of the block reference type setting can be retrieved using GetBlockReferenceType().
 
-    main_result = subprocess.run(child_command, cwd=str(application_directory), env=main_environment)
+Examples
 
-    if main_result.returncode != 0:
-        sys.exit(main_result.returncode)
+The best results from the example can be achieved by opening an E³.series project.
 
-    formatter_environment = os.environ.copy()
-    formatter_environment[ROLE_ENV] = "formatter"
-    formatter_environment[METADATA_ENV] = metadata_path
 
-    print("")
-    print("============================================================")
-    print("MAIN BUILDER COMPLETE")
-    print("STARTING FORMATTER")
-    print("============================================================")
+Visual Basic Script
 
-    formatter_result = subprocess.run(child_command, cwd=str(application_directory), env=formatter_environment)
 
-    sys.exit(formatter_result.returncode)
+Set e3Application = CreateObject( "CT.Application" ) 
+ 
+Set e3Job = e3Application.CreateJobObject()
+ 
+ 
+ 
+Dim blockReferenceType : blockReferenceType = 1        'all
+ 
+ 
+ 
+result = e3Job.SetBlockReferenceType( blockReferenceType )
+ 
+Select Case result
+ 
+Case -1
+ 
+    e3Application.PutError 0, "Error setting block reference type value"
+ 
+Case 1
+ 
+    e3Application.PutInfo 0, "Block reference type setting value changed from all to all"
+ 
+Case 2
+ 
+    e3Application.PutInfo 0, "Block reference type setting value changed from origin to all"
+ 
+Case 3
+ 
+    e3Application.PutInfo 0, "Block reference type setting value changed from position to all"
+ 
+End Select 
+ 
+ 
+ 
+Set e3Job = Nothing 
+ 
+Set e3Application = Nothing
+ 
+
+Version Information
+
+Introduced in v2009-8.50.
+
+
+See Also
+•e3Job - Overview 
+•GetBlockReferenceType() 
+•SetSettingValue() 
