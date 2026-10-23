@@ -9,36 +9,6 @@ import tempfile
 import subprocess
 import gc
 
-# A PyInstaller --windowed/--noconsole process has no stdout/stderr. Capture
-# all existing diagnostic prints and worker tracebacks in a persistent file.
-# This section does nothing in normal VS Code / console execution.
-def configure_windowed_log():
-    if not getattr(sys, 'frozen', False):
-        return None
-    if sys.stdout is not None and sys.stderr is not None:
-        return None
-    try:
-        log_dir = os.path.join(
-            os.environ.get('LOCALAPPDATA') or tempfile.gettempdir(),
-            'BlockPinArranger')
-        os.makedirs(log_dir, exist_ok=True)
-        path = os.path.join(log_dir, 'BlockPinArranger.log')
-        stream = open(path, 'a', encoding='utf-8', buffering=1,
-                      errors='replace')
-        if sys.stdout is None:
-            sys.stdout = stream
-        if sys.stderr is None:
-            sys.stderr = stream
-        stream.write('\n' + '=' * 72 + '\n')
-        stream.write('Process started: ' + repr(sys.argv) + '\n')
-        return path
-    except OSError:
-        # Lack of log access must not prevent the working E3 tool from starting.
-        return None
-
-
-WINDOWED_LOG_PATH = configure_windowed_log()
-
 # ================================================
 # HELPER FXN
 # ================================================
@@ -2507,219 +2477,74 @@ def build_worker_command(mode, manifest_path):
     return [sys.executable, os.path.abspath(__file__), mode, manifest_path]
 
 
-def launch_worker_process(mode, manifest_path):
-    """Start a worker WITHOUT blocking Tk's event loop.
-
-    In a --windowed build the child has no Windows console, so redirect
-    traceback output to the same persistent log as the parent.
-    """
+def run_worker_process(mode, manifest_path):
     command = build_worker_command(mode, manifest_path)
     log(f'WORKER LAUNCH: mode={mode} | frozen={bool(getattr(sys, "frozen", False))}')
     log(f'WORKER COMMAND: {command!r}')
-    if WINDOWED_LOG_PATH:
-        with open(WINDOWED_LOG_PATH, 'a', encoding='utf-8',
-                  errors='replace') as worker_log:
-            # subprocess duplicates the log handle into the child on Windows;
-            # closing the parent's handle here does not close the child's.
-            return subprocess.Popen(command, stdout=worker_log,
-                                    stderr=subprocess.STDOUT)
-    return subprocess.Popen(command)
+    # No hard exit or COM Surrogate termination. The child exits normally.
+    result = subprocess.run(command, check=False)
+    log(f'WORKER EXIT: mode={mode} | exit_code={result.returncode}')
+    return result
 
 
 def gui_two_phase_launcher():
-    """Keep the formatter GUI responsive while a separate E3 worker runs.
-
-    The previous version called subprocess.run() before creating Tk.  This
-    prevented the formatter window from existing until the ordering worker
-    completely exited.  In one-file builds, an E3/COM child that lingers at
-    shutdown made the program appear to have finished without a formatter.
-
-    Showing this window immediately also makes worker failures and waiting
-    for COM shutdown visible.  Actual formatting still NEVER starts while
-    the ordering worker remains alive.
-    """
+    """This PARENT never connects to E3, so E3 can accept manual settings."""
     import tkinter as tk
     from tkinter import messagebox
-
     session_dir = tempfile.mkdtemp(prefix='zuken_pin_order_')
     manifest = os.path.join(session_dir, 'formatter_manifest.json')
-    state = {'phase': 'ordering', 'process': None}
-
+    section('PHASE 1: ORDER PINS (SEPARATE COM SESSION)')
+    proc = run_worker_process('--order-worker', manifest)
+    if proc.returncode != 0:
+        messagebox.showerror('Zuken Pin Ordering',
+                             f'Pin ordering worker exited with code {proc.returncode}.\n'
+                             'Formatter has NOT been started.\n\n'
+                             'Run the executable from Command Prompt to see the '
+                             'actual worker error.')
+        return 1
+    if not os.path.isfile(manifest):
+        messagebox.showinfo('Zuken Pin Ordering - Dry Run',
+                            'Pin ordering finished without changes (dry run). '                            'Set EDGE_STAGING_DRY_RUN = False to order and format.')
+        return 0
+    with open(manifest, encoding='utf-8') as stream:
+        connectors = json.load(stream)['connectors']
+    targets = ', '.join(c['connector_name'] for c in connectors)
     root = tk.Tk()
-    root.title('Zuken - Block Pin Arranger')
-    root.geometry('580x275')
+    root.title('Zuken - Final Symbol Formatter')
+    root.geometry('580x300')
     root.resizable(False, False)
-    # Do not put the status window above the worker's Excel file dialog.
-    # It is raised to the foreground once the formatter is ready.
-
-    heading = tk.Label(root, text='ORDERING CONNECTOR PINS',
-                       font=('Segoe UI', 14, 'bold'))
-    heading.pack(pady=(22, 12))
-    status_var = tk.StringVar(value='Starting pin-ordering worker...')
-    status = tk.Label(root, textvariable=status_var, wraplength=535,
-                      justify='center')
-    status.pack(pady=(0, 12))
-    instructions = tk.Label(root, text='', justify='left', wraplength=530)
-    instructions.pack(padx=20)
+    root.attributes('-topmost', True)
+    tk.Label(root, text='PIN ORDERING COMPLETED', font=('Segoe UI', 14, 'bold')).pack(pady=(22, 10))
+    tk.Label(root, text=f'Connectors: {targets}', wraplength=520).pack(pady=(0, 15))
+    instructions = (
+        'The pin-ordering Python COM process has exited normally.\n\n'
+        'In Zuken, enable the required display property:\n'
+        f'  {FORMATTER_REQUIRED_PROPERTY}\n'
+        'Save or refresh the active drawing if needed.\n\n'
+        'Then return here and click RUN SYMBOL FORMATTER.'
+    )
+    tk.Label(root, text=instructions, justify='left', wraplength=530).pack()
     buttons = tk.Frame(root)
-    buttons.pack(pady=(14, 10))
-
-    def request_close():
-        # Do not destroy the PyInstaller launcher/extraction files while its
-        # independent Zuken COM worker may still be actively moving pins.
-        if state['phase'] in ('ordering', 'formatting'):
-            messagebox.showwarning(
-                'Zuken Pin Arranger',
-                'A Zuken worker is still running. Keep this window open '
-                'until the worker completes.\n\n'
-                + (f'Log: {WINDOWED_LOG_PATH}' if WINDOWED_LOG_PATH else ''),
-                parent=root)
-            return
-        root.destroy()
-
-    root.protocol('WM_DELETE_WINDOW', request_close)
-
-    def show_failure(title, explanation):
-        state['phase'] = 'error'
-        heading.config(text='OPERATION STOPPED')
-        status_var.set(explanation)
-        instructions.config(text=('Details: ' + WINDOWED_LOG_PATH)
-                            if WINDOWED_LOG_PATH else
-                            'Run the script from VS Code to inspect the worker error.')
-        for child in buttons.winfo_children():
-            child.destroy()
-        tk.Button(buttons, text='CLOSE', width=20, command=root.destroy).pack()
-        root.deiconify()
-        root.lift()
-        root.attributes('-topmost', True)
-        messagebox.showerror(title, explanation +
-                             (f'\n\nLog: {WINDOWED_LOG_PATH}'
-                              if WINDOWED_LOG_PATH else ''), parent=root)
-
-    def poll_format_worker():
-        process = state['process']
-        rc = process.poll()
-        if rc is None:
-            root.after(350, poll_format_worker)
-            return
-        log(f'WORKER EXIT: mode=--format-worker | exit_code={rc}')
-        if rc == 0:
-            state['phase'] = 'complete'
-            heading.config(text='SYMBOL FORMATTING COMPLETE')
-            status_var.set('Pin symbol formatting completed successfully.')
-            for child in buttons.winfo_children():
-                child.destroy()
-            tk.Button(buttons, text='CLOSE', width=20,
-                      command=root.destroy).pack()
-            messagebox.showinfo('Zuken Symbol Formatter',
-                                'Symbol formatting completed successfully.',
-                                parent=root)
-        else:
-            # Permit retry without reordering pins, exactly as before.
-            state['phase'] = 'ready'
-            status_var.set('Formatting did not finish. Review the log and retry.')
-            for child in buttons.winfo_children():
-                if isinstance(child, tk.Button) and 'RUN SYMBOL FORMATTER' in child.cget('text'):
-                    child.config(state='normal')
-            messagebox.showerror('Zuken Symbol Formatter',
-                                 'Symbol formatting failed. No pin movement was retried. '
-                                 'Adjust E3 settings and click Run Symbol Formatter again.'
-                                 + (f'\n\nLog: {WINDOWED_LOG_PATH}'
-                                    if WINDOWED_LOG_PATH else ''), parent=root)
+    buttons.pack(pady=15)
 
     def run_formatter():
-        if state['phase'] != 'ready':
-            return
-        state['phase'] = 'formatting'
-        status_var.set('Formatting pins in a new Zuken COM session...')
-        for child in buttons.winfo_children():
-            if isinstance(child, tk.Button) and 'RUN SYMBOL FORMATTER' in child.cget('text'):
-                child.config(state='disabled')
-        try:
-            state['process'] = launch_worker_process('--format-worker', manifest)
-        except Exception as exc:
-            log(f'FORMAT WORKER START FAILED: {exc!r}')
-            show_failure('Zuken Symbol Formatter',
-                         f'Unable to start symbol formatter: {exc}')
-            return
-        root.after(350, poll_format_worker)
-
-    def show_formatter():
-        try:
-            with open(manifest, encoding='utf-8') as stream:
-                connectors = json.load(stream)['connectors']
-            targets = ', '.join(c['connector_name'] for c in connectors)
-        except Exception as exc:
-            show_failure('Zuken Symbol Formatter',
-                         f'Formatter manifest could not be read: {exc}')
-            return
-
-        state['phase'] = 'ready'
-        heading.config(text='PIN ORDERING COMPLETED')
-        status_var.set(f'Connectors: {targets}')
-        instructions.config(text=(
-            'The pin-ordering E3 COM worker has exited.\n\n'
-            'In Zuken, enable the required display property:\n'
-            f'  {FORMATTER_REQUIRED_PROPERTY}\n'
-            'Save or refresh the active drawing if needed.\n\n'
-            'Then click RUN SYMBOL FORMATTER.'))
-        for child in buttons.winfo_children():
-            child.destroy()
-        tk.Button(buttons, text='RUN SYMBOL FORMATTER', width=25,
-                  height=2, command=run_formatter).pack(side='left', padx=8)
-        tk.Button(buttons, text='CLOSE (NO FORMATTING)', width=22,
-                  height=2, command=request_close).pack(side='left', padx=8)
-        root.geometry('580x330')
-        root.deiconify()
-        root.attributes('-topmost', True)
-        root.lift()
-        root.focus_force()
-        log('FORMATTER WINDOW READY: ordering worker exited and manifest exists')
-
-    last_wait_log = [False]
-
-    def poll_order_worker():
-        process = state['process']
-        rc = process.poll()
-        if rc is None:
-            if os.path.isfile(manifest):
-                status_var.set('Pin placements are complete. Waiting for the '
-                               'Zuken COM ordering worker to fully exit '
-                               'before enabling the formatter...')
-                if not last_wait_log[0]:
-                    log('ORDER MANIFEST EXISTS: waiting for worker process to exit')
-                    last_wait_log[0] = True
-            root.after(350, poll_order_worker)
-            return
-
-        log(f'WORKER EXIT: mode=--order-worker | exit_code={rc}')
-        if rc != 0:
-            show_failure('Zuken Pin Ordering',
-                         f'Pin ordering worker exited with code {rc}. '
-                         'Formatter has NOT been started.')
-        elif not os.path.isfile(manifest):
-            # Existing original behavior for dry runs and incomplete outputs.
-            show_failure('Zuken Pin Ordering',
-                         'Ordering finished without a formatter manifest. '
-                         'This can happen with EDGE_STAGING_DRY_RUN = True; '
-                         'no formatting was launched.')
+        run_button.config(state='disabled')
+        root.update_idletasks()
+        result = run_worker_process('--format-worker', manifest)
+        if result.returncode == 0:
+            messagebox.showinfo('Zuken Symbol Formatter',
+                                'Symbol formatting completed. See terminal for details.', parent=root)
+            root.destroy()
         else:
-            show_formatter()
+            messagebox.showerror('Zuken Symbol Formatter',
+                                 'Symbol formatting failed. No pin movement was retried. '                                 'Review terminal output, adjust E3 settings, and click '                                 'Run Symbol Formatter again.', parent=root)
+            run_button.config(state='normal')
 
-    def start_order_worker():
-        section('PHASE 1: ORDER PINS (SEPARATE COM SESSION)')
-        try:
-            state['process'] = launch_worker_process('--order-worker', manifest)
-        except Exception as exc:
-            log(f'ORDER WORKER START FAILED: {exc!r}')
-            show_failure('Zuken Pin Ordering',
-                         f'Unable to start pin-ordering worker: {exc}')
-            return
-        status_var.set('Choose your Excel workbook in the file dialog.\n'
-                       'Zuken pin placement runs in a separate process.')
-        root.after(350, poll_order_worker)
-
-    root.after(0, start_order_worker)
+    run_button = tk.Button(buttons, text='RUN SYMBOL FORMATTER', width=25,
+                           height=2, command=run_formatter)
+    run_button.pack(side='left', padx=8)
+    tk.Button(buttons, text='CLOSE (NO FORMATTING)', width=22,
+              height=2, command=root.destroy).pack(side='left', padx=8)
     root.mainloop()
     return 0
 
