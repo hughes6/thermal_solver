@@ -440,6 +440,27 @@ def normalize_optional_text(value):
     return value if value not in (None, "") else None
 
 
+def parse_optional_vertical_spacing(value):
+    """Excel J1: optional center-to-center Y spacing in E3 schematic units.
+
+    Empty J1 preserves automatic pitch detection and all existing positioning.
+    Reject malformed/zero/negative values before any E3 pin modification.
+    """
+    if value is None or (isinstance(value, str) and not value.strip()):
+        return None
+    try:
+        spacing = float(value)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(
+            f"Excel J1 vertical pin spacing must be a positive number; got {value!r}."
+        ) from exc
+    if not math.isfinite(spacing) or spacing <= 0:
+        raise ValueError(
+            f"Excel J1 vertical pin spacing must be finite and greater than zero; got {value!r}."
+        )
+    return spacing
+
+
 def find_device_ids(prj, dev, target_name, all_device_ids=None):
     """Unlike find_device_id, keep duplicates so they cannot be selected silently."""
     ids = all_device_ids if all_device_ids is not None else get_device_ids(prj)
@@ -1133,7 +1154,8 @@ def validate_connector_snapshot_location(connector_name, sorted_pin_records, blo
                 f"is not inside selected CABBLOCK {block_geometry['block_symbol_id']} "
                 f"on sheet {block_geometry['sheet_id']}. No pins were modified."
             )
-def derive_pin_geometry(block_geometry, sorted_pin_records, connector_excel_record):
+def derive_pin_geometry(block_geometry, sorted_pin_records, connector_excel_record,
+                        vertical_spacing=None):
     y_differences = []
     for index in range(len(sorted_pin_records) - 1):
         difference = abs(sorted_pin_records[index]["y"] - sorted_pin_records[index + 1]["y"])
@@ -1142,6 +1164,11 @@ def derive_pin_geometry(block_geometry, sorted_pin_records, connector_excel_reco
     pin_pitch = median(y_differences)
     if pin_pitch is None:
         pin_pitch = 0.25
+    # Keep the measured pitch for TEMPORARY staging. J1 changes only the
+    # FINAL pin spacing so that the existing working peel/stage logic is kept.
+    measured_pin_pitch = pin_pitch
+    if vertical_spacing is not None:
+        pin_pitch = vertical_spacing
     original_top_y = sorted_pin_records[0]["y"]
 
     # A placed E3 pin's GetSchemaLocation X is its symbol ORIGIN, not
@@ -1210,6 +1237,8 @@ def derive_pin_geometry(block_geometry, sorted_pin_records, connector_excel_reco
         raise RuntimeError(f"Existing top pin Y {original_top_y} is above block top {block_geometry['block_top']}.")
     return {
         "pin_pitch": pin_pitch,
+        "measured_pin_pitch": measured_pin_pitch,
+        "custom_vertical_spacing": vertical_spacing is not None,
         "original_top_y": original_top_y,
         "final_top_y": original_top_y,
         "left_x": left_x,
@@ -1393,7 +1422,9 @@ def build_edge_staging_map(global_final_sequence, pin_geometry, connector_excel_
     # Use one column on the unused CABBLOCK boundary, from top down.
     # Interior staging is never attempted: E3 pin views reject it.
     stage_top_y = pin_geometry['original_top_y']
-    pitch = pin_geometry['pin_pitch']
+    # The temporary staging layout must remain at its originally measured
+    # pitch; J1 overrides FINAL positions only. Blank J1 is unchanged.
+    pitch = pin_geometry['measured_pin_pitch']
     bottom_y = stage_top_y - (len(global_final_sequence) - 1) * pitch
     if bottom_y < pin_geometry['block_bottom'] + BLOCK_BOTTOM_CLEARANCE:
         raise RuntimeError(
@@ -1473,9 +1504,14 @@ def decide_edge_ordering_mode(connector_name, sorted_pin_records, final_plan,
     final_edge = 'LEFT' if left_count else 'RIGHT'
     source_edge = detect_existing_pin_edge(
         connector_name, sorted_pin_records, pin_geometry)
-    exact_match = connector_already_matches_final_plan(sorted_pin_records, final_plan)
+    # With J1 specified, use a tight position check: the existing 0.06
+    # tolerance could incorrectly SKIP a requested small pitch adjustment.
+    # Blank J1 retains the exact original 0.06 tolerance.
+    position_tolerance = 0.001 if pin_geometry['custom_vertical_spacing'] else 0.06
+    exact_match = connector_already_matches_final_plan(
+        sorted_pin_records, final_plan, tolerance=position_tolerance)
     order_match = connector_already_ordered_on_existing_edge(
-        sorted_pin_records, final_plan)
+        sorted_pin_records, final_plan, tolerance=position_tolerance)
     if exact_match:
         mode, skip_reason = 'SKIP', 'ALREADY AT EXACT EXCEL COORDINATES'
     elif order_match and skip_ordered_either_edge:
@@ -2546,6 +2582,8 @@ ws = wb.active
 # Optional restrictions: blank cells behave like unrestricted project search.
 REQUESTED_DEVICE_DESIGNATION = normalize_optional_text(ws["C4"].value)
 REQUESTED_PAGE = normalize_optional_text(ws["J2"].value)
+# Optional center-to-center vertical pin spacing. None means original behavior.
+REQUESTED_VERTICAL_SPACING = parse_optional_vertical_spacing(ws["J1"].value)
 
 NUMBER_OF_CONNECTORS = ws["C5"].value
 
@@ -2659,6 +2697,7 @@ try:
     section("OPTIONAL PROJECT TARGET FILTERS")
     log(f"C4 device designation: {REQUESTED_DEVICE_DESIGNATION or '<blank - automatic>'}")
     log(f"J2 sheet/page: {REQUESTED_PAGE or '<blank - any sheet>'}")
+    log(f"J1 vertical pin spacing: {REQUESTED_VERTICAL_SPACING if REQUESTED_VERTICAL_SPACING is not None else '<blank - automatic original pitch>'}")
     if REQUESTED_SHEET_ID is not None:
         log(f"Resolved sheet: {SHEET_NAME_BY_ID[REQUESTED_SHEET_ID]!r} (E3 ID {REQUESTED_SHEET_ID})")
 
@@ -2714,7 +2753,9 @@ try:
         validate_connector_snapshot_location(connector_name, sorted_pin_records, block_geometry)
         validate_excel_against_e3(connector_excel_record, sorted_pin_records)
 
-        pin_geometry = derive_pin_geometry(block_geometry, sorted_pin_records, connector_excel_record)
+        pin_geometry = derive_pin_geometry(
+            block_geometry, sorted_pin_records, connector_excel_record,
+            vertical_spacing=REQUESTED_VERTICAL_SPACING)
         final_plan = build_final_plan(connector_excel_record, pin_geometry)
         global_final_sequence = build_global_final_sequence(final_plan)
         decision = decide_edge_ordering_mode(
@@ -2810,6 +2851,9 @@ try:
         log(f"LEFT PIN X: {pin_geometry['left_x']}")
         log(f"RIGHT PIN X: {pin_geometry['right_x']}")
         log(f"PIN PITCH: {pin_geometry['pin_pitch']}")
+        if pin_geometry['custom_vertical_spacing']:
+            log(f"MEASURED SOURCE PIN PITCH (STAGING): {pin_geometry['measured_pin_pitch']}")
+            log(f"J1 OVERRIDE (FINAL VERTICAL PIN PITCH): {pin_geometry['pin_pitch']}")
         log(f"FINAL TOP Y: {pin_geometry['final_top_y']}")
 
         if already_matches:
