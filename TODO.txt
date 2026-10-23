@@ -1,1 +1,96 @@
-python -m PyInstaller --onefile --windowed --noconfirm --noupx --name BlockPinArrangerPortable --collect-submodules win32com --hidden-import pythoncom --hidden-import pywintypes --hidden-import win32timezone BlockPinArranger_onefile_noconsole.py
+from openpyxl import load_workbook
+import math
+import time
+import win32com.client as win32
+import os
+import sys
+import json
+import tempfile
+import subprocess
+import gc
+
+# A PyInstaller --windowed/--noconsole process has no stdout/stderr. Capture
+# all existing diagnostic prints and worker tracebacks in a persistent file.
+# This section does nothing in normal VS Code / console execution.
+def configure_windowed_log():
+    if not getattr(sys, 'frozen', False):
+        return None
+    if sys.stdout is not None and sys.stderr is not None:
+        return None
+    try:
+        log_dir = os.path.join(
+            os.environ.get('LOCALAPPDATA') or tempfile.gettempdir(),
+            'BlockPinArranger')
+        os.makedirs(log_dir, exist_ok=True)
+        path = os.path.join(log_dir, 'BlockPinArranger.log')
+        stream = open(path, 'a', encoding='utf-8', buffering=1,
+                      errors='replace')
+        if sys.stdout is None:
+            sys.stdout = stream
+        if sys.stderr is None:
+            sys.stderr = stream
+        stream.write('\n' + '=' * 72 + '\n')
+        stream.write('Process started: ' + repr(sys.argv) + '\n')
+        return path
+    except OSError:
+        # Lack of log access must not prevent the working E3 tool from starting.
+        return None
+
+
+WINDOWED_LOG_PATH = configure_windowed_log()
+
+# ================================================
+# HELPER FXN
+# ================================================
+
+def ask_save_path(default_full_path=""):
+    import os
+    import tkinter as tk
+    from tkinter import filedialog
+    default_folder = os.path.dirname(default_full_path)
+    root = tk.Tk()
+    root.withdraw()
+    root.attributes("-topmost", True)
+    root.update()
+    try:
+        selected_path = filedialog.askopenfilename(initialdir=default_folder, filetypes=[("Excel Files", "*.xlsm"), ("All Files", "*.*")])
+    except Exception:
+        root.destroy()
+        return None
+    if not selected_path:
+        root.destroy()
+        return None
+    root.destroy()
+    return os.path.abspath(selected_path)
+def log(message=""):
+    print(str(message))
+def section(title):
+    log()
+    log("=" * 120)
+    log(title)
+    log("=" * 120)
+def is_missing_value(value):
+    if value is None:
+        return True
+    try:
+        return int(value) == COM_MISSING
+    except Exception:
+        return False
+def clean_id_list(values):
+    cleaned = []
+    if values is None:
+        return cleaned
+    if not isinstance(values, (tuple, list)):
+        values = [values]
+    for value in values:
+        if is_missing_value(value):
+            continue
+        try:
+            value = int(value)
+        except Exception:
+            continue
+        if value > 0:
+            cleaned.append(value)
+    return cleaned
+def parse_count_array_result(result):
+    if result is None:
