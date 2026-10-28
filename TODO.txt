@@ -927,9 +927,9 @@ MOVE_DELAY_SECONDS = 0.10
 # The known-good standalone stretch test used X=24.0, Y=22.0.
 # Keep X=24 first and choose Y dynamically so long shields remain on-sheet.
 SHIELD_STAGE_X_VALUES = [24.0, 20.0, 28.0, 16.0, 32.0, 12.0, 36.0]
-SHIELD_STAGE_TOP_LIMIT = 32.0
-SHIELD_STAGE_DEFAULT_Y = 22.0
-SHIELD_STAGE_MARGIN = 0.50
+SHIELD_STAGE_TOP_LIMIT = 32.9   # E3 schematic page top; taller shields can stage lower
+SHIELD_STAGE_DEFAULT_Y = 22.0  # old verified location for short shields
+SHIELD_STAGE_MARGIN = 0.20     # clearance from top border when stretched
 
 
 #====================================================================================================================================
@@ -2358,6 +2358,18 @@ def place_twist(sym, job, placement):
     return placed_id
 
 
+# ======================================================================
+# SHIELD PLACEMENT BACKPORT
+# ======================================================================
+# E3 symbol Load / Place / immediate SetDisplayLength and stage->move were
+# restored from zuken_cable_overlay_v9_exact_working_core.py.
+# Changes retained elsewhere: D15 0.20/0.25 (blank -> 0.20), no-offset
+# outside twist position, connector aliases / pin view discovery, GUI.
+# Extremely tall shields are staged only at valid on-page Y coordinates.
+# Failed automatic stretches report failure instead of silently leaving an
+# incorrectly-sized (native-length) shield.
+# ======================================================================
+
 #====================================================================================================================================
 # PLACE SHIELD
 #
@@ -2399,33 +2411,45 @@ def place_shield(prj, job, placement):
     print("SHIELD MODE: Load -> Place -> IMMEDIATE SetDisplayLength")
     print("SHIELD NOTE: NO SetId / GetDisplayLength BEFORE STRETCH")
 
-    # Try the final location first.  If E3 rejects the resize there, try the
-    # same exact sequence in a clear staging area and move the resized shield.
+    # Restored from the earlier working V9 core: final position first, then
+    # fresh objects at on-sheet staging coordinates, moving the SAME sized
+    # symbol to its final location. Never leave an unstretched substitute.
     attempts = [("FINAL", final_x, final_y)]
 
-    # Pick stage Y values that leave enough room for a long shield.
-    max_stage_y = SHIELD_STAGE_TOP_LIMIT - requested_length - SHIELD_STAGE_MARGIN
-    if max_stage_y < 0.5:
-        max_stage_y = 0.5
+    # Keep the proven 22.0 staging height for shorter shields.  For large
+    # shields, lower the origin to fit the FULL stretched length on-sheet.
+    # Do not try off-page heights; those attempts can fail indefinitely in E3.
+    min_stage_y = 0.25
+    stage_top = SHIELD_STAGE_TOP_LIMIT - SHIELD_STAGE_MARGIN
+    max_stage_y = stage_top - requested_length
 
-    stage_base_y = min(SHIELD_STAGE_DEFAULT_Y, max_stage_y)
-    stage_y_values = [
-        stage_base_y,
-        max(0.5, stage_base_y - 0.5),
-        max(0.5, stage_base_y + 0.5),
-        max(0.5, stage_base_y - 1.0),
-        max(0.5, stage_base_y + 1.0),
-    ]
+    if max_stage_y >= min_stage_y:
+        stage_base_y = min(SHIELD_STAGE_DEFAULT_Y, max_stage_y)
+        stage_y_values = [
+            stage_base_y,
+            stage_base_y - 0.5,
+            stage_base_y + 0.5,
+            stage_base_y - 1.0,
+            stage_base_y + 1.0,
+            min_stage_y,
+        ]
+        seen_stage_y = []
+        for candidate_y in stage_y_values:
+            candidate_y = round(float(candidate_y), 6)
+            if not (min_stage_y <= candidate_y <= max_stage_y + 1e-6):
+                continue
+            if candidate_y not in seen_stage_y:
+                seen_stage_y.append(candidate_y)
 
-    seen_stage_y = []
-    for y in stage_y_values:
-        y = round(float(y), 6)
-        if y not in seen_stage_y:
-            seen_stage_y.append(y)
-
-    for stage_y in seen_stage_y:
-        for stage_x in SHIELD_STAGE_X_VALUES:
-            attempts.append(("STAGE", float(stage_x), float(stage_y)))
+        for stage_y in seen_stage_y:
+            for stage_x in SHIELD_STAGE_X_VALUES:
+                attempts.append(("STAGE", float(stage_x), float(stage_y)))
+    else:
+        print(
+            "SHIELD IS TOO TALL FOR ON-SHEET STAGING:", requested_length,
+            "(highest allowed staging origin:", round(max_stage_y, 3), ")"
+        )
+        print("FINAL POSITION WILL STILL BE ATTEMPTED")
 
     for attempt_number, (mode, x, y) in enumerate(attempts, start=1):
         print("")
@@ -2606,76 +2630,11 @@ def place_shield(prj, job, placement):
 
         time.sleep(PLACEMENT_DELAY_SECONDS)
 
-    # ================================================================
-    # MANUAL-STRETCH FALLBACK
-    #
-    # If E3 refuses every automatic SetDisplayLength attempt, do not
-    # abandon the shield.  Place one normal, unstretched Shield_Demo at
-    # the correct FINAL bottom insertion point.  The user can stretch it
-    # manually in E3 after the script finishes.
-    #
-    # All failed trial shields above were already deleted, so this leaves
-    # exactly one fallback shield at the intended cable location.
-    # ================================================================
-    print("")
-    print("============================================================")
-    print("SHIELD AUTO-RESIZE FAILED - USING MANUAL-STRETCH FALLBACK")
-    print("============================================================")
-    print("FALLBACK SYMBOL:", job["symbol_name"])
-    print("FALLBACK X:", final_x)
-    print("FALLBACK BOTTOM Y:", final_y)
-    print("TARGET LENGTH FOR MANUAL STRETCH:", requested_length)
-
-    fallback_sym = prj.CreateSymbolObject()
-
-    fallback_load_result = fallback_sym.Load(
-        job["symbol_name"],
-        SYMBOL_VERSION
+    raise Exception(
+        f"{job['symbol_name']} could not resize to {requested_length}. "
+        f"All attempts used Load -> Place -> immediate SetDisplayLength "
+        f"without SetId before the stretch."
     )
-
-    print("FALLBACK LOAD RESULT:", fallback_load_result)
-
-    if fallback_load_result == 0:
-        raise Exception(
-            f"{job['symbol_name']} could not resize and the fallback symbol "
-            f"could not be loaded."
-        )
-
-    fallback_id = fallback_sym.Place(
-        sheet_id,
-        final_x,
-        final_y,
-        0,
-        1.0,
-        0
-    )
-
-    print("FALLBACK PLACE RESULT:", fallback_id)
-
-    if fallback_id == 0:
-        raise Exception(
-            f"{job['symbol_name']} could not resize and the unstretched "
-            f"fallback could not be placed at X={final_x} Y={final_y}."
-        )
-
-    time.sleep(PLACEMENT_DELAY_SECONDS)
-
-    try:
-        fallback_sym.SetId(fallback_id)
-    except Exception:
-        pass
-
-    try:
-        fallback_length = float(fallback_sym.GetDisplayLength())
-    except Exception:
-        fallback_length = None
-
-    print("FALLBACK NATIVE LENGTH:", fallback_length)
-    print("MANUAL ACTION REQUIRED: stretch this shield upward to:", requested_length)
-    print("SHIELD FALLBACK PLACED AT CORRECT BOTTOM LOCATION")
-    print("============================================================")
-
-    return fallback_id
 
 
 #====================================================================================================================================
