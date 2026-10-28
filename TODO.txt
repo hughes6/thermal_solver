@@ -859,8 +859,8 @@ def get_spare_pins(pins, pinouts):
 #   - Shield_Demo uses Load -> Place -> immediate SetDisplayLength
 #   - SetId/GetDisplayLength happen only AFTER that immediate stretch attempt
 #
-# Multi-connector outer-shield logic already supports a run spanning
-# connector changes such as LEFT P1 -> P3 -> P4.
+# Outer shields are now split at every connector change: P1, P3 and P4
+# each receive a separate physical shield, even when Excel marks continue.
 # ======================================================================
 
 
@@ -1310,8 +1310,8 @@ def range_excel_rows(rows, start, end):
 #   It only places Shield_Demo around a twist run when every wire in
 #   that twist run is marked in the inner-SHLD column.
 #
-# OUTER SHIELDS ARE BUILT SEPARATELY ACROSS THE WHOLE SIDE SO THEY MAY
-# CROSS CONNECTOR CHANGES (EXAMPLE: LEFT P1 -> P3 -> P4).
+# OUTER SHIELDS ARE BUILT SEPARATELY AND SPLIT AT CONNECTOR CHANGES,
+# EVEN WHEN OUTER-SHIELD MARKS CONTINUE (EXAMPLE: P1 -> P3 -> P4).
 #====================================================================================================================================
 def build_section_jobs(rows):
     jobs = []
@@ -1398,10 +1398,11 @@ def build_section_jobs(rows):
 
 
 #====================================================================================================================================
-# BUILD OUTER-SHIELD JOBS ACROSS AN ENTIRE SIDE
+# BUILD ONE OUTER-SHIELD JOB PER CONTIGUOUS RUN ON ONE CONNECTOR
 #
-# Connector changes DO NOT break an outer shield.
-# Blank Excel row gaps or an unmarked outer-SHLD row DO break it.
+# A connector change ends the current shield, even when both rows are
+# marked in Excel.  Blank Excel row gaps and unmarked rows also end it.
+# Each new connector gets its own Shield_Demo and its own calculated span.
 #====================================================================================================================================
 def build_outer_shield_jobs(rows):
     jobs = []
@@ -1415,17 +1416,15 @@ def build_outer_shield_jobs(rows):
     def append_job(start_index, end_index):
         covered_rows = rows[start_index:end_index + 1]
 
-        connectors = []
-        for row in covered_rows:
-            connector = row["connector"]
-            if connector and connector not in connectors:
-                connectors.append(connector)
+        connector = covered_rows[0]["connector"]
+        if any(row["connector"] != connector for row in covered_rows):
+            raise ValueError("Outer shield job must contain exactly one connector")
 
         jobs.append({
             "type": "shield_outer",
             "side": side,
-            "connector": "/".join(connectors),
-            "connectors": connectors,
+            "connector": connector,
+            "connectors": [connector],
             "rows": covered_rows,
             "pins": [row["pin"] for row in covered_rows],
             "excel_rows": [row["excel_row"] for row in covered_rows],
@@ -1439,8 +1438,9 @@ def build_outer_shield_jobs(rows):
         if start is not None:
             previous = rows[index - 1]
             row_gap = row["excel_row"] != previous["excel_row"] + 1
+            connector_changed = row["connector"] != previous["connector"]
 
-            if row_gap or not marked:
+            if row_gap or connector_changed or not marked:
                 append_job(start, index - 1)
                 start = None
 
@@ -1948,7 +1948,22 @@ def resolve_connector_schematic_view(connector_token, required_pins, all_devices
 
     best = candidates[0]
 
-    if not best["analysis"]["has_real_y_spread"]:
+    if len(required_pins) == 1:
+        # A connector may have just ONE wire within its own outer shield.
+        # One pin cannot establish vertical spread, so select a placed
+        # schematic VIEW over an assembly/base-device candidate when possible.
+        # Keep the original multi-pin view validation unchanged.
+        view_priority = {"VIEW": 3, "CHILD": 2, "ASSEMBLY": 1, "BASE": 0}
+        candidates.sort(
+            key=lambda item: (
+                view_priority.get(item["source"], 0),
+                item["analysis"]["placed_count"],
+            ),
+            reverse=True,
+        )
+        best = candidates[0]
+        print("SINGLE-PIN SHIELD VIEW: using placed-pin sheet without requiring Y spread")
+    elif not best["analysis"]["has_real_y_spread"]:
         raise Exception(f"Could not locate the split schematic view for {expected_name}")
 
     sheet_id = best["analysis"]["sheet_id"]
@@ -2052,7 +2067,7 @@ def job_offset(job, twist_offset_settings):
 #
 # ACTUAL WORKING ORDER INSIDE EACH CONNECTOR SECTION:
 # Inner shields first, then twists.
-# Side-wide outer shields are processed separately before connector sections.
+# Connector-specific outer shields are processed before inner shields/twists.
 #====================================================================================================================================
 def job_priority(job):
     # This matches the earlier working dynamic-placement implementation:
@@ -2121,11 +2136,12 @@ def calculate_placement(job, pin_map, sheet_id, twist_offset_settings):
 
 
 #====================================================================================================================================
-# CALCULATE OUTER SHIELD PLACEMENT ACROSS ONE OR MORE CONNECTORS
+# CALCULATE ONE CONNECTOR'S OUTER SHIELD PLACEMENT
 #
-# Each Excel row is resolved through the connector named on that row.
-# This allows one outer shield to span, for example, LEFT P1 + P3 + P4.
-# All covered connector views must resolve to the same E3 sheet.
+# The job builder guarantees every row belongs to the same connector.
+# Resolve that connector's actual placed pins and size Shield_Demo only
+# from its first to its last marked wire.  The existing E3 sizing and
+# placement workflow below is intentionally unchanged.
 #====================================================================================================================================
 def calculate_outer_shield_placement(job, all_devices, dev, pin, cache, twist_offset_settings):
     resolved_by_connector = {}
@@ -2734,7 +2750,7 @@ def run_v9_symbol_overlay(excel_path):
 
         warnings.extend(section_warnings)
 
-    # Outer shields are side-wide and may cross connector changes.
+    # Build separate outer shields for each contiguous marked connector run.
     outer_jobs = (
         build_outer_shield_jobs(left_rows) +
         build_outer_shield_jobs(right_rows)
@@ -2742,7 +2758,7 @@ def run_v9_symbol_overlay(excel_path):
 
     print("")
     print("CONNECTOR SECTIONS WITH TWIST / INNER-SHIELD SYMBOLS:", len(packages))
-    print("SIDE-WIDE OUTER SHIELD JOBS:", len(outer_jobs))
+    print("CONNECTOR-SPECIFIC OUTER SHIELD JOBS:", len(outer_jobs))
 
     if warnings:
         print("")
@@ -2769,12 +2785,12 @@ def run_v9_symbol_overlay(excel_path):
     pin_map_cache = {}
     placed_ids = []
 
-    # Place side-wide outer shields FIRST. This matches the earlier working dynamic-placement ordering.
+    # Place separate per-connector outer shields FIRST, preserving working order.
     for job in outer_jobs:
         try:
             print("")
             print("============================================================")
-            print("PROCESSING SIDE-WIDE OUTER SHIELD")
+            print("PROCESSING CONNECTOR OUTER SHIELD")
             print("============================================================")
             print("SIDE:", job["side"])
             print("CONNECTORS:", job["connectors"])
