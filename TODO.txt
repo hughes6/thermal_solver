@@ -1611,14 +1611,12 @@ def get_symbol_location(sym, symbol_id):
 # LOAD DEVICE PIN MAP
 #====================================================================================================================================
 def load_device_pin_map(dev, pin, device_id):
-    dev.SetId(device_id)
-
-    try:
-        info = dev.GetAllPinIds(None)
-    except Exception:
-        return {}
-
-    pin_ids = extract_e3_ids(info)
+    # Use the SAME view-pin enumeration fallback as the working placer.
+    # Some E3 views expose pins through GetPinIds rather than GetAllPinIds.
+    pin_ids = get_connector_pin_ids(
+        dev, device_id, connector_name=f"overlay candidate {device_id}",
+        prefer_all=True
+    )
     pin_map = {}
 
     for pin_id in pin_ids:
@@ -1644,14 +1642,83 @@ def load_device_pin_map(dev, pin, device_id):
 #====================================================================================================================================
 # FIND BASE CONNECTOR
 #====================================================================================================================================
-def find_base_connector_devices(connector_token, all_devices):
+def find_base_connector_devices(connector_token, all_devices, dev):
+    """Find a connector with the same naming rules as the working placer.
+
+    After E3 creates schematic views, a connector may be exposed as W1.P1,
+    W1.01, or W1.1#1 instead of the literal W1.1.  The old overlay only
+    accepted an exact name, which wrongly rejected those valid connectors.
+    Never match a similarly numbered connector belonging to another cable.
+    """
     expected_name = connector_base_name(connector_token)
     expected_upper = expected_name.upper()
+    expected_designation = normalize_connector_token(connector_token)
+    root_name = CONNECTOR_ROOT_NAME.upper()
+    root_prefix = root_name + "."
     matches = []
+    seen_ids = set()
 
-    for record in all_devices:
-        if record["name"].upper() == expected_upper:
+    def add_match(record, reason):
+        device_id = record["device_id"]
+        if device_id not in seen_ids:
             matches.append(record)
+            seen_ids.add(device_id)
+            print("OVERLAY CONNECTOR MATCH:", expected_name,
+                  "->", record["name"], "DEVICE ID:", device_id,
+                  "MATCH TYPE:", reason)
+
+    # Prefer the exact canonical name, but recognize the aliases already
+    # supported by the main cable placer (P-prefix, leading zeroes, #suffix).
+    for record in all_devices:
+        device_name = clean_excel_value(record["name"])
+        name_upper = device_name.upper()
+        if name_upper == expected_upper:
+            add_match(record, "EXACT")
+        elif (name_upper.startswith(root_prefix)
+              and normalize_connector_token(device_name) == expected_designation):
+            add_match(record, "NORMALIZED")
+
+    # E3 can report an assembly member's LOCAL name (1/P1) rather than
+    # W1.1.  Accept those only if its actual parent assembly is W1.
+    if not matches:
+        for record in all_devices:
+            device_name = clean_excel_value(record["name"])
+            if normalize_connector_token(device_name) != expected_designation:
+                continue
+            if device_name.upper().startswith(root_prefix):
+                continue
+            try:
+                dev.SetId(record["device_id"])
+                assembly_id = int(dev.GetAssemblyId())
+                if assembly_id <= 0:
+                    continue
+                dev.SetId(assembly_id)
+                if clean_excel_value(dev.GetName()).upper() == root_name:
+                    add_match(record, "ASSEMBLY MEMBER")
+            except Exception as error:
+                print("OVERLAY LOCAL-NAME MATCH FAILED:", device_name, repr(error))
+
+    # On some E3 versions the assembly children aren't included in
+    # GetAllDeviceIds.  Explicitly enumerate children of the W1 assembly.
+    if not matches:
+        for root_record in all_devices:
+            if clean_excel_value(root_record["name"]).upper() != root_name:
+                continue
+            for child_id in get_child_device_ids(dev, root_record["device_id"]):
+                try:
+                    dev.SetId(child_id)
+                    child_name = clean_excel_value(dev.GetName())
+                except Exception:
+                    continue
+                if normalize_connector_token(child_name) == expected_designation:
+                    add_match({"device_id": child_id, "name": child_name},
+                              "W1 ASSEMBLY CHILD")
+
+    if not matches:
+        cable_names = [record["name"] for record in all_devices
+                       if clean_excel_value(record["name"]).upper().startswith(root_prefix)]
+        print("OVERLAY LOOKUP FAILED FOR:", expected_name)
+        print("AVAILABLE", root_name, "CONNECTORS:", cable_names)
 
     return matches
 
@@ -1737,7 +1804,9 @@ def get_same_name_assembly_devices(dev, base_device_id, expected_name):
         except Exception:
             continue
 
-        if name.upper() == expected_name.upper():
+        if (normalize_connector_token(name) == normalize_connector_token(expected_name)
+                and (name.upper().startswith(CONNECTOR_ROOT_NAME.upper() + ".")
+                     or name.upper() == expected_name.upper())):
             found_ids.append(device_id)
 
     return found_ids
@@ -1748,10 +1817,19 @@ def get_same_name_assembly_devices(dev, base_device_id, expected_name):
 #====================================================================================================================================
 def collect_connector_candidate_ids(connector_token, all_devices, dev):
     expected_name = connector_base_name(connector_token)
-    base_records = find_base_connector_devices(connector_token, all_devices)
+    base_records = find_base_connector_devices(connector_token, all_devices, dev)
 
     if not base_records:
-        raise Exception(f"Could not find base E3 connector {expected_name}")
+        root_prefix = CONNECTOR_ROOT_NAME.upper() + "."
+        visible_names = [record["name"] for record in all_devices
+                         if clean_excel_value(record["name"]).upper().startswith(root_prefix)]
+        available = ", ".join(visible_names[:15]) if visible_names else "none enumerated"
+        raise Exception(
+            f"Could not find E3 connector/view for {expected_name}. "
+            f"E3 currently reports these {CONNECTOR_ROOT_NAME} device names: {available}. "
+            "Check that the selected workbook matches the open E3 cable "
+            "and that its connector pin views have been placed."
+        )
 
     candidate_sources = {}
 
