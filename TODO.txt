@@ -650,7 +650,7 @@ def connector_designation_from_device_name(value):
     return normalize_connector_token(value)
 
 
-def generate_placement_locations(Pins, layout):
+def generate_placement_locations(Pins, layout, pin_spacing=0.10):
     TOP_OF_PAGE = 32.9
     BOTTOM_OF_PAGE = 0.0
     LEFT_OF_PAGE = 0.0
@@ -733,9 +733,8 @@ def generate_placement_locations(Pins, layout):
             # normal top placement
             ystart = y_pin_start
         else:
-            # below another connector:
-            # new rule:
-            #  p_start = top_p_start - pins_above*0.25 - conns_above*1
+            # Below another connector, use the same D15-selected vertical
+            # wire spacing as the actual placed schematic pin views.
 
             pins_above = 0
             conns_above = 0
@@ -755,13 +754,13 @@ def generate_placement_locations(Pins, layout):
                             pins_above += (len(r) - 1)
                             conns_above += 1
 
-            ystart = y_pin_start - (pins_above * 0.15) - (conns_above * 0.5)
+            ystart = y_pin_start - (pins_above * pin_spacing) - (conns_above * 0.5)
 
         pin_locs.append([conn, xstart, ystart, flip])
 
     return main_conn_locs, pin_locs, y_pin_start + 2
 
-def generate_aligned_pin_y(pinouts, y_start, pin_spacing=0.15, connector_gap=0.5):
+def generate_aligned_pin_y(pinouts, y_start, pin_spacing=0.10, connector_gap=0.5):
     pin_y = {}
 
     current_y = y_start
@@ -870,6 +869,9 @@ def get_spare_pins(pins, pinouts):
 #====================================================================================================================================
 TARGET_SHEET_NAME = None
 DEVICE_NAME_CELL = "B1"
+PIN_SPACING_MODE_CELL = "D15"   # Default Zuken Spacing / Increased Spacing
+DEFAULT_ZUKEN_PIN_SPACING = 0.10
+INCREASED_PIN_SPACING = 0.15
 DATA_FIRST_ROW = 5
 MAX_SCAN_ROWS = 5000
 
@@ -977,16 +979,18 @@ OFFSET_YES_OUTER_SHIELD = 0.75
 #====================================================================================================================================
 # HORIZONTAL LAYOUT WHEN OFFSET = NO
 #
-# LEFT CONNECTOR EXAMPLE AT X = 1.00:
+# Both twist columns share the OUTSIDE twist slot, not the inside/
+# intermediate slot.  Neither the symbol rotation nor its vertical
+# direction changes.  Example for LEFT connector at X = 1.00:
 #
-# Twist A + Shield A = 1.25
-# Twist B + Shield B = 1.25
-# Outer Shield       = 1.50
+# Twist A + Inner Shield A = 1.50
+# Twist B + Inner Shield B = 1.50
+# Outer Shield            = 1.75 (stays beyond the outer twist slot)
 #
 # RIGHT SIDE MIRRORS AUTOMATICALLY.
 #====================================================================================================================================
-OFFSET_NO_TWIST_LINE = 0.15
-OFFSET_NO_OUTER_SHIELD = 0.50
+OFFSET_NO_TWIST_LINE = OFFSET_YES_TWIST_B
+OFFSET_NO_OUTER_SHIELD = OFFSET_YES_OUTER_SHIELD
 
 
 #====================================================================================================================================
@@ -1116,6 +1120,31 @@ def parse_yes_no(value, setting_name):
         return False
 
     raise Exception(f"{setting_name} must contain YES or NO. Current value: {value}")
+
+
+#====================================================================================================================================
+# READ CABLE PIN SPACING (D15)
+#====================================================================================================================================
+def read_pin_spacing_setting(ws):
+    selected = clean_excel_value(ws[PIN_SPACING_MODE_CELL].value)
+    normalized = " ".join(selected.upper().split())
+
+    if not normalized:
+        print(
+            "D15 is blank; defaulting to Default Zuken Spacing (0.10)."
+        )
+        normalized = "DEFAULT ZUKEN SPACING"
+
+    if normalized == "DEFAULT ZUKEN SPACING":
+        return "Default Zuken Spacing", DEFAULT_ZUKEN_PIN_SPACING
+
+    if normalized == "INCREASED SPACING":
+        return "Increased Spacing", INCREASED_PIN_SPACING
+
+    raise ValueError(
+        f"Cell {PIN_SPACING_MODE_CELL} must be 'Default Zuken Spacing' "
+        f"or 'Increased Spacing'. Found: {selected!r}"
+    )
 
 
 #====================================================================================================================================
@@ -2971,6 +3000,8 @@ ws = wb.active
 NO_WIRES = int(ws["B15"].value)
 VERSION = ws["B2"].value
 NAME = ws["B1"].value
+SPACING_MODE, PIN_SPACING = read_pin_spacing_setting(ws)
+print(f"PIN SPACING D15: {SPACING_MODE} ({PIN_SPACING:.2f} per pin)")
 
 
 def placer_connector_designation(value):
@@ -3314,7 +3345,9 @@ for key, value in CONNECTORS.items():
         print("CONNECTOR PINS:", key, pindict)
         PINS.append(pindict)
 
-MAIN_CONN_LOCS, PINN_LOCS, Y_START = generate_placement_locations(PINS, LAYOUT)
+MAIN_CONN_LOCS, PINN_LOCS, Y_START = generate_placement_locations(
+    PINS, LAYOUT, pin_spacing=PIN_SPACING
+)
 SPARES = get_spare_pins(PINS, pinouts)
 print("spare pins: ", SPARES)
 print('main_conn: ', MAIN_CONN_LOCS)
@@ -3323,13 +3356,13 @@ print('pin: ', PINN_LOCS)
 PIN_Y = generate_aligned_pin_y(
     pinouts,
     y_start=Y_START,
-    pin_spacing=0.15,
+    pin_spacing=PIN_SPACING,
     connector_gap=0.5
 )
 
 SPARE_X = 8.0
 SPARE_Y = Y_START
-SPARE_PIN_SPACING = 0.15
+SPARE_PIN_SPACING = PIN_SPACING
 SPARE_CONN_GAP = 0.5
 
 # print("ALIGNED PIN Y:")
