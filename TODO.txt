@@ -526,15 +526,28 @@ def run_ct_code():
                         text.SetColour(0)
                         text.SetMode(1)
                         text.SetAlignment(2)
-                        xloc = [0.0]
-                        yloc = [0.0]
-                        grid = [""]
-                        column = [""]
-                        row = [""]
-                        result = text.GetSchemaLocation(xloc, yloc, grid,  column, row)
-                        new_x = result[1] + 1.5
-                        new_y = result[2] + 0.15
-                        text.SetSchemaLocation(new_x, new_y)
+                        # A formatter-only pass must NEVER shift an already
+                        # positioned top-level (bulk J1) Additional Part ID.
+                        # The previous +1.5 / +0.15 adjustment was relative
+                        # to its current location, so each formatter run
+                        # moved the label farther away.  Preserve its actual
+                        # E3 location in FORMATTER_ONLY; keep the original
+                        # first-placement behavior in the full cable workflow.
+                        if START_MODE != "FORMATTER_ONLY":
+                            xloc = [0.0]
+                            yloc = [0.0]
+                            grid = [""]
+                            column = [""]
+                            row = [""]
+                            result = text.GetSchemaLocation(xloc, yloc, grid, column, row)
+                            new_x = result[1] + 1.5
+                            new_y = result[2] + 0.15
+                            text.SetSchemaLocation(new_x, new_y)
+                        else:
+                            print(
+                                "FORMATTER ONLY: keeping top-level Additional "
+                                "Part ID at its existing schematic location"
+                            )
 
                     elif text.GetType() == 1000:
                         text.SetVisibility(0)
