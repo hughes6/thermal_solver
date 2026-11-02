@@ -269,6 +269,19 @@ ws = wb.active
 ASSY_NAME = ws["B1"].value
 VERSION = ws["B2"].value
 
+# ======================================================
+# INCLUDE P IN CONNECTOR NAMES? (MERGED AB3:AC3)
+#
+# AB3 = NO (case-insensitive):  %.2, %.9B
+# AB3 = YES, blank, or anything else:  %.P2, %.P9B
+# Only an explicit NO disables the P prefix.
+# ======================================================
+INCLUDE_P_PREFIX = str(ws["AB3"].value or "").strip().upper() != "NO"
+print(
+    "CONNECTOR P PREFIX:",
+    "ENABLED (%.P2)" if INCLUDE_P_PREFIX else "DISABLED (%.2)"
+)
+
 # Connector PART NUMBERS: up to 12 in B3:B14.
 CONNECTOR_PARTS = [ws[f"B{r}"].value for r in range(3, 15)]
 CONNECTOR_PARTS = [part for part in CONNECTOR_PARTS if part is not None and str(part).strip() != ""]
@@ -621,13 +634,20 @@ for connector_designation in CONNECTOR_LAYOUT:
         f"(COPY {connector_copy}): {connector_part}"
     )
 
-    # Keep COPY numeric for E3 relationships, but use the layout designation
-    # for the actual assembly member name.  Example: 9B -> %.9B.
+    # COPY remains numeric, preserving the original pin/wire mapping.
+    # Only an explicit "NO" in AB3 removes the P prefix.
+    if INCLUDE_P_PREFIX:
+        member_name = f"%.P{connector_designation}"
+    else:
+        member_name = f"%.{connector_designation}"
+
+    print("CONNECTOR MEMBER NAME:", member_name)
+
     add_member(
         connector_copy,
         connector_part,
         1,
-        f"%.{connector_designation}"
+        member_name
     )
 
 
