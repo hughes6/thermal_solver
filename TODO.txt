@@ -1,83 +1,92 @@
-# -*- coding: utf-8 -*-
-
-###########################################################################
-## Python code generated with wxFormBuilder (version 4.2.1-115-g11c2dec8-dirty)
-## http://www.wxformbuilder.org/
-##
-## PLEASE DO *NOT* EDIT THIS FILE!
-###########################################################################
-
+import AppGuiCode
 import wx
-import wx.xrc
 import wirelist
+import endtoend
+import cabletable
+import win32com.client as win32
 
-import gettext
-_ = gettext.gettext
+def on_generate(labels):
 
-###########################################################################
-## Class MyFrame1
-###########################################################################
+    if "Wirelist" in labels:
+        objects["Wirelist"] = True
 
-class MainFrame ( wx.Frame ):
+    if "Cable Table" in labels:
+        objects["Cable Table"] = True
 
-    def __init__( self, parent, on_generate_callback ):
-        wx.Frame.__init__ ( self, parent, id = wx.ID_ANY, title = wx.EmptyString, pos = wx.DefaultPosition, size = wx.Size( 229,203 ), style = wx.DEFAULT_FRAME_STYLE|wx.TAB_TRAVERSAL )
+    if "Print Labels" in labels:
+        objects["Print Labels"] = True
 
-        self.SetSizeHints( wx.DefaultSize, wx.DefaultSize )
-
-        bSizer1 = wx.BoxSizer( wx.VERTICAL )
-
-        m_checkList1Choices = [_(u"Wirelist"), _(u"Cable Table"), _(u"Print Labels"), _(u"End to End"), _(u"All")]
-        self.m_checkList1 = wx.CheckListBox( self, wx.ID_ANY, wx.DefaultPosition, wx.Size( 150,125 ), m_checkList1Choices, 0 )
-        self.m_checkList1.SetFont( wx.Font( 14, wx.FONTFAMILY_SWISS, wx.FONTSTYLE_NORMAL, wx.FONTWEIGHT_BOLD, False, "Arial" ) )
-        self.m_checkList1.SetForegroundColour( wx.SystemSettings.GetColour( wx.SYS_COLOUR_BTNTEXT ) )
-        self.m_checkList1.SetBackgroundColour( wx.SystemSettings.GetColour( wx.SYS_COLOUR_BTNFACE ) )
-
-        bSizer1.Add( self.m_checkList1, 0, wx.ALL|wx.ALIGN_CENTER_HORIZONTAL, 5 )
-
-        self.m_button1 = wx.Button( self, wx.ID_ANY, _(u"Generate"), wx.DefaultPosition, wx.DefaultSize, 0 )
-        bSizer1.Add( self.m_button1, 0, wx.ALL|wx.ALIGN_CENTER_HORIZONTAL, 5 )
-
-        self.on_generate_callback = on_generate_callback
-        self.SetSizer( bSizer1 )
-        self.Layout()
-
-        self.Centre( wx.BOTH )
-
-        # Connect Events
-        self.m_checkList1.Bind(wx.EVT_CHECKLISTBOX, self.OnCheck)
-        self.Bind( wx.EVT_ACTIVATE, self.OnActivate_Main )
-        self.Bind( wx.EVT_CLOSE, self.OnClose_Main )
-        self.m_button1.Bind( wx.EVT_BUTTON, self.Generate )
-
-    def __del__( self ):
-        pass
+    if "End to End" in labels:
+        objects["End to End"] = True
 
 
-    # Virtual event handlers, override them in your derived class
-    def OnActivate_Main( self, event ):
-        event.Skip()
+def excel_to_pdf(excel_path, pdf_path):
+    excel = win32.Dispatch("Excel.Application")
+    excel.Visible = False # Run in the background
 
-    def OnClose_Main( self, event ):
-        event.Skip()
+    # Open the workbook
+    workbook = excel.Workbooks.Open(excel_path)
 
-    def Generate( self, event ):
-        checked = self.m_checkList1.GetCheckedItems()
-        labels = [self.m_checkList1.GetString(i) for i in checked]
-        # send labels checked back to main
-        self.on_generate_callback(labels)
-        self.Close()
+    # Export as PDF (FileFormat=57 is for PDF)
+    workbook.ExportAsFixedFormat(0, pdf_path)
 
-    def OnCheck(self, event):
-        idx = event.GetInt()                 # which item was clicked
-        label = self.m_checkList1.GetString(idx)
+    # Close the workbook and quit Excel
+    workbook.Close(False)
+    excel.Quit()
 
-        if label == "All":
-            is_checked = self.m_checkList1.IsChecked(idx)
+def generate_sheets(objects):
+    wsheet = None
+    esheet = None
+    csheet = None
+    psheet = None
 
-            # For all items *except* "All", set their check state to match
-            count = self.m_checkList1.GetCount()
-            for i in range(count - 1):       # last item is "All"
-                self.m_checkList1.Check(i, is_checked)
+    if objects["Wirelist"] == True:
+        w = wirelist.WireList()
+        wsheet = w.run()
 
-        event.Skip() 
+    if objects["End to End"] == True:
+        e = endtoend.EndtoEnd()
+        esheet = e.run()
+        
+
+    if objects["Cable Table"] == True and objects["Print Labels"] == True:
+        c = cabletable.CableTable(True)
+        csheet, psheet = c.run()
+
+    elif objects["Cable Table"] == True:
+        c = cabletable.CableTable(False)
+        csheet = c.run()
+
+    save = [wsheet, esheet, csheet, psheet]
+    for sheet in save:
+        if sheet is not None:
+            pdf_sheet = sheet[:-4] + "pdf"
+            excel_to_pdf(sheet, pdf_sheet)
+
+
+#------------------------------------------------------------------------------
+# GUI main
+#------------------------------------------------------------------------------
+
+if __name__ == "__main__":
+
+    try:
+
+        objects = {
+            "Wirelist": False,
+            "Cable Table": False,
+            "Print Labels": False,
+            "End to End": False,
+        }
+        
+
+        app = wx.App(False)
+
+        frame = AppGuiCode.MainFrame(None, on_generate)
+        frame.Show(True)
+
+        app.MainLoop()
+        generate_sheets(objects)
+
+    except Exception as err:
+        print(err)
