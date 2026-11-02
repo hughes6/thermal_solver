@@ -1,203 +1,252 @@
 
-# -------------------------------------------------------
-# GUI SETUP
-# -------------------------------------------------------
-def create_gui():
-    from tkinter import ttk
-    import threading
+# =======================================================
+# USER-FRIENDLY ERROR HANDLING
+# =======================================================
+import traceback
 
-    root = tk.Tk()
-    root.title("Zuken Symbol Formatter")
-    root.geometry("560x500")
-    root.resizable(False, False)
+def friendly_error_message(error):
+    msg = str(error)
+    lower = msg.lower()
 
-    style = ttk.Style()
-    try:
-        style.theme_use("vista")
-    except:
-        pass
-
-    style.configure("Title.TLabel", font=("Segoe UI", 18, "bold"))
-    style.configure("Subtitle.TLabel", font=("Segoe UI", 10))
-    style.configure("Step.TLabel", font=("Segoe UI", 10))
-    style.configure("Status.TLabel", font=("Segoe UI", 10, "bold"))
-    style.configure("Run.TButton", font=("Segoe UI", 11, "bold"), padding=(20, 10))
-    style.configure("Secondary.TButton", font=("Segoe UI", 10), padding=(15, 8))
-
-    main_frame = ttk.Frame(root, padding=25)
-    main_frame.pack(fill="both", expand=True)
-
-    ttk.Label(
-        main_frame,
-        text="Zuken Symbol Formatter",
-        style="Title.TLabel"
-    ).pack(anchor="w")
-
-    ttk.Label(
-        main_frame,
-        text="Configure and format generated connector symbols.",
-        style="Subtitle.TLabel"
-    ).pack(anchor="w", pady=(2, 20))
-
-    instruction_frame = ttk.LabelFrame(
-        main_frame,
-        text="Before Running",
-        padding=15
-    )
-    instruction_frame.pack(fill="x", pady=(0, 20))
-
-    instructions = (
-        "1. Open Device Properties in Zuken.\n\n"
-        "2. Enable:\n"
-        "   Assembly  →  Additional Part ID\n\n"
-        "3. Return here and click Run Formatter."
-    )
-
-    ttk.Label(
-        instruction_frame,
-        text=instructions,
-        justify="left",
-        style="Step.TLabel"
-    ).pack(anchor="w")
-
-    status_frame = ttk.LabelFrame(
-        main_frame,
-        text="Status",
-        padding=12
-    )
-    status_frame.pack(fill="x", pady=(0, 20))
-
-    status_label = ttk.Label(
-        status_frame,
-        text="Ready",
-        style="Status.TLabel"
-    )
-    status_label.pack(anchor="w")
-
-    # -------------------------------------------------------
-    # FORMATTER FINISHED SUCCESSFULLY
-    # -------------------------------------------------------
-    def finished():
-        root.config(cursor="")
-
-        # Hide the formatter window immediately.
-        root.withdraw()
-
-        # Show completion popup.
-        try:
-            messagebox.showinfo(
-                "Complete",
-                "Formatting complete.",
-                parent=root
-            )
-        finally:
-            # Fully close formatter GUI after OK.
-            root.destroy()
-
-    # -------------------------------------------------------
-    # FORMATTER ERROR
-    # -------------------------------------------------------
-    def failed(error):
-        status_label.config(text=f"Error: {error}")
-        run_button.config(state="normal")
-        run_again_button.config(state="normal")
-        root.config(cursor="")
-
-        messagebox.showerror(
-            "Formatter Error",
-            str(error),
-            parent=root
+    if "no pins found" in lower:
+        return (
+            "Connector Pins Not Found",
+            "The selected connector's pins could not be found in E3.",
+            "Verify that the connector exists in the E3 library "
+            "and matches the Excel cable layout."
         )
 
-    # -------------------------------------------------------
-    # BACKGROUND FORMATTER WORKER
-    # -------------------------------------------------------
-    def worker():
-        error = None
-        com_initialized = False
+    if "could not find e3 connector" in lower or "could not locate the split schematic view" in lower:
+        return (
+            "Connector View Not Found",
+            "A connector or its schematic view could not be located.",
+            "Check that the correct cable is open in E3 and "
+            "that its connector views have been placed."
+        )
 
-        try:
-            pythoncom.CoInitialize()
-            com_initialized = True
+    if "could not resize" in lower or "final length changed" in lower:
+        return (
+            "Shield Resizing Failed",
+            "E3 could not resize a shield to the required length.",
+            "Check the available space on the schematic and "
+            "verify that Shield_Demo is available."
+        )
 
-            # Run existing E3 formatting code.
-            run_ct_code()
+    if "could not load library" in lower:
+        return (
+            "Symbol Not Found",
+            "A required library symbol could not be loaded.",
+            "Verify that the shield or twist symbol exists "
+            "in the E3 library."
+        )
 
-        except Exception as e:
-            error = str(e)
-            print(f"Formatter error: {e}")
+    if "d15" in lower or "must contain yes or no" in lower or "connector layout count" in lower:
+        return (
+            "Excel Configuration Error",
+            msg,
+            "Review the indicated Excel cell or layout setting "
+            "and correct its value."
+        )
 
-        finally:
-            if com_initialized:
-                pythoncom.CoUninitialize()
+    if isinstance(error, FileNotFoundError):
+        return (
+            "File Not Found",
+            "The selected file could not be located.",
+            "Make sure the Excel workbook has not been moved, "
+            "renamed, or deleted."
+        )
 
-            # Update the GUI only after formatting ends.
-            if error is None:
-                root.after(0, finished)
-            else:
-                root.after(
-                    0,
-                    lambda msg=error: failed(msg)
-                )
+    if isinstance(error, PermissionError):
+        return (
+            "File Access Error",
+            "The script does not have permission to access a file.",
+            "Check that the file is accessible and that you "
+            "have the necessary permissions."
+        )
 
-    # -------------------------------------------------------
-    # START FORMATTER
-    # -------------------------------------------------------
-    def run_formatter():
-        status_label.config(text="Running...")
-        run_button.config(state="disabled")
-        run_again_button.config(state="disabled")
-        root.config(cursor="watch")
+    if isinstance(error, KeyError):
+        return (
+            "Missing Data",
+            f"Required information could not be found: {msg}",
+            "Check the Excel pin assignments and connector "
+            "definitions for missing or incorrect values."
+        )
 
-        threading.Thread(
-            target=worker,
-            daemon=True
-        ).start()
+    if "com_error" in type(error).__name__.lower():
+        return (
+            "Zuken E3 Communication Error",
+            "The script encountered an error while communicating with E3.",
+            "Make sure E3 is running with the correct job open. "
+            "Check Technical Details for the specific E3 error."
+        )
 
-    # -------------------------------------------------------
-    # CLOSE
-    # -------------------------------------------------------
-    def close_app():
-        root.destroy()
+    if "pyodbc" in type(error).__module__.lower():
+        return (
+            "Database Error",
+            "The cable library database operation failed.",
+            "Check the database connection and availability."
+        )
 
-    # -------------------------------------------------------
-    # BUTTONS
-    # -------------------------------------------------------
-    button_frame = ttk.Frame(main_frame)
-    button_frame.pack(fill="x")
-
-    run_button = ttk.Button(
-        button_frame,
-        text="Run Formatter",
-        style="Run.TButton",
-        command=run_formatter
+    return (
+        "Cable Placer Error",
+        "The operation could not be completed.",
+        "Review the technical details below to identify "
+        "the specific problem."
     )
-    run_button.pack(fill="x")
 
-    secondary_frame = ttk.Frame(main_frame)
-    secondary_frame.pack(pady=(12, 0))
 
-    run_again_button = ttk.Button(
-        secondary_frame,
-        text="Run Again",
-        style="Secondary.TButton",
-        command=run_formatter
-    )
-    run_again_button.pack(side="left", padx=(0, 8))
+def show_error_dialog(error, parent=None, details=None):
+    title, description, suggestion = friendly_error_message(error)
 
-    ttk.Button(
-        secondary_frame,
-        text="Close",
-        style="Secondary.TButton",
-        command=close_app
-    ).pack(side="left")
+    if details is None:
+        details = "".join(
+            traceback.format_exception(
+                type(error),
+                error,
+                error.__traceback__
+            )
+        )
+
+    owns_root = parent is None
+
+    if owns_root:
+        window = tk.Tk()
+    else:
+        window = tk.Toplevel(parent)
+
+    window.title("Cable Placer - Error")
+    window.geometry("520x340")
+    window.resizable(False, False)
+
+    try:
+        window.attributes("-topmost", True)
+    except Exception:
+        pass
+
+    frame = ttk.Frame(window, padding=22)
+    frame.pack(fill="both", expand=True)
 
     ttk.Label(
-        main_frame,
-        text="E3 Symbol Automation",
-        font=("Segoe UI", 8)
-    ).pack(side="bottom", anchor="e", pady=(15, 0))
+        frame,
+        text=title,
+        font=("Segoe UI", 16, "bold"),
+        foreground="#C0392B"
+    ).pack(anchor="w", pady=(0, 15))
 
-    root.protocol("WM_DELETE_WINDOW", close_app)
+    ttk.Label(
+        frame,
+        text="What happened:",
+        font=("Segoe UI", 10, "bold")
+    ).pack(anchor="w")
 
-    root.mainloop()
+    ttk.Label(
+        frame,
+        text=description,
+        wraplength=465,
+        justify="left"
+    ).pack(anchor="w", pady=(4, 15))
+
+    ttk.Label(
+        frame,
+        text="Suggested fix:",
+        font=("Segoe UI", 10, "bold")
+    ).pack(anchor="w")
+
+    ttk.Label(
+        frame,
+        text=suggestion,
+        wraplength=465,
+        justify="left"
+    ).pack(anchor="w", pady=(4, 15))
+
+    detail_frame = ttk.Frame(frame)
+
+    detail_text = tk.Text(
+        detail_frame,
+        height=7,
+        wrap="word",
+        font=("Consolas", 9)
+    )
+    detail_text.pack(fill="both", expand=True)
+    detail_text.insert("1.0", details)
+    detail_text.config(state="disabled")
+
+    showing_details = False
+
+    def toggle_details():
+        nonlocal showing_details
+
+        showing_details = not showing_details
+
+        if showing_details:
+            window.geometry("520x550")
+            detail_frame.pack(fill="both", expand=True, pady=(5, 10))
+            details_button.config(text="Hide Technical Details")
+        else:
+            detail_frame.pack_forget()
+            window.geometry("520x340")
+            details_button.config(text="Show Technical Details")
+
+    def copy_details():
+        window.clipboard_clear()
+        window.clipboard_append(details)
+        window.update()
+
+    def close_window():
+        window.destroy()
+
+    button_frame = ttk.Frame(frame)
+    button_frame.pack(side="bottom", fill="x", pady=(10, 0))
+
+    details_button = ttk.Button(
+        button_frame,
+        text="Show Technical Details",
+        command=toggle_details
+    )
+    details_button.pack(side="left")
+
+    ttk.Button(
+        button_frame,
+        text="Copy Error",
+        command=copy_details
+    ).pack(side="left", padx=8)
+
+    ttk.Button(
+        button_frame,
+        text="OK",
+        command=close_window
+    ).pack(side="right")
+
+    window.protocol("WM_DELETE_WINDOW", close_window)
+
+    if owns_root:
+        window.mainloop()
+    else:
+        window.transient(parent)
+        window.grab_set()
+        parent.wait_window(window)
+
+
+# =======================================================
+# HANDLE UNCAUGHT SCRIPT ERRORS
+# =======================================================
+def cable_exception_handler(exc_type, exc_value, exc_tb):
+    if issubclass(exc_type, (KeyboardInterrupt, SystemExit)):
+        sys.__excepthook__(exc_type, exc_value, exc_tb)
+        return
+
+    details = "".join(
+        traceback.format_exception(
+            exc_type, exc_value, exc_tb
+        )
+    )
+
+    print(details, file=sys.stderr)
+
+    try:
+        show_error_dialog(exc_value, details=details)
+    except Exception:
+        sys.__excepthook__(exc_type, exc_value, exc_tb)
+
+
+sys.excepthook = cable_exception_handler
