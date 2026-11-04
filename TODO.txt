@@ -1,4 +1,4 @@
-"""Zuken E3.series - Match Properties (v9: automatic documented E3 text types + pin-view support)
+"""Zuken E3.series - Match Properties (v10: block and connector-pin text properties)
 
 Select one TEXT or BLOCK SYMBOL on a sheet and click Copy Source.
 The separate window STAYS OPEN after copying. Click back into E3 to select
@@ -9,6 +9,12 @@ This avoids keeping the E3 Add-on launcher waiting in an active script, which
 can cause E3's drawing window to appear locked. COM objects are also released
 after every click, instead of being retained for the lifetime of the GUI.
 
+This script traverses SYMBOL -> PINS/CONNECTORS -> PIN-OWNED TEXT, in
+addition to the symbol's own text. Pin text type #7 (local signal name) and
+#12 (device designation) can be attached to top connector/pin symbols rather
+than to the main block symbol. Only formatting is copied; no text values,
+connections, pin names or positions are written.
+
 This script copies FONT/STYLE only for matched E3 text types. Standard type IDs
 are built in from the supplied E3 text-type table; no user text-type entry or
 learning step is required. E3 attribute VALUES are NEVER copied. E3 type 1000
@@ -16,7 +22,7 @@ is generic Attribute, so Equipment Identification aliases must be checked for
 ambiguity, rather than assuming every type-1000 attribute is equipment ID.
 
 This script does NOT change block dimensions, scaling, width/height of symbol,
-names, IDs, text content, object locations, connections, or component assignments. The only write calls are paired
+names, IDs, text content, object locations, pin information, connections, or component assignments. The only write calls are paired
 format setters, and only after the user approves the preview.
 
 Requires Windows with E3.series running and pywin32 installed:
@@ -440,6 +446,75 @@ def same_value(a, b):
     return a == b
 
 
+def read_related_ids(obj, name, text_type=None, max_ids=800):
+    """Read E3's COM out-array methods safely; works with e3series wrapper.
+
+    Known E3 methods such as Symbol.GetPinIds and Pin.GetTextIds normally
+    return (count, ids), NOT a plain ID. Never use the count as an ID.
+    A text_type of None requests all objects (where supported).
+    """
+    names = get_com_names(obj)
+    if names and name not in names:
+        return [], f'{name} is not exposed'
+    try:
+        method = getattr(obj, name)
+    except Exception as exc:
+        return [], f'{name}: {type(exc).__name__}: {exc}'
+    arguments = [()] if text_type is None else [
+        (text_type,), (None, text_type), ([], text_type),
+    ]
+    errors = []
+    for args in arguments:
+        try:
+            raw = method(*args)
+            _count, ids = count_and_ids(raw)
+            if ids:
+                return list(dict.fromkeys(ids))[:max_ids], f'{name}{args}: {len(ids)} IDs'
+            # Some wrapper variants expose the array without a leading count.
+            if isinstance(raw, (tuple, list)) and raw and all(is_int_id(i) for i in raw):
+                # If the method has one return scalar, it's probably a COUNT.
+                if len(raw) > 1:
+                    return list(dict.fromkeys(raw))[:max_ids], f'{name}{args}: raw ID array'
+        except Exception as exc:
+            errors.append(f'{type(exc).__name__}: {exc}')
+    for flags, seed, label in (
+        (pythoncom.VT_BYREF | pythoncom.VT_VARIANT, None, 'BYREF VARIANT'),
+        (pythoncom.VT_BYREF | pythoncom.VT_ARRAY | pythoncom.VT_I4, [], 'BYREF I4 ARRAY'),
+    ):
+        try:
+            arr = win32.VARIANT(flags, seed)
+            raw = method(arr) if text_type is None else method(arr, text_type)
+            count, embedded = count_and_ids(raw)
+            ids = embedded or collect_ids(arr.value)
+            if ids:
+                return list(dict.fromkeys(ids))[:max_ids], f'{name} {label}: {len(ids)} IDs'
+        except Exception as exc:
+            errors.append(f'{label}: {type(exc).__name__}: {exc}')
+    return [], f'{name}: no object IDs returned' + (f' ({errors[0]})' if errors else '')
+
+
+def safe_get_scalar(obj, method_names):
+    names = get_com_names(obj)
+    for method in method_names:
+        if names and method not in names:
+            continue
+        try:
+            value = getattr(obj, method)()
+        except Exception:
+            continue
+        if isinstance(value, (str, int, float)) and value != MISSING_COM_PARAM and value is not None:
+            return value
+    return None
+
+
+def equal_text_format(a, b):
+    """Source pin text is uniform if its appearance matches (ignore text IDs)."""
+    fields = ('Font name', 'Text height', 'Font style', 'Text alignment', 'Text ratio / mode')
+    return all((name not in a.values and name not in b.values) or
+               (name in a.values and name in b.values and same_value(a.values[name][2], b.values[name][2]))
+               for name in fields)
+
+
 @dataclass
 class Source:
     job_id: object
@@ -456,6 +531,10 @@ class ChildText:
     text_type: object
     values: dict
     attribute_name: object = None
+    owner_scope: str = 'symbol'  # 'symbol' or 'pin'
+    pin_id: object = None
+    pin_name: object = None
+    pin_ordinal: object = None  # stable per-symbol pin order when available
 
 
 class E3Connection:
@@ -663,14 +742,234 @@ class E3Connection:
             n for n in names if 'text' in n.lower() or 'device' in n.lower())))
         return [], notes
 
+    def block_connector_pin_ids(self, symbol_id, notes):
+        """Discover the selected block's pins and attached connector pins.
+
+        Every returned pin must be linked by an API ownership relationship:
+        Symbol.GetPinIds, Device.GetPinIds (via symbol's device),
+        Block.GetPinIds / Block.GetConnectorIds (via selected block), or
+        a connector returned by Block.GetConnectorIds.
+        Do NOT scan unrelated connector devices on the sheet.
+        """
+        symbol, _ = self.object_for('symbol', symbol_id)
+        pin_ids = []
+        owners = []
+        linked_connector_ids = []
+        direct_connector_symbols = []
+        for method in ('GetPinIds', 'GetAllPinIds'):
+            ids, how = read_related_ids(symbol, method)
+            if ids:
+                notes.append(f'  BLOCK SYMBOL {symbol_id}: {how}')
+                pin_ids.extend(ids)
+        # On some E3 versions a block symbol can report its own connector
+        # devices/symbols without looking up the enclosing block object.
+        for method in ('GetConnectorIds', 'GetBlockConnectorIds'):
+            ids, how = read_related_ids(symbol, method)
+            if ids:
+                notes.append(f'  BLOCK SYMBOL {symbol_id}: {how}')
+                linked_connector_ids.extend(ids)
+
+        # From a symbol to its owning device. This is a much stronger link
+        # than searching all devices on the drawing or by proximity.
+        dev_id = safe_get_scalar(symbol, ('GetDeviceId', 'GetOwnerDeviceId'))
+        if is_int_id(dev_id):
+            try:
+                dev = self.job.CreateDeviceObject()
+                dev.SetId(int(dev_id))
+                owners.append(('device', int(dev_id), dev))
+            except Exception as exc:
+                notes.append(f'  Owner device {dev_id} could not be opened: {exc}')
+
+        # E3's GetSelectedBlockIds returns the block selected on the drawing.
+        # Only use it when this symbol is the unique selected symbol, so a
+        # selected GROUP of blocks cannot be crossed accidentally.
+        block_ids, _ = get_selected(self.job, 'GetSelectedBlockIds',
+                                   is_official_wrapper=self.backend == 'official e3series wrapper') \
+            if 'GetSelectedBlockIds' in get_com_names(self.job) else ([], [])
+        selected_symbol_ids, _ = get_selected(self.job, 'GetSelectedSymbolIds',
+                                    is_official_wrapper=self.backend == 'official e3series wrapper') \
+            if 'GetSelectedSymbolIds' in get_com_names(self.job) else ([], [])
+        candidate_block = safe_get_scalar(symbol, ('GetBlockId', 'GetParentBlockId'))
+        if not is_int_id(candidate_block) and len(block_ids) == len(selected_symbol_ids) == 1 \
+                and selected_symbol_ids[0] == int(symbol_id):
+            candidate_block = block_ids[0]
+        if is_int_id(candidate_block):
+            # Many E3 installations represent blocks as *devices*, rather
+            # than exposing a separate CreateBlockObject COM class.
+            if not any(oid == int(candidate_block) for _,oid,_ in owners):
+                try:
+                    block_device = self.job.CreateDeviceObject()
+                    block_device.SetId(int(candidate_block))
+                    owners.append(('block-device', int(candidate_block), block_device))
+                    notes.append(f'  Block device {candidate_block} linked to symbol {symbol_id}')
+                except Exception as exc:
+                    notes.append(f'  Block-device {candidate_block}: {exc}')
+            creator = getattr(self.job, 'CreateBlockObject', None)
+            if callable(creator):
+                try:
+                    block = creator()
+                    block.SetId(int(candidate_block))
+                    owners.append(('block', int(candidate_block), block))
+                    notes.append(f'  Selected block ID {candidate_block} linked to symbol {symbol_id}')
+                except Exception as exc:
+                    notes.append(f'  Block {candidate_block} could not be opened: {exc}')
+
+        # Pins directly attached to the block or its owning device.
+        for owner_kind, owner_id, owner in owners:
+            for method in ('GetPinIds', 'GetAllPinIds'):
+                ids, how = read_related_ids(owner, method)
+                if ids:
+                    notes.append(f'  {owner_kind} {owner_id}: {how}')
+                    pin_ids.extend(ids)
+            # These methods, when exposed, report connectors belonging to
+            # THIS block. Do not use generic project-wide device discovery.
+            if owner_kind in ('block', 'block-device', 'device'):
+                for method in ('GetConnectorIds', 'GetBlockConnectorIds', 'GetSubDeviceIds'):
+                    ids, how = read_related_ids(owner, method)
+                    if ids:
+                        notes.append(f'  {owner_kind} {owner_id}: {how}')
+                        linked_connector_ids.extend(ids)
+        for conn_id in dict.fromkeys(linked_connector_ids):
+            try:
+                conn = self.job.CreateDeviceObject()
+                conn.SetId(int(conn_id))
+                for method in ('GetPinIds', 'GetAllPinIds'):
+                    ids, how = read_related_ids(conn, method)
+                    if ids:
+                        notes.append(f'  block connector {conn_id}: {how}')
+                        pin_ids.extend(ids)
+                child_sids, how = read_related_ids(conn, 'GetSymbolIds')
+                for sid in child_sids:
+                    # Only collect connector symbols directly attached to the
+                    # selected block's devices, NEVER from the whole sheet.
+                    if sid != symbol_id:
+                        direct_connector_symbols.append((conn_id, sid))
+                if child_sids:
+                    notes.append(f'  block connector {conn_id}: {how}')
+            except Exception as exc:
+                notes.append(f'  Could not inspect block connector {conn_id}: {exc}')
+        dedup = list(dict.fromkeys(pin_ids))[:500]
+        notes.append(f'  PIN INVENTORY FOR SYMBOL {symbol_id}: {len(dedup)} linked pins')
+        if not dedup:
+            notes.append('  WARNING: no block/connector pin IDs were found; '
+                         'pin-owned designation and local signal formatting cannot be compared yet.')
+            for method in ('GetPinIds', 'GetAllPinIds', 'GetBlockId', 'GetDeviceId'):
+                notes.append(f'  Symbol.{method}: {method in get_com_names(symbol)}')
+        notes.append(f'  LINKED CONNECTOR SYMBOLS: {len(direct_connector_symbols)}')
+        return dedup, list(dict.fromkeys(direct_connector_symbols))[:200]
+
+    def pin_owned_text_ids(self, symbol_id, notes, existing_ids):
+        """Read pin-local texts (#7/#12), not just the block symbol text.
+
+        Some E3 projects store visible labels directly on a pin; others keep
+        them on the pin's placed symbol. We query both confirmed relationships.
+        No region-based fuzzy search and no changes to pin records.
+        """
+        pin_ids, connector_symbols = self.block_connector_pin_ids(symbol_id, notes)
+        tagged = {}
+        text_owner = {}
+        owner_names = {}
+        parent_symbol, _ = self.object_for('symbol', symbol_id)
+        parent_sheet = safe_get_scalar(parent_symbol, ('GetSheetId',))
+        for ordinal, pin_id in enumerate(pin_ids):
+            try:
+                pin = self.job.CreatePinObject()
+                pin.SetId(int(pin_id))
+            except Exception as exc:
+                notes.append(f'  Pin {pin_id}: cannot open: {exc}')
+                continue
+            pin_name = safe_get_scalar(pin, ('GetName', 'GetPinName'))
+            owner_names[pin_id] = pin_name
+            # The on-pin label can be type 7 or 12. Only copy these from
+            # corresponding text that actually exists on the destination.
+            for typ in (SIGNAL_NAME_TYPE, DEVICE_DESIGNATION_TYPE):
+                ids, how = read_related_ids(pin, 'GetTextIds', text_type=typ)
+                if ids:
+                    notes.append(f'  PIN {pin_id} {pin_name or ""}: {how} [type {typ}]')
+                for tid in ids:
+                    tagged[tid] = typ
+                    text_owner[tid] = (pin_id, pin_name, ordinal)
+            # If the E3 version cannot filter, try the all-text query and
+            # inspect GetTextType on each returned text later.
+            ids, _ = read_related_ids(pin, 'GetTextIds')
+            for tid in ids:
+                if tid not in text_owner:
+                    text_owner[tid] = (pin_id, pin_name, ordinal)
+            # Some pins have their labels stored on a distinct placed symbol.
+            child_symbol_ids, how = read_related_ids(pin, 'GetSymbolIds')
+            direct_child = safe_get_scalar(pin, ('GetSymbolId',))
+            if is_int_id(direct_child):
+                child_symbol_ids.append(int(direct_child))
+            for sid in list(dict.fromkeys(child_symbol_ids))[:25]:
+                if sid == symbol_id:
+                    continue
+                try:
+                    child = self.job.CreateSymbolObject()
+                    child.SetId(int(sid))
+                    child_sheet = safe_get_scalar(child, ('GetSheetId',))
+                    if parent_sheet is not None and child_sheet is not None \
+                            and child_sheet != parent_sheet:
+                        continue  # another view/sheet of the same connector
+                    # Only accept a linked placed pin symbol. Avoid reading
+                    # other symbols of the connector/device or all sheet text.
+                    for typ in (SIGNAL_NAME_TYPE, DEVICE_DESIGNATION_TYPE):
+                        tids, detail = read_related_ids(child, 'GetTextIds', text_type=typ)
+                        for tid in tids:
+                            tagged[tid] = typ
+                            text_owner[tid] = (pin_id, pin_name, ordinal)
+                        if tids:
+                            notes.append(f'  PIN SYMBOL {sid} (pin {pin_id}): {detail} type {typ}')
+                except Exception as exc:
+                    notes.append(f'  Pin {pin_id} symbol {sid}: {exc}')
+        # A connector pin-view label can belong to the connector symbol
+        # rather than the Pin COM object. The connector must be reached from
+        # this block's GetConnectorIds/related device; same sheet when known.
+        for connector_id, sid in connector_symbols:
+            try:
+                child = self.job.CreateSymbolObject()
+                child.SetId(int(sid))
+                child_sheet = safe_get_scalar(child, ('GetSheetId',))
+                if parent_sheet is not None and child_sheet is not None and child_sheet != parent_sheet:
+                    continue
+                for typ in (SIGNAL_NAME_TYPE, DEVICE_DESIGNATION_TYPE):
+                    tids, how = read_related_ids(child, 'GetTextIds', text_type=typ)
+                    for tid in tids:
+                        if tid not in existing_ids:
+                            text_owner[tid] = (connector_id, f'connector {connector_id}', None)
+                            tagged[tid] = typ
+                    if tids:
+                        notes.append(f'  BLOCK CONNECTOR SYMBOL {sid}: {how}; type {typ}')
+            except Exception as exc:
+                notes.append(f'  Connector symbol {sid} (device {connector_id}): {exc}')
+        notes.append(f'  PIN TEXT INVENTORY: {len(text_owner)} pin/connector-owned text IDs; '
+                     f'{sum(t == 7 for t in tagged.values())} signal names (#7), '
+                     f'{sum(t == 12 for t in tagged.values())} device designations (#12).')
+        return text_owner, tagged
+
     def read_symbol_texts(self, symbol_id):
         """Snapshot text styles and E3 text-type keys, never contents/locations."""
         ids, notes = self.related_text_ids(symbol_id)
+        pin_owners, pin_types = self.pin_owned_text_ids(symbol_id, notes, set(ids))
+        # Prefer a verified PIN owner if the same text is discoverable via
+        # both symbol and pin API paths (do not write the same text twice).
+        ids = list(dict.fromkeys(list(ids) + list(pin_owners)))
+        notes.append(f'TOTAL MATCHABLE TEXTS: {len(ids)} including {len(pin_owners)} pin-related.')
         entries = []
+        parent_symbol, _ = self.object_for('symbol', symbol_id)
+        parent_sheet = safe_get_scalar(parent_symbol, ('GetSheetId',))
         for tid in ids:
             try:
                 txt, _ = self.object_for('text', tid)
                 names = get_com_names(txt)
+                # A device pin can exist in multiple views. When E3 exposes
+                # sheet IDs for both sides, never format another sheet's pin
+                # text simply because it belongs to the same connector device.
+                txt_sheet = safe_get_scalar(txt, ('GetSheetId',))
+                if (is_int_id(parent_sheet) and is_int_id(txt_sheet)
+                        and int(parent_sheet) != int(txt_sheet)):
+                    notes.append(f'Text {tid}: SKIPPED (different sheet {txt_sheet}; '
+                                 f'block is on {parent_sheet}).')
+                    continue
                 text_type = None
                 for method in ('GetTextType', 'GetType'):
                     if names and method not in names:
@@ -684,7 +983,7 @@ class E3Connection:
                         pass
                 # A symbol-scoped filtered lookup is stronger evidence than
                 # the text object's generic GetType() method in some builds.
-                tagged_type = getattr(self, '_tagged_types', {}).get(tid)
+                tagged_type = pin_types.get(tid, getattr(self, '_tagged_types', {}).get(tid))
                 if tagged_type is not None:
                     if text_type != tagged_type:
                         notes.append(f'Text {tid}: getter returned type {text_type!r}; '
@@ -698,7 +997,16 @@ class E3Connection:
                     notes.append(f'Text {tid}: generic Attribute #1000 has no readable attribute name; '
                                  'only unambiguous one-to-one alias matching is allowed.')
                 if values:
-                    entries.append(ChildText(tid, text_type, values, attribute_name))
+                    pin_data = pin_owners.get(tid)
+                    if pin_data:
+                        entries.append(ChildText(tid, text_type, values, attribute_name,
+                                                 owner_scope='pin', pin_id=pin_data[0],
+                                                 pin_name=pin_data[1], pin_ordinal=pin_data[2]))
+                        notes.append(f'PIN TEXT {tid}: owner pin {pin_data[0]}, '
+                                     f'name={pin_data[1]!r}, ordinal={pin_data[2]}, '
+                                     f'type={text_type}, height={values.get("Text height",(None,None,None))[2]!r}')
+                    else:
+                        entries.append(ChildText(tid, text_type, values, attribute_name))
                     if text_type in self.preferred_text_types():
                         notes.append(f'{self.type_name(text_type).upper()} TEXT ID {tid}: '
                                      f'GetHeight={values.get("Text height", (None,None,"UNAVAILABLE"))[2]!r}, '
@@ -757,7 +1065,7 @@ class MatchPropertiesApp:
             panel, text='Select source in E3 -> Copy Source -> select target(s) in E3 -> Preview -> Apply.',
         ).pack(anchor='w', pady=(5, 2))
         ttk.Label(
-            panel, text='Hatch/outline + designation, location, equipment/part ID, device function, Saber, and pin-view text styles. No geometry changes.',
+            panel, text='Hatch/outline + block/connector pin local signals, pin designations, location, equipment/part ID, device function and Saber text styles. No geometry changes.',
         ).pack(anchor='w', pady=(0, 12))
 
         row = ttk.Frame(panel)
@@ -961,9 +1269,9 @@ class MatchPropertiesApp:
         child_texts = []
         if cat == 'symbol':
             child_texts, text_notes = conn.read_symbol_texts(ids[0])
-            self.write(f'SOURCE SYMBOL TEXTS: found {len(child_texts)} readable attached text objects.')
+            self.write(f'SOURCE BLOCK + PIN TEXTS: found {len(child_texts)} readable linked text objects.')
             for entry in child_texts:
-                designation = f' ({conn.type_name(entry.text_type)})'
+                designation = f' ({conn.type_name(entry.text_type)})' + (f' [PIN {entry.pin_name or entry.pin_id}]' if entry.owner_scope == 'pin' else ' [BLOCK]')
                 self.write(f'  Text ID {entry.object_id}: type {entry.text_type!r}{designation}; formatting: '
                            + ', '.join(f'{k}={format_property(k, v[2])}' for k, v in entry.values.items()))
             for note in text_notes:
@@ -1043,31 +1351,90 @@ class MatchPropertiesApp:
                 return group_sources[0], 'equivalent Equipment ID / Additional Part ID'
         return None, 'unmatched or ambiguous'
 
+    def match_pin_text_source(self, target, src_pin_texts, dst_pin_texts):
+        """Match by pin + type; if source style uniform, broadcast that style.
+
+        Top pin labels often have different pin names/IDs across blocks. The
+        user wants their *formatting*, not signal/device IDs. If all source
+        pin labels of this type have the same format, there is one clear style
+        template for each corresponding target pin text of the same type.
+        If the source has varied formatting, use exact pin-name equality, then
+        the E3 symbol pin order only when both pin inventories line up.
+        """
+        typ = target.text_type
+        source = [e for e in src_pin_texts if e.text_type == typ]
+        dest = [e for e in dst_pin_texts if e.text_type == typ]
+        if not source:
+            return None, 'source has no pin-owned text of this type'
+        # Strongest identity: pin names are unique on both source & target.
+        name = (target.pin_name or '').strip().lower() if isinstance(target.pin_name, str) else ''
+        if name:
+            named_src = [e for e in source if isinstance(e.pin_name,str) and e.pin_name.strip().lower() == name]
+            named_dst = [e for e in dest if isinstance(e.pin_name,str) and e.pin_name.strip().lower() == name]
+            if len(named_src) == len(named_dst) == 1:
+                return named_src[0], f'pin name {target.pin_name!r}'
+        # For a consistent source pin-text style, apply the source font to
+        # ALL destination pin labels of the matching type, regardless of pin
+        # number/name/count. This is the primary fix for top pins.
+        if all(equal_text_format(source[0], e) for e in source[1:]):
+            return source[0], f'uniform source pin style ({len(source)} type-{typ} texts)'
+        # The pin order is meaningful in E3's symbol definition. Only use it
+        # if BOTH sides have the same number of *distinct* labeled pins,
+        # and there is exactly one text of this type on each matching pin.
+        src_orders = [e.pin_ordinal for e in source]
+        dst_orders = [e.pin_ordinal for e in dest]
+        if (len(source) == len(dest) and len(set(src_orders)) == len(source)
+                and len(set(dst_orders)) == len(dest)
+                and None not in src_orders and None not in dst_orders):
+            src_sorted = sorted(source, key=lambda e:e.pin_ordinal)
+            dst_sorted = sorted(dest, key=lambda e:e.pin_ordinal)
+            key = next((i for i, e in enumerate(dst_sorted) if e.object_id == target.object_id), None)
+            if key is not None:
+                return src_sorted[key], 'same position in ordered pin list'
+        return None, 'source pin styles differ and there is no unambiguous pin match'
+
     def plan_symbol_texts(self, conn, symbol_id, black):
         """Pair unique exact E3 text types or Equipment/Part ID aliases; force black."""
         target_texts, notes = conn.read_symbol_texts(symbol_id)
         for note in notes:
             self.write(f'  Symbol {symbol_id} text discovery: {note}')
+        # Block symbol text and connector/pin text are DIFFERENT owners.
+        # A block-level designation must not masquerade as the font on a
+        # top connector pin. Keep the two scopes separate.
+        src_pin_texts = [e for e in self.source.child_texts if e.owner_scope == 'pin']
+        dst_pin_texts = [e for e in target_texts if e.owner_scope == 'pin']
+        src_symbol_texts = [e for e in self.source.child_texts if e.owner_scope != 'pin']
+        dst_symbol_texts = [e for e in target_texts if e.owner_scope != 'pin']
+        self.write(f'  PIN FONT INVENTORY symbol {symbol_id}: '
+                   f'source {len(src_pin_texts)} pin labels, target {len(dst_pin_texts)} pin labels.')
+        for typ in (SIGNAL_NAME_TYPE, DEVICE_DESIGNATION_TYPE):
+            a = [e for e in src_pin_texts if e.text_type == typ]
+            b = [e for e in dst_pin_texts if e.text_type == typ]
+            self.write(f'  TOP/CONNECTOR PIN TEXT TYPE {typ}: source {len(a)}, target {len(b)}; '
+                       'match only if both contain the type.')
         src_by_type = defaultdict(list)
         dst_by_type = defaultdict(list)
-        for e in self.source.child_texts:
+        for e in src_symbol_texts:
             src_by_type[e.text_type].append(e)
-        for e in target_texts:
+        for e in dst_symbol_texts:
             dst_by_type[e.text_type].append(e)
         src_by_role = defaultdict(list)
         dst_by_role = defaultdict(list)
-        for entry in self.source.child_texts:
+        for entry in src_symbol_texts:
             src_by_role[text_role(entry.text_type, self.source.type_config, entry.attribute_name)].append(entry)
-        for entry in target_texts:
+        for entry in dst_symbol_texts:
             dst_by_role[text_role(entry.text_type, self.source.type_config, entry.attribute_name)].append(entry)
         planned = []
         for target in target_texts:
             # A type may occur several times, often with different positions;
             # never pair by list order or rendered text content (designations).
-            source, why = self.find_matching_child_source(
-                target, src_by_type, dst_by_type, src_by_role, dst_by_role)
-            if target.text_type is None and len(self.source.child_texts) == len(target_texts) == 1:
-                source, why = self.source.child_texts[0], 'only source/target text'
+            if target.owner_scope == 'pin':
+                source, why = self.match_pin_text_source(target, src_pin_texts, dst_pin_texts)
+            else:
+                source, why = self.find_matching_child_source(
+                    target, src_by_type, dst_by_type, src_by_role, dst_by_role)
+                if target.text_type is None and len(src_symbol_texts) == len(dst_symbol_texts) == 1:
+                    source, why = src_symbol_texts[0], 'only source/target symbol text'
             if source is None:
                 self.write(f'  Text ID {target.object_id}: {conn.type_name(target.text_type)} '
                            f'has no unique compatible source ({why}); only forcing black if needed.')
@@ -1086,7 +1453,8 @@ class MatchPropertiesApp:
                     changes.append((name, getter, setter, current, desired))
             if changes:
                 desc = conn.type_name(target.text_type)
-                self.write(f'  Symbol {symbol_id}, text ID {target.object_id} ({desc}): {len(changes)} changes'
+                owner = (f'PIN {target.pin_name or target.pin_id}' if target.owner_scope == 'pin' else 'BLOCK')
+                self.write(f'  Symbol {symbol_id}, {owner}, text ID {target.object_id} ({desc}): {len(changes)} changes'
                            + (f'; matched source text {source.object_id} ({why})' if source else '; black only'))
                 for name, _, _, before, after in changes:
                     self.write(f'    {name}: {format_property(name, before)} -> {format_property(name, after)}'
@@ -1325,18 +1693,21 @@ class MatchPropertiesApp:
                         for line in conn.hatch_diagnostics(oid):
                             self.write('  ' + line)
                         hatch_methods_logged = True
-        # Apply attached text formats after symbol hatch/outline, and verify
+        # Apply attached symbol AND pin text formats after hatch/outline, and verify
         # each setter using the same live readback used for symbol properties.
         if text_plan:
-            self.write('ATTACHED SYMBOL TEXT RESULTS (text values/designations unchanged)')
+            self.write('ATTACHED BLOCK + CONNECTOR/PIN TEXT RESULTS (values unchanged)')
         safe_children = {}
         for symbol_id, text_id, changes in text_plan:
             try:
                 if symbol_id not in safe_children:
-                    ids_attached, text_notes = conn.related_text_ids(symbol_id)
-                    safe_children[symbol_id] = set(ids_attached)
+                    # IMPORTANT: recheck PIN-linked as well as symbol-linked text.
+                    # Previously this check rejected correctly discovered top-pin
+                    # texts because they were not on the block symbol itself.
+                    current_texts, text_notes = conn.read_symbol_texts(symbol_id)
+                    safe_children[symbol_id] = {e.object_id for e in current_texts}
                 if text_id not in safe_children[symbol_id]:
-                    self.write(f'Text {text_id}: SKIPPED - text no longer attached to target symbol {symbol_id}')
+                    self.write(f'Text {text_id}: SKIPPED - text no longer attached to block/pins of symbol {symbol_id}')
                     failed += len(changes)
                     continue
                 txt, _ = conn.object_for('text', text_id)
