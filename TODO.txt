@@ -1,162 +1,258 @@
-"""E3 Block Maker launcher with descriptive, copyable error popups.
+"""Friendly, copyable error popups for the E3 Block Maker launcher.
 
-Run `python launcher.py` (or the packaged launcher executable).
-Runs main.py and test.py in separate processes, as in the original design.
+Standard-library only.  This is imported by the *parent* launcher, so a
+failure in a separate main.py / test.py process still produces one popup.
 """
 
-import os
-import sys
-import tempfile
-import subprocess
-import traceback
-from collections import deque
-from datetime import datetime
+from __future__ import annotations
+
 from pathlib import Path
+import re
+import sys
 
 
-ROLE_ENV = "BLOCK_MAKER_ROLE"
-METADATA_ENV = "E3_SECONDARY_BLOCK_FILE"
+def _failure_section(output: str) -> str:
+    """Prefer the last Python traceback instead of earlier progress messages."""
+    index = output.rfind("Traceback (most recent call last):")
+    if index >= 0:
+        return output[index:]
+    return output[-12000:]
 
 
-def get_application_directory():
-    if getattr(sys, "frozen", False):
-        return Path(sys.executable).resolve().parent
-    return Path(__file__).resolve().parent
+def _exception_line(output: str) -> str:
+    lines = [line.strip() for line in _failure_section(output).splitlines() if line.strip()]
+    pattern = re.compile(
+        r"^(?:[\w.]+(?:Error|Exception)|Exception|SystemExit|KeyboardInterrupt)\s*:"
+    )
+    for line in reversed(lines):
+        if pattern.match(line):
+            return line
+    # The final line usually holds the COM error or process failure.
+    return lines[-1] if lines else "The program stopped without a Python traceback."
 
 
-def get_child_command():
-    if getattr(sys, "frozen", False):
-        return [sys.executable]
-    return [sys.executable, str(Path(__file__).resolve())]
+def describe_error(stage: str, output: str):
+    """Return (title, what_happened, how_to_fix, technical_reason)."""
+    relevant = _failure_section(output)
+    lower = relevant.lower()
+    reason = _exception_line(output)
 
+    checks = (
+        ("model check is failing", "Model check failed", "The Excel model check did not pass.", "Open the workbook and correct the model check shown in cell G8. Recalculate/save it, then rerun Block Maker."),
+        ("title check is failing", "Title check failed", "The Excel title check did not pass.", "Correct the title check shown in cell E2, recalculate/save the workbook, and rerun."),
+        ("connector model check is failing", "Connector model check failed", "One or more connector models failed workbook validation.", "Check the connector model verification at cell G2. Fix the highlighted connector/type entries and rerun."),
+        ("duplicate pin check is failing", "Duplicate pins detected", "The workbook detected a duplicate pin assignment.", "Review the duplicate-pin check in cell G4 and correct repeated pin entries before rerunning."),
+    )
+    for needle, title, happened, fix in checks:
+        if needle in lower:
+            return title, happened, fix, reason
 
-def run_builder_child():
-    import main  # Exceptions must propagate so subprocess returns a failure code.
-
-
-def run_formatter_child():
-    import test  # Exceptions must propagate so subprocess returns a failure code.
-
-
-class StageFailed(Exception):
-    def __init__(self, stage, return_code, output):
-        self.stage = stage
-        self.return_code = return_code
-        self.output = output
-        super().__init__(f"{stage} exited with code {return_code}")
-
-
-def emit(line, log_handle):
-    """Stream to both console and persistent log, without waiting for the child."""
-    log_handle.write(line)
-    log_handle.flush()
-    if sys.stdout is not None:
-        try:
-            sys.stdout.write(line)
-            sys.stdout.flush()
-        except (OSError, ValueError):
-            pass
-
-
-def run_stage(stage, command, environment, cwd, log_handle):
-    heading = f"\n{'=' * 60}\nSTARTING {stage.upper()}\n{'=' * 60}\n"
-    emit(heading, log_handle)
-
-    # Keep a tail in memory, but persist the entire output to the log file.
-    recent_lines = deque(maxlen=400)
-    process = subprocess.Popen(
-        command,
-        cwd=str(cwd),
-        env=environment,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.STDOUT,
-        text=True,
-        encoding="utf-8",
-        errors="replace",
-        bufsize=1,
+    if "e3_secondary_block_file" in lower or "metadata not found" in lower or "metadata file not found" in lower:
+        return (
+            "Launcher / metadata issue",
+            "The builder or formatter could not find the temporary data file that connects the two stages.",
+            "Launch launcher.py, not main.py or test.py. Keep launcher.py, main.py, test.py, utils.py and error_popup.py together. If packaging an EXE, rebuild it with the updated launcher.",
+            reason,
+        )
+    if "nameerror" in lower and "text_size" in lower:
+        return (
+            "Text size setting missing",
+            "test.py attempted to use TEXT_SIZE without loading it from the builder's metadata.",
+            "Ensure main.py saves 'text_size' into each secondary-block metadata entry and test.py reads it before calling runn().",
+            reason,
+        )
+    if "no device found in database" in lower or "step 1 failed" in lower or "database table selected components" in lower:
+        return (
+            "Connector model not found",
+            "E3 could not find a requested connector component in its component database.",
+            "Check the connector type and library version (currently 1) in the workbook. Make sure the component exists in the connected E3 library.",
+            reason,
+        )
+    if "pin " in lower and "not found in new view" in lower or "duplicate pin name" in lower:
+        return (
+            "Schematic pin mismatch",
+            "A pin from Excel could not be matched uniquely to the newly created E3 connector view.",
+            "Compare the Excel pin names with the pin names in the E3 connector library. Check for missing, differently suffixed, or duplicate pins.",
+            reason,
+        )
+    if any(x in lower for x in (
+        "failed placing split block", "failed creating shared main schematic view", "failed creating new view from parent connector",
+        "e3 reused symbol id", "e3 reused pin symbol", "cannot place", "place block failed",
+        "failed to create new sheet", "schematic block for",
+    )):
+        return (
+            "E3 schematic placement failed",
+            "E3 could not create or place one of the schematic blocks, connector views, pins or sheets.",
+            "Inspect the named connector, sheet and symbol in Technical Details. Check available page space and symbol-library names. Because E3 changes already made are not automatically undone, inspect/restore the project before retrying.",
+            reason,
+        )
+    if "ct.application" in lower or "win32com" in lower or "pywintypes.com_error" in lower or "com_error" in lower or "operation unavailable" in lower:
+        return (
+            "E3 connection or automation error",
+            "The Block Maker could not communicate reliably with the active Zuken E3 application.",
+            "Open E3 with the correct project, confirm that no modal dialogs are blocking it, and retry. If it persists, copy the technical details so the failing E3 API call can be identified.",
+            reason,
+        )
+    if "pyodbc" in lower or "sql server" in lower or "sql-zuken-prd" in lower or "odbc" in lower:
+        return (
+            "SQL database connection failed",
+            "Block Maker could not access the Zuken SQL database or execute a database request.",
+            "Check your corporate network/VPN, SQL Server availability and Windows database permissions. Copy the technical details for the exact database message.",
+            reason,
+        )
+    if "permissionerror" in lower or "permission denied" in lower:
+        return (
+            "File access denied",
+            "Python was not allowed to open or write a required file.",
+            "Close any other program holding the file, verify write permissions for the selected folder, and rerun.",
+            reason,
+        )
+    if "filenotfounderror" in lower or "no such file or directory" in lower:
+        return (
+            "Required file not found",
+            "A selected workbook or supporting file could not be found.",
+            "Verify the workbook path and that all Block Maker scripts are in the same folder. Then rerun from launcher.py.",
+            reason,
+        )
+    if any(x in lower for x in ("badzipfile", "invalidfileexception", "openpyxl", "load_workbook", "not a zip file")):
+        return (
+            "Excel workbook could not be read",
+            "Block Maker could not read the selected Excel workbook correctly.",
+            "Select a valid .xlsm workbook based on the Block Maker template; verify it is saved and not corrupted. Check the workbook values required by main.py.",
+            reason,
+        )
+    if "keyerror" in lower or "nonetype" in lower or "typeerror" in lower or "valueerror" in lower:
+        return (
+            "Missing or invalid input data",
+            "A required Excel value or connector field was missing or in an unexpected format.",
+            "Review the connector list, pin counts, names, and required workbook cells. Technical Details identifies the exact line and value that failed.",
+            reason,
+        )
+    if stage.lower().startswith("formatter"):
+        return (
+            "Formatter stopped",
+            "The E3 schematic builder completed, but the formatting stage did not finish.",
+            "Review Technical Details for the failing symbol or attribute. The E3 project may contain completed blocks even though formatting failed; avoid rerunning the builder on top of them without inspecting the project.",
+            reason,
+        )
+    return (
+        "Block Maker stopped",
+        f"The {stage.lower()} stage failed before the entire operation finished.",
+        "Read Technical Details and use Copy Error to share the complete error and program output. Check the E3 project for partially created objects before rerunning.",
+        reason,
     )
 
-    assert process.stdout is not None
-    with process.stdout:
-        for line in process.stdout:
-            emit(line, log_handle)
-            recent_lines.append(line)
 
-    exit_code = process.wait()
-    if exit_code != 0:
-        raise StageFailed(stage, exit_code, "".join(recent_lines))
-
-    emit(f"\n{stage.upper()} COMPLETE\n", log_handle)
-
-
-def main():
-    # Children should never create their own popups. One parent-level popup
-    # handles exceptions from both stages, including those in utils.py.
-    role = os.environ.get(ROLE_ENV, "").strip().lower()
-    if role == "main":
-        run_builder_child()
-        return 0
-    if role == "formatter":
-        run_formatter_child()
-        return 0
-
-    from error_popup import show_error_dialog
-
-    app_dir = get_application_directory()
-    command = get_child_command()
-    log_dir = Path(tempfile.gettempdir()) / "E3_Block_Maker_Logs"
-    log_dir.mkdir(parents=True, exist_ok=True)
-    log_path = log_dir / f"block_maker_{datetime.now():%Y%m%d_%H%M%S_%f}.log"
-
-    stage = "Launcher"
+def show_error_dialog(stage: str, output: str, log_path: str, exit_code: int) -> None:
+    """Show friendly popup. Copy Error includes the *entire* logged run."""
+    title, happened, fix, reason = describe_error(stage, output)
+    path = Path(log_path)
     try:
-        with log_path.open("w", encoding="utf-8", errors="replace") as log:
-            emit(f"Block Maker log: {log_path}\n", log)
-            emit(f"Application directory: {app_dir}\n", log)
-            with tempfile.TemporaryDirectory(prefix="e3_block_maker_") as temp_dir:
-                metadata_path = str(Path(temp_dir) / "secondary_blocks.json")
-                emit(f"Metadata path: {metadata_path}\n", log)
-
-                # Each child receives its own environment. The original
-                # builder->formatter sequencing is preserved.
-                builder_env = os.environ.copy()
-                builder_env[ROLE_ENV] = "main"
-                builder_env[METADATA_ENV] = metadata_path
-                builder_env["PYTHONUNBUFFERED"] = "1"
-                stage = "Main Builder"
-                run_stage(stage, command, builder_env, app_dir, log)
-
-                if not Path(metadata_path).is_file():
-                    raise RuntimeError(
-                        "Main builder exited successfully but did not write "
-                        "the E3_SECONDARY_BLOCK_FILE metadata JSON."
-                    )
-
-                formatter_env = os.environ.copy()
-                formatter_env[ROLE_ENV] = "formatter"
-                formatter_env[METADATA_ENV] = metadata_path
-                formatter_env["PYTHONUNBUFFERED"] = "1"
-                stage = "Formatter"
-                run_stage(stage, command, formatter_env, app_dir, log)
-
-            emit("\nBLOCK MAKER COMPLETE — BOTH STAGES SUCCEEDED\n", log)
-        return 0
-
-    except StageFailed as exc:
-        # No hidden success state: a failed child stops the next stage.
-        show_error_dialog(exc.stage, exc.output, str(log_path), exc.return_code)
-        return exc.return_code if exc.return_code > 0 else 1
-
+        full_log = path.read_text(encoding="utf-8", errors="replace")
     except Exception:
-        details = traceback.format_exc()
-        try:
-            with log_path.open("a", encoding="utf-8") as log:
-                emit(f"\nLAUNCHER/STAGE FAILURE\n{details}", log)
-        except OSError:
-            sys.stderr.write(details)
-        show_error_dialog(stage, details, str(log_path), 1)
-        return 1
+        full_log = output
 
+    copy_payload = (
+        "E3 BLOCK MAKER — ERROR REPORT\n"
+        f"Stage: {stage}\n"
+        f"Issue: {title}\n"
+        f"What happened: {happened}\n"
+        f"How to fix it: {fix}\n"
+        f"Technical error: {reason}\n"
+        f"Exit code: {exit_code}\n"
+        f"Log file: {path}\n"
+        "\n=========== FULL PROGRAM OUTPUT ===========\n"
+        f"{full_log}"
+    )
+    technical_preview = full_log[-24000:]  # Keep popup responsive for very long logs.
 
-if __name__ == "__main__":
-    sys.exit(main())
+    try:
+        import tkinter as tk
+        from tkinter import scrolledtext, ttk
+
+        root = tk.Tk()
+        root.title("Block Maker - Error")
+        root.configure(bg="#f5f7fa")
+        root.geometry("800x390")
+        root.minsize(670, 340)
+        root.attributes("-topmost", True)
+
+        outer = tk.Frame(root, bg="#f5f7fa", padx=22, pady=16)
+        outer.pack(fill="both", expand=True)
+
+        heading = tk.Label(outer, text="Block Maker could not finish", fg="#a52730", bg="#f5f7fa",
+                           font=("Segoe UI", 16, "bold"), anchor="w")
+        heading.pack(fill="x", pady=(0, 6))
+
+        issue = tk.Label(outer, text=f"{title}  |  {stage}", fg="#263238", bg="#f5f7fa",
+                         font=("Segoe UI", 11, "bold"), anchor="w")
+        issue.pack(fill="x", pady=(0, 12))
+
+        tk.Label(outer, text="WHAT HAPPENED", fg="#526577", bg="#f5f7fa",
+                 font=("Segoe UI", 9, "bold"), anchor="w").pack(fill="x")
+        happened_label = tk.Label(outer, text=happened, fg="#233142", bg="#f5f7fa",
+                                  font=("Segoe UI", 10), justify="left", anchor="w", wraplength=745)
+        happened_label.pack(fill="x", pady=(4, 10))
+
+        tk.Label(outer, text="HOW TO FIX IT", fg="#526577", bg="#f5f7fa",
+                 font=("Segoe UI", 9, "bold"), anchor="w").pack(fill="x")
+        fix_label = tk.Label(outer, text=fix, fg="#233142", bg="#f5f7fa",
+                             font=("Segoe UI", 10), justify="left", anchor="w", wraplength=745)
+        fix_label.pack(fill="x", pady=(4, 10))
+
+        reason_label = tk.Label(outer, text=f"Error: {reason}", fg="#526577", bg="#f5f7fa",
+                                font=("Consolas", 9), justify="left", anchor="w", wraplength=745)
+        reason_label.pack(fill="x", pady=(0, 6))
+
+        log_label = tk.Label(outer, text=f"Log saved: {path}", fg="#526577", bg="#f5f7fa",
+                              font=("Segoe UI", 9), anchor="w", wraplength=745, justify="left")
+        log_label.pack(fill="x", pady=(0, 8))
+
+        details_frame = tk.Frame(outer, bg="#f5f7fa")
+        details_box = scrolledtext.ScrolledText(details_frame, height=12, wrap="none",
+                                               font=("Consolas", 9), relief="solid", bd=1)
+        details_box.insert("1.0", technical_preview)
+        details_box.configure(state="disabled")
+        details_box.pack(fill="both", expand=True)
+
+        status = tk.StringVar(value="")
+        status_label = tk.Label(outer, textvariable=status, fg="#236d3f", bg="#f5f7fa",
+                                font=("Segoe UI", 9), anchor="w")
+        status_label.pack(side="bottom", fill="x", pady=(5, 0))
+
+        button_bar = tk.Frame(outer, bg="#f5f7fa")
+        button_bar.pack(side="bottom", fill="x", pady=(6, 2))
+
+        details_visible = [False]
+
+        def toggle_details():
+            details_visible[0] = not details_visible[0]
+            if details_visible[0]:
+                details_frame.pack(fill="both", expand=True, before=button_bar, pady=(4, 6))
+                details_button.configure(text="Hide Technical Details")
+                root.geometry("800x675")
+            else:
+                details_frame.pack_forget()
+                details_button.configure(text="Show Technical Details")
+                root.geometry("800x390")
+
+        def copy_error():
+            try:
+                root.clipboard_clear()
+                root.clipboard_append(copy_payload)
+                root.update()  # Keep clipboard data available after clicking.
+                status.set("Full error report and program output copied to clipboard.")
+            except Exception as exc:
+                status.set(f"Couldn't copy automatically: {exc}. Log is saved above.")
+
+        details_button = ttk.Button(button_bar, text="Show Technical Details", command=toggle_details)
+        details_button.pack(side="left", padx=(0, 9))
+        ttk.Button(button_bar, text="Copy Error", command=copy_error).pack(side="left")
+        ttk.Button(button_bar, text="Close", command=root.destroy).pack(side="right")
+
+        root.lift()
+        root.focus_force()
+        root.mainloop()
+    except Exception as popup_exc:
+        # Never hide the original exception if Tk cannot open a window.
+        sys.stderr.write(f"Error popup unavailable: {popup_exc!r}\n{copy_payload}\n")
