@@ -1,4 +1,4 @@
-"""Zuken E3.series - Match Properties (v4: hatch pattern first + detailed diagnostics)
+"""Zuken E3.series - Match Properties (v6: device designation font detection + hatch)
 
 Select one TEXT or BLOCK SYMBOL on a sheet and click Copy Source.
 The separate window STAYS OPEN after copying. Click back into E3 to select
@@ -9,8 +9,8 @@ This avoids keeping the E3 Add-on launcher waiting in an active script, which
 can cause E3's drawing window to appear locked. COM objects are also released
 after every click, instead of being retained for the lifetime of the GUI.
 
-This script does NOT change names, IDs, text content, object locations,
-connections, or component assignments. The only write calls are paired
+This script does NOT change block dimensions, scaling, width/height of symbol,
+names, IDs, text content, object locations, connections, or component assignments. The only write calls are paired
 format setters, and only after the user approves the preview.
 
 Requires Windows with E3.series running and pywin32 installed:
@@ -39,7 +39,8 @@ import subprocess
 import sys
 import traceback
 from functools import wraps
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+from collections import defaultdict
 import tkinter as tk
 from tkinter import ttk, messagebox
 
@@ -55,16 +56,20 @@ AUTO_COLOUR = -1  # E3's automatic/default color on tested block outline.
 # Do not include content/position/orientation or geometry by default.
 # E3 text width may mean glyph ratio, not measured text width; no change
 # to text width is attempted until that distinction is established.
+DEVICE_DESIGNATION_TYPE = 12  # E3 standard text type for Device Designation.
+
 TEXT_FORMAT = (
     ('Font name', 'GetFontName', 'SetFontName'),
     ('Text height', 'GetHeight', 'SetHeight'),
     ('Text colour', 'GetColour', 'SetColour'),
     ('Font style', 'GetStyle', 'SetStyle'),
     ('Text alignment', 'GetAlignment', 'SetAlignment'),
+    # Optional on some E3 versions. The mode is typically the text-width ratio.
+    ('Text ratio / mode', 'GetMode', 'SetMode'),
 )
 SYMBOL_FORMAT = (
     ('Outline colour', 'GetBlockOutlineColour', 'SetBlockOutlineColour'),
-    ('Outline width', 'GetBlockOutlineWidth', 'SetBlockOutlineWidth'),
+    ('Outline line width (not block size)', 'GetBlockOutlineWidth', 'SetBlockOutlineWidth'),
     ('Outline style', 'GetBlockOutlineStyle', 'SetBlockOutlineStyle'),
     # A hatch must have a pattern before line appearance settings may be
     # editable. Copy the pattern FIRST; never invent a hatch pattern ID.
@@ -299,6 +304,14 @@ class Source:
     category: str
     object_id: int
     values: dict
+    child_texts: list = field(default_factory=list)
+
+
+@dataclass
+class ChildText:
+    object_id: int
+    text_type: object
+    values: dict
 
 
 class E3Connection:
@@ -375,6 +388,166 @@ class E3Connection:
                 notes.append(f'{label}: {getter} failed: {exc}')
         return values, notes
 
+    def related_text_ids(self, symbol_id):
+        """Find text IDs belonging to this exact symbol, including type #12.
+
+        E3's symbol.GetTextIds has an optional TEXT-TYPE FILTER. Several COM
+        versions require that filter or a by-reference output array. A call
+        without arguments alone is insufficient and was the v5 failure.
+        Never take texts from unrelated devices or the global sheet.
+        """
+        symbol, _ = self.object_for('symbol', symbol_id)
+        names = get_com_names(symbol)
+        notes = []
+        all_ids = []
+        designation_ids = []
+
+        if names and 'GetTextIds' not in names:
+            notes.append('Symbol.GetTextIds is NOT EXPOSED on this E3 version.')
+        else:
+            fn = getattr(symbol, 'GetTextIds')
+            # Consult specific text type #12, then the unfiltered lookup.
+            # This follows the E3 COM GetTextIds(ids, textType) signature.
+            # The official wrapper may expose optional array parameters
+            # differently, hence several harmless/read-only probes.
+            calls = [
+                ('type #12: parameter only', (DEVICE_DESIGNATION_TYPE,), True),
+                ('type #12: None output', (None, DEVICE_DESIGNATION_TYPE), True),
+                ('type #12: empty list output', ([], DEVICE_DESIGNATION_TYPE), True),
+                ('all text: no arguments', (), False),
+            ]
+            for desc, args, filtered in calls:
+                try:
+                    raw = fn(*args)
+                    count, ids = count_and_ids(raw)
+                    # A scalar/tuple count is NOT a text object ID.
+                    notes.append(f'Symbol {symbol_id} GetTextIds {desc}: '
+                                 f'{display(raw)} -> count {count}, IDs {ids[:30]}')
+                    if ids:
+                        if filtered:
+                            designation_ids.extend(ids)
+                        else:
+                            all_ids.extend(ids)
+                except Exception as exc:
+                    notes.append(f'Symbol {symbol_id} GetTextIds {desc}: '
+                                 f'{type(exc).__name__}: {exc}')
+
+            # Try explicit COM by-ref outputs even if a wrapper is installed;
+            # different E3 wrapper releases expose optional out params differently.
+            if not designation_ids or not all_ids:
+                for text_type in (DEVICE_DESIGNATION_TYPE, None):
+                    for flags, seed, variant_desc in (
+                        (pythoncom.VT_BYREF | pythoncom.VT_VARIANT, None, 'BYREF VARIANT'),
+                        (pythoncom.VT_BYREF | pythoncom.VT_ARRAY | pythoncom.VT_I4, [], 'BYREF LONG ARRAY'),
+                    ):
+                        try:
+                            arg = win32.VARIANT(flags, seed)
+                            if text_type is None:
+                                raw = fn(arg)
+                            else:
+                                raw = fn(arg, text_type)
+                            cnt, ids_in_result = count_and_ids(raw)
+                            ids = ids_in_result or collect_ids(arg.value)
+                            notes.append(f'Symbol {symbol_id} {variant_desc} '
+                                         f'type {text_type}: count={cnt} IDs={ids[:30]}')
+                            if text_type == DEVICE_DESIGNATION_TYPE:
+                                designation_ids.extend(ids)
+                            else:
+                                all_ids.extend(ids)
+                        except Exception as exc:
+                            notes.append(f'Symbol {symbol_id} {variant_desc} type {text_type}: '
+                                         f'{type(exc).__name__}: {exc}')
+
+        # The user should not unknowingly apply a font from a similarly named
+        # device elsewhere on the sheet. Only accept symbol-scoped results.
+        dedup = list(dict.fromkeys(designation_ids + all_ids))
+        self._designation_ids = set(designation_ids)
+        if designation_ids:
+            notes.append(f'Symbol {symbol_id}: found {len(set(designation_ids))} '
+                         'device-designation candidate(s) via explicit type #12 filter.')
+        if dedup:
+            return dedup[:300], notes
+
+        # Last resort: direct job text ID enumeration but ONLY if a text
+        # provides a verified parent symbol ID. Do not use proximity or text.
+        job_names = get_com_names(self.job)
+        if 'GetTextIds' in job_names:
+            try:
+                project_ids, attempts = get_selected(
+                    self.job, 'GetTextIds',
+                    is_official_wrapper=(self.backend == 'official e3series wrapper'))
+                notes.extend(f'Job.GetTextIds: {a}' for a in attempts)
+                if len(project_ids) > 3000:
+                    notes.append(f'Job text scan has {len(project_ids)} entries; safety cap 3000.')
+                    return [], notes
+                attached = []
+                for tid in project_ids:
+                    txt, _ = self.object_for('text', tid)
+                    txt_names = get_com_names(txt)
+                    for owner_method in ('GetSymbolId', 'GetOwnerSymbolId', 'GetParentSymbolId'):
+                        if owner_method not in txt_names:
+                            continue
+                        try:
+                            owner = getattr(txt, owner_method)()
+                            if is_int_id(owner):
+                                if int(owner) == int(symbol_id):
+                                    attached.append(tid)
+                                break
+                        except Exception:
+                            continue
+                if attached:
+                    notes.append(f'Found {len(attached)} texts via verified parent symbol IDs.')
+                    return list(dict.fromkeys(attached)), notes
+            except Exception as exc:
+                notes.append(f'Job-scoped owner fallback failed: {exc}')
+
+        notes.append('WARNING: NO ATTACHED TEXT IDs FOUND. Text size/format is '
+                     'UNVERIFIED, not identical. Only hatch matching is available.')
+        notes.append('Symbol text methods: ' + repr(sorted(
+            n for n in names if 'text' in n.lower() or 'device' in n.lower())))
+        return [], notes
+
+    def read_symbol_texts(self, symbol_id):
+        """Snapshot text styles and E3 text-type keys, never contents/locations."""
+        ids, notes = self.related_text_ids(symbol_id)
+        entries = []
+        for tid in ids:
+            try:
+                txt, _ = self.object_for('text', tid)
+                names = get_com_names(txt)
+                text_type = None
+                for method in ('GetTextType', 'GetType'):
+                    if names and method not in names:
+                        continue
+                    try:
+                        v = getattr(txt, method)()
+                        if valid_property(v):
+                            text_type = v
+                            break
+                    except Exception:
+                        pass
+                # The explicit GetTextIds(..., 12) filter confirms designation
+                # membership even if Text.GetType reports a generic object kind.
+                if tid in getattr(self, '_designation_ids', set()):
+                    if text_type != DEVICE_DESIGNATION_TYPE:
+                        notes.append(f'Text {tid}: type from getter {text_type!r}; '
+                                     'symbol type-12 filter identifies Device Designation.')
+                    text_type = DEVICE_DESIGNATION_TYPE
+                values, prop_notes = self.read_properties('text', tid)
+                if values:
+                    entries.append(ChildText(tid, text_type, values))
+                    if text_type == DEVICE_DESIGNATION_TYPE:
+                        notes.append(f'DEVICE DESIGNATION TEXT ID {tid}: '
+                                     f'GetHeight={values.get("Text height", (None,None,"UNAVAILABLE"))[2]!r}, '
+                                     f'font={values.get("Font name", (None,None,"UNAVAILABLE"))[2]!r}, '
+                                     f'style={values.get("Font style", (None,None,"UNAVAILABLE"))[2]!r}')
+                else:
+                    notes.append(f'Text {tid}: no editable format properties.')
+                notes.extend(f'Text {tid}: {x}' for x in prop_notes)
+            except Exception as exc:
+                notes.append(f'Text {tid}: could not inspect: {exc}')
+        return entries, notes
+
     def hatch_diagnostics(self, object_id):
         obj, _ = self.object_for('symbol', object_id)
         return read_hatch_diagnostics(obj)
@@ -408,7 +581,7 @@ class MatchPropertiesApp:
         self.preview = None
         self.conn = None
         self.root.title('Zuken E3 - Match Properties')
-        self.root.geometry('900x660')
+        self.root.geometry('950x710')
         self.root.minsize(670, 440)
         # Do not keep this window on top: E3 must be clickable while GUI runs.
         self.root.attributes('-topmost', False)
@@ -421,7 +594,7 @@ class MatchPropertiesApp:
             panel, text='Select source in E3 -> Copy Source -> select target(s) in E3 -> Preview -> Apply.',
         ).pack(anchor='w', pady=(5, 2))
         ttk.Label(
-            panel, text='Text-to-text / block-to-block. Copies hatch PATTERN first; -1 is not automatically skipped.',
+            panel, text='Hatch/outline + type-12 DEVICE DESIGNATION font matching. No block resizing, scaling or position changes.',
         ).pack(anchor='w', pady=(0, 12))
 
         row = ttk.Frame(panel)
@@ -434,10 +607,16 @@ class MatchPropertiesApp:
         ttk.Button(row, text='Back to E3', command=self.return_to_e3).pack(side='left')
         ttk.Button(row, text='Copy Log', command=self.copy_log).pack(side='right')
 
+        settings = ttk.Frame(panel)
+        settings.pack(fill='x', pady=(9, 0))
+        ttk.Label(settings, text='Black text colour index (E3 palette):').pack(side='left')
+        self.black_index = tk.StringVar(value='0')
+        ttk.Entry(settings, textvariable=self.black_index, width=6).pack(side='left', padx=(7, 10))
+        ttk.Label(settings, text='Default 0; confirm this is black in your E3 colour palette.').pack(side='left')
         ttk.Label(
             panel,
-            text='This window stays visible after copying. Click directly into E3 to select targets; Back to E3 minimizes only when clicked.',
-        ).pack(anchor='w', pady=(9, 0))
+            text='Window stays open after Copy Source. Click E3 to select targets; Back to E3 minimizes only if clicked.',
+        ).pack(anchor='w', pady=(6, 0))
 
         self.status = tk.StringVar(value='Ready. Nothing will be changed without a preview and confirmation.')
         ttk.Label(panel, textvariable=self.status, wraplength=830).pack(fill='x', pady=(10, 8))
@@ -460,6 +639,15 @@ class MatchPropertiesApp:
     def write(self, msg):
         self.output.insert('end', msg + '\n')
         self.output.see('end')
+
+    def get_black_index(self):
+        try:
+            idx = int(self.black_index.get().strip())
+        except (ValueError, AttributeError):
+            raise ValueError('Black text colour must be a numeric E3 colour index (e.g., 0).')
+        if idx < 0 or idx > 255:
+            raise ValueError('Black colour index must be between 0 and 255; -1 means Automatic, not guaranteed black.')
+        return idx
 
     def return_to_e3(self):
         # No grab_set(), window disable, or always-on-top state is ever used.
@@ -562,7 +750,20 @@ class MatchPropertiesApp:
             self.write('No format properties were validated as safe getter/setter pairs.')
             self.status.set('Source has no readable/matchable formatting. See log.')
             return
-        self.source = Source(conn.job_id(), cat, ids[0], values)
+        child_texts = []
+        if cat == 'symbol':
+            child_texts, text_notes = conn.read_symbol_texts(ids[0])
+            self.write(f'SOURCE SYMBOL TEXTS: found {len(child_texts)} readable attached text objects.')
+            for entry in child_texts:
+                designation = ' (Device Designation)' if entry.text_type == DEVICE_DESIGNATION_TYPE else ''
+                self.write(f'  Text ID {entry.object_id}: type {entry.text_type!r}{designation}; formatting: '
+                           + ', '.join(f'{k}={format_property(k, v[2])}' for k, v in entry.values.items()))
+            for note in text_notes:
+                self.write('  Text discovery: ' + note)
+            if not child_texts:
+                self.write('  WARNING: No attached symbol texts were found. Text differences CANNOT be checked. Hatch matching still works. '
+                           'Use Scan / Diagnostics or send Copy Log for the method names.')
+        self.source = Source(conn.job_id(), cat, ids[0], values, child_texts)
         self.write(f'Saved {cat.upper()} source ID {ids[0]} with {len(values)} formatting properties:')
         for name, (getter, setter, value) in values.items():
             self.write(f'  {name}: {format_property(name, value)}')
@@ -589,6 +790,72 @@ class MatchPropertiesApp:
             raise ValueError('More than 100 targets were selected. Reduce selection for a safer test.')
         return list(dict.fromkeys(ids))
 
+    def plan_symbol_texts(self, conn, symbol_id, black):
+        """Only pair unique matching text types; blacken unmatched text too."""
+        target_texts, notes = conn.read_symbol_texts(symbol_id)
+        for note in notes:
+            self.write(f'  Symbol {symbol_id} text discovery: {note}')
+        src_by_type = defaultdict(list)
+        dst_by_type = defaultdict(list)
+        for e in self.source.child_texts:
+            src_by_type[e.text_type].append(e)
+        for e in target_texts:
+            dst_by_type[e.text_type].append(e)
+        planned = []
+        for target in target_texts:
+            # A type may occur several times, often with different positions;
+            # never pair by list order or rendered text content (designations).
+            sources = src_by_type[target.text_type]
+            candidates = dst_by_type[target.text_type]
+            source = None
+            if target.text_type is not None and len(sources) == len(candidates) == 1:
+                source = sources[0]
+            elif target.text_type is None and len(self.source.child_texts) == len(target_texts) == 1:
+                source = self.source.child_texts[0]
+            elif len(sources) > 1 or len(candidates) > 1:
+                self.write(f'  Text ID {target.object_id}: duplicate E3 text type {target.text_type!r}; '
+                           'font copying skipped to prevent matching unrelated labels.')
+            changes = []
+            for name, (getter, setter, current) in target.values.items():
+                if name == 'Text colour':
+                    desired = black  # ALWAYS black, even if source is Automatic or colored.
+                elif source and name in source.values:
+                    desired = source.values[name][2]
+                else:
+                    continue
+                if not source_property_copyable(name, desired):
+                    self.write(f'  Text ID {target.object_id}, {name}: skipped unsafe source value {desired!r}')
+                    continue
+                if not same_value(current, desired):
+                    changes.append((name, getter, setter, current, desired))
+            if changes:
+                desc = 'Device Designation' if target.text_type == DEVICE_DESIGNATION_TYPE else f'Text type {target.text_type!r}'
+                self.write(f'  Symbol {symbol_id}, text ID {target.object_id} ({desc}): {len(changes)} changes'
+                           + (f'; matched source text {source.object_id}' if source else '; black only'))
+                for name, _, _, before, after in changes:
+                    self.write(f'    {name}: {format_property(name, before)} -> {format_property(name, after)}'
+                               + (' (forced black index)' if name == 'Text colour' else ''))
+                planned.append((symbol_id, target.object_id, changes))
+            elif source:
+                self.write(f'  Symbol {symbol_id}, text ID {target.object_id}: source font already matched; colour black.')
+        src_designations = [t for t in self.source.child_texts
+                            if t.text_type == DEVICE_DESIGNATION_TYPE]
+        dst_designations = [t for t in target_texts
+                            if t.text_type == DEVICE_DESIGNATION_TYPE]
+        self.write(f'  DESIGNATION CHECK symbol {symbol_id}: '
+                   f'source={len(src_designations)} type-12 text(s), '
+                   f'target={len(dst_designations)} type-12 text(s).')
+        if len(src_designations) != 1 or len(dst_designations) != 1:
+            self.write(f'  WARNING: Device designation size/format NOT VERIFIED '
+                       f'(source {len(src_designations)}, target {len(dst_designations)}). '
+                       'This does NOT mean the fonts match. Inspect the text discovery output.')
+        elif 'Text height' not in src_designations[0].values or 'Text height' not in dst_designations[0].values:
+            self.write('  WARNING: Device designation exists, but text height getter/setter unavailable.')
+        if not target_texts:
+            self.write(f'  WARNING: Symbol {symbol_id}: no attached texts were found; '
+                       'designation and other text formatting were NOT compared.')
+        return planned
+
     @release_e3_after_action
     def preview_target(self):
         self.reset_preview()
@@ -602,7 +869,14 @@ class MatchPropertiesApp:
             self.write('PREVIEW BLOCKED: ' + str(exc))
             self.status.set(str(exc))
             return
+        try:
+            black = self.get_black_index()
+        except ValueError as exc:
+            self.write('PREVIEW BLOCKED: ' + str(exc))
+            self.status.set(str(exc))
+            return
         plan = []
+        text_plan = []
         skipped_count = 0
         for oid in ids:
             try:
@@ -641,17 +915,50 @@ class MatchPropertiesApp:
                     self.write(f'ID {oid}: no supported formatting differences.')
                 for note in notes:
                     self.write(f'  Skipped: {note}')
+                if self.source.category == 'symbol':
+                    text_plan.extend(self.plan_symbol_texts(conn, oid, black))
             except Exception as exc:
                 self.write(f'ID {oid}: could not inspect; will SKIP ({exc})')
-        if not plan:
-            self.status.set(f'No changes to apply. {skipped_count} unmatched properties skipped (see log).')
-            self.write(f'PREVIEW SUMMARY: 0 changes available; {skipped_count} changes skipped by safeguards.')
+        # When a TEXT object (rather than a block) is selected, enforce black
+        # exactly as for the text nodes within blocks.
+        if self.source.category == 'text':
+            updated = []
+            for oid, changes in plan:
+                updated.append((oid, [(name, getter, setter, before,
+                    black if name == 'Text colour' else after)
+                    for name, getter, setter, before, after in changes]))
+            plan = updated
+            # If source/target colors matched but were non-black, add that
+            # change even though no source-to-target difference existed.
+            for oid in ids:
+                vals, _ = conn.read_properties('text', oid)
+                if 'Text colour' not in vals:
+                    continue
+                getter, setter, current = vals['Text colour']
+                entry = next((c for tid, c in plan if tid == oid), None)
+                if entry is None and not same_value(current, black):
+                    plan.append((oid, [('Text colour', getter, setter, current, black)]))
+                elif entry is not None:
+                    entry[:] = [c for c in entry if c[0] != 'Text colour']
+                    if not same_value(current, black):
+                        entry.append(('Text colour', getter, setter, current, black))
+            plan = [(oid, c) for oid, c in plan if c]
+        if not plan and not text_plan:
+            if self.source.category == 'symbol':
+                self.status.set('No VERIFIED format differences. If designation text was not found, '
+                                'its font size was NOT compared. See the diagnostic warnings.')
+                self.write('PREVIEW SUMMARY: No AVAILABLE changes; designation must be verified '
+                           'separately unless source AND target type-12 text were read.')
+            else:
+                self.status.set(f'No changes to apply. {skipped_count} unmatched properties skipped (see log).')
+                self.write(f'PREVIEW SUMMARY: 0 changes available; {skipped_count} changes skipped.')
             return
-        self.preview = (conn.job_id(), self.source.category, self.source.object_id, ids, plan, skipped_count)
+        self.preview = (conn.job_id(), self.source.category, self.source.object_id,
+                        ids, plan, skipped_count, text_plan, black)
         self.apply_button.configure(state='normal')
-        changes_count = sum(len(p[1]) for p in plan)
+        changes_count = sum(len(p[1]) for p in plan) + sum(len(c) for _, _, c in text_plan)
         self.status.set(
-            f'Preview: {changes_count} changes on {len(plan)} target(s); '
+            f'Preview: {changes_count} changes on {len(ids)} target(s); '
             f'{skipped_count} unmatched properties skipped. Apply requires confirmation.'
         )
         self.write(f'PREVIEW SUMMARY: {changes_count} planned changes, {skipped_count} skipped.')
@@ -660,7 +967,7 @@ class MatchPropertiesApp:
     def apply(self):
         if not self.preview or not self.source:
             return
-        project_id, cat, source_id, selected_ids, plan, skipped_count = self.preview
+        project_id, cat, source_id, selected_ids, plan, skipped_count, text_plan, black = self.preview
         self.reset_preview()
         conn = self.connect()
         if not conn:
@@ -676,11 +983,19 @@ class MatchPropertiesApp:
         if set(live_ids) != set(selected_ids):
             self.write('APPLY BLOCKED: selected target IDs differ from preview. Preview again.')
             return
-        n = sum(len(changes) for _, changes in plan)
+        try:
+            if self.get_black_index() != black:
+                self.write('APPLY BLOCKED: Black text colour index changed since Preview. Preview again.')
+                return
+        except ValueError as exc:
+            self.write('APPLY BLOCKED: ' + str(exc))
+            return
+        n = sum(len(changes) for _, changes in plan) + sum(len(changes) for _, _, changes in text_plan)
         ok = messagebox.askyesno(
             'Confirm formatting change',
             f'Apply {n} formatting changes to {len(plan)} {cat} target(s)?\n\n'
-            'Text content, object positions and device properties will not be changed.\n'
+            'Text contents, object positions and device designations will NOT be changed.\n'
+            'Attached texts will inherit font formatting by text type, with colour forced to black.\n'
             'Test this beta in a project copy first. Continue?',
             icon='warning',
         )
@@ -756,6 +1071,52 @@ class MatchPropertiesApp:
                         for line in conn.hatch_diagnostics(oid):
                             self.write('  ' + line)
                         hatch_methods_logged = True
+        # Apply attached text formats after symbol hatch/outline, and verify
+        # each setter using the same live readback used for symbol properties.
+        if text_plan:
+            self.write('ATTACHED SYMBOL TEXT RESULTS (text values/designations unchanged)')
+        safe_children = {}
+        for symbol_id, text_id, changes in text_plan:
+            try:
+                if symbol_id not in safe_children:
+                    ids_attached, text_notes = conn.related_text_ids(symbol_id)
+                    safe_children[symbol_id] = set(ids_attached)
+                if text_id not in safe_children[symbol_id]:
+                    self.write(f'Text {text_id}: SKIPPED - text no longer attached to target symbol {symbol_id}')
+                    failed += len(changes)
+                    continue
+                txt, _ = conn.object_for('text', text_id)
+                for name, getter, setter, before, after in changes:
+                    try:
+                        live = getattr(txt, getter)()
+                        if not valid_property_for(name, live):
+                            self.write(f'Text {text_id}, {name}: invalid live value {display(live)}')
+                            failed += 1
+                            continue
+                        if same_value(live, after):
+                            successful += 1
+                            self.write(f'Text {text_id}, {name}: ALREADY MATCHED {format_property(name, live)}')
+                            continue
+                        if not same_value(live, before):
+                            failed += 1
+                            self.write(f'Text {text_id}, {name}: SKIPPED - changed since preview')
+                            continue
+                        result = invoke_format_setter(txt, name, setter, after)
+                        after_live = getattr(txt, getter)()
+                        if valid_property_for(name, after_live) and same_value(after_live, after):
+                            successful += 1
+                            self.write(f'Text {text_id}, {name}: VERIFIED {format_property(name, before)} '
+                                       f'-> {format_property(name, after_live)}')
+                        else:
+                            failed += 1
+                            self.write(f'Text {text_id}, {name}: UNVERIFIED; requested {after!r}, '
+                                       f'getter {after_live!r}, setter returned {result!r}')
+                    except Exception as exc:
+                        failed += 1
+                        self.write(f'Text {text_id}, {name}: ERROR: {exc}')
+            except Exception as exc:
+                failed += len(changes)
+                self.write(f'Text {text_id}: ERROR opening attached text: {exc}')
         if failed and cat == 'symbol':
             self.write('DIAGNOSIS: The API did not confirm every requested write. '
                        'The target might not support an active hatch, or the setter may '
