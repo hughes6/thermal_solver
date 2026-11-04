@@ -1,220 +1,414 @@
-"""
-Zuken E3.series - Selection Probe (READ ONLY)
+ZUKEN E3.SELECTION PROBE  |  READ ONLY
+==============================================================
+Select a block, symbol, or text item in E3 before scanning.
+The script does not write/change any E3 objects.
 
-Select an object in the E3 drawing, then run this script. It shows the
-selection-related COM methods your installed version exposes and attempts
-safe, no-argument selection-ID readers. It NEVER modifies the project.
+Connected to CT.Application successfully.
+Project ID: 118
 
-Requirements: Windows, E3.series running with an open project,
-              pywin32 installed in this Python environment.
-"""
+[PROJECT/JOB]
+Selection-related method names:
+  GetSelectedAllDeviceCount
+  GetSelectedAllDeviceIds
+  GetSelectedBlockCount
+  GetSelectedBlockIds
+  GetSelectedBundleCount
+  GetSelectedBundleIds
+  GetSelectedBusbarIds
+  GetSelectedCableCount
+  GetSelectedCableIds
+  GetSelectedConnectionCount
+  GetSelectedConnectionIds
+  GetSelectedConnectLineIds
+  GetSelectedConnectorCount
+  GetSelectedConnectorIds
+  GetSelectedDeviceCount
+  GetSelectedDeviceIds
+  GetSelectedDimensionIds
+  GetSelectedEmbeddedObjectIds
+  GetSelectedGraphCount
+  GetSelectedGraphIds
+  GetSelectedNetSegmentCount
+  GetSelectedNetSegmentIds
+  GetSelectedSheetCount
+  GetSelectedSheetIds
+  GetSelectedSignalCount
+  GetSelectedSignalIds
+  GetSelectedSymbolCount
+  GetSelectedSymbolIds
+  GetSelectedTerminalCount
+  GetSelectedTerminalIds
+  GetSelectedTextCount
+  GetSelectedTextIds
+  GetTreeSelectedAllDeviceIds
+  GetTreeSelectedAllDeviceIdsByFolder
+  GetTreeSelectedBlockIds
+  GetTreeSelectedBundleIds
+  GetTreeSelectedBusbarIds
+  GetTreeSelectedCableIds
+  GetTreeSelectedConnectorIds
+  GetTreeSelectedDeviceIds
+  GetTreeSelectedExternalDocumentIds
+  GetTreeSelectedExternalDocumentIdsByFolder
+  GetTreeSelectedPinIds
+  GetTreeSelectedSheetIds
+  GetTreeSelectedSheetIdsByFolder
+  GetTreeSelectedSlotIds
+  GetTreeSelectedStructureNodeIds
+  GetTreeSelectedSymbolIds
+  GetTreeSelectedTerminalIds
+  ResetSelection
+Selection-ID reader results:
+  GetSelectedAllDeviceIds() -> (0, -2147352572)
+  GetSelectedBlockIds() -> (0, -2147352572)
+  GetSelectedBundleIds() -> (0, -2147352572)
+  GetSelectedBusbarIds() -> (0, -2147352572)
+  GetSelectedCableIds() -> (0, -2147352572)
+  GetSelectedConnectionIds() -> (0, -2147352572)
+  GetSelectedConnectLineIds() -> (0, -2147352572)
+  GetSelectedConnectorIds() -> (0, -2147352572)
+  GetSelectedDeviceIds() -> (0, -2147352572)
+  GetSelectedDimensionIds() -> (0, -2147352572)
+  GetSelectedEmbeddedObjectIds() -> (0, -2147352572)
+  GetSelectedGraphIds() -> (0, -2147352572)
+  GetSelectedNetSegmentIds() -> (0, -2147352572)
+  GetSelectedSheetIds() -> (0, -2147352572)
+  GetSelectedSignalIds() -> (0, -2147352572)
+  GetSelectedSymbolIds() -> (0, -2147352572)
+  GetSelectedTerminalIds() -> (0, -2147352572)
+  GetSelectedTextIds() -> (0, -2147352572)
+  GetTreeSelectedAllDeviceIds() -> (0, -2147352572)
+  GetTreeSelectedBlockIds() -> (0, -2147352572)
+  GetTreeSelectedBundleIds() -> (0, -2147352572)
+  GetTreeSelectedBusbarIds() -> (0, -2147352572)
+  GetTreeSelectedCableIds() -> (0, -2147352572)
+  GetTreeSelectedConnectorIds() -> (0, -2147352572)
+  GetTreeSelectedDeviceIds() -> (0, -2147352572)
+  GetTreeSelectedExternalDocumentIds() -> (0, -2147352572)
+  GetTreeSelectedPinIds() -> (0, -2147352572)
+  GetTreeSelectedSheetIds() -> (1, -2147352572)
+  GetTreeSelectedSlotIds() -> (0, -2147352572)
+  GetTreeSelectedStructureNodeIds() -> (0, -2147352572)
+  GetTreeSelectedSymbolIds() -> (0, -2147352572)
+  GetTreeSelectedTerminalIds() -> (0, -2147352572)
 
-import tkinter as tk
-from tkinter import ttk
-import traceback
+[APPLICATION]
+Selection-related method names:
+  GetDatabaseTableSelectedComponents
+  GetDatabaseTreeSelectedComponents
+  GetDatabaseTreeSelectedModels
+  GetDatabaseTreeSelectedSymbols
+  SelectComponentFromTable
+Selection-ID reader results:
+  (No no-argument selection-ID readers discovered.)
 
-try:
-    import pythoncom
-    import win32com.client as win32
-except ImportError:
-    raise SystemExit("pywin32 is required. Install it with: py -m pip install pywin32")
+[CreateTextObject / FORMAT GETTERS]
+  GetAlignment
+  GetColour
+  GetFontName
+  GetHeight
+  GetRotation
+  GetStyle
+  GetWidth
 
+[CreateSymbolObject / FORMAT GETTERS]
+  GetBlockHatchColour
+  GetBlockHatchStyle
+  GetBlockHatchWidth
+  GetBlockOutlineColour
+  GetBlockOutlineStyle
+  GetBlockOutlineWidth
+  GetDBTextSize
+  GetDisplayWidth
+  GetRotation
 
-# These readers are only called IF discovered in the COM type information.
-# Some E3 versions may not provide all of them.
-KNOWN_READERS = (
-    "GetSelectedAllDeviceIds",
-    "GetSelectedDeviceIds",
-    "GetSelectedSymbolIds",
-    "GetSelectedTextIds",
-    "GetSelectedGraphIds",
-    "GetSelectedGraphicIds",
-    "GetSelectedObjectIds",
-    "GetSelectedSheetIds",
-    "GetTreeSelectedAllDeviceIds",
-)
-STYLE_TERMS = (
-    "font", "color", "colour", "height", "size", "spacing", "align",
-    "rotation", "angle", "width", "linestyle", "texttype", "justify",
-    "visible", "displaylevel", "typeface", "style", "bold", "italic",
-)
+[CreateSheetObject / FORMAT GETTERS]
+  GetDXFSize
+  GetVisibleArea
 
-
-def get_method_names(obj):
-    """Read method names from the COM type library (without invoking them)."""
-    names = set()
-    try:
-        info = obj._oleobj_.GetTypeInfo()
-        attributes = info.GetTypeAttr()
-        for index in range(attributes.cFuncs):
-            description = info.GetFuncDesc(index)
-            com_names = info.GetNames(description.memid)
-            if com_names:
-                names.add(str(com_names[0]))
-    except Exception:
-        # E3 versions without accessible type information may still provide
-        # some method names through the win32com wrapper.
-        pass
-    try:
-        names.update(x for x in dir(obj) if not x.startswith("_"))
-    except Exception:
-        pass
-    return sorted(names, key=str.lower)
-
-
-def compact(value, limit=320):
-    s = repr(value)
-    return s if len(s) <= limit else s[:limit] + " ... [truncated]"
-
-
-def selection_reader_names(methods):
-    """Selection ID getters, not setters/actions that alter selection."""
-    found = set(methods)
-    readers = {name for name in found
-               if name.lower().startswith("get")
-               and "select" in name.lower()
-               and name.lower().endswith("ids")}
-    readers.update(name for name in KNOWN_READERS if name in found)
-    # If no type library metadata is available, try only the known confirmed
-    # method; on some dynamic COM objects, the name is callable even if dir()
-    # doesn't expose it.
-    if not found:
-        readers.add("GetSelectedAllDeviceIds")
-    return sorted(readers, key=str.lower)
-
-
-def scan():
-    log = [
-        "ZUKEN E3.SELECTION PROBE  |  READ ONLY",
-        "=" * 62,
-        "Select a block, symbol, or text item in E3 before scanning.",
-        "The script does not write/change any E3 objects.",
-        "",
-    ]
-    try:
-        e3 = win32.Dispatch("CT.Application")
-        prj = e3.CreateJobObject()
-        log.append("Connected to CT.Application successfully.")
-        try:
-            job_id = prj.GetId()
-            log.append(f"Project ID: {job_id!r}")
-            if not job_id:
-                log.append("WARNING: No open project was detected.")
-        except Exception as ex:
-            log.append(f"Could not read project ID: {ex}")
-
-        # Test selection on the project object, where confirmed device-reader
-        # methods exist. The raw result is printed so there is no assumption
-        # about how this particular COM version packs counts/ID arrays.
-        for object_label, obj in (("PROJECT/JOB", prj), ("APPLICATION", e3)):
-            names = get_method_names(obj)
-            select_names = [n for n in names if "select" in n.lower()]
-            log += ["", f"[{object_label}]", "Selection-related method names:"]
-            log.extend(f"  {name}" for name in select_names) if select_names else log.append(
-                "  (No names exposed by introspection; this is not proof they are absent.)")
-
-            readers = selection_reader_names(names)
-            if object_label == "PROJECT/JOB":
-                # Always try the one verified reader, even if E3 doesn't list
-                # it when inspecting its COM interface.
-                readers = sorted(set(readers) | {"GetSelectedAllDeviceIds"}, key=str.lower)
-            log.append("Selection-ID reader results:")
-            if not readers:
-                log.append("  (No no-argument selection-ID readers discovered.)")
-            for method_name in readers:
-                try:
-                    fn = getattr(obj, method_name)
-                    result = fn()
-                    log.append(f"  {method_name}() -> {compact(result)}")
-                except Exception as ex:
-                    log.append(f"  {method_name}() -> NOT AVAILABLE / NEEDS ARGUMENTS: {ex}")
-
-        # List potentially relevant *getter names* for a later Match Properties
-        # script. Creating the COM object wrappers is read-only; no SetId or
-        # setter is called, and no styling is changed here.
-        for creator in ("CreateTextObject", "CreateSymbolObject", "CreateSheetObject"):
-            log += ["", f"[{creator} / FORMAT GETTERS]"]
-            try:
-                obj = getattr(prj, creator)()
-                methods = get_method_names(obj)
-                style_getters = [name for name in methods
-                                 if name.startswith("Get")
-                                 and any(term in name.lower() for term in STYLE_TERMS)]
-                if style_getters:
-                    log.extend(f"  {name}" for name in style_getters[:90])
-                    if len(style_getters) > 90:
-                        log.append(f"  ... and {len(style_getters) - 90} more")
-                else:
-                    log.append("  No matching getters shown by type library inspection.")
-            except Exception as ex:
-                log.append(f"  Could not inspect {creator}: {ex}")
-
-        log += ["", "HOW TO INTERPRET", "-" * 62,
-                "Nonempty ID results after selecting something = COM selection works.",
-                "If only devices are detected, test clicking the actual symbol vs.",
-                "its text, and compare reader output after each scan.",
-                "No ID results may mean the object type uses another API method,",
-                "not that E3 has no selection capability."]
-    except Exception:
-        log += ["", "CONNECTION / SCAN ERROR", traceback.format_exc()]
-    return "\n".join(log)
+HOW TO INTERPRET
+--------------------------------------------------------------
+Nonempty ID results after selecting something = COM selection works.
+If only devices are detected, test clicking the actual symbol vs.
+its text, and compare reader output after each scan.
+No ID results may mean the object type uses another API method,
+not that E3 has no selection capability.
 
 
-def main():
-    pythoncom.CoInitialize()
-    root = tk.Tk()
-    root.withdraw()  # Read initial E3 selection before taking GUI focus.
-    root.title("Zuken - Selection Probe (Read Only)")
-    root.geometry("940x690")
-    root.minsize(620, 420)
 
-    frame = ttk.Frame(root, padding=12)
-    frame.pack(fill="both", expand=True)
-    ttk.Label(frame, text="Zuken Selection Probe", font=("Segoe UI", 15, "bold")).pack(anchor="w")
-    ttk.Label(frame, text="Select an object in E3, return here, and click Scan Again. This tool makes no changes.").pack(anchor="w", pady=(4, 10))
+post block select
+ZUKEN E3.SELECTION PROBE  |  READ ONLY
+==============================================================
+Select a block, symbol, or text item in E3 before scanning.
+The script does not write/change any E3 objects.
 
-    area = ttk.Frame(frame)
-    area.pack(fill="both", expand=True)
-    output = tk.Text(area, wrap="none", font=("Consolas", 10), undo=False)
-    scroll_y = ttk.Scrollbar(area, orient="vertical", command=output.yview)
-    scroll_x = ttk.Scrollbar(area, orient="horizontal", command=output.xview)
-    output.configure(yscrollcommand=scroll_y.set, xscrollcommand=scroll_x.set)
-    area.rowconfigure(0, weight=1)
-    area.columnconfigure(0, weight=1)
-    output.grid(row=0, column=0, sticky="nsew")
-    scroll_y.grid(row=0, column=1, sticky="ns")
-    scroll_x.grid(row=1, column=0, sticky="ew")
+Connected to CT.Application successfully.
+Project ID: 118
 
-    row = ttk.Frame(frame)
-    row.pack(fill="x", pady=(10, 0))
-    status = tk.StringVar(value="Ready")
+[PROJECT/JOB]
+Selection-related method names:
+  GetSelectedAllDeviceCount
+  GetSelectedAllDeviceIds
+  GetSelectedBlockCount
+  GetSelectedBlockIds
+  GetSelectedBundleCount
+  GetSelectedBundleIds
+  GetSelectedBusbarIds
+  GetSelectedCableCount
+  GetSelectedCableIds
+  GetSelectedConnectionCount
+  GetSelectedConnectionIds
+  GetSelectedConnectLineIds
+  GetSelectedConnectorCount
+  GetSelectedConnectorIds
+  GetSelectedDeviceCount
+  GetSelectedDeviceIds
+  GetSelectedDimensionIds
+  GetSelectedEmbeddedObjectIds
+  GetSelectedGraphCount
+  GetSelectedGraphIds
+  GetSelectedNetSegmentCount
+  GetSelectedNetSegmentIds
+  GetSelectedSheetCount
+  GetSelectedSheetIds
+  GetSelectedSignalCount
+  GetSelectedSignalIds
+  GetSelectedSymbolCount
+  GetSelectedSymbolIds
+  GetSelectedTerminalCount
+  GetSelectedTerminalIds
+  GetSelectedTextCount
+  GetSelectedTextIds
+  GetTreeSelectedAllDeviceIds
+  GetTreeSelectedAllDeviceIdsByFolder
+  GetTreeSelectedBlockIds
+  GetTreeSelectedBundleIds
+  GetTreeSelectedBusbarIds
+  GetTreeSelectedCableIds
+  GetTreeSelectedConnectorIds
+  GetTreeSelectedDeviceIds
+  GetTreeSelectedExternalDocumentIds
+  GetTreeSelectedExternalDocumentIdsByFolder
+  GetTreeSelectedPinIds
+  GetTreeSelectedSheetIds
+  GetTreeSelectedSheetIdsByFolder
+  GetTreeSelectedSlotIds
+  GetTreeSelectedStructureNodeIds
+  GetTreeSelectedSymbolIds
+  GetTreeSelectedTerminalIds
+  ResetSelection
+Selection-ID reader results:
+  GetSelectedAllDeviceIds() -> (1, -2147352572)
+  GetSelectedBlockIds() -> (1, -2147352572)
+  GetSelectedBundleIds() -> (0, -2147352572)
+  GetSelectedBusbarIds() -> (0, -2147352572)
+  GetSelectedCableIds() -> (0, -2147352572)
+  GetSelectedConnectionIds() -> (0, -2147352572)
+  GetSelectedConnectLineIds() -> (0, -2147352572)
+  GetSelectedConnectorIds() -> (0, -2147352572)
+  GetSelectedDeviceIds() -> (0, -2147352572)
+  GetSelectedDimensionIds() -> (0, -2147352572)
+  GetSelectedEmbeddedObjectIds() -> (0, -2147352572)
+  GetSelectedGraphIds() -> (0, -2147352572)
+  GetSelectedNetSegmentIds() -> (0, -2147352572)
+  GetSelectedSheetIds() -> (1, -2147352572)
+  GetSelectedSignalIds() -> (0, -2147352572)
+  GetSelectedSymbolIds() -> (1, -2147352572)
+  GetSelectedTerminalIds() -> (0, -2147352572)
+  GetSelectedTextIds() -> (0, -2147352572)
+  GetTreeSelectedAllDeviceIds() -> (0, -2147352572)
+  GetTreeSelectedBlockIds() -> (0, -2147352572)
+  GetTreeSelectedBundleIds() -> (0, -2147352572)
+  GetTreeSelectedBusbarIds() -> (0, -2147352572)
+  GetTreeSelectedCableIds() -> (0, -2147352572)
+  GetTreeSelectedConnectorIds() -> (0, -2147352572)
+  GetTreeSelectedDeviceIds() -> (0, -2147352572)
+  GetTreeSelectedExternalDocumentIds() -> (0, -2147352572)
+  GetTreeSelectedPinIds() -> (0, -2147352572)
+  GetTreeSelectedSheetIds() -> (1, -2147352572)
+  GetTreeSelectedSlotIds() -> (0, -2147352572)
+  GetTreeSelectedStructureNodeIds() -> (0, -2147352572)
+  GetTreeSelectedSymbolIds() -> (0, -2147352572)
+  GetTreeSelectedTerminalIds() -> (0, -2147352572)
 
-    def refresh():
-        status.set("Scanning E3 selection...")
-        root.update_idletasks()
-        text = scan()
-        output.delete("1.0", "end")
-        output.insert("1.0", text)
-        status.set("Scan completed. Compare results after selecting another object.")
+[APPLICATION]
+Selection-related method names:
+  GetDatabaseTableSelectedComponents
+  GetDatabaseTreeSelectedComponents
+  GetDatabaseTreeSelectedModels
+  GetDatabaseTreeSelectedSymbols
+  SelectComponentFromTable
+Selection-ID reader results:
+  (No no-argument selection-ID readers discovered.)
 
-    def copy_output():
-        root.clipboard_clear()
-        root.clipboard_append(output.get("1.0", "end-1c"))
-        root.update()
-        status.set("Copied results to clipboard.")
+[CreateTextObject / FORMAT GETTERS]
+  GetAlignment
+  GetColour
+  GetFontName
+  GetHeight
+  GetRotation
+  GetStyle
+  GetWidth
 
-    ttk.Button(row, text="Scan Again", command=refresh).pack(side="left")
-    ttk.Button(row, text="Copy Results", command=copy_output).pack(side="left", padx=8)
-    ttk.Button(row, text="Close", command=root.destroy).pack(side="right")
-    ttk.Label(frame, textvariable=status).pack(anchor="w", pady=(8, 0))
+[CreateSymbolObject / FORMAT GETTERS]
+  GetBlockHatchColour
+  GetBlockHatchStyle
+  GetBlockHatchWidth
+  GetBlockOutlineColour
+  GetBlockOutlineStyle
+  GetBlockOutlineWidth
+  GetDBTextSize
+  GetDisplayWidth
+  GetRotation
 
-    refresh()
-    root.deiconify()
-    try:
-        root.mainloop()
-    finally:
-        pythoncom.CoUninitialize()
+[CreateSheetObject / FORMAT GETTERS]
+  GetDXFSize
+  GetVisibleArea
+
+HOW TO INTERPRET
+--------------------------------------------------------------
+Nonempty ID results after selecting something = COM selection works.
+If only devices are detected, test clicking the actual symbol vs.
+its text, and compare reader output after each scan.
+No ID results may mean the object type uses another API method,
+not that E3 has no selection capability.
 
 
-if __name__ == "__main__":
-    main()
+
+
+post text select
+ZUKEN E3.SELECTION PROBE  |  READ ONLY
+==============================================================
+Select a block, symbol, or text item in E3 before scanning.
+The script does not write/change any E3 objects.
+
+Connected to CT.Application successfully.
+Project ID: 118
+
+[PROJECT/JOB]
+Selection-related method names:
+  GetSelectedAllDeviceCount
+  GetSelectedAllDeviceIds
+  GetSelectedBlockCount
+  GetSelectedBlockIds
+  GetSelectedBundleCount
+  GetSelectedBundleIds
+  GetSelectedBusbarIds
+  GetSelectedCableCount
+  GetSelectedCableIds
+  GetSelectedConnectionCount
+  GetSelectedConnectionIds
+  GetSelectedConnectLineIds
+  GetSelectedConnectorCount
+  GetSelectedConnectorIds
+  GetSelectedDeviceCount
+  GetSelectedDeviceIds
+  GetSelectedDimensionIds
+  GetSelectedEmbeddedObjectIds
+  GetSelectedGraphCount
+  GetSelectedGraphIds
+  GetSelectedNetSegmentCount
+  GetSelectedNetSegmentIds
+  GetSelectedSheetCount
+  GetSelectedSheetIds
+  GetSelectedSignalCount
+  GetSelectedSignalIds
+  GetSelectedSymbolCount
+  GetSelectedSymbolIds
+  GetSelectedTerminalCount
+  GetSelectedTerminalIds
+  GetSelectedTextCount
+  GetSelectedTextIds
+  GetTreeSelectedAllDeviceIds
+  GetTreeSelectedAllDeviceIdsByFolder
+  GetTreeSelectedBlockIds
+  GetTreeSelectedBundleIds
+  GetTreeSelectedBusbarIds
+  GetTreeSelectedCableIds
+  GetTreeSelectedConnectorIds
+  GetTreeSelectedDeviceIds
+  GetTreeSelectedExternalDocumentIds
+  GetTreeSelectedExternalDocumentIdsByFolder
+  GetTreeSelectedPinIds
+  GetTreeSelectedSheetIds
+  GetTreeSelectedSheetIdsByFolder
+  GetTreeSelectedSlotIds
+  GetTreeSelectedStructureNodeIds
+  GetTreeSelectedSymbolIds
+  GetTreeSelectedTerminalIds
+  ResetSelection
+Selection-ID reader results:
+  GetSelectedAllDeviceIds() -> (1, -2147352572)
+  GetSelectedBlockIds() -> (1, -2147352572)
+  GetSelectedBundleIds() -> (0, -2147352572)
+  GetSelectedBusbarIds() -> (0, -2147352572)
+  GetSelectedCableIds() -> (0, -2147352572)
+  GetSelectedConnectionIds() -> (0, -2147352572)
+  GetSelectedConnectLineIds() -> (0, -2147352572)
+  GetSelectedConnectorIds() -> (0, -2147352572)
+  GetSelectedDeviceIds() -> (0, -2147352572)
+  GetSelectedDimensionIds() -> (0, -2147352572)
+  GetSelectedEmbeddedObjectIds() -> (0, -2147352572)
+  GetSelectedGraphIds() -> (0, -2147352572)
+  GetSelectedNetSegmentIds() -> (0, -2147352572)
+  GetSelectedSheetIds() -> (1, -2147352572)
+  GetSelectedSignalIds() -> (0, -2147352572)
+  GetSelectedSymbolIds() -> (0, -2147352572)
+  GetSelectedTerminalIds() -> (0, -2147352572)
+  GetSelectedTextIds() -> (1, -2147352572)
+  GetTreeSelectedAllDeviceIds() -> (0, -2147352572)
+  GetTreeSelectedBlockIds() -> (0, -2147352572)
+  GetTreeSelectedBundleIds() -> (0, -2147352572)
+  GetTreeSelectedBusbarIds() -> (0, -2147352572)
+  GetTreeSelectedCableIds() -> (0, -2147352572)
+  GetTreeSelectedConnectorIds() -> (0, -2147352572)
+  GetTreeSelectedDeviceIds() -> (0, -2147352572)
+  GetTreeSelectedExternalDocumentIds() -> (0, -2147352572)
+  GetTreeSelectedPinIds() -> (0, -2147352572)
+  GetTreeSelectedSheetIds() -> (1, -2147352572)
+  GetTreeSelectedSlotIds() -> (0, -2147352572)
+  GetTreeSelectedStructureNodeIds() -> (0, -2147352572)
+  GetTreeSelectedSymbolIds() -> (0, -2147352572)
+  GetTreeSelectedTerminalIds() -> (0, -2147352572)
+
+[APPLICATION]
+Selection-related method names:
+  GetDatabaseTableSelectedComponents
+  GetDatabaseTreeSelectedComponents
+  GetDatabaseTreeSelectedModels
+  GetDatabaseTreeSelectedSymbols
+  SelectComponentFromTable
+Selection-ID reader results:
+  (No no-argument selection-ID readers discovered.)
+
+[CreateTextObject / FORMAT GETTERS]
+  GetAlignment
+  GetColour
+  GetFontName
+  GetHeight
+  GetRotation
+  GetStyle
+  GetWidth
+
+[CreateSymbolObject / FORMAT GETTERS]
+  GetBlockHatchColour
+  GetBlockHatchStyle
+  GetBlockHatchWidth
+  GetBlockOutlineColour
+  GetBlockOutlineStyle
+  GetBlockOutlineWidth
+  GetDBTextSize
+  GetDisplayWidth
+  GetRotation
+
+[CreateSheetObject / FORMAT GETTERS]
+  GetDXFSize
+  GetVisibleArea
+
+HOW TO INTERPRET
+--------------------------------------------------------------
+Nonempty ID results after selecting something = COM selection works.
+If only devices are detected, test clicking the actual symbol vs.
+its text, and compare reader output after each scan.
+No ID results may mean the object type uses another API method,
+not that E3 has no selection capability.
