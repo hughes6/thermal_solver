@@ -1,4 +1,4 @@
-"""Zuken E3.series - Match Properties (v7: color palette + symbol text)
+"""Zuken E3.series - Match Properties (v8: custom E3 text types, aliases + pin-view support)
 
 Select one TEXT or BLOCK SYMBOL on a sheet and click Copy Source.
 The separate window STAYS OPEN after copying. Click back into E3 to select
@@ -8,6 +8,10 @@ IMPORTANT: This file first launches a DETACHED GUI process and then exits.
 This avoids keeping the E3 Add-on launcher waiting in an active script, which
 can cause E3's drawing window to appear locked. COM objects are also released
 after every click, instead of being retained for the lifetime of the GUI.
+
+This script copies FONT/STYLE only for matched text types. Device Function and
+Saber Parameter text types are project-dependent; use "Learn Selected Text Type"
+or enter their E3 type IDs. E3 parameter and equipment attribute VALUES are NEVER copied.
 
 This script does NOT change block dimensions, scaling, width/height of symbol,
 names, IDs, text content, object locations, connections, or component assignments. The only write calls are paired
@@ -61,20 +65,74 @@ LOCATION_TYPE = 15            # E3 standard text type for Location.
 # In this project's cable-formatting scripts, Additional Part ID is type 1000.
 # This may be a custom text type; do not assume other projects use that meaning.
 ADDITIONAL_PART_ID_TYPE = 1000
-PREFERRED_TEXT_TYPES = (DEVICE_DESIGNATION_TYPE, LOCATION_TYPE, ADDITIONAL_PART_ID_TYPE)
+SIGNAL_NAME_TYPE = 7  # E3 standard "Signal name" type; local variants can be custom.
+PREFERRED_TEXT_TYPES = (DEVICE_DESIGNATION_TYPE, LOCATION_TYPE,
+                        ADDITIONAL_PART_ID_TYPE, SIGNAL_NAME_TYPE)
 TEXT_TYPE_NAMES = {
     DEVICE_DESIGNATION_TYPE: 'Device Designation',
     LOCATION_TYPE: 'Location',
     ADDITIONAL_PART_ID_TYPE: 'Additional Part ID (project type 1000)',
+    SIGNAL_NAME_TYPE: 'Signal name (E3 type 7; local signal may be different)',
 }
+# Additional text types are project-specific, so expose them for learning/configuring.
+# These are text formatting categories, NOT their rendered values or device attributes.
+OPTIONAL_TYPE_GROUPS = (
+    'Equipment Identification',
+    'Device Function',
+    'Saber Parameters',
+    'Local Signal Name',
+)
+DEFAULT_TYPE_SPEC = {
+    'Equipment Identification': '',
+    'Device Function': '',
+    'Saber Parameters': '',
+    'Local Signal Name': '7',
+}
+
+def parse_type_ids(raw):
+    """Read a comma/semicolon-separated list of positive E3 text type IDs."""
+    result = []
+    for token in raw.replace(';', ',').split(','):
+        token = token.strip()
+        if not token:
+            continue
+        if not token.isdecimal() or int(token) <= 0:
+            raise ValueError(f'Text type IDs must be positive integers: {token!r}')
+        result.append(int(token))
+    return tuple(dict.fromkeys(result))
+
+
+def text_role(typ, config):
+    """Canonical formatting group. Equipment ID and Additional Part ID are aliases."""
+    if typ == ADDITIONAL_PART_ID_TYPE or typ in config.get('Equipment Identification', ()):
+        return 'Equipment / Additional Part ID'
+    if typ == DEVICE_DESIGNATION_TYPE:
+        return 'Device Designation'
+    if typ == LOCATION_TYPE:
+        return 'Location'
+    if typ in config.get('Local Signal Name', ()):
+        return 'Local Signal Name'
+    if typ in config.get('Device Function', ()):
+        return 'Device Function'
+    if typ in config.get('Saber Parameters', ()):
+        return f'Saber Parameter (type {typ})'  # do NOT merge different parameter numbers
+    return f'Text type {typ}'
+
+
+def text_type_description(typ, config):
+    role = text_role(typ, config)
+    if role.startswith('Text type '):
+        return TEXT_TYPE_NAMES.get(typ, role)
+    return role
 # Fixed black text index, per user request. Not exposed as a UI option.
 BLACK_TEXT_COLOUR = 0
 
 # Color numbers come from the user's supplied Zuken palette image.
-# Hex swatches are only approximate visual references; E3 palette indices
+# 1553 swatch uses user-specified #e18ec9; other HTML swatches approximate.
+# Hex swatches are only visual references; E3 palette indices
 # (NOT these HTML hex colors) are what the script sends to Zuken.
 PALETTE_SCHEME = (
-    ('1553', 183, '#b8a3e4'),
+    ('1553', 183, '#e18ec9'),
     ('Computers', 240, '#398bff'),
     ('Ground', 132, '#70d65c'),
     ('Panels', 127, '#e3df86'),
@@ -345,6 +403,7 @@ class Source:
     object_id: int
     values: dict
     child_texts: list = field(default_factory=list)
+    type_config: dict = field(default_factory=dict)
 
 
 @dataclass
@@ -360,6 +419,7 @@ class E3Connection:
         self.app = None
         self.job = None
         self.details = []
+        self.type_config = {k: parse_type_ids(v) for k, v in DEFAULT_TYPE_SPEC.items()}
         try:
             import e3series
             app = e3series.Application()
@@ -375,6 +435,18 @@ class E3Connection:
             self.details.append(f'Official wrapper did not connect: {exc}')
         self.app = win32.Dispatch('CT.Application')
         self.job = self.app.CreateJobObject()
+
+    def set_text_types(self, config):
+        self.type_config = {k: tuple(v) for k, v in config.items()}
+
+    def preferred_text_types(self):
+        types = list(PREFERRED_TEXT_TYPES)
+        for group in OPTIONAL_TYPE_GROUPS:
+            types.extend(self.type_config.get(group, ()))
+        return tuple(dict.fromkeys(types))
+
+    def type_name(self, typ):
+        return text_type_description(typ, self.type_config)
 
     def job_id(self):
         return self.job.GetId()
@@ -429,7 +501,7 @@ class E3Connection:
         return values, notes
 
     def related_text_ids(self, symbol_id):
-        """Find actual symbol-owned text, particularly types 12, 15 and 1000.
+        """Find actual symbol-owned text, including optional project-specific types.
 
         The symbol's COM GetTextIds may require the explicit type filter, or a
         by-reference output array, depending on the wrapper/build. The result
@@ -443,11 +515,12 @@ class E3Connection:
         typed_ids = defaultdict(list)
         self._tagged_types = {}
 
+        preferred = self.preferred_text_types()
         if names and 'GetTextIds' not in names:
             notes.append('Symbol.GetTextIds is NOT EXPOSED on this E3 version.')
         else:
             fn = getattr(symbol, 'GetTextIds')
-            for typ in (*PREFERRED_TEXT_TYPES, None):
+            for typ in (*preferred, None):
                 desc = f'text type #{typ}' if typ is not None else 'all text'
                 if typ is None:
                     attempts = [('no args', ())]
@@ -495,11 +568,11 @@ class E3Connection:
                 else:
                     typed_ids[typ].extend(found)
                     if found:
-                        notes.append(f'  {TEXT_TYPE_NAMES[typ]}: {len(set(found))} attached text(s)')
+                        notes.append(f'  {self.type_name(typ)} (#{typ}): {len(set(found))} attached text(s)')
 
         # Explicit text-type filters take priority over text.GetType() because
         # some E3 builds report a generic object kind through GetType().
-        for typ in PREFERRED_TEXT_TYPES:
+        for typ in preferred:
             for tid in typed_ids[typ]:
                 previous = self._tagged_types.get(tid)
                 if previous is not None and previous != typ:
@@ -508,7 +581,7 @@ class E3Connection:
                     continue
                 self._tagged_types[tid] = typ
         dedup = list(dict.fromkeys(
-            [id_ for typ in PREFERRED_TEXT_TYPES for id_ in typed_ids[typ]] + all_ids
+            [id_ for typ in preferred for id_ in typed_ids[typ]] + all_ids
         ))
         if dedup:
             return dedup[:300], notes
@@ -565,7 +638,7 @@ class E3Connection:
                         continue
                     try:
                         v = getattr(txt, method)()
-                        if valid_property(v):
+                        if valid_property(v) and is_int_id(v):
                             text_type = v
                             break
                     except Exception:
@@ -576,13 +649,13 @@ class E3Connection:
                 if tagged_type is not None:
                     if text_type != tagged_type:
                         notes.append(f'Text {tid}: getter returned type {text_type!r}; '
-                                     f'symbol filtered lookup identifies {TEXT_TYPE_NAMES[tagged_type]}.')
+                                     f'symbol filtered lookup identifies {self.type_name(tagged_type)}.')
                     text_type = tagged_type
                 values, prop_notes = self.read_properties('text', tid)
                 if values:
                     entries.append(ChildText(tid, text_type, values))
-                    if text_type in PREFERRED_TEXT_TYPES:
-                        notes.append(f'{TEXT_TYPE_NAMES[text_type].upper()} TEXT ID {tid}: '
+                    if text_type in self.preferred_text_types():
+                        notes.append(f'{self.type_name(text_type).upper()} TEXT ID {tid}: '
                                      f'GetHeight={values.get("Text height", (None,None,"UNAVAILABLE"))[2]!r}, '
                                      f'font={values.get("Font name", (None,None,"UNAVAILABLE"))[2]!r}, '
                                      f'style={values.get("Font style", (None,None,"UNAVAILABLE"))[2]!r}')
@@ -626,8 +699,8 @@ class MatchPropertiesApp:
         self.preview = None
         self.conn = None
         self.root.title('Zuken E3 - Match Properties')
-        self.root.geometry('1080x810')
-        self.root.minsize(780, 590)
+        self.root.geometry('1110x910')
+        self.root.minsize(830, 660)
         # Do not keep this window on top: E3 must be clickable while GUI runs.
         self.root.attributes('-topmost', False)
         self.root.protocol('WM_DELETE_WINDOW', self.on_close)
@@ -639,7 +712,7 @@ class MatchPropertiesApp:
             panel, text='Select source in E3 -> Copy Source -> select target(s) in E3 -> Preview -> Apply.',
         ).pack(anchor='w', pady=(5, 2))
         ttk.Label(
-            panel, text='Hatch/outline + device designation, location and Additional Part ID text styles. No geometry changes.',
+            panel, text='Hatch/outline + designation, location, equipment/part ID, device function, Saber, and pin-view text styles. No geometry changes.',
         ).pack(anchor='w', pady=(0, 12))
 
         row = ttk.Frame(panel)
@@ -690,6 +763,30 @@ class MatchPropertiesApp:
             text='Window stays open after Copy Source. Click E3 to select targets; Back to E3 minimizes only if clicked.',
         ).pack(anchor='w', pady=(4, 0))
 
+        types_box = ttk.LabelFrame(panel, text='Optional project text types (match formatting, NEVER text values)', padding=(9, 6))
+        types_box.pack(fill='x', pady=(8, 2))
+        self.type_vars = {}
+        for i, group in enumerate(OPTIONAL_TYPE_GROUPS):
+            rr = i // 2
+            cc = (i % 2) * 2
+            ttk.Label(types_box, text=group + ' type ID(s):').grid(row=rr, column=cc, sticky='e', padx=(4, 5), pady=3)
+            var = tk.StringVar(value=DEFAULT_TYPE_SPEC[group])
+            self.type_vars[group] = var
+            ttk.Entry(types_box, textvariable=var, width=19).grid(row=rr, column=cc + 1, sticky='we', padx=(0, 12), pady=3)
+            var.trace_add('write', lambda *_: self.reset_preview())
+        for col in (1, 3):
+            types_box.columnconfigure(col, weight=1)
+        ttk.Label(types_box, text='Select a text item in E3 and use Learn Text Type to fill the chosen field. '
+                  'Saber types can be comma-separated; E3 #7 is the default signal name.',
+                  wraplength=850).grid(row=2, column=0, columnspan=4, sticky='w', pady=(4, 2))
+        learn_row = ttk.Frame(types_box)
+        learn_row.grid(row=3, column=0, columnspan=4, sticky='w', pady=(2, 0))
+        self.learn_role = tk.StringVar(value='Equipment Identification')
+        ttk.Combobox(learn_row, state='readonly', width=25, textvariable=self.learn_role,
+                     values=OPTIONAL_TYPE_GROUPS).pack(side='left', padx=(0, 8))
+        ttk.Button(learn_row, text='Learn Selected Text Type', command=self.learn_text_type).pack(side='left')
+        ttk.Label(learn_row, text='(Read-only detection; no object is changed)').pack(side='left', padx=8)
+
         self.status = tk.StringVar(value='Ready. Nothing will be changed without a preview and confirmation.')
         ttk.Label(panel, textvariable=self.status, wraplength=830).pack(fill='x', pady=(10, 8))
 
@@ -725,6 +822,58 @@ class MatchPropertiesApp:
         except ValueError as exc:
             self.status.set(str(exc))
 
+    def read_type_config(self):
+        return {group: parse_type_ids(self.type_vars[group].get()) for group in OPTIONAL_TYPE_GROUPS}
+
+    @release_e3_after_action
+    def learn_text_type(self):
+        """Read a selected E3 text's numeric type; never change the E3 object."""
+        self.write('\n' + '=' * 65 + '\nLEARN TEXT TYPE (read-only)')
+        conn = self.connect()
+        if not conn:
+            return
+        selected = self.selection_report(conn)
+        ids = selected.get('text', [])
+        if len(ids) != 1:
+            self.write('LEARN BLOCKED: select exactly ONE TEXT item, not the whole symbol.')
+            self.status.set('Select one text item within E3, then Learn Selected Text Type.')
+            return
+        obj, _ = conn.object_for('text', ids[0])
+        names = get_com_names(obj)
+        observations = []
+        for name in ('GetTextType', 'GetType'):
+            if names and name not in names:
+                continue
+            try:
+                raw = getattr(obj, name)()
+                observations.append((name, raw))
+                self.write(f'Text ID {ids[0]}: {name}() => {display(raw)}')
+            except Exception as e:
+                self.write(f'Text ID {ids[0]}: {name}() => ERROR {e}')
+        # GetTextType is semantically specific, unlike GetType on some E3 builds,
+        # which may report a generic object kind. Prefer the more specific getter.
+        type_values = [int(v) for name, v in observations if name == 'GetTextType' and is_int_id(v)]
+        fallback_values = [int(v) for name, v in observations if name == 'GetType' and is_int_id(v)]
+        if type_values:
+            typ = type_values[0]
+            if fallback_values and fallback_values[0] != typ:
+                self.write(f'NOTE: GetType returned {fallback_values[0]}, differing from '
+                           f'GetTextType {typ}; using the text-specific getter.')
+        elif fallback_values:
+            typ = fallback_values[0]
+            self.write('NOTE: GetTextType was unavailable; using GetType. '
+                       'Verify this ID in E3 Format > Text Types before applying.')
+        else:
+            self.write('UNKNOWN TEXT TYPE: check E3 Format > Text Types, then enter numeric ID manually.')
+            self.status.set('Text type unavailable; see log and enter type ID manually.')
+            return
+        group = self.learn_role.get()
+        old = parse_type_ids(self.type_vars[group].get())
+        revised = (*old, typ) if group == 'Saber Parameters' else (typ,)
+        self.type_vars[group].set(', '.join(map(str, dict.fromkeys(revised))))
+        self.write(f'LEARNED: {group} -> E3 text type #{typ}. Copy Source again before Preview.')
+        self.status.set(f'Learned {group} type #{typ}. Copy Source again to capture it.')
+
     def return_to_e3(self):
         # No grab_set(), window disable, or always-on-top state is ever used.
         # Minimize so the E3 drawing area can receive clicks again.
@@ -747,6 +896,7 @@ class MatchPropertiesApp:
                 self.conn.close()
                 self.conn = None
             self.conn = E3Connection()
+            self.conn.set_text_types(self.read_type_config())
             if not self.conn.job_id():
                 raise RuntimeError('E3 is connected, but no active project is open.')
             return self.conn
@@ -831,7 +981,7 @@ class MatchPropertiesApp:
             child_texts, text_notes = conn.read_symbol_texts(ids[0])
             self.write(f'SOURCE SYMBOL TEXTS: found {len(child_texts)} readable attached text objects.')
             for entry in child_texts:
-                designation = f' ({TEXT_TYPE_NAMES[entry.text_type]})' if entry.text_type in TEXT_TYPE_NAMES else ''
+                designation = f' ({conn.type_name(entry.text_type)})'
                 self.write(f'  Text ID {entry.object_id}: type {entry.text_type!r}{designation}; formatting: '
                            + ', '.join(f'{k}={format_property(k, v[2])}' for k, v in entry.values.items()))
             for note in text_notes:
@@ -839,7 +989,8 @@ class MatchPropertiesApp:
             if not child_texts:
                 self.write('  WARNING: No attached symbol texts were found. Text differences CANNOT be checked. Hatch matching still works. '
                            'Use Scan / Diagnostics or send Copy Log for the method names.')
-        self.source = Source(conn.job_id(), cat, ids[0], values, child_texts)
+        self.source = Source(conn.job_id(), cat, ids[0], values, child_texts, self.read_type_config())
+        self.write('PROJECT TEXT TYPE CONFIG: ' + repr(self.source.type_config))
         self.write(f'Saved {cat.upper()} source ID {ids[0]} with {len(values)} formatting properties:')
         for name, (getter, setter, value) in values.items():
             self.write(f'  {name}: {format_property(name, value)}')
@@ -866,8 +1017,26 @@ class MatchPropertiesApp:
             raise ValueError('More than 100 targets were selected. Reduce selection for a safer test.')
         return list(dict.fromkeys(ids))
 
+    def find_matching_child_source(self, target, source_by_type, dest_by_type, source_by_role, dest_by_role):
+        """Prefer identical E3 type, allow Equipment ID <-> Additional Part ID.
+
+        Never map unrelated Saber parameters or pin labels by list order.
+        """
+        ttype = target.text_type
+        exact_source = source_by_type[ttype]
+        exact_target = dest_by_type[ttype]
+        if ttype is not None and len(exact_source) == len(exact_target) == 1:
+            return exact_source[0], 'exact type'
+        role = text_role(ttype, self.source.type_config)
+        if role == 'Equipment / Additional Part ID':
+            group_sources = source_by_role[role]
+            group_targets = dest_by_role[role]
+            if len(group_sources) == len(group_targets) == 1:
+                return group_sources[0], 'equivalent Equipment ID / Additional Part ID'
+        return None, 'unmatched or ambiguous'
+
     def plan_symbol_texts(self, conn, symbol_id, black):
-        """Only pair unique matching text types; blacken unmatched text too."""
+        """Pair unique exact E3 text types or Equipment/Part ID aliases; force black."""
         target_texts, notes = conn.read_symbol_texts(symbol_id)
         for note in notes:
             self.write(f'  Symbol {symbol_id} text discovery: {note}')
@@ -877,20 +1046,23 @@ class MatchPropertiesApp:
             src_by_type[e.text_type].append(e)
         for e in target_texts:
             dst_by_type[e.text_type].append(e)
+        src_by_role = defaultdict(list)
+        dst_by_role = defaultdict(list)
+        for entry in self.source.child_texts:
+            src_by_role[text_role(entry.text_type, self.source.type_config)].append(entry)
+        for entry in target_texts:
+            dst_by_role[text_role(entry.text_type, self.source.type_config)].append(entry)
         planned = []
         for target in target_texts:
             # A type may occur several times, often with different positions;
             # never pair by list order or rendered text content (designations).
-            sources = src_by_type[target.text_type]
-            candidates = dst_by_type[target.text_type]
-            source = None
-            if target.text_type is not None and len(sources) == len(candidates) == 1:
-                source = sources[0]
-            elif target.text_type is None and len(self.source.child_texts) == len(target_texts) == 1:
-                source = self.source.child_texts[0]
-            elif len(sources) > 1 or len(candidates) > 1:
-                self.write(f'  Text ID {target.object_id}: duplicate E3 text type {target.text_type!r}; '
-                           'font copying skipped to prevent matching unrelated labels.')
+            source, why = self.find_matching_child_source(
+                target, src_by_type, dst_by_type, src_by_role, dst_by_role)
+            if target.text_type is None and len(self.source.child_texts) == len(target_texts) == 1:
+                source, why = self.source.child_texts[0], 'only source/target text'
+            if source is None:
+                self.write(f'  Text ID {target.object_id}: {conn.type_name(target.text_type)} '
+                           f'has no unique compatible source ({why}); only forcing black if needed.')
             changes = []
             for name, (getter, setter, current) in target.values.items():
                 if name == 'Text colour':
@@ -905,19 +1077,19 @@ class MatchPropertiesApp:
                 if not same_value(current, desired):
                     changes.append((name, getter, setter, current, desired))
             if changes:
-                desc = TEXT_TYPE_NAMES.get(target.text_type, f'Text type {target.text_type!r}')
+                desc = conn.type_name(target.text_type)
                 self.write(f'  Symbol {symbol_id}, text ID {target.object_id} ({desc}): {len(changes)} changes'
-                           + (f'; matched source text {source.object_id}' if source else '; black only'))
+                           + (f'; matched source text {source.object_id} ({why})' if source else '; black only'))
                 for name, _, _, before, after in changes:
                     self.write(f'    {name}: {format_property(name, before)} -> {format_property(name, after)}'
                                + (' (forced black index)' if name == 'Text colour' else ''))
                 planned.append((symbol_id, target.object_id, changes))
             elif source:
                 self.write(f'  Symbol {symbol_id}, text ID {target.object_id}: source font already matched; colour black.')
-        for typ in PREFERRED_TEXT_TYPES:
+        for typ in conn.preferred_text_types():
             src_typed = [t for t in self.source.child_texts if t.text_type == typ]
             dst_typed = [t for t in target_texts if t.text_type == typ]
-            label = TEXT_TYPE_NAMES[typ]
+            label = conn.type_name(typ)
             self.write(f'  {label.upper()} CHECK symbol {symbol_id}: '
                        f'source={len(src_typed)} text(s), target={len(dst_typed)} text(s).')
             if len(src_typed) == len(dst_typed) == 1:
@@ -932,6 +1104,16 @@ class MatchPropertiesApp:
                            'only unique type pairs receive font styles. Text color still forced black.')
             else:
                 self.write(f'  NOTE: {label}: not present in either symbol; nothing to copy.')
+        for group in ('Equipment Identification', 'Device Function', 'Saber Parameters', 'Local Signal Name'):
+            type_ids = self.source.type_config.get(group, ())
+            if not type_ids:
+                self.write(f'  NOTE: {group}: no project E3 type configured; unknown types '
+                           'can still pair by exact ID if discovered via GetTextIds(all).')
+                continue
+            src_count = sum(t.text_type in type_ids for t in self.source.child_texts)
+            dst_count = sum(t.text_type in type_ids for t in target_texts)
+            self.write(f'  {group.upper()} CHECK: source={src_count}, target={dst_count} '
+                       '(only existing compatible nodes are formatted).')
         if not target_texts:
             self.write(f'  WARNING: Symbol {symbol_id}: no attached texts were found; '
                        'designation and other text formatting were NOT compared.')
@@ -941,6 +1123,10 @@ class MatchPropertiesApp:
     def preview_target(self):
         self.reset_preview()
         self.write('\n' + '=' * 65 + '\nPREVIEW TARGETS (read-only)')
+        if self.source and self.source.type_config != self.read_type_config():
+            self.write('PREVIEW BLOCKED: project text-type mapping changed. Copy Source again.')
+            self.status.set('Text type mapping changed. Copy Source again before Preview.')
+            return
         conn = self.connect()
         if not conn:
             return
@@ -1039,6 +1225,10 @@ class MatchPropertiesApp:
     def apply(self):
         if not self.preview or not self.source:
             return
+        if self.source.type_config != self.read_type_config():
+            self.write('APPLY BLOCKED: project text-type mapping changed since Copy Source.')
+            self.reset_preview()
+            return
         project_id, cat, source_id, selected_ids, plan, skipped_count, text_plan, black, palette_choice = self.preview
         self.reset_preview()
         conn = self.connect()
@@ -1064,7 +1254,7 @@ class MatchPropertiesApp:
             'Confirm formatting change',
             f'Apply {n} formatting changes to {len(selected_ids)} selected {cat} target(s)?\n\n'
             'Text contents, object positions and device designations will NOT be changed.\n'
-            'Designation, location and Additional Part ID text will match by type, with ALL text black.\n'
+            'Matching existing text types (including Equipment/Part ID aliases) will use source styles; ALL text black.\n'
             'Test this beta in a project copy first. Continue?',
             icon='warning',
         )
