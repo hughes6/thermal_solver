@@ -1,258 +1,220 @@
-"""Friendly, copyable error popups for the E3 Block Maker launcher.
+"""
+Zuken E3.series - Selection Probe (READ ONLY)
 
-Standard-library only.  This is imported by the *parent* launcher, so a
-failure in a separate main.py / test.py process still produces one popup.
+Select an object in the E3 drawing, then run this script. It shows the
+selection-related COM methods your installed version exposes and attempts
+safe, no-argument selection-ID readers. It NEVER modifies the project.
+
+Requirements: Windows, E3.series running with an open project,
+              pywin32 installed in this Python environment.
 """
 
-from __future__ import annotations
+import tkinter as tk
+from tkinter import ttk
+import traceback
 
-from pathlib import Path
-import re
-import sys
-
-
-def _failure_section(output: str) -> str:
-    """Prefer the last Python traceback instead of earlier progress messages."""
-    index = output.rfind("Traceback (most recent call last):")
-    if index >= 0:
-        return output[index:]
-    return output[-12000:]
+try:
+    import pythoncom
+    import win32com.client as win32
+except ImportError:
+    raise SystemExit("pywin32 is required. Install it with: py -m pip install pywin32")
 
 
-def _exception_line(output: str) -> str:
-    lines = [line.strip() for line in _failure_section(output).splitlines() if line.strip()]
-    pattern = re.compile(
-        r"^(?:[\w.]+(?:Error|Exception)|Exception|SystemExit|KeyboardInterrupt)\s*:"
-    )
-    for line in reversed(lines):
-        if pattern.match(line):
-            return line
-    # The final line usually holds the COM error or process failure.
-    return lines[-1] if lines else "The program stopped without a Python traceback."
+# These readers are only called IF discovered in the COM type information.
+# Some E3 versions may not provide all of them.
+KNOWN_READERS = (
+    "GetSelectedAllDeviceIds",
+    "GetSelectedDeviceIds",
+    "GetSelectedSymbolIds",
+    "GetSelectedTextIds",
+    "GetSelectedGraphIds",
+    "GetSelectedGraphicIds",
+    "GetSelectedObjectIds",
+    "GetSelectedSheetIds",
+    "GetTreeSelectedAllDeviceIds",
+)
+STYLE_TERMS = (
+    "font", "color", "colour", "height", "size", "spacing", "align",
+    "rotation", "angle", "width", "linestyle", "texttype", "justify",
+    "visible", "displaylevel", "typeface", "style", "bold", "italic",
+)
 
 
-def describe_error(stage: str, output: str):
-    """Return (title, what_happened, how_to_fix, technical_reason)."""
-    relevant = _failure_section(output)
-    lower = relevant.lower()
-    reason = _exception_line(output)
-
-    checks = (
-        ("model check is failing", "Model check failed", "The Excel model check did not pass.", "Open the workbook and correct the model check shown in cell G8. Recalculate/save it, then rerun Block Maker."),
-        ("title check is failing", "Title check failed", "The Excel title check did not pass.", "Correct the title check shown in cell E2, recalculate/save the workbook, and rerun."),
-        ("connector model check is failing", "Connector model check failed", "One or more connector models failed workbook validation.", "Check the connector model verification at cell G2. Fix the highlighted connector/type entries and rerun."),
-        ("duplicate pin check is failing", "Duplicate pins detected", "The workbook detected a duplicate pin assignment.", "Review the duplicate-pin check in cell G4 and correct repeated pin entries before rerunning."),
-    )
-    for needle, title, happened, fix in checks:
-        if needle in lower:
-            return title, happened, fix, reason
-
-    if "e3_secondary_block_file" in lower or "metadata not found" in lower or "metadata file not found" in lower:
-        return (
-            "Launcher / metadata issue",
-            "The builder or formatter could not find the temporary data file that connects the two stages.",
-            "Launch launcher.py, not main.py or test.py. Keep launcher.py, main.py, test.py, utils.py and error_popup.py together. If packaging an EXE, rebuild it with the updated launcher.",
-            reason,
-        )
-    if "nameerror" in lower and "text_size" in lower:
-        return (
-            "Text size setting missing",
-            "test.py attempted to use TEXT_SIZE without loading it from the builder's metadata.",
-            "Ensure main.py saves 'text_size' into each secondary-block metadata entry and test.py reads it before calling runn().",
-            reason,
-        )
-    if "no device found in database" in lower or "step 1 failed" in lower or "database table selected components" in lower:
-        return (
-            "Connector model not found",
-            "E3 could not find a requested connector component in its component database.",
-            "Check the connector type and library version (currently 1) in the workbook. Make sure the component exists in the connected E3 library.",
-            reason,
-        )
-    if "pin " in lower and "not found in new view" in lower or "duplicate pin name" in lower:
-        return (
-            "Schematic pin mismatch",
-            "A pin from Excel could not be matched uniquely to the newly created E3 connector view.",
-            "Compare the Excel pin names with the pin names in the E3 connector library. Check for missing, differently suffixed, or duplicate pins.",
-            reason,
-        )
-    if any(x in lower for x in (
-        "failed placing split block", "failed creating shared main schematic view", "failed creating new view from parent connector",
-        "e3 reused symbol id", "e3 reused pin symbol", "cannot place", "place block failed",
-        "failed to create new sheet", "schematic block for",
-    )):
-        return (
-            "E3 schematic placement failed",
-            "E3 could not create or place one of the schematic blocks, connector views, pins or sheets.",
-            "Inspect the named connector, sheet and symbol in Technical Details. Check available page space and symbol-library names. Because E3 changes already made are not automatically undone, inspect/restore the project before retrying.",
-            reason,
-        )
-    if "ct.application" in lower or "win32com" in lower or "pywintypes.com_error" in lower or "com_error" in lower or "operation unavailable" in lower:
-        return (
-            "E3 connection or automation error",
-            "The Block Maker could not communicate reliably with the active Zuken E3 application.",
-            "Open E3 with the correct project, confirm that no modal dialogs are blocking it, and retry. If it persists, copy the technical details so the failing E3 API call can be identified.",
-            reason,
-        )
-    if "pyodbc" in lower or "sql server" in lower or "sql-zuken-prd" in lower or "odbc" in lower:
-        return (
-            "SQL database connection failed",
-            "Block Maker could not access the Zuken SQL database or execute a database request.",
-            "Check your corporate network/VPN, SQL Server availability and Windows database permissions. Copy the technical details for the exact database message.",
-            reason,
-        )
-    if "permissionerror" in lower or "permission denied" in lower:
-        return (
-            "File access denied",
-            "Python was not allowed to open or write a required file.",
-            "Close any other program holding the file, verify write permissions for the selected folder, and rerun.",
-            reason,
-        )
-    if "filenotfounderror" in lower or "no such file or directory" in lower:
-        return (
-            "Required file not found",
-            "A selected workbook or supporting file could not be found.",
-            "Verify the workbook path and that all Block Maker scripts are in the same folder. Then rerun from launcher.py.",
-            reason,
-        )
-    if any(x in lower for x in ("badzipfile", "invalidfileexception", "openpyxl", "load_workbook", "not a zip file")):
-        return (
-            "Excel workbook could not be read",
-            "Block Maker could not read the selected Excel workbook correctly.",
-            "Select a valid .xlsm workbook based on the Block Maker template; verify it is saved and not corrupted. Check the workbook values required by main.py.",
-            reason,
-        )
-    if "keyerror" in lower or "nonetype" in lower or "typeerror" in lower or "valueerror" in lower:
-        return (
-            "Missing or invalid input data",
-            "A required Excel value or connector field was missing or in an unexpected format.",
-            "Review the connector list, pin counts, names, and required workbook cells. Technical Details identifies the exact line and value that failed.",
-            reason,
-        )
-    if stage.lower().startswith("formatter"):
-        return (
-            "Formatter stopped",
-            "The E3 schematic builder completed, but the formatting stage did not finish.",
-            "Review Technical Details for the failing symbol or attribute. The E3 project may contain completed blocks even though formatting failed; avoid rerunning the builder on top of them without inspecting the project.",
-            reason,
-        )
-    return (
-        "Block Maker stopped",
-        f"The {stage.lower()} stage failed before the entire operation finished.",
-        "Read Technical Details and use Copy Error to share the complete error and program output. Check the E3 project for partially created objects before rerunning.",
-        reason,
-    )
-
-
-def show_error_dialog(stage: str, output: str, log_path: str, exit_code: int) -> None:
-    """Show friendly popup. Copy Error includes the *entire* logged run."""
-    title, happened, fix, reason = describe_error(stage, output)
-    path = Path(log_path)
+def get_method_names(obj):
+    """Read method names from the COM type library (without invoking them)."""
+    names = set()
     try:
-        full_log = path.read_text(encoding="utf-8", errors="replace")
+        info = obj._oleobj_.GetTypeInfo()
+        attributes = info.GetTypeAttr()
+        for index in range(attributes.cFuncs):
+            description = info.GetFuncDesc(index)
+            com_names = info.GetNames(description.memid)
+            if com_names:
+                names.add(str(com_names[0]))
     except Exception:
-        full_log = output
-
-    copy_payload = (
-        "E3 BLOCK MAKER — ERROR REPORT\n"
-        f"Stage: {stage}\n"
-        f"Issue: {title}\n"
-        f"What happened: {happened}\n"
-        f"How to fix it: {fix}\n"
-        f"Technical error: {reason}\n"
-        f"Exit code: {exit_code}\n"
-        f"Log file: {path}\n"
-        "\n=========== FULL PROGRAM OUTPUT ===========\n"
-        f"{full_log}"
-    )
-    technical_preview = full_log[-24000:]  # Keep popup responsive for very long logs.
-
+        # E3 versions without accessible type information may still provide
+        # some method names through the win32com wrapper.
+        pass
     try:
-        import tkinter as tk
-        from tkinter import scrolledtext, ttk
+        names.update(x for x in dir(obj) if not x.startswith("_"))
+    except Exception:
+        pass
+    return sorted(names, key=str.lower)
 
-        root = tk.Tk()
-        root.title("Block Maker - Error")
-        root.configure(bg="#f5f7fa")
-        root.geometry("800x390")
-        root.minsize(670, 340)
-        root.attributes("-topmost", True)
 
-        outer = tk.Frame(root, bg="#f5f7fa", padx=22, pady=16)
-        outer.pack(fill="both", expand=True)
+def compact(value, limit=320):
+    s = repr(value)
+    return s if len(s) <= limit else s[:limit] + " ... [truncated]"
 
-        heading = tk.Label(outer, text="Block Maker could not finish", fg="#a52730", bg="#f5f7fa",
-                           font=("Segoe UI", 16, "bold"), anchor="w")
-        heading.pack(fill="x", pady=(0, 6))
 
-        issue = tk.Label(outer, text=f"{title}  |  {stage}", fg="#263238", bg="#f5f7fa",
-                         font=("Segoe UI", 11, "bold"), anchor="w")
-        issue.pack(fill="x", pady=(0, 12))
+def selection_reader_names(methods):
+    """Selection ID getters, not setters/actions that alter selection."""
+    found = set(methods)
+    readers = {name for name in found
+               if name.lower().startswith("get")
+               and "select" in name.lower()
+               and name.lower().endswith("ids")}
+    readers.update(name for name in KNOWN_READERS if name in found)
+    # If no type library metadata is available, try only the known confirmed
+    # method; on some dynamic COM objects, the name is callable even if dir()
+    # doesn't expose it.
+    if not found:
+        readers.add("GetSelectedAllDeviceIds")
+    return sorted(readers, key=str.lower)
 
-        tk.Label(outer, text="WHAT HAPPENED", fg="#526577", bg="#f5f7fa",
-                 font=("Segoe UI", 9, "bold"), anchor="w").pack(fill="x")
-        happened_label = tk.Label(outer, text=happened, fg="#233142", bg="#f5f7fa",
-                                  font=("Segoe UI", 10), justify="left", anchor="w", wraplength=745)
-        happened_label.pack(fill="x", pady=(4, 10))
 
-        tk.Label(outer, text="HOW TO FIX IT", fg="#526577", bg="#f5f7fa",
-                 font=("Segoe UI", 9, "bold"), anchor="w").pack(fill="x")
-        fix_label = tk.Label(outer, text=fix, fg="#233142", bg="#f5f7fa",
-                             font=("Segoe UI", 10), justify="left", anchor="w", wraplength=745)
-        fix_label.pack(fill="x", pady=(4, 10))
+def scan():
+    log = [
+        "ZUKEN E3.SELECTION PROBE  |  READ ONLY",
+        "=" * 62,
+        "Select a block, symbol, or text item in E3 before scanning.",
+        "The script does not write/change any E3 objects.",
+        "",
+    ]
+    try:
+        e3 = win32.Dispatch("CT.Application")
+        prj = e3.CreateJobObject()
+        log.append("Connected to CT.Application successfully.")
+        try:
+            job_id = prj.GetId()
+            log.append(f"Project ID: {job_id!r}")
+            if not job_id:
+                log.append("WARNING: No open project was detected.")
+        except Exception as ex:
+            log.append(f"Could not read project ID: {ex}")
 
-        reason_label = tk.Label(outer, text=f"Error: {reason}", fg="#526577", bg="#f5f7fa",
-                                font=("Consolas", 9), justify="left", anchor="w", wraplength=745)
-        reason_label.pack(fill="x", pady=(0, 6))
+        # Test selection on the project object, where confirmed device-reader
+        # methods exist. The raw result is printed so there is no assumption
+        # about how this particular COM version packs counts/ID arrays.
+        for object_label, obj in (("PROJECT/JOB", prj), ("APPLICATION", e3)):
+            names = get_method_names(obj)
+            select_names = [n for n in names if "select" in n.lower()]
+            log += ["", f"[{object_label}]", "Selection-related method names:"]
+            log.extend(f"  {name}" for name in select_names) if select_names else log.append(
+                "  (No names exposed by introspection; this is not proof they are absent.)")
 
-        log_label = tk.Label(outer, text=f"Log saved: {path}", fg="#526577", bg="#f5f7fa",
-                              font=("Segoe UI", 9), anchor="w", wraplength=745, justify="left")
-        log_label.pack(fill="x", pady=(0, 8))
+            readers = selection_reader_names(names)
+            if object_label == "PROJECT/JOB":
+                # Always try the one verified reader, even if E3 doesn't list
+                # it when inspecting its COM interface.
+                readers = sorted(set(readers) | {"GetSelectedAllDeviceIds"}, key=str.lower)
+            log.append("Selection-ID reader results:")
+            if not readers:
+                log.append("  (No no-argument selection-ID readers discovered.)")
+            for method_name in readers:
+                try:
+                    fn = getattr(obj, method_name)
+                    result = fn()
+                    log.append(f"  {method_name}() -> {compact(result)}")
+                except Exception as ex:
+                    log.append(f"  {method_name}() -> NOT AVAILABLE / NEEDS ARGUMENTS: {ex}")
 
-        details_frame = tk.Frame(outer, bg="#f5f7fa")
-        details_box = scrolledtext.ScrolledText(details_frame, height=12, wrap="none",
-                                               font=("Consolas", 9), relief="solid", bd=1)
-        details_box.insert("1.0", technical_preview)
-        details_box.configure(state="disabled")
-        details_box.pack(fill="both", expand=True)
-
-        status = tk.StringVar(value="")
-        status_label = tk.Label(outer, textvariable=status, fg="#236d3f", bg="#f5f7fa",
-                                font=("Segoe UI", 9), anchor="w")
-        status_label.pack(side="bottom", fill="x", pady=(5, 0))
-
-        button_bar = tk.Frame(outer, bg="#f5f7fa")
-        button_bar.pack(side="bottom", fill="x", pady=(6, 2))
-
-        details_visible = [False]
-
-        def toggle_details():
-            details_visible[0] = not details_visible[0]
-            if details_visible[0]:
-                details_frame.pack(fill="both", expand=True, before=button_bar, pady=(4, 6))
-                details_button.configure(text="Hide Technical Details")
-                root.geometry("800x675")
-            else:
-                details_frame.pack_forget()
-                details_button.configure(text="Show Technical Details")
-                root.geometry("800x390")
-
-        def copy_error():
+        # List potentially relevant *getter names* for a later Match Properties
+        # script. Creating the COM object wrappers is read-only; no SetId or
+        # setter is called, and no styling is changed here.
+        for creator in ("CreateTextObject", "CreateSymbolObject", "CreateSheetObject"):
+            log += ["", f"[{creator} / FORMAT GETTERS]"]
             try:
-                root.clipboard_clear()
-                root.clipboard_append(copy_payload)
-                root.update()  # Keep clipboard data available after clicking.
-                status.set("Full error report and program output copied to clipboard.")
-            except Exception as exc:
-                status.set(f"Couldn't copy automatically: {exc}. Log is saved above.")
+                obj = getattr(prj, creator)()
+                methods = get_method_names(obj)
+                style_getters = [name for name in methods
+                                 if name.startswith("Get")
+                                 and any(term in name.lower() for term in STYLE_TERMS)]
+                if style_getters:
+                    log.extend(f"  {name}" for name in style_getters[:90])
+                    if len(style_getters) > 90:
+                        log.append(f"  ... and {len(style_getters) - 90} more")
+                else:
+                    log.append("  No matching getters shown by type library inspection.")
+            except Exception as ex:
+                log.append(f"  Could not inspect {creator}: {ex}")
 
-        details_button = ttk.Button(button_bar, text="Show Technical Details", command=toggle_details)
-        details_button.pack(side="left", padx=(0, 9))
-        ttk.Button(button_bar, text="Copy Error", command=copy_error).pack(side="left")
-        ttk.Button(button_bar, text="Close", command=root.destroy).pack(side="right")
+        log += ["", "HOW TO INTERPRET", "-" * 62,
+                "Nonempty ID results after selecting something = COM selection works.",
+                "If only devices are detected, test clicking the actual symbol vs.",
+                "its text, and compare reader output after each scan.",
+                "No ID results may mean the object type uses another API method,",
+                "not that E3 has no selection capability."]
+    except Exception:
+        log += ["", "CONNECTION / SCAN ERROR", traceback.format_exc()]
+    return "\n".join(log)
 
-        root.lift()
-        root.focus_force()
+
+def main():
+    pythoncom.CoInitialize()
+    root = tk.Tk()
+    root.withdraw()  # Read initial E3 selection before taking GUI focus.
+    root.title("Zuken - Selection Probe (Read Only)")
+    root.geometry("940x690")
+    root.minsize(620, 420)
+
+    frame = ttk.Frame(root, padding=12)
+    frame.pack(fill="both", expand=True)
+    ttk.Label(frame, text="Zuken Selection Probe", font=("Segoe UI", 15, "bold")).pack(anchor="w")
+    ttk.Label(frame, text="Select an object in E3, return here, and click Scan Again. This tool makes no changes.").pack(anchor="w", pady=(4, 10))
+
+    area = ttk.Frame(frame)
+    area.pack(fill="both", expand=True)
+    output = tk.Text(area, wrap="none", font=("Consolas", 10), undo=False)
+    scroll_y = ttk.Scrollbar(area, orient="vertical", command=output.yview)
+    scroll_x = ttk.Scrollbar(area, orient="horizontal", command=output.xview)
+    output.configure(yscrollcommand=scroll_y.set, xscrollcommand=scroll_x.set)
+    area.rowconfigure(0, weight=1)
+    area.columnconfigure(0, weight=1)
+    output.grid(row=0, column=0, sticky="nsew")
+    scroll_y.grid(row=0, column=1, sticky="ns")
+    scroll_x.grid(row=1, column=0, sticky="ew")
+
+    row = ttk.Frame(frame)
+    row.pack(fill="x", pady=(10, 0))
+    status = tk.StringVar(value="Ready")
+
+    def refresh():
+        status.set("Scanning E3 selection...")
+        root.update_idletasks()
+        text = scan()
+        output.delete("1.0", "end")
+        output.insert("1.0", text)
+        status.set("Scan completed. Compare results after selecting another object.")
+
+    def copy_output():
+        root.clipboard_clear()
+        root.clipboard_append(output.get("1.0", "end-1c"))
+        root.update()
+        status.set("Copied results to clipboard.")
+
+    ttk.Button(row, text="Scan Again", command=refresh).pack(side="left")
+    ttk.Button(row, text="Copy Results", command=copy_output).pack(side="left", padx=8)
+    ttk.Button(row, text="Close", command=root.destroy).pack(side="right")
+    ttk.Label(frame, textvariable=status).pack(anchor="w", pady=(8, 0))
+
+    refresh()
+    root.deiconify()
+    try:
         root.mainloop()
-    except Exception as popup_exc:
-        # Never hide the original exception if Tk cannot open a window.
-        sys.stderr.write(f"Error popup unavailable: {popup_exc!r}\n{copy_payload}\n")
+    finally:
+        pythoncom.CoUninitialize()
+
+
+if __name__ == "__main__":
+    main()
