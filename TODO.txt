@@ -1,4 +1,4 @@
-"""Zuken E3.series - Match Properties (v6: device designation font detection + hatch)
+"""Zuken E3.series - Match Properties (v7: color palette + symbol text)
 
 Select one TEXT or BLOCK SYMBOL on a sheet and click Copy Source.
 The separate window STAYS OPEN after copying. Click back into E3 to select
@@ -57,6 +57,46 @@ AUTO_COLOUR = -1  # E3's automatic/default color on tested block outline.
 # E3 text width may mean glyph ratio, not measured text width; no change
 # to text width is attempted until that distinction is established.
 DEVICE_DESIGNATION_TYPE = 12  # E3 standard text type for Device Designation.
+LOCATION_TYPE = 15            # E3 standard text type for Location.
+# In this project's cable-formatting scripts, Additional Part ID is type 1000.
+# This may be a custom text type; do not assume other projects use that meaning.
+ADDITIONAL_PART_ID_TYPE = 1000
+PREFERRED_TEXT_TYPES = (DEVICE_DESIGNATION_TYPE, LOCATION_TYPE, ADDITIONAL_PART_ID_TYPE)
+TEXT_TYPE_NAMES = {
+    DEVICE_DESIGNATION_TYPE: 'Device Designation',
+    LOCATION_TYPE: 'Location',
+    ADDITIONAL_PART_ID_TYPE: 'Additional Part ID (project type 1000)',
+}
+# Fixed black text index, per user request. Not exposed as a UI option.
+BLACK_TEXT_COLOUR = 0
+
+# Color numbers come from the user's supplied Zuken palette image.
+# Hex swatches are only approximate visual references; E3 palette indices
+# (NOT these HTML hex colors) are what the script sends to Zuken.
+PALETTE_SCHEME = (
+    ('1553', 183, '#b8a3e4'),
+    ('Computers', 240, '#398bff'),
+    ('Ground', 132, '#70d65c'),
+    ('Panels', 127, '#e3df86'),
+    ('Power', 251, '#94b0fa'),
+    ('PCIe Cards - Light blue', 188, '#77c4f5'),
+    ('PCIe Cards - Amber', 48, '#edae00'),
+    ('PCIe Cards - Yellow', 47, '#f2c500'),
+    ('PCIe Cards - Orange', 32, '#f87926'),
+    ('PCIe Cards - Blue', 178, '#3baff6'),
+    ('PCIe Cards - Cyan', 255, '#28cce9'),
+)
+PALETTE_BY_INDEX = {str(index): label for label, index, _ in PALETTE_SCHEME}
+
+
+def palette_override(selection):
+    """Return a concrete hatch color index or None to copy the source color."""
+    if selection == 'source':
+        return None
+    if selection not in PALETTE_BY_INDEX:
+        raise ValueError(f'Unrecognized palette selection: {selection!r}')
+    return int(selection)
+
 
 TEXT_FORMAT = (
     ('Font name', 'GetFontName', 'SetFontName'),
@@ -389,87 +429,91 @@ class E3Connection:
         return values, notes
 
     def related_text_ids(self, symbol_id):
-        """Find text IDs belonging to this exact symbol, including type #12.
+        """Find actual symbol-owned text, particularly types 12, 15 and 1000.
 
-        E3's symbol.GetTextIds has an optional TEXT-TYPE FILTER. Several COM
-        versions require that filter or a by-reference output array. A call
-        without arguments alone is insufficient and was the v5 failure.
-        Never take texts from unrelated devices or the global sheet.
+        The symbol's COM GetTextIds may require the explicit type filter, or a
+        by-reference output array, depending on the wrapper/build. The result
+        includes ONLY text IDs returned for the selected symbol. No sheet-wide
+        text is matched based on proximity or rendered text content.
         """
         symbol, _ = self.object_for('symbol', symbol_id)
         names = get_com_names(symbol)
         notes = []
         all_ids = []
-        designation_ids = []
+        typed_ids = defaultdict(list)
+        self._tagged_types = {}
 
         if names and 'GetTextIds' not in names:
             notes.append('Symbol.GetTextIds is NOT EXPOSED on this E3 version.')
         else:
             fn = getattr(symbol, 'GetTextIds')
-            # Consult specific text type #12, then the unfiltered lookup.
-            # This follows the E3 COM GetTextIds(ids, textType) signature.
-            # The official wrapper may expose optional array parameters
-            # differently, hence several harmless/read-only probes.
-            calls = [
-                ('type #12: parameter only', (DEVICE_DESIGNATION_TYPE,), True),
-                ('type #12: None output', (None, DEVICE_DESIGNATION_TYPE), True),
-                ('type #12: empty list output', ([], DEVICE_DESIGNATION_TYPE), True),
-                ('all text: no arguments', (), False),
-            ]
-            for desc, args, filtered in calls:
-                try:
-                    raw = fn(*args)
-                    count, ids = count_and_ids(raw)
-                    # A scalar/tuple count is NOT a text object ID.
-                    notes.append(f'Symbol {symbol_id} GetTextIds {desc}: '
-                                 f'{display(raw)} -> count {count}, IDs {ids[:30]}')
-                    if ids:
-                        if filtered:
-                            designation_ids.extend(ids)
-                        else:
-                            all_ids.extend(ids)
-                except Exception as exc:
-                    notes.append(f'Symbol {symbol_id} GetTextIds {desc}: '
-                                 f'{type(exc).__name__}: {exc}')
-
-            # Try explicit COM by-ref outputs even if a wrapper is installed;
-            # different E3 wrapper releases expose optional out params differently.
-            if not designation_ids or not all_ids:
-                for text_type in (DEVICE_DESIGNATION_TYPE, None):
+            for typ in (*PREFERRED_TEXT_TYPES, None):
+                desc = f'text type #{typ}' if typ is not None else 'all text'
+                if typ is None:
+                    attempts = [('no args', ())]
+                else:
+                    attempts = [
+                        ('type only', (typ,)),
+                        ('None output and type', (None, typ)),
+                        ('empty array and type', ([], typ)),
+                    ]
+                found = []
+                for strategy, args in attempts:
+                    try:
+                        raw = fn(*args)
+                        count, ids = count_and_ids(raw)
+                        notes.append(f'Symbol {symbol_id} GetTextIds {desc} '
+                                     f'[{strategy}]: {display(raw)} -> count {count}, IDs {ids[:30]}')
+                        found.extend(ids)
+                        if ids:
+                            break  # avoid extra COM probes once IDs were decoded
+                    except Exception as exc:
+                        notes.append(f'Symbol {symbol_id} GetTextIds {desc} '
+                                     f'[{strategy}]: {type(exc).__name__}: {exc}')
+                # The original probe succeeded for device designation via
+                # a BYREF array; retain this tested fallback for all types.
+                if not found:
                     for flags, seed, variant_desc in (
                         (pythoncom.VT_BYREF | pythoncom.VT_VARIANT, None, 'BYREF VARIANT'),
                         (pythoncom.VT_BYREF | pythoncom.VT_ARRAY | pythoncom.VT_I4, [], 'BYREF LONG ARRAY'),
                     ):
                         try:
                             arg = win32.VARIANT(flags, seed)
-                            if text_type is None:
-                                raw = fn(arg)
-                            else:
-                                raw = fn(arg, text_type)
-                            cnt, ids_in_result = count_and_ids(raw)
-                            ids = ids_in_result or collect_ids(arg.value)
-                            notes.append(f'Symbol {symbol_id} {variant_desc} '
-                                         f'type {text_type}: count={cnt} IDs={ids[:30]}')
-                            if text_type == DEVICE_DESIGNATION_TYPE:
-                                designation_ids.extend(ids)
-                            else:
-                                all_ids.extend(ids)
+                            raw = fn(arg) if typ is None else fn(arg, typ)
+                            cnt, embedded = count_and_ids(raw)
+                            ids = embedded or collect_ids(arg.value)
+                            notes.append(f'Symbol {symbol_id} GetTextIds {desc} '
+                                         f'[{variant_desc}]: count={cnt} IDs={ids[:30]}')
+                            found.extend(ids)
+                            if ids:
+                                break
                         except Exception as exc:
-                            notes.append(f'Symbol {symbol_id} {variant_desc} type {text_type}: '
-                                         f'{type(exc).__name__}: {exc}')
+                            notes.append(f'Symbol {symbol_id} GetTextIds {desc} '
+                                         f'[{variant_desc}]: {type(exc).__name__}: {exc}')
+                if typ is None:
+                    all_ids.extend(found)
+                else:
+                    typed_ids[typ].extend(found)
+                    if found:
+                        notes.append(f'  {TEXT_TYPE_NAMES[typ]}: {len(set(found))} attached text(s)')
 
-        # The user should not unknowingly apply a font from a similarly named
-        # device elsewhere on the sheet. Only accept symbol-scoped results.
-        dedup = list(dict.fromkeys(designation_ids + all_ids))
-        self._designation_ids = set(designation_ids)
-        if designation_ids:
-            notes.append(f'Symbol {symbol_id}: found {len(set(designation_ids))} '
-                         'device-designation candidate(s) via explicit type #12 filter.')
+        # Explicit text-type filters take priority over text.GetType() because
+        # some E3 builds report a generic object kind through GetType().
+        for typ in PREFERRED_TEXT_TYPES:
+            for tid in typed_ids[typ]:
+                previous = self._tagged_types.get(tid)
+                if previous is not None and previous != typ:
+                    notes.append(f'WARNING: text ID {tid} appeared under two text types '
+                                 f'({previous}, {typ}); retaining first type.')
+                    continue
+                self._tagged_types[tid] = typ
+        dedup = list(dict.fromkeys(
+            [id_ for typ in PREFERRED_TEXT_TYPES for id_ in typed_ids[typ]] + all_ids
+        ))
         if dedup:
             return dedup[:300], notes
 
-        # Last resort: direct job text ID enumeration but ONLY if a text
-        # provides a verified parent symbol ID. Do not use proximity or text.
+        # Existing verified-parent-only fallback remains available.
         job_names = get_com_names(self.job)
         if 'GetTextIds' in job_names:
             try:
@@ -502,7 +546,7 @@ class E3Connection:
                 notes.append(f'Job-scoped owner fallback failed: {exc}')
 
         notes.append('WARNING: NO ATTACHED TEXT IDs FOUND. Text size/format is '
-                     'UNVERIFIED, not identical. Only hatch matching is available.')
+                     'UNVERIFIED, not identical. Hatch/outline matching still works.')
         notes.append('Symbol text methods: ' + repr(sorted(
             n for n in names if 'text' in n.lower() or 'device' in n.lower())))
         return [], notes
@@ -526,18 +570,19 @@ class E3Connection:
                             break
                     except Exception:
                         pass
-                # The explicit GetTextIds(..., 12) filter confirms designation
-                # membership even if Text.GetType reports a generic object kind.
-                if tid in getattr(self, '_designation_ids', set()):
-                    if text_type != DEVICE_DESIGNATION_TYPE:
-                        notes.append(f'Text {tid}: type from getter {text_type!r}; '
-                                     'symbol type-12 filter identifies Device Designation.')
-                    text_type = DEVICE_DESIGNATION_TYPE
+                # A symbol-scoped filtered lookup is stronger evidence than
+                # the text object's generic GetType() method in some builds.
+                tagged_type = getattr(self, '_tagged_types', {}).get(tid)
+                if tagged_type is not None:
+                    if text_type != tagged_type:
+                        notes.append(f'Text {tid}: getter returned type {text_type!r}; '
+                                     f'symbol filtered lookup identifies {TEXT_TYPE_NAMES[tagged_type]}.')
+                    text_type = tagged_type
                 values, prop_notes = self.read_properties('text', tid)
                 if values:
                     entries.append(ChildText(tid, text_type, values))
-                    if text_type == DEVICE_DESIGNATION_TYPE:
-                        notes.append(f'DEVICE DESIGNATION TEXT ID {tid}: '
+                    if text_type in PREFERRED_TEXT_TYPES:
+                        notes.append(f'{TEXT_TYPE_NAMES[text_type].upper()} TEXT ID {tid}: '
                                      f'GetHeight={values.get("Text height", (None,None,"UNAVAILABLE"))[2]!r}, '
                                      f'font={values.get("Font name", (None,None,"UNAVAILABLE"))[2]!r}, '
                                      f'style={values.get("Font style", (None,None,"UNAVAILABLE"))[2]!r}')
@@ -581,8 +626,8 @@ class MatchPropertiesApp:
         self.preview = None
         self.conn = None
         self.root.title('Zuken E3 - Match Properties')
-        self.root.geometry('950x710')
-        self.root.minsize(670, 440)
+        self.root.geometry('1080x810')
+        self.root.minsize(780, 590)
         # Do not keep this window on top: E3 must be clickable while GUI runs.
         self.root.attributes('-topmost', False)
         self.root.protocol('WM_DELETE_WINDOW', self.on_close)
@@ -594,7 +639,7 @@ class MatchPropertiesApp:
             panel, text='Select source in E3 -> Copy Source -> select target(s) in E3 -> Preview -> Apply.',
         ).pack(anchor='w', pady=(5, 2))
         ttk.Label(
-            panel, text='Hatch/outline + type-12 DEVICE DESIGNATION font matching. No block resizing, scaling or position changes.',
+            panel, text='Hatch/outline + device designation, location and Additional Part ID text styles. No geometry changes.',
         ).pack(anchor='w', pady=(0, 12))
 
         row = ttk.Frame(panel)
@@ -607,16 +652,43 @@ class MatchPropertiesApp:
         ttk.Button(row, text='Back to E3', command=self.return_to_e3).pack(side='left')
         ttk.Button(row, text='Copy Log', command=self.copy_log).pack(side='right')
 
-        settings = ttk.Frame(panel)
-        settings.pack(fill='x', pady=(9, 0))
-        ttk.Label(settings, text='Black text colour index (E3 palette):').pack(side='left')
-        self.black_index = tk.StringVar(value='0')
-        ttk.Entry(settings, textvariable=self.black_index, width=6).pack(side='left', padx=(7, 10))
-        ttk.Label(settings, text='Default 0; confirm this is black in your E3 colour palette.').pack(side='left')
+        # Source default, or select one of the exact E3 palette indices in the photo.
+        # The radio selection overrides HATCH COLOUR only; outline still matches
+        # the source and all text is always forced to BLACK_TEXT_COLOUR.
+        palette_box = ttk.LabelFrame(panel, text='Target hatch color (E3 palette)', padding=(10, 7))
+        palette_box.pack(fill='x', pady=(12, 3))
+        self.palette_selection = tk.StringVar(value='source')
+        ttk.Radiobutton(
+            palette_box, text='Copy source hatch color (default)',
+            value='source', variable=self.palette_selection,
+            command=self.palette_changed,
+        ).grid(row=0, column=0, columnspan=3, sticky='w', pady=(0, 5))
+        for ix, (label, color_index, preview_hex) in enumerate(PALETTE_SCHEME):
+            rr = 1 + ix // 3
+            cc = ix % 3
+            cell = ttk.Frame(palette_box)
+            cell.grid(row=rr, column=cc, sticky='w', padx=(0, 13), pady=2)
+            ttk.Radiobutton(
+                cell, variable=self.palette_selection, value=str(color_index),
+                command=self.palette_changed,
+            ).pack(side='left')
+            tk.Label(
+                cell, bg=preview_hex, width=3, height=1,
+                relief='solid', borderwidth=1,
+            ).pack(side='left', padx=(0, 5))
+            ttk.Label(cell, text=f'{label}  #{color_index}').pack(side='left')
+        for cc in range(3):
+            palette_box.columnconfigure(cc, weight=1)
+        ttk.Label(
+            panel,
+            text='Palette selection changes HATCH COLOR only. Hatch pattern/style always come from the source. '
+                 'Text is always black (index 0). Swatches are approximate; E3 index numbers are exact.',
+            wraplength=1010,
+        ).pack(anchor='w', pady=(3, 0))
         ttk.Label(
             panel,
             text='Window stays open after Copy Source. Click E3 to select targets; Back to E3 minimizes only if clicked.',
-        ).pack(anchor='w', pady=(6, 0))
+        ).pack(anchor='w', pady=(4, 0))
 
         self.status = tk.StringVar(value='Ready. Nothing will be changed without a preview and confirmation.')
         ttk.Label(panel, textvariable=self.status, wraplength=830).pack(fill='x', pady=(10, 8))
@@ -640,14 +712,18 @@ class MatchPropertiesApp:
         self.output.insert('end', msg + '\n')
         self.output.see('end')
 
-    def get_black_index(self):
+    def palette_changed(self):
+        # Prevent using a preview created with a different hatch override.
+        self.reset_preview()
         try:
-            idx = int(self.black_index.get().strip())
-        except (ValueError, AttributeError):
-            raise ValueError('Black text colour must be a numeric E3 colour index (e.g., 0).')
-        if idx < 0 or idx > 255:
-            raise ValueError('Black colour index must be between 0 and 255; -1 means Automatic, not guaranteed black.')
-        return idx
+            index = palette_override(self.palette_selection.get())
+            if index is None:
+                summary = 'Copy source hatch color'
+            else:
+                summary = f'{PALETTE_BY_INDEX[str(index)]} (E3 color index {index})'
+            self.status.set(f'Hatch color: {summary}. Preview targets to apply this choice.')
+        except ValueError as exc:
+            self.status.set(str(exc))
 
     def return_to_e3(self):
         # No grab_set(), window disable, or always-on-top state is ever used.
@@ -755,7 +831,7 @@ class MatchPropertiesApp:
             child_texts, text_notes = conn.read_symbol_texts(ids[0])
             self.write(f'SOURCE SYMBOL TEXTS: found {len(child_texts)} readable attached text objects.')
             for entry in child_texts:
-                designation = ' (Device Designation)' if entry.text_type == DEVICE_DESIGNATION_TYPE else ''
+                designation = f' ({TEXT_TYPE_NAMES[entry.text_type]})' if entry.text_type in TEXT_TYPE_NAMES else ''
                 self.write(f'  Text ID {entry.object_id}: type {entry.text_type!r}{designation}; formatting: '
                            + ', '.join(f'{k}={format_property(k, v[2])}' for k, v in entry.values.items()))
             for note in text_notes:
@@ -829,7 +905,7 @@ class MatchPropertiesApp:
                 if not same_value(current, desired):
                     changes.append((name, getter, setter, current, desired))
             if changes:
-                desc = 'Device Designation' if target.text_type == DEVICE_DESIGNATION_TYPE else f'Text type {target.text_type!r}'
+                desc = TEXT_TYPE_NAMES.get(target.text_type, f'Text type {target.text_type!r}')
                 self.write(f'  Symbol {symbol_id}, text ID {target.object_id} ({desc}): {len(changes)} changes'
                            + (f'; matched source text {source.object_id}' if source else '; black only'))
                 for name, _, _, before, after in changes:
@@ -838,19 +914,24 @@ class MatchPropertiesApp:
                 planned.append((symbol_id, target.object_id, changes))
             elif source:
                 self.write(f'  Symbol {symbol_id}, text ID {target.object_id}: source font already matched; colour black.')
-        src_designations = [t for t in self.source.child_texts
-                            if t.text_type == DEVICE_DESIGNATION_TYPE]
-        dst_designations = [t for t in target_texts
-                            if t.text_type == DEVICE_DESIGNATION_TYPE]
-        self.write(f'  DESIGNATION CHECK symbol {symbol_id}: '
-                   f'source={len(src_designations)} type-12 text(s), '
-                   f'target={len(dst_designations)} type-12 text(s).')
-        if len(src_designations) != 1 or len(dst_designations) != 1:
-            self.write(f'  WARNING: Device designation size/format NOT VERIFIED '
-                       f'(source {len(src_designations)}, target {len(dst_designations)}). '
-                       'This does NOT mean the fonts match. Inspect the text discovery output.')
-        elif 'Text height' not in src_designations[0].values or 'Text height' not in dst_designations[0].values:
-            self.write('  WARNING: Device designation exists, but text height getter/setter unavailable.')
+        for typ in PREFERRED_TEXT_TYPES:
+            src_typed = [t for t in self.source.child_texts if t.text_type == typ]
+            dst_typed = [t for t in target_texts if t.text_type == typ]
+            label = TEXT_TYPE_NAMES[typ]
+            self.write(f'  {label.upper()} CHECK symbol {symbol_id}: '
+                       f'source={len(src_typed)} text(s), target={len(dst_typed)} text(s).')
+            if len(src_typed) == len(dst_typed) == 1:
+                if 'Text height' not in src_typed[0].values or 'Text height' not in dst_typed[0].values:
+                    self.write(f'  WARNING: {label} exists, but text height getter/setter unavailable.')
+            elif typ == DEVICE_DESIGNATION_TYPE:
+                self.write(f'  WARNING: {label} size/format NOT VERIFIED '
+                           f'(source {len(src_typed)}, target {len(dst_typed)}). '
+                           'This does NOT mean the fonts match.')
+            elif src_typed or dst_typed:
+                self.write(f'  NOTE: {label}: unmatched/multiple nodes; preserving text, '
+                           'only unique type pairs receive font styles. Text color still forced black.')
+            else:
+                self.write(f'  NOTE: {label}: not present in either symbol; nothing to copy.')
         if not target_texts:
             self.write(f'  WARNING: Symbol {symbol_id}: no attached texts were found; '
                        'designation and other text formatting were NOT compared.')
@@ -869,12 +950,19 @@ class MatchPropertiesApp:
             self.write('PREVIEW BLOCKED: ' + str(exc))
             self.status.set(str(exc))
             return
+        black = BLACK_TEXT_COLOUR
+        palette_choice = self.palette_selection.get()
         try:
-            black = self.get_black_index()
+            hatch_override = palette_override(palette_choice)
         except ValueError as exc:
             self.write('PREVIEW BLOCKED: ' + str(exc))
             self.status.set(str(exc))
             return
+        if self.source.category == 'symbol':
+            self.write('HATCH COLOR MODE: ' + (
+                f'{PALETTE_BY_INDEX[str(hatch_override)]} (E3 #{hatch_override})'
+                if hatch_override is not None else 'Copy source hatch color'))
+        self.write(f'TEXT COLOR MODE: Always black (E3 index {BLACK_TEXT_COLOUR})')
         plan = []
         text_plan = []
         skipped_count = 0
@@ -895,6 +983,14 @@ class MatchPropertiesApp:
                 for name, (getter, setter, source_val) in self.source.values.items():
                     if name not in values:
                         continue
+                    # Source hatch pattern/style/distance are always copied.
+                    # The chosen palette index only overrides hatch COLOUR.
+                    if name == 'Hatch colour' and hatch_override is not None:
+                        source_val = hatch_override
+                    # For directly selected TEXT, enforce black even when
+                    # its source/target text colors are equal but non-black.
+                    if name == 'Text colour' and self.source.category == 'text':
+                        source_val = BLACK_TEXT_COLOUR
                     if not source_property_copyable(name, source_val):
                         if not same_value(values[name][2], source_val):
                             skipped_count += 1
@@ -919,30 +1015,6 @@ class MatchPropertiesApp:
                     text_plan.extend(self.plan_symbol_texts(conn, oid, black))
             except Exception as exc:
                 self.write(f'ID {oid}: could not inspect; will SKIP ({exc})')
-        # When a TEXT object (rather than a block) is selected, enforce black
-        # exactly as for the text nodes within blocks.
-        if self.source.category == 'text':
-            updated = []
-            for oid, changes in plan:
-                updated.append((oid, [(name, getter, setter, before,
-                    black if name == 'Text colour' else after)
-                    for name, getter, setter, before, after in changes]))
-            plan = updated
-            # If source/target colors matched but were non-black, add that
-            # change even though no source-to-target difference existed.
-            for oid in ids:
-                vals, _ = conn.read_properties('text', oid)
-                if 'Text colour' not in vals:
-                    continue
-                getter, setter, current = vals['Text colour']
-                entry = next((c for tid, c in plan if tid == oid), None)
-                if entry is None and not same_value(current, black):
-                    plan.append((oid, [('Text colour', getter, setter, current, black)]))
-                elif entry is not None:
-                    entry[:] = [c for c in entry if c[0] != 'Text colour']
-                    if not same_value(current, black):
-                        entry.append(('Text colour', getter, setter, current, black))
-            plan = [(oid, c) for oid, c in plan if c]
         if not plan and not text_plan:
             if self.source.category == 'symbol':
                 self.status.set('No VERIFIED format differences. If designation text was not found, '
@@ -954,7 +1026,7 @@ class MatchPropertiesApp:
                 self.write(f'PREVIEW SUMMARY: 0 changes available; {skipped_count} changes skipped.')
             return
         self.preview = (conn.job_id(), self.source.category, self.source.object_id,
-                        ids, plan, skipped_count, text_plan, black)
+                        ids, plan, skipped_count, text_plan, black, palette_choice)
         self.apply_button.configure(state='normal')
         changes_count = sum(len(p[1]) for p in plan) + sum(len(c) for _, _, c in text_plan)
         self.status.set(
@@ -967,7 +1039,7 @@ class MatchPropertiesApp:
     def apply(self):
         if not self.preview or not self.source:
             return
-        project_id, cat, source_id, selected_ids, plan, skipped_count, text_plan, black = self.preview
+        project_id, cat, source_id, selected_ids, plan, skipped_count, text_plan, black, palette_choice = self.preview
         self.reset_preview()
         conn = self.connect()
         if not conn:
@@ -983,19 +1055,16 @@ class MatchPropertiesApp:
         if set(live_ids) != set(selected_ids):
             self.write('APPLY BLOCKED: selected target IDs differ from preview. Preview again.')
             return
-        try:
-            if self.get_black_index() != black:
-                self.write('APPLY BLOCKED: Black text colour index changed since Preview. Preview again.')
-                return
-        except ValueError as exc:
-            self.write('APPLY BLOCKED: ' + str(exc))
+        if self.palette_selection.get() != palette_choice:
+            self.write('APPLY BLOCKED: Palette choice changed since Preview. Preview again.')
+            self.status.set('Hatch palette selection changed; Preview Targets again.')
             return
         n = sum(len(changes) for _, changes in plan) + sum(len(changes) for _, _, changes in text_plan)
         ok = messagebox.askyesno(
             'Confirm formatting change',
-            f'Apply {n} formatting changes to {len(plan)} {cat} target(s)?\n\n'
+            f'Apply {n} formatting changes to {len(selected_ids)} selected {cat} target(s)?\n\n'
             'Text contents, object positions and device designations will NOT be changed.\n'
-            'Attached texts will inherit font formatting by text type, with colour forced to black.\n'
+            'Designation, location and Additional Part ID text will match by type, with ALL text black.\n'
             'Test this beta in a project copy first. Continue?',
             icon='warning',
         )
