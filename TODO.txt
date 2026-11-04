@@ -1,8 +1,51 @@
-save = [wsheet, esheet, csheet, psheet]
-for sheet in save:
-    if sheet is not None:
-        folder, filename = os.path.split(sheet)
-        pdf_name = os.path.splitext(filename)[0].replace("%", " ") + ".pdf"
-        pdf_sheet = os.path.join(folder, pdf_name)
+(
+source "${THERMAL_SIM_OPENFOAM_BASHRC:-$HOME/OpenFOAM/OpenFOAM-v2606/etc/bashrc}" || exit 1
+set -euo pipefail
 
-        excel_to_pdf(sheet, pdf_sheet)
+TARGET='/mnt/c/OpenFOAM/thermal_sim_SOLAR_ATB/SOLAR_ATB_20PCT_HEAT_LOAD'
+SEED="${TARGET}.heated-flow-check"
+
+cd "$TARGET"
+
+# Stop if this target already contains an initialized parallel run.
+for entry in processor[0-9]* .cold_flow_seed_import_manifest \
+             .unqualified_airflow_imported .initial_airflow_converged; do
+    if [[ -e "$entry" || -L "$entry" ]]; then
+        printf 'STOP: target already contains %s; preserve it.\n' "$entry"
+        exit 1
+    fi
+done
+
+# Preserve the leftover import snapshot while holding the target lock.
+(
+    exec 9>>.thermal_solver_run.lock
+    flock -n 9 || {
+        echo 'STOP: target is currently in use.'
+        exit 1
+    }
+
+    if [[ -e .unqualified-source-snapshot || -L .unqualified-source-snapshot ]]; then
+        backup=$(mktemp -d "$PWD/import-recovery.XXXXXX")
+        mv -- .unqualified-source-snapshot "$backup/"
+        printf 'Previous snapshot preserved in %s\n' "$backup"
+    fi
+)
+
+CHECKPOINT=$(
+    find "$SEED/processor0" -mindepth 1 -maxdepth 1 \
+        -type d -printf '%f\n' |
+    awk '/^[0-9]+([.][0-9]+)?([eE][-+]?[0-9]+)?$/' |
+    sort -g | tail -1
+)
+test -n "$CHECKPOINT"
+printf 'Importing saved airflow at t=%s\n' "$CHECKPOINT"
+
+OPENFOAM_LAUNCHER=env \
+bash ./create_thermal_branch_from_cold_flow_seed.sh \
+    "$SEED" "$TARGET" 6 --allow-unqualified "$CHECKPOINT" \
+    2>&1 | tee import-unqualified.stdout.log
+
+THERMAL_SOLVER_OPENFOAM_ENV_READY=1 OPENFOAM_LAUNCHER=env \
+bash ./run_parallel.sh 6 --unqualified-thermal 1 \
+    2>&1 | tee -a unqualified-thermal.stdout.log
+)
