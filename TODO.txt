@@ -40,7 +40,7 @@ def describe_cable_error(error):
 
     if "connector not found" in msg:
         return ("Connector Part Not Found", raw,
-                "Check the connector part number and confirm version 1 exists in E3.")
+                "Check the part number and its E3 version. If multiple versions exist, set CONNECTOR_VERSION_OVERRIDES.")
 
     if "could not create component" in msg:
         return ("Cable Assembly Could Not Be Created", raw,
@@ -620,6 +620,55 @@ def get_pin_copy(connector_name, connector_version, physical_pin):
 
     return row[0]
 
+# Resolve connector versions from the E3 library instead of assuming "1".
+# Explicitly select A for the connector whose revision is known.
+CONNECTOR_VERSION_OVERRIDES = {
+    "Molex_Recept_42_2x21": "A",
+}
+
+
+def get_connector_version(connector_name):
+    cur.execute("""
+        SELECT DISTINCT VERSION
+        FROM dbo.ComponentData
+        WHERE ENTRY = ?
+    """, connector_name)
+    versions = [str(row[0]).strip() for row in cur.fetchall() if row[0] is not None]
+
+    if not versions:
+        raise RuntimeError(f"Connector not found: {connector_name}")
+
+    preferred = CONNECTOR_VERSION_OVERRIDES.get(str(connector_name))
+    if preferred is not None:
+        for version in versions:
+            if version.upper() == str(preferred).upper():
+                return version
+        raise RuntimeError(
+            f"Version {preferred} not found for {connector_name}. "
+            f"Available versions: {', '.join(versions)}"
+        )
+
+    if len(versions) == 1:
+        return versions[0]
+
+    # Preserve the original script's version-1 default if several exist.
+    if "1" in versions:
+        return "1"
+
+    raise RuntimeError(
+        f"Multiple versions exist for connector {connector_name}: "
+        f"{', '.join(versions)}. Add the desired version to "
+        "CONNECTOR_VERSION_OVERRIDES."
+    )
+
+
+# Resolve once so assembly membership and pin lookups use the SAME version.
+CONNECTOR_VERSIONS = {
+    designation: get_connector_version(CONNECTORS[designation])
+    for designation in CONNECTOR_LAYOUT
+}
+print("CONNECTOR VERSION MAP:", CONNECTOR_VERSIONS)
+
 # ============================================================
 # CONNECTORS
 # ============================================================
@@ -646,7 +695,7 @@ for connector_designation in CONNECTOR_LAYOUT:
     add_member(
         connector_copy,
         connector_part,
-        1,
+        CONNECTOR_VERSIONS[connector_designation],
         member_name
     )
 
@@ -674,8 +723,8 @@ for wire_data in WIRES:
     connector2_copy = CONNECTOR_COPIES[connector2]
 
     # Convert physical pins to Zuken pin COPY numbers
-    pin1_copy = get_pin_copy(connector1_part, 1, pin1)
-    pin2_copy = get_pin_copy(connector2_part, 1, pin2)
+    pin1_copy = get_pin_copy(connector1_part, CONNECTOR_VERSIONS[connector1], pin1)
+    pin2_copy = get_pin_copy(connector2_part, CONNECTOR_VERSIONS[connector2], pin2)
 
     # Determine internal conductor node
     if no_wires == 1:
