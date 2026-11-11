@@ -1,7 +1,7 @@
 """Zuken E3.series: Excel J2 local-signal importer.
 
-Version 1.3 -- Windows / E3.series. Run by double-clicking or from an E3 Tools menu.
-One Excel picker opens, then imports immediately (no preview or Apply button).
+Version 1.4 DEBUG -- Windows / E3.series. Run by double-clicking or from an E3 Tools menu.
+One Excel picker opens, then imports immediately. A log opens if any assignments fail.
 
 Excel worksheet: any name; uses the matching data tab (or active tab).
 E3 drawing sheet 'J2' is used only to locate the block.
@@ -37,6 +37,8 @@ from __future__ import annotations
 from collections import Counter
 from dataclasses import dataclass, field
 import gc
+import os
+from datetime import datetime
 from pathlib import Path
 import re
 import subprocess
@@ -44,6 +46,7 @@ import sys
 import traceback
 
 SHEET_NAME = 'J2'  # E3 drawing-page identifier, NOT a required Excel tab name
+VERSION = '1.4-debug'
 FIRST_ROW = 7
 FIRST_PIN_COL = 9  # I
 CONNECTOR_COL_STEP = 4  # I:J, M:N, Q:R, U:V, ...
@@ -294,14 +297,82 @@ def get_scalar(obj, methods):
     return None
 
 
+def object_api_names(obj, filter_words=('signal', 'text', 'pin', 'connector', 'block', 'device', 'sheet')):
+    """Inspect the COM type library safely, also works with the official wrapper."""
+    found = set()
+    try:
+        found.update(str(n) for n in dir(obj) if not str(n).startswith('_'))
+    except Exception:
+        pass
+    try:
+        ti = obj._oleobj_.GetTypeInfo()
+        ta = ti.GetTypeAttr()
+        for i in range(ta.cFuncs):
+            names = ti.GetNames(ti.GetFuncDesc(i).memid)
+            if names:
+                found.add(str(names[0]))
+    except Exception:
+        pass
+    return sorted(x for x in found if any(w in x.lower() for w in filter_words))
+
+
+def diagnostic_ids(obj, method_names):
+    """Read-only COM enumeration diagnostics, limited to short summaries."""
+    results = []
+    for method_name in method_names:
+        try:
+            m = getattr(obj, method_name, None)
+            if not callable(m):
+                results.append(f'  {method_name}: NOT EXPOSED')
+                continue
+            try:
+                raw = m()
+                typ = type(raw).__name__
+                if isinstance(raw, (list, tuple)):
+                    summary = f'length={len(raw)}, first={repr(raw[:3])[:180]}'
+                else:
+                    summary = repr(raw)[:280]
+                results.append(f'  {method_name}(): {typ} {summary}')
+            except Exception as ex:
+                results.append(f'  {method_name}(): {type(ex).__name__}: {str(ex)[:180]}')
+            ids = com_ids(obj, method_name)
+            results.append(f'  {method_name} parsed IDs={len(ids)}, first={ids[:8]}')
+        except Exception as ex:
+            results.append(f'  {method_name} probe FAILED: {type(ex).__name__}: {ex}')
+    return results
+
+
+def pin_diagnostics(job, pin_id):
+    """Show available pin signal APIs, and local-signal (#7) text ownership."""
+    notes = []
+    try:
+        pin = make_object(job, 'Pin', pin_id)
+        notes.append('PIN COM APIs: ' + str(object_api_names(pin, ('signal', 'text', 'name', 'symbol'))[:90]))
+        for method in ('GetName','GetPinName','GetLocalSignalName','GetSignalName','GetSignal','GetSignalId'):
+            fn = getattr(pin, method, None)
+            if not callable(fn):
+                notes.append(f'  {method}: not exposed')
+            else:
+                try:
+                    notes.append(f'  {method}() = {repr(fn())[:180]}')
+                except Exception as ex:
+                    notes.append(f'  {method}(): {type(ex).__name__}: {str(ex)[:150]}')
+        notes.extend(diagnostic_ids(pin, ('GetTextIds','GetSymbolIds')))
+        ids = related_ids(pin, ('GetTextIds',), text_type=LOCAL_SIGNAL_TEXT_TYPE)
+        notes.append(f'  GetTextIds(type=7) parsed IDs={ids[:30]}')
+    except Exception as ex:
+        notes.append(f'pin diagnostic error: {type(ex).__name__}: {ex}')
+    return notes
+
+
 def make_object(job, kind, object_id):
     creator = getattr(job, f'Create{kind}Object', None)
     if not callable(creator):
         raise RuntimeError(f'E3 does not expose Create{kind}Object().')
     obj = creator()
     result = obj.SetId(int(object_id))
-    if result is False:
-        raise RuntimeError(f'Could not resolve {kind} ID {object_id}.')
+    if result is False or (type(result) is int and result < 0):
+        raise RuntimeError(f'Could not resolve {kind} ID {object_id}: SetId returned {result!r}.')
     return obj
 
 
@@ -358,15 +429,27 @@ class E3Project:
 
     def block_device(self, designation, log):
         hits = []
-        for did, obj in self.devices():
+        inventory = self.devices()
+        for did, obj in inventory:
             name = as_text(get_scalar(obj, ('GetName', 'GetDeviceDesignation', 'GetDeviceName')))
             if device_key(name) == device_key(designation):
                 hits.append((did, obj))
+        log.append(f'ALL E3 DEVICES ENUMERATED: {len(inventory)}; matching C4 {designation!r}')
         if not hits:
+            log.append('DEVICE EXAMPLES (first 40):')
+            for did, ob in inventory[:40]:
+                log.append(f'  id {did} name={get_scalar(ob, ("GetName", "GetDeviceDesignation", "GetDeviceName"))!r}')
+            log.append('JOB DEVICE-ID METHOD DIAGNOSTICS:')
+            log.extend(diagnostic_ids(self.job, ('GetDeviceIds','GetAllDeviceIds','GetBlockIds')))
             raise LookupError(f'No E3 block/device matches C4 = {designation!r}.')
         if self.j2_page_exists():
             scoped = [(did, o) for did, o in hits if self.on_j2(o)]
             if not scoped:
+                for did, o in hits[:10]:
+                    log.append(f'BLOCK found ID={did}, but on_j2=False; symbols={related_ids(o, ("GetSymbolIds",))[:25]}')
+                log.append('E3 J2 PAGE EXISTS BUT MATCHED BLOCK NOT ON IT. Sheet ids/names:')
+                for sid in related_ids(self.job, ('GetSheetIds',))[:40]:
+                    log.append(f'  sheet ID={sid}: {self.sheet_name(sid)!r}')
                 raise LookupError(f'{designation!r} was found, but not on E3 drawing sheet J2.')
             hits = scoped
             log.append('E3 drawing sheet J2 found; restricting block match to that page.')
@@ -434,6 +517,14 @@ def resolve(data, e3, log):
     _, block = e3.block_device(data.block_name, log)
     candidates = e3.connectors(block)
     log.append(f'Associated connector devices found: {len(candidates)}')
+    log.append('BLOCK CONNECTOR DISCOVERY:')
+    log.extend(diagnostic_ids(block, ('GetConnectorIds','GetBlockConnectorIds','GetSubDeviceIds','GetPinIds','GetSymbolIds')))
+    log.append('ASSOCIATED CONNECTOR SAMPLES (first 40):')
+    for cid, _, cname, ctype in candidates[:40]:
+        log.append(f'  id={cid}, name={cname!r}, type={ctype!r}')
+    if not candidates:
+        log.append('WARNING: No connector devices were discovered inside the block; '
+                   'this is likely why no assignments will occur.')
     indexed = {}
     for i in range(data.connector_count):
         examples = [e for e in data.entries if e.connector_index == i]
@@ -447,6 +538,8 @@ def resolve(data, e3, log):
                        f'=> {choice[2]!r}, ID {choice[0]}, component {choice[3]!r}')
         except Exception as exc:
             log.append('SKIP CONNECTOR: ' + str(exc))
+            log.append(f'  SEARCH KEY: {sample.connector_name!r}; available connector names: '
+                       f'{[c[2] for c in candidates[:40]]!r}')
     plans = []
     for entry in data.entries:
         choice = indexed.get(entry.connector_index)
@@ -460,6 +553,16 @@ def resolve(data, e3, log):
                        f'-> {entry.signal_name!r} [pin ID {pin_id}]')
         except Exception as exc:
             log.append(f'SKIP {entry.cell}: {exc}')
+            try:
+                conn = choice[1]
+                log.append('  CONNECTOR PIN-ID DIAGNOSTICS:')
+                log.extend(diagnostic_ids(conn, ('GetPinIds', 'GetAllPinIds')))
+                pin_ids = related_ids(conn, ('GetPinIds','GetAllPinIds'))
+                log.append('  FIRST 35 PINS ON THIS CONNECTOR: ' + repr([
+                    (pid, get_scalar(make_object(e3.job, 'Pin', pid), ('GetName','GetPinName')))
+                    for pid in pin_ids[:35]]))
+            except Exception as ex:
+                log.append(f'  PIN INVENTORY DIAGNOSTIC FAILED: {ex}')
     return plans
 
 
@@ -484,7 +587,9 @@ def set_pin_signal(pin, target_name):
             continue
         try:
             ret = method(target_name)
-            if ret is False or (type(ret) is int and ret < 0):
+            # E3 COM setters conventionally return 1 on success and <=0 on failure.
+            # v1.3 incorrectly accepted 0 as successful when read-back was unavailable.
+            if ret is False or (type(ret) is int and ret <= 0):
                 failures.append(f'{method_name} returned {ret!r}')
                 continue
             current = get_signal(pin)
@@ -625,57 +730,136 @@ def write_log(path, content):
 
 
 def perform(path):
-    lines = [f'EXCEL: {path}']
-    data = parse_workbook(path)
-    lines.append(f'EXCEL WORKSHEET: {data.worksheet_name}')
-    lines.append(f'E3 DRAWING PAGE FOR BLOCK MATCH: {SHEET_NAME}')
-    require_no_duplicate_pins(data)
-    lines += [f'BLOCK (C4): {data.block_name}',
-              f'CONNECTORS (C5): {data.connector_count}',
-              f'DEFINED PINS: {len(data.entries)}',
-              f'B2: {data.check_b2!r}', '']
-    # Worksheet issues that are NOT duplicate errors are reported and skipped.
-    for problem in data.duplicate_problems:
-        lines.append('WORKSHEET NOTICE: ' + problem)
+    """Apply immediately, always write a COMPLETE log even if lookup fails."""
+    lines = [f'ZUKEN LOCAL SIGNAL DEBUG IMPORTER v{VERSION}',
+             f'TIME: {datetime.now().isoformat(timespec="seconds")}',
+             f'EXCEL FILE: {path}', '']
+    summary = {'defined':0, 'resolved':0, 'signal_accepted':0,
+               'verified':0, 'formatted':0, 'failed':0, 'skipped':0,
+               'fatal':None, 'log':str(log_path(path))}
+    com_initialized = False
     try:
+        data = parse_workbook(path)
+        lines += [f'EXCEL WORKSHEET SELECTED: {data.worksheet_name}',
+                  f'E3 DRAWING PAGE FOR IDENTIFICATION: {SHEET_NAME}',
+                  f'DEVICE DESIGNATION (C4): {data.block_name!r}',
+                  f'NUMBER OF CONNECTORS (C5): {data.connector_count}',
+                  f'DUPLICATE-PIN STATUS (B2): {data.check_b2!r}',
+                  f'SIGNAL ASSIGNMENTS READ: {len(data.entries)}']
+        summary['defined'] = len(data.entries)
+        for ci in range(data.connector_count):
+            grouped = [e for e in data.entries if e.connector_index == ci]
+            pc = FIRST_PIN_COL + CONNECTOR_COL_STEP * ci
+            from openpyxl.utils import get_column_letter
+            cols = f'{get_column_letter(pc)}:{get_column_letter(pc+1)}'
+            lines.append(f'EXCEL CONNECTOR #{ci+1} {cols}: {len(grouped)} nonblank assignments; '
+                         f'name (B{FIRST_ROW+ci})={grouped[0].connector_name if grouped else "(no nonblank signals)"!r}')
+        for e in data.entries[:100]:
+            lines.append(f'  INPUT {e.cell}: connector={e.connector_name!r}, type={e.connector_type!r}, '
+                         f'pin={e.pin_name!r} -> signal={e.signal_name!r}')
+        if len(data.entries) > 100:
+            lines.append(f'  ... {len(data.entries)-100} additional assignments omitted from this preview')
+        for prob in data.duplicate_problems:
+            lines.append('EXCEL NOTICE: '+prob)
+        require_no_duplicate_pins(data)
+        if not data.entries:
+            raise RuntimeError('No pin/signal pairs were read from the workbook. '
+                               'Check starting row 7 and pairs I:J, M:N, Q:R. '
+                               'Unspecified/blank signal cells are intentionally skipped.')
+
         import pythoncom
-    except ImportError:
-        raise RuntimeError('pywin32 is required on Windows: py -m pip install pywin32')
-    pythoncom.CoInitialize()
-    try:
+        pythoncom.CoInitialize()
+        com_initialized = True
         e3 = E3Project()
-        lines.append(f'E3 connection: {e3.backend}')
+        lines.append(f'E3 CONNECTION: {e3.backend}; job ID={e3.job.GetId()!r}')
+        lines.append('E3 JOB AVAILABLE RELEVANT METHODS: '
+                     + repr(object_api_names(e3.job, ('device','sheet','block','symbol','pin'))[:120]))
+        lines.append('E3 JOB SHEET ENUMERATION:')
+        lines.extend(diagnostic_ids(e3.job, ('GetSheetIds',)))
+        sheet_ids = related_ids(e3.job, ('GetSheetIds',))
+        lines.append('E3 SHEET NAMES (first 40): '
+                     +repr([(sid,e3.sheet_name(sid)) for sid in sheet_ids[:40]]))
+        lines.append('E3 JOB DEVICE ENUMERATION:')
+        lines.extend(diagnostic_ids(e3.job, ('GetDeviceIds','GetAllDeviceIds','GetBlockIds')))
+
         plans = resolve(data, e3, lines)
-        lines.append(f'RESOLVED PINS: {len(plans)} / {len(data.entries)}')
-        lines.append('APPLY RESULTS:')
+        summary['resolved'] = len(plans)
+        summary['skipped'] = summary['defined'] - summary['resolved']
+        lines.append(f'RESOLVED {len(plans)} / {len(data.entries)} PIN ASSIGNMENTS')
+        if not plans:
+            lines.append('NO PINS RESOLVED, so no E3 writes attempted. Check the SKIP and method reports above.')
+        else:
+            lines.append('E3 COM PIN API SAMPLE FOR FIRST RESOLVED PIN:')
+            lines.extend(pin_diagnostics(e3.job, plans[0].pin_id))
+
+        lines.append('WRITE RESULTS:')
         for plan in plans:
-            entry = plan.entry
+            e = plan.entry
+            lines.append(f'ATTEMPT {e.cell}: connector={e.connector_name!r}, '
+                         f'pin={e.pin_name!r} (ID {plan.pin_id}), target={e.signal_name!r}')
             try:
                 pin = make_object(e3.job, 'Pin', plan.pin_id)
-                signal_result = set_pin_signal(pin, entry.signal_name)
+                before = get_signal(pin)
+                lines.append(f'  SIGNAL BEFORE: {before!r}')
+                result = set_pin_signal(pin, e.signal_name)
+                after = get_signal(pin)
+                summary['signal_accepted'] += 1
+                if after is not None and as_text(after) == e.signal_name:
+                    summary['verified'] += 1
+                lines.append(f'  SIGNAL SETTER: {result}; READBACK: {after!r}')
+                if after is not None and as_text(after) != e.signal_name:
+                    raise RuntimeError(f'Signal not verified after setter. Expected {e.signal_name!r}, got {after!r}')
                 format_result = format_local_signal(e3.job, plan.pin_id, plan.connector_id)
-                lines.append(f'{entry.connector_name}/{entry.pin_name} -> '
-                             f'{entry.signal_name!r}: signal={signal_result}; {format_result}')
-            except Exception as exc:
-                lines.append(f'FAILED {entry.connector_name}/{entry.pin_name}: {exc}')
+                if format_result.startswith('OK:'):
+                    summary['formatted'] += 1
+                else:
+                    lines.append('  FORMAT DIAGNOSTIC:')
+                    lines.extend(pin_diagnostics(e3.job, plan.pin_id))
+                lines.append(f'  TEXT FORMAT: {format_result}')
+            except Exception as ex:
+                summary['failed'] += 1
+                lines.append(f'  WRITE FAILED: {type(ex).__name__}: {ex}')
+                lines.extend(pin_diagnostics(e3.job, plan.pin_id))
         del e3
+    except Exception as ex:
+        summary['fatal'] = f'{type(ex).__name__}: {ex}'
+        lines.append('FATAL ERROR: '+summary['fatal'])
+        lines.append(traceback.format_exc())
     finally:
-        gc.collect()
-        pythoncom.CoUninitialize()
-    output = '\n'.join(lines)
-    write_log(path, output)
-    return output
+        if com_initialized:
+            try:
+                gc.collect()
+                pythoncom.CoUninitialize()
+            except Exception:
+                pass
+        lines += ['', '============= FINAL SUMMARY =============',
+                  f'Excel defined assignments:       {summary["defined"]}',
+                  f'Resolved pin IDs:                {summary["resolved"]}',
+                  f'Signal setter accepted:         {summary["signal_accepted"]}',
+                  f'Signal names read-back verified:{summary["verified"]}',
+                  f'Text formatting verified:       {summary["formatted"]}',
+                  f'Skipped or not matched:         {summary["skipped"]}',
+                  f'Write failures:                 {summary["failed"]}',
+                  f'Fatal problem:                  {summary["fatal"] or "none"}',
+                  f'Debug log:                       {summary["log"]}',
+                  'NOTE: a setter accepted without readback is NOT proof that E3 changed.',
+                  '=========================================']
+        try:
+            write_log(path, '\n'.join(lines))
+        except Exception:
+            fallback = Path.home()/'Desktop'/'Zuken_J2_E3_Import_Debug_Log.txt'
+            try:
+                fallback.write_text('\n'.join(lines), encoding='utf-8')
+                summary['log'] = str(fallback)
+            except Exception:
+                pass
+    return summary
 
 
 def run_once():
-    """Prompt for one Excel file and immediately apply it to the active E3 job.
-
-    The window is hidden so the ONLY normal UI is the file picker. The initial
-    E3-launched process has already exited; E3 stays available for selection.
-    """
+    """Single Excel picker; no preview or Apply button, diagnostic log on problems."""
     import tkinter as tk
     from tkinter import filedialog, messagebox
-
     root = tk.Tk()
     root.withdraw()
     try:
@@ -689,24 +873,33 @@ def run_once():
             filetypes=[('Excel workbooks', '*.xlsx *.xlsm'), ('All files', '*.*')],
         )
         if not filename:
-            return  # Cancel: leave E3 unchanged.
-
+            return
         path = Path(filename)
-        try:
-            # Directly modify E3; do NOT ask for a preview or confirmation.
-            perform(path)
-        except Exception as exc:
-            details = traceback.format_exc()
+        summary = perform(path)
+        # Do not allow silent no-ops or partial imports.
+        issues = (summary['fatal'] is not None or summary['signal_accepted'] == 0 or
+                  summary['skipped'] > 0 or summary['failed'] > 0 or
+                  summary['formatted'] < summary['signal_accepted'] or
+                  summary['verified'] < summary['signal_accepted'])
+        if issues:
+            msg = (f'Excel assignments: {summary["defined"]}\n'
+                   f'Pins matched: {summary["resolved"]}\n'
+                   f'Signal setters accepted: {summary["signal_accepted"]}\n'
+                   f'Signal readbacks verified: {summary["verified"]}\n'
+                   f'Text labels formatted: {summary["formatted"]}\n'
+                   f'Unmatched/skipped: {summary["skipped"]}\n'
+                   f'Write failures: {summary["failed"]}\n'
+                   f'Problem: {summary["fatal"] or "see log for skipped pins"}\n'
+                   f'\nDiagnostic log:\n{summary["log"]}\n\n'
+                   'The log will open automatically. Please send it back to me.')
+            messagebox.showwarning('E3 local signal import: diagnostic results', msg, parent=root)
             try:
-                write_log(path, 'IMPORT FAILED\n\n' + details)
-                log_notice = f'\n\nFull error log: {log_path(path)}'
+                os.startfile(summary['log'])
             except Exception:
-                log_notice = ''
-            messagebox.showerror(
-                'E3 local signal import failed',
-                f'{exc}{log_notice}',
-                parent=root,
-            )
+                pass
+    except Exception:
+        err = traceback.format_exc()
+        messagebox.showerror('E3 local signal importer: unexpected error', err[-2000:], parent=root)
     finally:
         root.destroy()
 
