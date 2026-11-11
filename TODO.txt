@@ -1,10 +1,11 @@
 """Zuken E3.series: Excel J2 local-signal importer.
 
-Version 2.2: faster pin lookups/peer checks, reliable visible popup and explicit completion.
+Version 2.3: quiet success window (Enter to close), detailed error window.
 Looks up device designation text on connector-owned symbols in addition
  to the pin; prints before/after text style; no log file.
 Run from E3 or Python, choose one Excel workbook, and immediately apply.
-Uses ordinary print() for diagnostic output: no separate console, no pause, no log file.
+Diagnostics are captured in memory; on success only a small completion window appears.
+On error, detailed diagnostics are displayed with a Copy button. No log file.
 
 Excel worksheet: any name; uses the matching data tab (or active tab).
 E3 drawing sheet 'J2' is used only to locate the block.
@@ -47,6 +48,9 @@ from __future__ import annotations
 from collections import Counter
 from dataclasses import dataclass, field
 from datetime import datetime
+from contextlib import redirect_stdout, redirect_stderr
+import io
+import warnings
 from pathlib import Path
 import math
 from statistics import median
@@ -55,7 +59,7 @@ import traceback
 import time
 
 SHEET_NAME = 'J2'  # E3 drawing-page identifier, NOT a required Excel tab name
-VERSION = '2.2-fast-finish-popup'
+VERSION = '2.3-quiet-complete'
 FIRST_ROW = 7
 FIRST_PIN_COL = 9  # I
 CONNECTOR_COL_STEP = 4  # I:J, M:N, Q:R, U:V, ...
@@ -1717,7 +1721,12 @@ def perform(path):
 
 
 def import_issues(summary):
-    """Return user-actionable issues (fatal, partial import, formatting)."""
+    """Show an error window for actual import errors, not cosmetic text warnings.
+
+    Placed type-617 labels may be perfectly visible/bold even when the API
+    reports them as unverifiable. Keep that diagnostic for true error reports,
+    rather than presenting a false failed-import popup on a successful run.
+    """
     issues = []
     if summary.get('fatal'):
         issues.append('ERROR: ' + str(summary['fatal']))
@@ -1729,18 +1738,47 @@ def import_issues(summary):
     done = summary.get('verified', 0)
     if defined and done < defined:
         issues.append(f"Only {done}/{defined} requested pin-local names were verified.")
-    fmt = summary.get('formatted', 0)
-    written = summary.get('signal_accepted', 0)
-    if written and fmt < written:
-        issues.append(f"Only {fmt}/{written} assigned local-signal labels were bold-formatted.")
-    expected = summary.get('expected_designations', 0)
-    designation = summary.get('designation_formatted', 0)
-    if written and expected and designation < expected:
-        issues.append(f"Only {designation}/{expected} top-pin device designations were made bold/visible.")
-    # Other formatting issues and STOP diagnostics may be printed as notices.
-    # Include them in the details without treating every optional missing
-    # text object as a fatal error.
     return issues
+
+
+def show_complete_window(parent, result):
+    """Small foreground completion dialog, dismissed by Enter or the button.
+
+    Tkinter is used instead of input(): stdin is not guaranteed to exist when
+    running inside Zuken/E3's embedded script host.
+    """
+    import tkinter as tk
+    from tkinter import ttk
+
+    window = tk.Toplevel(parent)
+    window.title('Zuken - Script Complete')
+    window.resizable(False, False)
+    window.geometry('310x134')
+    window.protocol('WM_DELETE_WINDOW', window.destroy)
+
+    frame = ttk.Frame(window, padding=17)
+    frame.pack(fill='both', expand=True)
+    ttk.Label(frame, text='Script complete', font=('Segoe UI', 12, 'bold')).pack(pady=(0, 8))
+    ttk.Label(frame, text=f"{result.get('verified', 0)} pin local signal(s) updated").pack()
+    ttk.Label(frame, text='Press Enter to close', foreground='#555555').pack(pady=(6, 5))
+
+    def finish(event=None):
+        window.destroy()
+
+    window.bind('<Return>', finish)
+    window.bind('<KP_Enter>', finish)
+    window.bind('<Escape>', finish)
+    # A clickable fallback if focus is managed differently by the E3 host.
+    close_button = ttk.Button(frame, text='Close', command=finish)
+    close_button.pack()
+    try:
+        window.attributes('-topmost', True)
+        window.deiconify()
+        window.lift()
+        close_button.focus_set()
+    except Exception:
+        pass
+    parent.wait_window(window)
 
 
 def show_issue_window(parent, summary, issues, title='Zuken Import — Issues'):
@@ -1809,9 +1847,10 @@ def show_issue_window(parent, summary, issues, title='Zuken Import — Issues'):
 
 
 def run_once():
-    """One file dialog; apply automatically and show any problems in a popup."""
+    """Pick workbook, import quietly, and show success or actionable errors."""
     import tkinter as tk
     from tkinter import filedialog
+
     root = tk.Tk()
     root.withdraw()
     try:
@@ -1819,45 +1858,55 @@ def run_once():
     except Exception:
         pass
     try:
-        print(f'ZUKEN E3 LOCAL SIGNAL IMPORTER v{VERSION}', flush=True)
         filename = filedialog.askopenfilename(
             parent=root,
             title='Select Excel file for E3 local signal names',
             filetypes=[('Excel workbooks', '*.xlsx *.xlsm'), ('All files', '*.*')],
         )
         if not filename:
-            print('Cancelled: no workbook selected.', flush=True)
             return
-        result = perform(Path(filename))
+
+        # In a normal E3 run, keep the output pane clean. We retain all existing
+        # diagnostics in memory and display them if the import actually fails.
+        capture = io.StringIO()
+        with redirect_stdout(capture), redirect_stderr(capture), warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter('always')
+            result = perform(Path(filename))
+
+        extra = capture.getvalue().splitlines()
+        if extra:
+            # perform() already saves ConsoleLines into output_lines, so keep
+            # captured stdout only as extra diagnostics if an issue occurs.
+            result.setdefault('output_lines', []).extend(
+                ['--- Additional captured output ---'] + extra[-250:]
+            )
+        if caught:
+            result.setdefault('output_lines', []).extend(
+                ['--- Python warnings ---'] + [str(w.message) for w in caught]
+            )
+
         issues = import_issues(result)
         if issues:
-            print(f"IMPORT COMPLETED IN {result.get('elapsed_seconds', 0):.1f}s "
-                  f"— {result['verified']} names verified; "
-                  f"{len(issues)} item(s) need attention. Showing issue window.", flush=True)
             show_issue_window(root, result, issues)
         else:
-            print(f"SUCCESS — IMPORT COMPLETED IN {result.get('elapsed_seconds', 0):.1f}s: "
-                  f"{result['verified']} pin-local names updated; "
-                  f"{result['formatted']} labels formatted bold. Script is exiting.", flush=True)
+            show_complete_window(root, result)
     except Exception as exc:
         details = traceback.format_exc()
-        print('UNEXPECTED ERROR:\n' + details, flush=True)
         try:
             show_issue_window(root,
                 {'output_lines': details.splitlines()},
                 [f'{type(exc).__name__}: {exc}'],
-                title='Zuken Import — Unexpected Error')
+                title='Zuken Import - Unexpected Error')
         except Exception:
             try:
                 from tkinter import messagebox
-                messagebox.showerror('Zuken Import — Unexpected Error',
+                messagebox.showerror('Zuken Import - Unexpected Error',
                                      f'{type(exc).__name__}: {exc}', parent=root)
             except Exception:
-                pass
+                # Keep the exception visible if tkinter's error dialog is unavailable.
+                print('UNEXPECTED ERROR:\n' + details, flush=True)
     finally:
-        print('FINAL EXIT: closing importer window.', flush=True)
         root.destroy()
-        print('SCRIPT FINISHED: control returned to E3/Python.', flush=True)
 
 
 def main():
