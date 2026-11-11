@@ -1,6 +1,6 @@
 """Zuken E3.series: Excel J2 local-signal importer.
 
-Version 2.4: 310x150 completion dialog auto-foregrounded and Enter-ready, detailed error window.
+Version 2.5: Force all local signal labels visible on each imported connector; retain v2.4 completion/error windows.
 Looks up device designation text on connector-owned symbols in addition
  to the pin; prints before/after text style; no log file.
 Run from E3 or Python, choose one Excel workbook, and immediately apply.
@@ -60,7 +60,7 @@ import traceback
 import time
 
 SHEET_NAME = 'J2'  # E3 drawing-page identifier, NOT a required Excel tab name
-VERSION = '2.4-focused-complete'
+VERSION = '2.5-all-local-signals-visible'
 FIRST_ROW = 7
 FIRST_PIN_COL = 9  # I
 CONNECTOR_COL_STEP = 4  # I:J, M:N, Q:R, U:V, ...
@@ -1431,6 +1431,83 @@ def format_placed_local_signal(job, pin_id, connector_name, pin_name):
     return verified == len(found), f'{connector_name}/{pin_name}: '+ ' | '.join(messages)
 
 
+def ensure_connector_local_signals_visible(job, connector_id, connector_name):
+    """Enable every existing type-617 label on an Excel-selected connector.
+
+    The normal import formats newly assigned pins. This final pass additionally
+    visits *every* pin belonging to that same E3 connector so previously named
+    pins, including ones omitted from the workbook, also display their local
+    signal labels. It does not change any signal value, font, or other connector.
+
+    E3 Pin.GetViewIds() identifies the placed pin view; Text.SetVisibility(1)
+    is the working Pin Arranger method. Verify with GetVisibility() when exposed.
+    """
+    connector = make_object(job, 'Device', connector_id)
+    pin_ids = list(dict.fromkeys(related_ids(connector, ('GetPinIds',))))
+    seen_views = set()
+    seen_texts = set()
+    count_visible = 0
+    failures = []
+    observations = []
+
+    for pin_id in pin_ids:
+        try:
+            views = placed_pin_view_ids(job, pin_id)
+        except Exception as exc:
+            failures.append(f'pin {pin_id}: could not enumerate placed views: {exc}')
+            continue
+        for view_id in views:
+            # A pin can have multiple placed views. Some E3 objects expose the
+            # same view through more than one pin; don't repeat COM writes.
+            if view_id in seen_views:
+                continue
+            seen_views.add(view_id)
+            try:
+                items = view_text_items(job, view_id)
+            except Exception as exc:
+                failures.append(f'view {view_id}: could not enumerate text: {exc}')
+                continue
+            for text_type, _, text_id in items:
+                if text_type != LOCAL_SIGNAL_TEXT_TYPE or text_id in seen_texts:
+                    continue
+                seen_texts.add(text_id)
+                try:
+                    txt = make_object(job, 'Text', text_id)
+                    setter = getattr(txt, 'SetVisibility', None)
+                    if not callable(setter):
+                        failures.append(f'type-617 text {text_id}: SetVisibility unavailable')
+                        continue
+                    result = setter(1)
+                    # Some E3 COM setters return 0 even when successful. Always
+                    # prefer the real visibility state over the return code.
+                    state = get_scalar(txt, ('GetVisibility', 'GetVisible'))
+                    if state in (1, True):
+                        count_visible += 1
+                    elif state is None:
+                        observations.append(f'text {text_id}: visibility readback unavailable '
+                                            f'(SetVisibility returned {result!r})')
+                    else:
+                        failures.append(f'text {text_id}: visibility still {state!r} '
+                                        f'after SetVisibility(1), return={result!r}')
+                except Exception as exc:
+                    failures.append(f'text {text_id}: SetVisibility(1) failed: '
+                                    f'{type(exc).__name__}: {exc}')
+
+    result = {
+        'pins': len(pin_ids), 'views': len(seen_views),
+        'labels': len(seen_texts), 'verified': count_visible,
+        'failed': len(failures), 'unverified': len(observations),
+    }
+    detail = (f'{connector_name}: {len(pin_ids)} connector pins scanned, '
+              f'{len(seen_views)} placed views, {len(seen_texts)} local signal '
+              f'label(s); {count_visible} visible verified')
+    if failures:
+        detail += '; visibility errors: ' + '; '.join(failures[:15])
+    if observations:
+        detail += '; unverified visibility: ' + '; '.join(observations[:10])
+    return result, detail
+
+
 def show_top_designation_placed_view(job, connector_id, connector_name):
     """Use the Pin Arranger's type-213 '1/N' marker to find the TOP view.
 
@@ -1479,7 +1556,8 @@ def perform(path):
              f'EXCEL FILE: {path}', ''])
     summary = {'defined':0, 'resolved':0, 'signal_accepted':0,
                'verified':0, 'formatted':0, 'designation_formatted':0, 'expected_designations':0, 'failed':0, 'skipped':0,
-               'fatal':None}
+               'visibility_labels':0, 'visibility_verified':0, 'visibility_failed':0,
+               'visibility_unverified':0, 'fatal':None}
     com_initialized = False
     try:
         data = parse_workbook(path)
@@ -1675,6 +1753,26 @@ def perform(path):
                         lines.append(f'  NOTICE: {cname}: type-12 formatting error: '
                                      f'{type(exc).__name__}: {exc}')
             lines.append(f'TIMING: top-pin designation formatting done at +{time.perf_counter()-started_at:.1f}s')
+            # The normal type-617 bolding pass covers only newly assigned pins.
+            # Ensure existing local signal labels are visible on ALL pins of
+            # connectors actually selected by this workbook, not just edited pins.
+            if not summary['fatal'] and not summary['failed']:
+                lines.append('ALL LOCAL SIGNAL LABELS VISIBLE (TYPE 617):')
+                for cid, cname in dict.fromkeys((p.connector_id, p.entry.connector_name)
+                                              for p, _ in valid):
+                    try:
+                        stats, detail = ensure_connector_local_signals_visible(e3.job, cid, cname)
+                        summary['visibility_labels'] += stats['labels']
+                        summary['visibility_verified'] += stats['verified']
+                        summary['visibility_failed'] += stats['failed']
+                        summary['visibility_unverified'] += stats['unverified']
+                        lines.append('  ' + detail)
+                    except Exception as exc:
+                        summary['visibility_failed'] += 1
+                        lines.append(f'  VISIBILITY ERROR {cname}: '
+                                     f'{type(exc).__name__}: {exc}')
+                lines.append(f'TIMING: all selected-connector local signal visibility done '
+                             f'at +{time.perf_counter()-started_at:.1f}s')
             lines.append(f'COUNTERPART PIN ATTRIBUTES CHANGED: {changed_attrs[:20]!r}')
             if changed_attrs:
                 summary['fatal']='A non-target PIN ATTRIBUTE changed. STOP and restore your project copy.'
@@ -1708,6 +1806,9 @@ def perform(path):
                   f'Pin-local value readback verified:{summary["verified"]}',
                   f'Pin-local text formatting verified:{summary["formatted"]}',
                   f'Top-pin designations bold/visible:{summary["designation_formatted"]}',
+                  f'Local signal labels visible (verified): {summary["visibility_verified"]}/{summary["visibility_labels"]}',
+                  f'Local label visibility errors:    {summary["visibility_failed"]}',
+                  f'Local label visibility unverified:{summary["visibility_unverified"]}',
                   f'Skipped or not matched:         {summary["skipped"]}',
                   f'Write failures:                 {summary["failed"]}',
                   f'Fatal problem:                  {summary["fatal"] or "none"}',
@@ -1733,6 +1834,10 @@ def import_issues(summary):
         issues.append('ERROR: ' + str(summary['fatal']))
     if summary.get('failed'):
         issues.append(f"{summary['failed']} write(s) failed.")
+    if summary.get('visibility_failed') or summary.get('visibility_unverified'):
+        issues.append(f"Local signal visibility could not be verified for "
+                      f"{summary.get('visibility_failed', 0) + summary.get('visibility_unverified', 0)} "
+                      f"text object(s). See details.")
     if summary.get('skipped'):
         issues.append(f"{summary['skipped']} assignment(s) could not be resolved or applied.")
     defined = summary.get('defined', 0)
@@ -1867,7 +1972,9 @@ def show_issue_window(parent, summary, issues, title='Zuken Import — Issues'):
     tokens = ('BLOCK LOOKUP', 'BLOCK MATCH', 'BLOCK ', 'SKIP ', 'ERROR',
               'FATAL', 'STOP', 'NOTICE:', 'FAILED', 'WARNING', 'SUMMARY',
               'Pin-local attributes written:', 'Pin-local value readback verified:',
-              'Pin-local text formatting verified:', 'Top-pin designations bold/visible:')
+              'Pin-local text formatting verified:', 'Top-pin designations bold/visible:',
+              'ALL LOCAL SIGNAL LABELS VISIBLE', 'VISIBILITY ERROR',
+              'Local signal labels visible', 'Local label visibility')
     for line in records:
         if any(tag in line for tag in tokens):
             relevant.append(line)
