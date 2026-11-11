@@ -1,6 +1,8 @@
 """Zuken E3.series: Excel J2 local-signal importer.
 
-Version 1.8: BOLD LOCAL TEXT + TOP-PIN DESIGNATION + PLAIN PRINT.
+Version 1.9: Fix bold on actual placed text of a multi-pin connector symbol.
+Looks up device designation text on connector-owned symbols in addition
+ to the pin; prints before/after text style; no log file.
 Run from E3 or Python, choose one Excel workbook, and immediately apply.
 Uses ordinary print() for diagnostic output: no separate console, no pause, no log file.
 
@@ -51,7 +53,7 @@ import re
 import traceback
 
 SHEET_NAME = 'J2'  # E3 drawing-page identifier, NOT a required Excel tab name
-VERSION = '1.8-print-top-pin-bold'
+VERSION = '1.9-multipin-text-bold'
 FIRST_ROW = 7
 FIRST_PIN_COL = 9  # I
 CONNECTOR_COL_STEP = 4  # I:J, M:N, Q:R, U:V, ...
@@ -788,28 +790,43 @@ def read_pin_local_evidence(job, pin_id):
 
 
 def style_text_bold(job, text_id, *, height=None):
-    """Format an existing E3 Text object only (never change its value/net)."""
+    """Bold an EXISTING, independently identified E3 text object.
+
+    The actual displayed Text ID matters: an E3 pin may expose the text's
+    visibility while the corresponding glyphs live on a multi-pin symbol.
+    Do not claim success unless the text object's style can be read back.
+    """
     t = make_object(job, 'Text', text_id)
+    original_style = get_scalar(t, ('GetStyle',))
     setter = getattr(t, 'SetStyle', None)
     if not callable(setter):
-        return False, f'text {text_id}: SetStyle unavailable'
-    setter(BOLD_STYLE)
+        return False, f'text {text_id}: SetStyle unavailable; style before={original_style!r}'
+    try:
+        setter_return = setter(BOLD_STYLE)
+    except Exception as exc:
+        return False, f'text {text_id}: SetStyle({BOLD_STYLE}) failed: {exc}'
+    if setter_return is False or (type(setter_return) is int and setter_return < 0):
+        return False, f'text {text_id}: SetStyle rejected ({setter_return!r})'
     if height is not None:
         size_setter = getattr(t, 'SetHeight', None)
         if callable(size_setter):
-            size_setter(height)
+            try:
+                size_setter(height)
+            except Exception as exc:
+                return False, f'text {text_id}: SetHeight({height}) failed: {exc}'
     visible_via = set_visible(t)
-    style = get_scalar(t, ('GetStyle',))
+    actual_style = get_scalar(t, ('GetStyle',))
     actual_h = get_scalar(t, ('GetHeight',))
-    bold_ok = (style == BOLD_STYLE)
+    bold_ok = actual_style == BOLD_STYLE
     height_ok = (height is None or
                  (isinstance(actual_h, (int, float)) and
                   abs(float(actual_h) - height) <= 0.0001))
-    result = f'text {text_id}: bold={bold_ok} (style={style!r})'
+    info = (f'text {text_id}: SetStyle({BOLD_STYLE}) returned {setter_return!r}, '
+            f'style {original_style!r} -> {actual_style!r}, bold readback={bold_ok}')
     if height is not None:
-        result += f', 0.15-inch={height_ok} (height={actual_h!r})'
-    result += f', text visibility={visible_via or "owner-level"}'
-    return bold_ok and height_ok, result
+        info += f', 0.15-inch={height_ok} (height={actual_h!r})'
+    info += f', visibility={visible_via or "owner-level"}'
+    return bold_ok and height_ok, info
 
 
 def format_verified_local_attribute_text(job, pin_id, attr, connector_id=None):
@@ -930,8 +947,119 @@ def placed_pin_y(job,pin_id):
     return None,'no exposed placed pin/text Y coordinate'
 
 
-def show_top_pin_designation(job,connector_id,connector_name):
-    """Show/bold type-12 designation on HIGHEST-Y pin of one connector only."""
+def designation_text_ids(job, connector_id, top_pin_id, connector_name,
+                         sibling_connector_ids=()):
+    """Locate the real, PLACED type-12 text, including multi-pin symbols.
+
+    Device designations on connector groups frequently belong to the whole
+    connector symbol rather than Pin.GetTextIds(12). Only accept symbols
+    uniquely owned by the requested connector; never style a sibling's text.
+    """
+    conn = make_object(job, 'Device', connector_id)
+    pin = make_object(job, 'Pin', top_pin_id)
+    conn_pin_ids = set(related_ids(conn, ('GetPinIds',)))
+    notes=[]
+
+    # Highest confidence: a type-12 node directly returned by the top pin.
+    direct = related_ids(pin, ('GetTextIds',), text_type=DEVICE_DESIGNATION_TEXT_TYPE)
+    if direct:
+        notes.append(f'top pin directly exposes type-12 text IDs {direct}; also checking placed symbols')
+    else:
+        notes.append('top pin GetTextIds(type=12) returned no text')
+
+    # E3 can place all 9 pins of a connector in one symbol. Version 1.8 only
+    # accepted a symbol owning EXACTLY one pin, which misses these labels.
+    from_pin = related_ids(pin, ('GetSymbolIds',))
+    pin_sym_id = get_scalar(pin, ('GetSymbolId', 'GetOwnerSymbolId'))
+    if type(pin_sym_id) is int and pin_sym_id > 0:
+        from_pin.append(pin_sym_id)
+    from_conn = related_ids(conn, ('GetSymbolIds',))
+    notes.append(f'pin symbol IDs={from_pin}; connector symbol IDs={from_conn}')
+    candidates = list(dict.fromkeys(from_pin + from_conn))
+
+    # A shared symbol returned by both connectors is not sufficient proof of
+    # ownership; skip it unless its associated pin IDs belong only to J1B.
+    shared_symbols=set()
+    for sibling_id in sibling_connector_ids:
+        if sibling_id == connector_id:
+            continue
+        try:
+            other=make_object(job, 'Device', sibling_id)
+            shared_symbols.update(related_ids(other, ('GetSymbolIds',)))
+        except Exception:
+            pass
+
+    collected=[]
+    for sid in candidates:
+        try:
+            sym = make_object(job, 'Symbol', sid)
+            sym_pin_ids = set(related_ids(sym, ('GetPinIds',)))
+            own_pin_id = get_scalar(sym, ('GetPinId','GetOwnerPinId'))
+            if not sym_pin_ids and type(own_pin_id) is int and own_pin_id > 0:
+                sym_pin_ids.add(own_pin_id)
+            if sym_pin_ids:
+                # A connector's text may be on a 9-pin symbol, and that is OK.
+                if top_pin_id not in sym_pin_ids or not sym_pin_ids <= conn_pin_ids:
+                    notes.append(f'symbol {sid}: rejected (pins {sorted(sym_pin_ids)[:15]} not exclusive to selected connector)')
+                    continue
+            elif sid in shared_symbols:
+                notes.append(f'symbol {sid}: rejected (also returned by another connector; unknown pin ownership)')
+                continue
+            elif sid not in from_conn and sid not in from_pin:
+                continue
+            tids = related_ids(sym, ('GetTextIds',), text_type=DEVICE_DESIGNATION_TEXT_TYPE)
+            notes.append(f'symbol {sid} ({len(sym_pin_ids)} associated pins): type-12 text IDs={tids}')
+            for tid in tids:
+                collected.append((tid,sid))
+        except Exception as exc:
+            notes.append(f'symbol {sid} lookup failed: {type(exc).__name__}: {exc}')
+
+    unique=list(dict.fromkeys(tid for tid,_ in collected))
+    if len(unique) == 1:
+        return list(dict.fromkeys(direct + unique)), '; '.join(notes)
+    if not unique:
+        return list(dict.fromkeys(direct)), '; '.join(notes) + '; no connector-symbol type-12 text found'
+
+    # Multiple designation nodes: first accept an exact displayed connector
+    # name, if the text object's API exposes one and the match is unique.
+    matching=[]
+    for tid in unique:
+        try:
+            t=make_object(job,'Text',tid)
+            value=get_scalar(t,('GetText','GetDisplayText','GetString','GetValue'))
+            if isinstance(value,str) and value.strip().casefold()==connector_name.strip().casefold():
+                matching.append(tid)
+        except Exception:
+            pass
+    if len(matching)==1:
+        notes.append(f'unique rendered designation {connector_name!r} identifies text {matching[0]}')
+        return list(dict.fromkeys(direct + matching)), '; '.join(notes)
+
+    # Next accept a unique highest-Y label on a symbol proven exclusive to
+    # this connector. No extrapolation from pin number or memory addresses.
+    positioned=[]
+    for tid in unique:
+        try:
+            xy=read_xy_local(make_object(job,'Text',tid))
+            if xy is not None:
+                positioned.append((xy[1],tid))
+        except Exception:
+            pass
+    if len(positioned)==len(unique):
+        positioned.sort(reverse=True)
+        if len(positioned)<2 or abs(positioned[0][0]-positioned[1][0])>1e-7:
+            notes.append(f'chose unique highest-Y type-12 label, text ID {positioned[0][1]}')
+            return list(dict.fromkeys(direct + [positioned[0][1]])), '; '.join(notes)
+    notes.append('AMBIGUOUS multiple type-12 texts; no formatting attempted')
+    return list(dict.fromkeys(direct)), '; '.join(notes)
+
+
+def show_top_pin_designation(job, connector_id, connector_name, sibling_connector_ids=()):
+    """Make the highest-Y connector pin's device designation visible AND bold.
+
+    Crucial fix: retrieve the actual text from the *multi-pin symbol* when
+    Pin.GetTextIds(type=12) is empty. Do not change other connector symbols.
+    """
     conn=make_object(job,'Device',connector_id)
     pin_ids=related_ids(conn,('GetPinIds',))
     ranked=[]
@@ -946,14 +1074,23 @@ def show_top_pin_designation(job,connector_id,connector_name):
         except Exception:
             missing.append(pid)
     if not pin_ids or missing or len(ranked)!=len(pin_ids):
-        return (False,f'{connector_name}: cannot identify highest-Y pin safely; '
-                f'{len(ranked)}/{len(pin_ids)} locations available, missing={missing[:20]}')
+        return False,(f'{connector_name}: cannot identify highest-Y pin safely; '
+                      f'{len(ranked)}/{len(pin_ids)} locations available, missing={missing[:20]}')
     ranked.sort(key=lambda v:v[0],reverse=True)
     if len(ranked)>1 and abs(ranked[0][0]-ranked[1][0])<1e-7:
         return False,f'{connector_name}: multiple pins tie for highest Y; no designation visibility changed'
     y,top_id,location_method=ranked[0]
     pin=make_object(job,'Pin',top_id)
-    # Visibility is pin-scoped; never show type 12 for the whole connector.
+
+    # Find a safe, exact text object BEFORE changing visibility; no setter is
+    # invoked if text ownership remains ambiguous.
+    text_ids, discovery = designation_text_ids(job,connector_id,top_id,connector_name,
+                                                sibling_connector_ids)
+    if not text_ids:
+        return False,(f'{connector_name}: TOP PIN {get_scalar(pin,("GetName",))!r} '
+                      f'(ID {top_id}, Y={y:g}); {discovery}. '
+                      f'No unrelated text was formatted.')
+
     vis_result='no pin visibility API'
     show=getattr(pin,'SetTextVisibility',None)
     if callable(show):
@@ -962,18 +1099,12 @@ def show_top_pin_designation(job,connector_id,connector_name):
             vis_result=f'Pin.SetTextVisibility(12,1) returned {res!r}'
         except Exception as exc:
             vis_result=f'Pin.SetTextVisibility failed: {exc}'
-    text_ids=related_ids(pin,('GetTextIds',),text_type=DEVICE_DESIGNATION_TEXT_TYPE)
-    if not text_ids:
-        for sym in uniquely_owned_pin_symbols(job,top_id,connector_id):
-            text_ids.extend(related_ids(sym,('GetTextIds',),text_type=DEVICE_DESIGNATION_TEXT_TYPE))
-    text_ids=list(dict.fromkeys(text_ids))
     results=[style_text_bold(job,tid) for tid in text_ids]
     formatted=bool(results) and all(ok for ok,_ in results)
-    detail='; '.join(msg for _,msg in results) or 'no existing type-12 text object returned'
-    # Leave lower-pin designations exactly as found.
+    detail='; '.join(msg for _,msg in results)
     return formatted,(f'{connector_name}: TOP PIN {get_scalar(pin,("GetName",))!r} '
                       f'(ID {top_id}, Y={y:g} via {location_method}); '
-                      f'{vis_result}; {detail}')
+                      f'{discovery}; {vis_result}; {detail}')
 
 
 def uniquely_owned_pin_symbols(job, pin_id, connector_id=None):
@@ -1267,7 +1398,8 @@ def perform(path):
                 lines.append('TOP-PIN DEVICE DESIGNATION (TYPE 12):')
                 for cid, cname in dict.fromkeys((p.connector_id,p.entry.connector_name) for p,_ in valid):
                     try:
-                        ok, detail=show_top_pin_designation(e3.job,cid,cname)
+                        ok, detail=show_top_pin_designation(e3.job,cid,cname,
+                                                               sibling_connector_ids=[other_cid for other_cid,*_ in others])
                         lines.append('  '+('OK: ' if ok else 'NOTICE: ')+detail)
                         if ok:
                             summary['designation_formatted']+=1
@@ -1324,7 +1456,7 @@ def run_once():
     except Exception:
         pass
     try:
-        print('ZUKEN E3 LOCAL SIGNAL IMPORTER v1.8', flush=True)
+        print('ZUKEN E3 LOCAL SIGNAL IMPORTER v1.9', flush=True)
         print('Select an Excel workbook to import pin-local names.', flush=True)
         filename = filedialog.askopenfilename(
             parent=root,
