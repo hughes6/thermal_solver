@@ -1,9 +1,12 @@
 """Zuken E3.series: Excel J2 local-signal importer.
 
-Version 1.2 -- Windows / E3.series. Run by double-clicking or from an E3 Tools menu.
+Version 1.3 -- Windows / E3.series. Run by double-clicking or from an E3 Tools menu.
 One Excel picker opens, then imports immediately (no preview or Apply button).
 
-Worksheet 'J2':
+Excel worksheet: any name; uses the matching data tab (or active tab).
+E3 drawing sheet 'J2' is used only to locate the block.
+
+Worksheet cells:
     B2    = duplicate-pin status/check (if present)
     C4    = block device designation
     C5    = connector count N
@@ -40,7 +43,7 @@ import subprocess
 import sys
 import traceback
 
-SHEET_NAME = 'J2'
+SHEET_NAME = 'J2'  # E3 drawing-page identifier, NOT a required Excel tab name
 FIRST_ROW = 7
 FIRST_PIN_COL = 9  # I
 CONNECTOR_COL_STEP = 4  # I:J, M:N, Q:R, U:V, ...
@@ -68,6 +71,7 @@ class ImportSheet:
     entries: list[PinEntry]
     check_b2: object
     duplicate_problems: list[str] = field(default_factory=list)
+    worksheet_name: str = ''
 
 
 @dataclass
@@ -110,24 +114,53 @@ def duplicate_flag_b2(value):
     return s in ('error', 'fail', 'failed', 'true') or 'duplicate' in s
 
 
+def select_data_sheet(wb):
+    """Choose the Excel data tab; J2 refers to the *E3 page*, not Excel.
+
+    Prefer a populated J2 tab if present, then the active Excel tab,
+    otherwise the first tab with a designation in C4 and connector count C5.
+    """
+    def has_inputs(sh):
+        if not as_text(sh['C4'].value):
+            return False
+        try:
+            n = float(sh['C5'].value)
+            return n >= 1 and n.is_integer()
+        except (TypeError, ValueError):
+            return False
+
+    matches = [sh for sh in wb.worksheets if has_inputs(sh)]
+    if not matches:
+        tabs = ', '.join(repr(sh.title) for sh in wb.worksheets)
+        raise ValueError(
+            'Could not find an Excel worksheet with the device designation '
+            'in C4 and connector count in C5. Excel tab names found: '
+            + (tabs or '(none)')
+        )
+    for sh in matches:
+        if sh.title.casefold() == SHEET_NAME.casefold():
+            return sh
+    if wb.active in matches:
+        return wb.active
+    return matches[0]
+
+
 def parse_workbook(filename: Path) -> ImportSheet:
     """Read Excel values without modifying the workbook or recalculating it."""
     from openpyxl import load_workbook
     wb = load_workbook(str(filename), read_only=False, data_only=True)
     try:
-        if SHEET_NAME not in wb.sheetnames:
-            raise ValueError("Excel worksheet 'J2' was not found.")
-        sh = wb[SHEET_NAME]
+        sh = select_data_sheet(wb)
         block = as_text(sh['C4'].value)
         if not block:
-            raise ValueError('J2!C4 (device designation) is empty.')
+            raise ValueError(f'{sh.title}!C4 (device designation) is empty.')
         raw_count = sh['C5'].value
         try:
             connector_count = int(raw_count)
             if connector_count < 1 or float(raw_count) != connector_count:
                 raise ValueError()
         except (ValueError, TypeError):
-            raise ValueError('J2!C5 must contain the number of connectors.') from None
+            raise ValueError(f'{sh.title}!C5 must contain the number of connectors.') from None
 
         entries = []
         problems = []
@@ -166,12 +199,12 @@ def parse_workbook(filename: Path) -> ImportSheet:
                                         pin, signal, f'{signal_col_letter}{row}'))
 
         sheet_data = ImportSheet(Path(filename), block, connector_count,
-                                 entries, sh['B2'].value, problems)
+                                 entries, sh['B2'].value, problems, sh.title)
         # A B2 formula may have no cached value when Excel has not calculated.
         # The actual duplicate scan above remains authoritative in that case.
         if duplicate_flag_b2(sheet_data.check_b2):
             sheet_data.duplicate_problems.insert(
-                0, 'J2!B2 reports duplicate pins: ' + repr(sheet_data.check_b2))
+                0, f'{sh.title}!B2 reports duplicate pins: ' + repr(sheet_data.check_b2))
         return sheet_data
     finally:
         wb.close()
@@ -592,8 +625,10 @@ def write_log(path, content):
 
 
 def perform(path):
-    lines = [f'EXCEL: {path}', f'WORKSHEET: {SHEET_NAME}']
+    lines = [f'EXCEL: {path}']
     data = parse_workbook(path)
+    lines.append(f'EXCEL WORKSHEET: {data.worksheet_name}')
+    lines.append(f'E3 DRAWING PAGE FOR BLOCK MATCH: {SHEET_NAME}')
     require_no_duplicate_pins(data)
     lines += [f'BLOCK (C4): {data.block_name}',
               f'CONNECTORS (C5): {data.connector_count}',
