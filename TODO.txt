@@ -1,6 +1,6 @@
 """Zuken E3.series: Excel J2 local-signal importer.
 
-Version 2.5: Force all local signal labels visible on each imported connector; retain v2.4 completion/error windows.
+Version 2.6: Display missing pin-owned Local Signal Name attributes before making their placed text visible; retain v2.4 completion/error windows.
 Looks up device designation text on connector-owned symbols in addition
  to the pin; prints before/after text style; no log file.
 Run from E3 or Python, choose one Excel workbook, and immediately apply.
@@ -33,8 +33,9 @@ propagate into other connectors. It writes only to an explicitly existing
 pin-owned attribute named Local Signal Name (or listed direct alias).
 When no such field exists, it performs READ-ONLY diagnostics and prints
 what E3 exposes, without changing signal connectivity.
-It formats actual placed pin-view text type 617 after matching its logical
-pin and connector. Type-12 designation is enabled and bolded on the unique
+It calls Attribute.DisplayAttribute on hidden pin-owned Local Signal Name
+attributes, then formats actual placed pin-view text type 617 after matching
+its logical pin and connector. Type-12 designation is enabled and bolded on the unique
 top placed pin identified by split-position marker type 213 (1/N).
 Unlike E3 electrical net signal, these changes are only text styling.
 
@@ -60,7 +61,7 @@ import traceback
 import time
 
 SHEET_NAME = 'J2'  # E3 drawing-page identifier, NOT a required Excel tab name
-VERSION = '2.5-all-local-signals-visible'
+VERSION = '2.6-show-pin-attributes'
 FIRST_ROW = 7
 FIRST_PIN_COL = 9  # I
 CONNECTOR_COL_STEP = 4  # I:J, M:N, Q:R, U:V, ...
@@ -1431,81 +1432,192 @@ def format_placed_local_signal(job, pin_id, connector_name, pin_name):
     return verified == len(found), f'{connector_name}/{pin_name}: '+ ' | '.join(messages)
 
 
+def _local_signal_attribute_on_pin(job, pin):
+    """Return (attribute object, attribute ID), strictly owned by this pin.
+
+    Pin.GetAttributeValue alone is not enough to show the corresponding text.
+    The earlier working Block Maker used Pin.GetAttributeIds() followed by
+    Attribute.DisplayAttribute() for Local Signal Name.  Do not create a new
+    attribute or touch the electrical signal/network here.
+    """
+    for aid in related_ids(pin, ('GetAttributeIds',)):
+        try:
+            attr = make_object(job, 'Attribute', aid)
+            name = as_text(get_scalar(attr, ('GetName',))).casefold()
+            if name == 'local signal name':
+                return attr, aid
+        except Exception:
+            continue
+    return None, None
+
+
+def _pin_local_display_texts(job, pin_id):
+    """Collect actual placed type-617 texts for a single pin, no net objects."""
+    texts = set()
+    views = set()
+    for vid in placed_pin_view_ids(job, pin_id):
+        views.add(vid)
+        for typ, _, tid in view_text_items(job, vid):
+            if typ == LOCAL_SIGNAL_TEXT_TYPE:
+                texts.add(tid)
+    return views, texts
+
+
+def _visibility_readback(job, text_id):
+    text = make_object(job, 'Text', text_id)
+    return get_scalar(text, ('GetVisibility', 'GetVisible'))
+
+
 def ensure_connector_local_signals_visible(job, connector_id, connector_name):
-    """Enable every existing type-617 label on an Excel-selected connector.
+    """Display *all* existing local signal names on one selected connector.
 
-    The normal import formats newly assigned pins. This final pass additionally
-    visits *every* pin belonging to that same E3 connector so previously named
-    pins, including ones omitted from the workbook, also display their local
-    signal labels. It does not change any signal value, font, or other connector.
+    Version 2.5 only SetVisibility(1) on type-617 text objects it could find.
+    But some hidden Local Signal Name pin attributes have NO placed text object
+    until Attribute.DisplayAttribute() has been called.  This function mirrors
+    the previously working Block Maker, then re-enumerates pin views and the
+    attribute's own text IDs and makes those text objects visible and bold.
 
-    E3 Pin.GetViewIds() identifies the placed pin view; Text.SetVisibility(1)
-    is the working Pin Arranger method. Verify with GetVisibility() when exposed.
+    Only existing nonblank pin-local attributes are displayed; this code NEVER
+    calls Pin.SetSignalName or changes a signal value, connector, or other pin.
     """
     connector = make_object(job, 'Device', connector_id)
     pin_ids = list(dict.fromkeys(related_ids(connector, ('GetPinIds',))))
-    seen_views = set()
     seen_texts = set()
-    count_visible = 0
-    failures = []
-    observations = []
+    seen_views = set()
+    visible_texts = set()
+    expected_named_pins = 0
+    displayed_named_pins = 0
+    display_attribute_calls = 0
+    failed = []
+    uncertain = []
+    samples = []
 
     for pin_id in pin_ids:
+        pin = make_object(job, 'Pin', pin_id)
+        pin_name = as_text(get_scalar(pin, ('GetName',))) or str(pin_id)
+        # Read the pin-owned *attribute*, never the shared electrical net.
+        value = None
         try:
-            views = placed_pin_view_ids(job, pin_id)
-        except Exception as exc:
-            failures.append(f'pin {pin_id}: could not enumerate placed views: {exc}')
-            continue
-        for view_id in views:
-            # A pin can have multiple placed views. Some E3 objects expose the
-            # same view through more than one pin; don't repeat COM writes.
-            if view_id in seen_views:
-                continue
-            seen_views.add(view_id)
-            try:
-                items = view_text_items(job, view_id)
-            except Exception as exc:
-                failures.append(f'view {view_id}: could not enumerate text: {exc}')
-                continue
-            for text_type, _, text_id in items:
-                if text_type != LOCAL_SIGNAL_TEXT_TYPE or text_id in seen_texts:
-                    continue
-                seen_texts.add(text_id)
-                try:
-                    txt = make_object(job, 'Text', text_id)
-                    setter = getattr(txt, 'SetVisibility', None)
-                    if not callable(setter):
-                        failures.append(f'type-617 text {text_id}: SetVisibility unavailable')
-                        continue
-                    result = setter(1)
-                    # Some E3 COM setters return 0 even when successful. Always
-                    # prefer the real visibility state over the return code.
-                    state = get_scalar(txt, ('GetVisibility', 'GetVisible'))
-                    if state in (1, True):
-                        count_visible += 1
-                    elif state is None:
-                        observations.append(f'text {text_id}: visibility readback unavailable '
-                                            f'(SetVisibility returned {result!r})')
-                    else:
-                        failures.append(f'text {text_id}: visibility still {state!r} '
-                                        f'after SetVisibility(1), return={result!r}')
-                except Exception as exc:
-                    failures.append(f'text {text_id}: SetVisibility(1) failed: '
-                                    f'{type(exc).__name__}: {exc}')
+            value = pin.GetAttributeValue('Local Signal Name')
+        except Exception:
+            pass
+        existing_value = as_text(value) if isinstance(value, (str, int, float)) and value != NO_VALUE else ''
+        views_before, ids_before = _pin_local_display_texts(job, pin_id)
+        seen_views.update(views_before)
 
-    result = {
+        # Make any existing 617 text visible even on pins with no attribute
+        # value.  A blank value is not considered a missing rendered label.
+        attr, aid = (None, None)
+        if existing_value:
+            expected_named_pins += 1
+            attr, aid = _local_signal_attribute_on_pin(job, pin)
+            if attr is None:
+                if not ids_before:
+                    failed.append(f'{connector_name}/{pin_name}: Local Signal Name value '
+                                  f'{existing_value!r} exists, but no attribute ID or '
+                                  'placed type-617 text was found')
+                # Existing placed type-617 text can still be made visible.
+            else:
+                # Calling DisplayAttribute is what the original Block Maker
+                # does.  Its absence in v2.5 is why text objects could remain
+                # uncreated even after SetVisibility(1) was requested.
+                need_display = not ids_before or any(
+                    _visibility_readback(job, tid) not in (1, True)
+                    for tid in ids_before
+                )
+                if need_display:
+                    display = getattr(attr, 'DisplayAttribute', None)
+                    if not callable(display):
+                        failed.append(f'{connector_name}/{pin_name}: '
+                                      'Attribute.DisplayAttribute not available')
+                    else:
+                        try:
+                            result = display()
+                            display_attribute_calls += 1
+                            samples.append(f'{pin_name}: Attribute {aid} '
+                                           f'DisplayAttribute() returned {result!r}')
+                        except Exception as exc:
+                            failed.append(f'{connector_name}/{pin_name}: '
+                                          f'Attribute.DisplayAttribute error: {exc}')
+
+        # Attribute.DisplayAttribute can create new text IDs, so we MUST
+        # re-enumerate after it has executed.  Also inspect attribute-owned
+        # text, whose type can differ from 617 on some E3 symbol libraries.
+        views_after, type617_ids = _pin_local_display_texts(job, pin_id)
+        seen_views.update(views_after)
+        text_ids = set(type617_ids)
+        if existing_value and attr is not None:
+            text_ids.update(related_ids(attr, ('GetTextIds',)))
+        if not text_ids and existing_value:
+            failed.append(f'{connector_name}/{pin_name}: Local Signal Name '
+                          f'{existing_value!r} still has NO DISPLAY TEXT after '
+                          'DisplayAttribute; check placed pin symbol/attribute '
+                          'visibility settings in E3')
+            continue
+
+        pin_visible = False
+        for tid in sorted(text_ids):
+            if tid not in seen_texts:
+                seen_texts.add(tid)
+                try:
+                    txt = make_object(job, 'Text', tid)
+                    set_vis = getattr(txt, 'SetVisibility', None)
+                    if not callable(set_vis):
+                        failed.append(f'{connector_name}/{pin_name}: '
+                                      f'text {tid} has no SetVisibility')
+                        continue
+                    ret = set_vis(1)
+                    # Preserve 0.15-inch bold formatting on all displayed
+                    # local signal names, not just newly imported values.
+                    if existing_value:
+                        style = getattr(txt, 'SetStyle', None)
+                        if callable(style):
+                            style(BOLD_STYLE)
+                        height = getattr(txt, 'SetHeight', None)
+                        if callable(height):
+                            height(TEXT_HEIGHT_IN)
+                    state = _visibility_readback(job, tid)
+                    if state in (1, True):
+                        visible_texts.add(tid)
+                    elif state is None:
+                        uncertain.append(f'{connector_name}/{pin_name}: text {tid} '
+                                         f'visibility cannot be read (setter={ret!r})')
+                    else:
+                        failed.append(f'{connector_name}/{pin_name}: text {tid} '
+                                      f'visibility is {state!r} after SetVisibility(1)')
+                except Exception as exc:
+                    failed.append(f'{connector_name}/{pin_name}: text {tid}: '
+                                  f'{type(exc).__name__}: {exc}')
+            if tid in visible_texts:
+                pin_visible = True
+        if existing_value and pin_visible:
+            displayed_named_pins += 1
+        elif existing_value and text_ids and not pin_visible:
+            # If a display text was found but GetVisibility is unsupported,
+            # fail visibly rather than claiming success.
+            uncertain.append(f'{connector_name}/{pin_name}: could not verify '
+                             f'display of {existing_value!r}')
+
+    stats = {
         'pins': len(pin_ids), 'views': len(seen_views),
-        'labels': len(seen_texts), 'verified': count_visible,
-        'failed': len(failures), 'unverified': len(observations),
+        'labels': len(seen_texts), 'verified': len(visible_texts),
+        'failed': len(failed), 'unverified': len(uncertain),
+        'named_pins': expected_named_pins,
+        'displayed_pins': displayed_named_pins,
+        'display_calls': display_attribute_calls,
     }
-    detail = (f'{connector_name}: {len(pin_ids)} connector pins scanned, '
-              f'{len(seen_views)} placed views, {len(seen_texts)} local signal '
-              f'label(s); {count_visible} visible verified')
-    if failures:
-        detail += '; visibility errors: ' + '; '.join(failures[:15])
-    if observations:
-        detail += '; unverified visibility: ' + '; '.join(observations[:10])
-    return result, detail
+    detail = (f'{connector_name}: {len(pin_ids)} pins, '
+              f'{expected_named_pins} nonblank Local Signal Name attributes, '
+              f'{display_attribute_calls} Attribute.DisplayAttribute calls; '
+              f'{displayed_named_pins}/{expected_named_pins} named pins shown; '
+              f'{len(visible_texts)}/{len(seen_texts)} text IDs visible')
+    if samples:
+        detail += '; display samples: ' + '; '.join(samples[:8])
+    if failed:
+        detail += '; ERRORS: ' + '; '.join(failed[:15])
+    if uncertain:
+        detail += '; UNVERIFIED: ' + '; '.join(uncertain[:10])
+    return stats, detail
 
 
 def show_top_designation_placed_view(job, connector_id, connector_name):
@@ -1557,7 +1669,7 @@ def perform(path):
     summary = {'defined':0, 'resolved':0, 'signal_accepted':0,
                'verified':0, 'formatted':0, 'designation_formatted':0, 'expected_designations':0, 'failed':0, 'skipped':0,
                'visibility_labels':0, 'visibility_verified':0, 'visibility_failed':0,
-               'visibility_unverified':0, 'fatal':None}
+               'visibility_unverified':0, 'named_pins_expected':0, 'named_pins_displayed':0, 'fatal':None}
     com_initialized = False
     try:
         data = parse_workbook(path)
@@ -1762,6 +1874,8 @@ def perform(path):
                                               for p, _ in valid):
                     try:
                         stats, detail = ensure_connector_local_signals_visible(e3.job, cid, cname)
+                        summary['named_pins_expected'] += stats['named_pins']
+                        summary['named_pins_displayed'] += stats['displayed_pins']
                         summary['visibility_labels'] += stats['labels']
                         summary['visibility_verified'] += stats['verified']
                         summary['visibility_failed'] += stats['failed']
@@ -1806,6 +1920,7 @@ def perform(path):
                   f'Pin-local value readback verified:{summary["verified"]}',
                   f'Pin-local text formatting verified:{summary["formatted"]}',
                   f'Top-pin designations bold/visible:{summary["designation_formatted"]}',
+                  f'Named pins displayed (verified):      {summary["named_pins_displayed"]}/{summary["named_pins_expected"]}',
                   f'Local signal labels visible (verified): {summary["visibility_verified"]}/{summary["visibility_labels"]}',
                   f'Local label visibility errors:    {summary["visibility_failed"]}',
                   f'Local label visibility unverified:{summary["visibility_unverified"]}',
@@ -1834,6 +1949,8 @@ def import_issues(summary):
         issues.append('ERROR: ' + str(summary['fatal']))
     if summary.get('failed'):
         issues.append(f"{summary['failed']} write(s) failed.")
+    if summary.get('named_pins_displayed', 0) < summary.get('named_pins_expected', 0):
+        issues.append(f"Only {summary.get('named_pins_displayed', 0)}/{summary.get('named_pins_expected', 0)} pins with Local Signal Name values have verified visible text.")
     if summary.get('visibility_failed') or summary.get('visibility_unverified'):
         issues.append(f"Local signal visibility could not be verified for "
                       f"{summary.get('visibility_failed', 0) + summary.get('visibility_unverified', 0)} "
