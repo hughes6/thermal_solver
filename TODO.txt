@@ -1,8 +1,8 @@
 """Zuken E3.series: Excel J2 local-signal importer.
 
-Version 1.7 CONSOLE OUTPUT / PIN-LOCAL SAFETY -- Windows / E3.series.
-Open one Excel picker, then perform the import and PRINT results in a console window.
-No text log is written and no other configuration window is opened.
+Version 1.8: BOLD LOCAL TEXT + TOP-PIN DESIGNATION + PLAIN PRINT.
+Run from E3 or Python, choose one Excel workbook, and immediately apply.
+Uses ordinary print() for diagnostic output: no separate console, no pause, no log file.
 
 Excel worksheet: any name; uses the matching data tab (or active tab).
 E3 drawing sheet 'J2' is used only to locate the block.
@@ -45,24 +45,25 @@ from dataclasses import dataclass, field
 import gc
 from datetime import datetime
 from pathlib import Path
+import math
+from statistics import median
 import re
-import subprocess
-import sys
 import traceback
 
 SHEET_NAME = 'J2'  # E3 drawing-page identifier, NOT a required Excel tab name
-VERSION = '1.7-console-pin-local-safe'
+VERSION = '1.8-print-top-pin-bold'
 FIRST_ROW = 7
 FIRST_PIN_COL = 9  # I
 CONNECTOR_COL_STEP = 4  # I:J, M:N, Q:R, U:V, ...
 LOCAL_SIGNAL_TEXT_TYPE = 7
+DEVICE_DESIGNATION_TEXT_TYPE = 12
 TEXT_HEIGHT_IN = 0.15
 BOLD_STYLE = 1
 NO_VALUE = -2147352572  # COM's DISP_E_PARAMNOTFOUND
 
 
 class ConsoleLines(list):
-    """Capture diagnostics for programmatic tests and print them immediately."""
+    """Pass diagnostics through the host interpreter with plain print()."""
     def __init__(self, lines=()):
         super().__init__()
         self.extend(lines)
@@ -786,43 +787,193 @@ def read_pin_local_evidence(job, pin_id):
     return out
 
 
-def format_verified_local_attribute_text(job, pin_id, attr):
-    """Do not style type-7 NET text as if it were a local pin attribute.
+def style_text_bold(job, text_id, *, height=None):
+    """Format an existing E3 Text object only (never change its value/net)."""
+    t = make_object(job, 'Text', text_id)
+    setter = getattr(t, 'SetStyle', None)
+    if not callable(setter):
+        return False, f'text {text_id}: SetStyle unavailable'
+    setter(BOLD_STYLE)
+    if height is not None:
+        size_setter = getattr(t, 'SetHeight', None)
+        if callable(size_setter):
+            size_setter(height)
+    visible_via = set_visible(t)
+    style = get_scalar(t, ('GetStyle',))
+    actual_h = get_scalar(t, ('GetHeight',))
+    bold_ok = (style == BOLD_STYLE)
+    height_ok = (height is None or
+                 (isinstance(actual_h, (int, float)) and
+                  abs(float(actual_h) - height) <= 0.0001))
+    result = f'text {text_id}: bold={bold_ok} (style={style!r})'
+    if height is not None:
+        result += f', 0.15-inch={height_ok} (height={actual_h!r})'
+    result += f', text visibility={visible_via or "owner-level"}'
+    return bold_ok and height_ok, result
 
-    A separate pin-owned attribute text may exist, identified by its GetAttributeName.
-    It is safe to format only a positively identified attribute-associated text node.
+
+def format_verified_local_attribute_text(job, pin_id, attr, connector_id=None):
+    """Bold local signal display text attached to ONLY this connector pin.
+
+    Prefer explicit attribute-owned text nodes. E3 can instead represent the
+    visual signal field as type-7 text associated with the PIN. In that case,
+    formatting the existing text object is safe; we NEVER call SetText or
+    SetSignalName (which could change shared signal data).
     """
     pin = make_object(job, 'Pin', pin_id)
     all_ids = related_ids(pin, ('GetTextIds',))
-    # Filter by exact pin-attribute binding; if not exposed, do not guess.
-    trusted=[]
+    attribute_ids=[]
     for tid in all_ids:
         try:
             t = make_object(job, 'Text', tid)
-            name = get_scalar(t, ('GetAttributeName',))
-            if as_text(name).casefold() != attr.casefold():
-                continue
+            text_attr = get_scalar(t, ('GetAttributeName','GetAssignedAttributeName'))
             owner = get_scalar(t, ('GetOwnerPinId','GetPinId'))
-            if owner is not None and owner != pin_id:
-                continue
-            trusted.append((tid,t))
+            if as_text(text_attr).casefold() == attr.casefold() and (owner is None or owner==pin_id):
+                attribute_ids.append(tid)
+        except Exception:
+            pass
+
+    if attribute_ids:
+        text_ids = attribute_ids
+        source = f'pin-local attribute {attr!r}'
+    else:
+        # Use type-7 only when the ID is returned from THIS selected pin.
+        text_ids = related_ids(pin, ('GetTextIds',), text_type=LOCAL_SIGNAL_TEXT_TYPE)
+        source = 'pin-owned type-7 Local Signal Name text'
+        # Do not touch a text object if COM lists that same ID under another
+        # pin of this connector. This is only a FORMAT setter, still conservative.
+        if text_ids and connector_id is not None:
+            conn = make_object(job,'Device',connector_id)
+            shared=set()
+            for peer_id in related_ids(conn, ('GetPinIds',)):
+                if peer_id == pin_id:
+                    continue
+                try:
+                    peer=make_object(job,'Pin',peer_id)
+                    shared.update(related_ids(peer,('GetTextIds',),text_type=LOCAL_SIGNAL_TEXT_TYPE))
+                except Exception:
+                    pass
+            text_ids=[tid for tid in text_ids if tid not in shared]
+
+    if not text_ids:
+        return 'NO VERIFIED PER-PIN LOCAL SIGNAL TEXT; local attribute written, formatting skipped'
+    # A pin-level visibility setter can expose a hidden label without writing
+    # any signal value, and is constrained to the selected pin ID.
+    if source.startswith('pin-owned type-7'):
+        show = getattr(pin,'SetTextVisibility',None)
+        if callable(show):
+            try:
+                show(LOCAL_SIGNAL_TEXT_TYPE,1)
+            except Exception:
+                pass
+    results=[style_text_bold(job,tid,height=TEXT_HEIGHT_IN) for tid in dict.fromkeys(text_ids)]
+    ok=all(success for success,_ in results)
+    return ('OK' if ok else 'PARTIAL') + ' LOCAL SIGNAL TEXT ('+source+'): '+ '; '.join(msg for _,msg in results)
+
+
+def read_xy_local(obj):
+    """Read schema coordinates from a placed pin, symbol or text object."""
+    for method in ('GetSchemaLocation','GetPosition','GetLocation','GetCoordinates','GetXY'):
+        fn=getattr(obj,method,None)
+        if not callable(fn):
+            continue
+        try:
+            result=fn()
         except Exception:
             continue
-    if not trusted:
-        return 'NO VERIFIED PIN-LOCAL ATTRIBUTE TEXT. Attribute was set; visual text NOT verified/formatted. Type-7 net text was deliberately untouched.'
-    result=[]
-    for tid,t in trusted:
+        if (isinstance(result,(tuple,list)) and len(result)>=2 and
+                all(type(a) in (int,float) and math.isfinite(a) for a in result[:2])):
+            return float(result[0]),float(result[1])
+    x=get_scalar(obj,('GetSchemaX','GetX'))
+    y=get_scalar(obj,('GetSchemaY','GetY'))
+    if (type(x) in (int,float) and type(y) in (int,float) and
+            math.isfinite(x) and math.isfinite(y)):
+        return float(x),float(y)
+    return None
+
+
+def placed_pin_y(job,pin_id):
+    """Determine actual pin Y, never infer top pin from ID/pin number."""
+    pin=make_object(job,'Pin',pin_id)
+    xy=read_xy_local(pin)
+    if xy is not None:
+        return xy[1],'Pin schema position'
+    # Per-pin symbols, when exposed, are more reliable than text nodes.
+    symbol_ids=related_ids(pin,('GetSymbolIds',))
+    sid=get_scalar(pin,('GetSymbolId','GetOwnerSymbolId'))
+    if type(sid) is int and sid>0:
+        symbol_ids.append(sid)
+    ys=[]
+    for sid in dict.fromkeys(symbol_ids):
         try:
-            t.SetHeight(TEXT_HEIGHT_IN)
-            t.SetStyle(BOLD_STYLE)
-            visible = set_visible(t)
-            h=get_scalar(t, ('GetHeight',))
-            sty=get_scalar(t, ('GetStyle',))
-            correct=(isinstance(h,(int,float)) and abs(h-TEXT_HEIGHT_IN)<0.0001 and sty==BOLD_STYLE)
-            result.append((tid,correct,visible))
-        except Exception as ex:
-            result.append((tid,'FAILED',str(ex)))
-    return 'PIN ATTRIBUTE TEXT RESULTS: '+repr(result)
+            xy=read_xy_local(make_object(job,'Symbol',sid))
+            if xy is not None:
+                ys.append(xy[1])
+        except Exception:
+            pass
+    if len(ys)==1 or (ys and max(ys)-min(ys)<1e-7):
+        return float(median(ys)),'placed pin symbol'
+    # The pin's type-7 text and other text nodes commonly sit at its Y.
+    # Prefer type 7 so consistent offsets between text types cannot bias order.
+    for group, description in ((related_ids(pin,('GetTextIds',),text_type=LOCAL_SIGNAL_TEXT_TYPE),'type-7 pin text'),
+                               (related_ids(pin,('GetTextIds',)),'pin-owned text')):
+        ys=[]
+        for tid in group:
+            try:
+                xy=read_xy_local(make_object(job,'Text',tid))
+                if xy is not None:
+                    ys.append(xy[1])
+            except Exception:
+                pass
+        if ys:
+            return float(median(ys)),description
+    return None,'no exposed placed pin/text Y coordinate'
+
+
+def show_top_pin_designation(job,connector_id,connector_name):
+    """Show/bold type-12 designation on HIGHEST-Y pin of one connector only."""
+    conn=make_object(job,'Device',connector_id)
+    pin_ids=related_ids(conn,('GetPinIds',))
+    ranked=[]
+    missing=[]
+    for pid in pin_ids:
+        try:
+            y,how=placed_pin_y(job,pid)
+            if y is None:
+                missing.append(pid)
+            else:
+                ranked.append((y,pid,how))
+        except Exception:
+            missing.append(pid)
+    if not pin_ids or missing or len(ranked)!=len(pin_ids):
+        return (False,f'{connector_name}: cannot identify highest-Y pin safely; '
+                f'{len(ranked)}/{len(pin_ids)} locations available, missing={missing[:20]}')
+    ranked.sort(key=lambda v:v[0],reverse=True)
+    if len(ranked)>1 and abs(ranked[0][0]-ranked[1][0])<1e-7:
+        return False,f'{connector_name}: multiple pins tie for highest Y; no designation visibility changed'
+    y,top_id,location_method=ranked[0]
+    pin=make_object(job,'Pin',top_id)
+    # Visibility is pin-scoped; never show type 12 for the whole connector.
+    vis_result='no pin visibility API'
+    show=getattr(pin,'SetTextVisibility',None)
+    if callable(show):
+        try:
+            res=show(DEVICE_DESIGNATION_TEXT_TYPE,1)
+            vis_result=f'Pin.SetTextVisibility(12,1) returned {res!r}'
+        except Exception as exc:
+            vis_result=f'Pin.SetTextVisibility failed: {exc}'
+    text_ids=related_ids(pin,('GetTextIds',),text_type=DEVICE_DESIGNATION_TEXT_TYPE)
+    if not text_ids:
+        for sym in uniquely_owned_pin_symbols(job,top_id,connector_id):
+            text_ids.extend(related_ids(sym,('GetTextIds',),text_type=DEVICE_DESIGNATION_TEXT_TYPE))
+    text_ids=list(dict.fromkeys(text_ids))
+    results=[style_text_bold(job,tid) for tid in text_ids]
+    formatted=bool(results) and all(ok for ok,_ in results)
+    detail='; '.join(msg for _,msg in results) or 'no existing type-12 text object returned'
+    # Leave lower-pin designations exactly as found.
+    return formatted,(f'{connector_name}: TOP PIN {get_scalar(pin,("GetName",))!r} '
+                      f'(ID {top_id}, Y={y:g} via {location_method}); '
+                      f'{vis_result}; {detail}')
 
 
 def uniquely_owned_pin_symbols(job, pin_id, connector_id=None):
@@ -948,7 +1099,7 @@ def perform(path):
              f'TIME: {datetime.now().isoformat(timespec="seconds")}',
              f'EXCEL FILE: {path}', ''])
     summary = {'defined':0, 'resolved':0, 'signal_accepted':0,
-               'verified':0, 'formatted':0, 'failed':0, 'skipped':0,
+               'verified':0, 'formatted':0, 'designation_formatted':0, 'failed':0, 'skipped':0,
                'fatal':None}
     com_initialized = False
     try:
@@ -1090,9 +1241,9 @@ def perform(path):
                     summary['signal_accepted']+=1
                     summary['verified']+=1
                     lines.append(f'  ATTRIBUTE SETTER: {result}; net unchanged: {get_signal(pin)==net_before}; peers unchanged.')
-                    fmt=format_verified_local_attribute_text(e3.job,plan.pin_id,field)
+                    fmt=format_verified_local_attribute_text(e3.job,plan.pin_id,field,plan.connector_id)
                     lines.append(f'  LOCAL ATTRIBUTE TEXT FORMAT: {fmt}')
-                    if fmt.startswith('PIN ATTRIBUTE TEXT RESULTS:') and 'False' not in fmt and 'FAILED' not in fmt and 'None' not in fmt:
+                    if fmt.startswith('OK LOCAL SIGNAL TEXT'):
                         summary['formatted']+=1
                 except Exception as ex:
                     summary['failed']+=1
@@ -1110,6 +1261,18 @@ def perform(path):
                         changed_attrs.append((cid,pid,field,before,now))
                 except Exception as exc:
                     changed_attrs.append((cid,pid,field,'read failed',str(exc)))
+            # Run once per Excel-selected connector, using ALL its pins (not
+            # only the pin numbers which have signals defined in Excel).
+            if not summary['fatal'] and not summary['failed']:
+                lines.append('TOP-PIN DEVICE DESIGNATION (TYPE 12):')
+                for cid, cname in dict.fromkeys((p.connector_id,p.entry.connector_name) for p,_ in valid):
+                    try:
+                        ok, detail=show_top_pin_designation(e3.job,cid,cname)
+                        lines.append('  '+('OK: ' if ok else 'NOTICE: ')+detail)
+                        if ok:
+                            summary['designation_formatted']+=1
+                    except Exception as exc:
+                        lines.append(f'  NOTICE: {cname}: type-12 formatting error: {type(exc).__name__}: {exc}')
             lines.append(f'COUNTERPART PIN ATTRIBUTES CHANGED: {changed_attrs[:20]!r}')
             if changed_attrs:
                 summary['fatal']='A non-target PIN ATTRIBUTE changed. STOP and restore your project copy.'
@@ -1141,6 +1304,7 @@ def perform(path):
                   f'Pin-local attributes written:     {summary["signal_accepted"]}',
                   f'Pin-local value readback verified:{summary["verified"]}',
                   f'Pin-local text formatting verified:{summary["formatted"]}',
+                  f'Top-pin designations bold/visible:{summary["designation_formatted"]}',
                   f'Skipped or not matched:         {summary["skipped"]}',
                   f'Write failures:                 {summary["failed"]}',
                   f'Fatal problem:                  {summary["fatal"] or "none"}',
@@ -1150,7 +1314,7 @@ def perform(path):
 
 
 def run_once():
-    """Ask for Excel once, then print all outcomes directly. No log file."""
+    """Ask for Excel once; use native print() rather than a spawned console."""
     import tkinter as tk
     from tkinter import filedialog
     root = tk.Tk()
@@ -1160,8 +1324,8 @@ def run_once():
     except Exception:
         pass
     try:
-        print('ZUKEN E3 LOCAL SIGNAL IMPORTER v1.7', flush=True)
-        print('Choose the Excel workbook; results will print in this window.', flush=True)
+        print('ZUKEN E3 LOCAL SIGNAL IMPORTER v1.8', flush=True)
+        print('Select an Excel workbook to import pin-local names.', flush=True)
         filename = filedialog.askopenfilename(
             parent=root,
             title='Select Excel file for E3 local signal names',
@@ -1172,9 +1336,9 @@ def run_once():
             if result['fatal'] or result['failed'] or result['signal_accepted']==0:
                 print('\nRESULT: NO VERIFIED COMPLETED IMPORT / REVIEW ERRORS ABOVE.', flush=True)
             elif result['formatted'] < result['signal_accepted']:
-                print('\nRESULT: Pin-local fields updated, but not all display text could be verified/formatted.', flush=True)
+                print('\nRESULT: Names updated; some text formatting remains unverified.', flush=True)
             else:
-                print('\nRESULT: Pin-local fields updated and formatting verified.', flush=True)
+                print('\nRESULT: Pin-local names updated. Top-pin designation results printed above.', flush=True)
         else:
             print('Cancelled: no workbook selected.', flush=True)
     except Exception:
@@ -1184,40 +1348,8 @@ def run_once():
 
 
 def main():
-    # The E3 Tools host may have no visible stdout. Launch a separate Python
-    # process with its own console and release E3's Tools-menu selection host.
-    if sys.platform == 'win32' and '--child' not in sys.argv:
-        exe = Path(sys.executable)
-        if exe.name.lower() == 'pythonw.exe':
-            normal_exe = exe.with_name('python.exe')
-            if normal_exe.exists():
-                exe = normal_exe
-        try:
-            subprocess.Popen(
-                [str(exe), str(Path(__file__).resolve()), '--child'],
-                creationflags=subprocess.CREATE_NEW_CONSOLE | subprocess.CREATE_NEW_PROCESS_GROUP,
-                cwd=str(Path(__file__).resolve().parent),
-                close_fds=True,
-            )
-        except Exception as exc:
-            # E3 may embed its own interpreter; expose launch failure visibly.
-            try:
-                from tkinter import Tk, messagebox
-                r=Tk(); r.withdraw()
-                messagebox.showerror('E3 importer launch failed', str(exc), parent=r)
-                r.destroy()
-            except Exception:
-                print('Could not open importer console:',exc,flush=True)
-        return
-    try:
-        run_once()
-    finally:
-        if '--child' in sys.argv:
-            print('\nPress ENTER to close this console.', flush=True)
-            try:
-                input()
-            except (EOFError, OSError, KeyboardInterrupt):
-                pass
+    """No separate console process, popup debug window or Press Enter pause."""
+    run_once()
 
 
 if __name__ == '__main__':
