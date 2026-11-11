@@ -1,6 +1,6 @@
 """Zuken E3.series: Excel J2 local-signal importer.
 
-Version 2.3: quiet success window (Enter to close), detailed error window.
+Version 2.4: 310x150 completion dialog auto-foregrounded and Enter-ready, detailed error window.
 Looks up device designation text on connector-owned symbols in addition
  to the pin; prints before/after text style; no log file.
 Run from E3 or Python, choose one Excel workbook, and immediately apply.
@@ -50,6 +50,7 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from contextlib import redirect_stdout, redirect_stderr
 import io
+import sys
 import warnings
 from pathlib import Path
 import math
@@ -59,7 +60,7 @@ import traceback
 import time
 
 SHEET_NAME = 'J2'  # E3 drawing-page identifier, NOT a required Excel tab name
-VERSION = '2.3-quiet-complete'
+VERSION = '2.4-focused-complete'
 FIRST_ROW = 7
 FIRST_PIN_COL = 9  # I
 CONNECTOR_COL_STEP = 4  # I:J, M:N, Q:R, U:V, ...
@@ -1742,10 +1743,11 @@ def import_issues(summary):
 
 
 def show_complete_window(parent, result):
-    """Small foreground completion dialog, dismissed by Enter or the button.
+    """310x150 foreground completion dialog; Enter works without clicking first.
 
-    Tkinter is used instead of input(): stdin is not guaranteed to exist when
-    running inside Zuken/E3's embedded script host.
+    Keep this as a Tk dialog, not input(): an E3 launcher may have no stdin.
+    Reassert focus shortly after mapping because E3/Windows can take it back
+    immediately after the Excel file-picker closes.
     """
     import tkinter as tk
     from tkinter import ttk
@@ -1753,31 +1755,78 @@ def show_complete_window(parent, result):
     window = tk.Toplevel(parent)
     window.title('Zuken - Script Complete')
     window.resizable(False, False)
-    window.geometry('310x134')
-    window.protocol('WM_DELETE_WINDOW', window.destroy)
+    window.geometry('310x150')
 
-    frame = ttk.Frame(window, padding=17)
+    frame = ttk.Frame(window, padding=14)
     frame.pack(fill='both', expand=True)
-    ttk.Label(frame, text='Script complete', font=('Segoe UI', 12, 'bold')).pack(pady=(0, 8))
+    ttk.Label(frame, text='Script complete', font=('Segoe UI', 12, 'bold')).pack(pady=(0, 6))
     ttk.Label(frame, text=f"{result.get('verified', 0)} pin local signal(s) updated").pack()
     ttk.Label(frame, text='Press Enter to close', foreground='#555555').pack(pady=(6, 5))
 
     def finish(event=None):
-        window.destroy()
+        try:
+            window.grab_release()
+        except tk.TclError:
+            pass
+        if window.winfo_exists():
+            window.destroy()
 
+    window.protocol('WM_DELETE_WINDOW', finish)
     window.bind('<Return>', finish)
     window.bind('<KP_Enter>', finish)
     window.bind('<Escape>', finish)
-    # A clickable fallback if focus is managed differently by the E3 host.
     close_button = ttk.Button(frame, text='Close', command=finish)
     close_button.pack()
+
+    def bring_to_front():
+        if not window.winfo_exists():
+            return
+        try:
+            window.deiconify()
+            window.attributes('-topmost', True)
+            window.lift()
+            window.focus_force()
+            close_button.focus_force()
+        except tk.TclError:
+            return
+
+        # On Windows, visual topmost position does not always equal keyboard
+        # focus; explicitly request foreground activation for the dialog.
+        if sys.platform == 'win32':
+            try:
+                import ctypes
+                from ctypes import wintypes
+                user32 = ctypes.windll.user32
+                user32.GetAncestor.argtypes = (wintypes.HWND, wintypes.UINT)
+                user32.GetAncestor.restype = wintypes.HWND
+                user32.ShowWindow.argtypes = (wintypes.HWND, ctypes.c_int)
+                user32.ShowWindow.restype = wintypes.BOOL
+                user32.BringWindowToTop.argtypes = (wintypes.HWND,)
+                user32.BringWindowToTop.restype = wintypes.BOOL
+                user32.SetForegroundWindow.argtypes = (wintypes.HWND,)
+                user32.SetForegroundWindow.restype = wintypes.BOOL
+                hwnd = user32.GetAncestor(int(window.winfo_id()), 2)  # GA_ROOT
+                if not hwnd:
+                    hwnd = int(window.winfo_id())
+                user32.ShowWindow(hwnd, 5)  # SW_SHOW
+                user32.BringWindowToTop(hwnd)
+                user32.SetForegroundWindow(hwnd)
+                close_button.focus_force()
+            except Exception:
+                # Tk's topmost/focus_force are the cross-platform fallback.
+                pass
+
+    # Make it modal with respect to the importer's hidden Tk root. This also
+    # ensures keyboard events go to this window once foregrounded.
+    window.update_idletasks()
     try:
-        window.attributes('-topmost', True)
-        window.deiconify()
-        window.lift()
-        close_button.focus_set()
-    except Exception:
+        window.grab_set()
+    except tk.TclError:
         pass
+    bring_to_front()
+    # A delayed focus request handles Windows/E3 briefly reclaiming focus.
+    window.after(120, bring_to_front)
+    window.after(350, bring_to_front)
     parent.wait_window(window)
 
 
