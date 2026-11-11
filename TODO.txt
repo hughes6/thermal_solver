@@ -1,6 +1,6 @@
 """Zuken E3.series: Excel J2 local-signal importer.
 
-Version 2.1: Full block discovery + visible error/partial-import popup; keeps pin-view formatting.
+Version 2.2: faster pin lookups/peer checks, reliable visible popup and explicit completion.
 Looks up device designation text on connector-owned symbols in addition
  to the pin; prints before/after text style; no log file.
 Run from E3 or Python, choose one Excel workbook, and immediately apply.
@@ -46,16 +46,16 @@ from __future__ import annotations
 
 from collections import Counter
 from dataclasses import dataclass, field
-import gc
 from datetime import datetime
 from pathlib import Path
 import math
 from statistics import median
 import re
 import traceback
+import time
 
 SHEET_NAME = 'J2'  # E3 drawing-page identifier, NOT a required Excel tab name
-VERSION = '2.1-block-lookup-error-popup'
+VERSION = '2.2-fast-finish-popup'
 FIRST_ROW = 7
 FIRST_PIN_COL = 9  # I
 CONNECTOR_COL_STEP = 4  # I:J, M:N, Q:R, U:V, ...
@@ -731,6 +731,22 @@ def resolve(data, e3, log):
             log.append('SKIP CONNECTOR: ' + str(exc))
             log.append(f'  SEARCH KEY: {sample.connector_name!r}; available connector names: '
                        f'{[c[2] for c in candidates[:40]]!r}')
+    # E3 COM GetPinIds/GetName calls are expensive, especially on 128+ pin
+    # connectors. Index each matched connector ONCE, not once per Excel row.
+    pin_indexes = {}
+    for ci, choice in indexed.items():
+        pin_index = {}
+        for pid in related_ids(choice[1], ('GetPinIds','GetAllPinIds')):
+            try:
+                p = make_object(e3.job, 'Pin', pid)
+                name = as_text(get_scalar(p, ('GetName', 'GetPinName'))).casefold()
+                if name:
+                    pin_index.setdefault(name, []).append(pid)
+            except Exception:
+                continue
+        pin_indexes[ci] = pin_index
+        log.append(f'PIN INDEX: connector {choice[0]}: '
+                   f'{sum(map(len, pin_index.values()))} pins indexed once')
     plans = []
     for entry in data.entries:
         choice = indexed.get(entry.connector_index)
@@ -738,7 +754,12 @@ def resolve(data, e3, log):
             log.append(f'SKIP {entry.cell}: no unique connector match for {entry.connector_name!r}')
             continue
         try:
-            pin_id = e3.pin(choice[1], entry.pin_name)
+            hits = pin_indexes[entry.connector_index].get(entry.pin_name.casefold(), [])
+            if not hits:
+                raise LookupError(f'Pin {entry.pin_name!r} not found on connector.')
+            if len(hits) != 1:
+                raise LookupError(f'Pin {entry.pin_name!r} is ambiguous on connector: {hits!r}')
+            pin_id = hits[0]
             plans.append(ResolvedPin(entry, choice[0], pin_id))
             log.append(f'PLAN {entry.cell}: {entry.connector_name}/{entry.pin_name} '
                        f'-> {entry.signal_name!r} [pin ID {pin_id}]')
@@ -791,6 +812,19 @@ def local_attribute_field(pin):
         except Exception as exc:
             probes.append((attr, type(exc).__name__))
     return None, 'No verified pin-local attribute; HasAttribute probes=' + repr(probes)
+
+
+def read_peer_attribute_state(pin, field):
+    """Read ONLY the specified field; do not scan all alias names per read."""
+    has = getattr(pin, 'HasAttribute', None)
+    getter = getattr(pin, 'GetAttributeValue', None)
+    if not (callable(has) and callable(getter)):
+        return ('unreadable', None)
+    try:
+        exists = has(field)
+        return (exists is True or (type(exists) is int and exists > 0), getter(field))
+    except Exception:
+        return ('unreadable', None)
 
 
 def get_local_attribute(pin, attr):
@@ -1433,7 +1467,8 @@ def show_top_designation_placed_view(job, connector_id, connector_name):
 
 
 def perform(path):
-    """Apply immediately; print all decisions to stdout, never write files."""
+    """Apply immediately; print progress/timing to stdout, never write files."""
+    started_at = time.perf_counter()
     lines = ConsoleLines([f'ZUKEN LOCAL SIGNAL IMPORTER v{VERSION}',
              f'TIME: {datetime.now().isoformat(timespec="seconds")}',
              f'EXCEL FILE: {path}', ''])
@@ -1443,6 +1478,7 @@ def perform(path):
     com_initialized = False
     try:
         data = parse_workbook(path)
+        lines.append(f'TIMING: Excel parsed in {time.perf_counter()-started_at:.1f}s')
         lines += [f'EXCEL WORKSHEET SELECTED: {data.worksheet_name}',
                   f'E3 DRAWING PAGE FOR IDENTIFICATION: {SHEET_NAME}',
                   f'DEVICE DESIGNATION (C4): {data.block_name!r}',
@@ -1486,6 +1522,7 @@ def perform(path):
         lines.extend(diagnostic_ids(e3.job, ('GetDeviceIds','GetAllDeviceIds','GetBlockIds')))
 
         plans = resolve(data, e3, lines)
+        lines.append(f'TIMING: E3 block/connector/pin lookup done at +{time.perf_counter()-started_at:.1f}s')
         summary['resolved'] = len(plans)
         summary['expected_designations'] = len({p.connector_id for p in plans})
         summary['skipped'] = summary['defined'] - summary['resolved']
@@ -1525,6 +1562,8 @@ def perform(path):
             lines.append('COUNTERPART PIN READBACK BEFORE WRITES:')
             other_sigs={}
             other_attrs={}
+            peers_by_name={}
+            first_peer_per_connector={}
             monitored_fields={field for _,field in valid}
             selected={v.pin_id for v,_ in valid}
             for cid,conn,cn,ct in others:
@@ -1534,36 +1573,40 @@ def perform(path):
                         op=make_object(e3.job,'Pin',pid)
                         key=(cid,pid)
                         other_sigs[key]=get_signal(op)
+                        peer_name=as_text(get_scalar(op, ('GetName','GetPinName'))).casefold()
                         for f in monitored_fields:
-                            try:
-                                existing, why=local_attribute_field(op)
-                                # Capture both the attribute's existence and value:
-                                # even creation of an attribute on an unselected pin is a side effect.
-                                getter=getattr(op,'GetAttributeValue',None)
-                                raw=getter(f) if callable(getter) else None
-                                other_attrs[(cid,pid,f)]=(existing==f,raw)
-                            except Exception:
-                                other_attrs[(cid,pid,f)]=('unreadable',None)
+                            pk=(cid,pid,f)
+                            other_attrs[pk]=read_peer_attribute_state(op,f)
+                            if peer_name:
+                                peers_by_name.setdefault(peer_name,set()).add(pk)
+                            first_peer_per_connector.setdefault(cid,pk)
                     except Exception: pass
             lines.append(f'  Non-target pin electrical signals snapshotted: {len(other_sigs)}')
             lines.append(f'  Non-target pin local attributes snapshotted: {len(other_attrs)}')
+            lines.append('  SPEEDUP: first write checks all peers; later writes check '
+                         'same-numbered pins + connector sentinels; all peers rechecked at end.')
+            lines.append(f'TIMING: preflight and safety snapshots done at +{time.perf_counter()-started_at:.1f}s')
             lines.append('WRITE RESULTS (PIN ATTRIBUTES ONLY, NEVER NETWORK):')
-            for plan,field in valid:
+            for write_idx,(plan,field) in enumerate(valid):
                 e=plan.entry
                 lines.append(f'ATTEMPT {e.cell}: connector={e.connector_name!r}, pin={e.pin_name!r}, ID {plan.pin_id}, attribute={field!r}, value={e.signal_name!r}')
                 try:
                     pin=make_object(e3.job,'Pin',plan.pin_id)
                     original_local_value=get_local_attribute(pin,field)
                     result,net_before=set_pin_local_attribute(pin,field,e.signal_name)
-                    # Check cross-connector propagation immediately, BEFORE another write.
+                    # Detect cross-connector propagation as soon as practicable.
+                    # First write: inspect ALL other pins to establish safety.
+                    # Subsequent writes: same pin number on other connectors,
+                    # plus one sentinel per connector. At the end ALL are checked.
+                    watch = (other_attrs.keys() if write_idx == 0 else
+                             (peers_by_name.get(e.pin_name.casefold(),set()) |
+                              set(first_peer_per_connector.values())))
                     changed_now=[]
-                    for (peer_cid,peer_pid,peer_field),before_state in other_attrs.items():
+                    for peer_cid,peer_pid,peer_field in watch:
+                        before_state=other_attrs[(peer_cid,peer_pid,peer_field)]
                         try:
                             peer=make_object(e3.job,'Pin',peer_pid)
-                            peer_existing,_=local_attribute_field(peer)
-                            getter=getattr(peer,'GetAttributeValue',None)
-                            peer_raw=getter(peer_field) if callable(getter) else None
-                            now=(peer_existing==peer_field,peer_raw)
+                            now=read_peer_attribute_state(peer,peer_field)
                             if now != before_state:
                                 changed_now.append((peer_cid,peer_pid,peer_field,before_state,now))
                         except Exception as exc:
@@ -1582,6 +1625,9 @@ def perform(path):
                     summary['verified']+=1
                     lines.append(f'  ATTRIBUTE SETTER: {result}; net unchanged: {get_signal(pin)==net_before}; peers unchanged.')
                     lines.append('  PLACED PIN-VIEW LABEL: scheduled formatting after all value writes')
+                    if ((write_idx + 1) % 10 == 0 or write_idx + 1 == len(valid)):
+                        lines.append(f'PROGRESS: {write_idx+1}/{len(valid)} pin attributes verified '
+                                     f'at +{time.perf_counter()-started_at:.1f}s')
                 except Exception as ex:
                     summary['failed']+=1
                     lines.append(f'  WRITE FAILED: {type(ex).__name__}: {ex}')
@@ -1590,14 +1636,12 @@ def perform(path):
             for (cid,pid,field),before in other_attrs.items():
                 try:
                     op=make_object(e3.job,'Pin',pid)
-                    existing,_=local_attribute_field(op)
-                    getter=getattr(op,'GetAttributeValue',None)
-                    raw=getter(field) if callable(getter) else None
-                    now=(existing==field,raw)
+                    now=read_peer_attribute_state(op,field)
                     if now != before:
                         changed_attrs.append((cid,pid,field,before,now))
                 except Exception as exc:
                     changed_attrs.append((cid,pid,field,'read failed',str(exc)))
+            lines.append(f'TIMING: attribute writes and full peer check done at +{time.perf_counter()-started_at:.1f}s')
             # Pin Arranger path: resolve *actual placed* pin view text type
             # 617 (Local Signal Name) after all local-attribute changes are done.
             # This is vital because E3 may regenerate label text on a write.
@@ -1613,6 +1657,7 @@ def perform(path):
                     except Exception as exc:
                         lines.append(f'  NOTICE: {e.connector_name}/{e.pin_name}: '
                                      f'view formatting failed: {type(exc).__name__}: {exc}')
+                lines.append(f'TIMING: local-signal text formatting done at +{time.perf_counter()-started_at:.1f}s')
                 # Use type-213 '1/N' marker from the placed pin-view symbols
                 # to identify physical top split; logical Pin Y is unreliable.
                 lines.append('TOP-PIN DEVICE DESIGNATION (TYPE 12 ON VIEW 1/N):')
@@ -1624,6 +1669,7 @@ def perform(path):
                     except Exception as exc:
                         lines.append(f'  NOTICE: {cname}: type-12 formatting error: '
                                      f'{type(exc).__name__}: {exc}')
+            lines.append(f'TIMING: top-pin designation formatting done at +{time.perf_counter()-started_at:.1f}s')
             lines.append(f'COUNTERPART PIN ATTRIBUTES CHANGED: {changed_attrs[:20]!r}')
             if changed_attrs:
                 summary['fatal']='A non-target PIN ATTRIBUTE changed. STOP and restore your project copy.'
@@ -1645,7 +1691,8 @@ def perform(path):
     finally:
         if com_initialized:
             try:
-                gc.collect()
+                # This already follows normal Python reference lifetime. Avoid a
+                # forced full garbage collection of thousands of E3 COM proxies.
                 pythoncom.CoUninitialize()
             except Exception:
                 pass
@@ -1660,7 +1707,9 @@ def perform(path):
                   f'Write failures:                 {summary["failed"]}',
                   f'Fatal problem:                  {summary["fatal"] or "none"}',
                                     'IMPORTANT: GetSignalName/SetSignalName are ELECTRICAL NET signals; this version NEVER writes them.',
-                  '=========================================']
+                  '=========================================',
+                  f'E3 IMPORT FINISHED: all operations returned in {time.perf_counter()-started_at:.1f}s']
+        summary['elapsed_seconds'] = time.perf_counter() - started_at
         # The error popup uses the same diagnostics as print(), without
         # creating a separate console or writing any log files.
         summary['output_lines'] = list(lines)
@@ -1700,17 +1749,20 @@ def show_issue_window(parent, summary, issues, title='Zuken Import — Issues'):
     from tkinter import ttk
 
     window = tk.Toplevel(parent)
-    window.title(title)
+    window.title(title + ' (import already finished)')
     window.geometry('700x385')
     window.minsize(460, 250)
     try:
-        window.transient(parent)
+        # Do NOT set transient(parent): the file-picker root is withdrawn,
+        # and Windows can hide a transient child of a withdrawn parent.
         window.attributes('-topmost', True)
+        window.deiconify()
+        window.lift()
     except Exception:
         pass
     frame = ttk.Frame(window, padding=12)
     frame.pack(fill='both', expand=True)
-    ttk.Label(frame, text='Local signal import needs attention',
+    ttk.Label(frame, text='Import finished — review the items below',
               font=('Segoe UI', 11, 'bold')).pack(anchor='w', pady=(0, 7))
     ttk.Label(frame, text='\n'.join(issues), justify='left',
               wraplength=660).pack(anchor='w', pady=(0, 7))
@@ -1751,7 +1803,9 @@ def show_issue_window(parent, summary, issues, title='Zuken Import — Issues'):
     window.protocol('WM_DELETE_WINDOW', window.destroy)
     window.lift()
     window.focus_force()
+    print('IMPORT FINISHED WITH ISSUES — visible issue window open; click Close to exit.', flush=True)
     parent.wait_window(window)
+    print('Issue window closed; script exiting.', flush=True)
 
 
 def run_once():
@@ -1777,10 +1831,14 @@ def run_once():
         result = perform(Path(filename))
         issues = import_issues(result)
         if issues:
+            print(f"IMPORT COMPLETED IN {result.get('elapsed_seconds', 0):.1f}s "
+                  f"— {result['verified']} names verified; "
+                  f"{len(issues)} item(s) need attention. Showing issue window.", flush=True)
             show_issue_window(root, result, issues)
         else:
-            print(f"SUCCESS: {result['verified']} pin-local names updated; "
-                  f"{result['formatted']} labels formatted bold.", flush=True)
+            print(f"SUCCESS — IMPORT COMPLETED IN {result.get('elapsed_seconds', 0):.1f}s: "
+                  f"{result['verified']} pin-local names updated; "
+                  f"{result['formatted']} labels formatted bold. Script is exiting.", flush=True)
     except Exception as exc:
         details = traceback.format_exc()
         print('UNEXPECTED ERROR:\n' + details, flush=True)
@@ -1797,7 +1855,9 @@ def run_once():
             except Exception:
                 pass
     finally:
+        print('FINAL EXIT: closing importer window.', flush=True)
         root.destroy()
+        print('SCRIPT FINISHED: control returned to E3/Python.', flush=True)
 
 
 def main():
