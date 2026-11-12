@@ -967,16 +967,18 @@ def collect_labeled_block_pins(prj, sht, block, connector_name, sheet_symbol_cac
 
 
 def select_labeled_block(prj, sht, connector_record, candidates, sheet_names):
-    """Choose by exact connector label + expected pin inventory, not GetName().
+    """Choose by connector label and ALL explicitly requested pin names.
 
-    Even if only one block is located, reject it unless all the expected pin
-    names appear under that connector designation inside that exact block.
+    Excel may list only a subset of E3 pins. Unlisted pins cannot disqualify
+    a block; missing requested pins and duplicate E3 labels still disqualify.
     """
     name = connector_record['connector name']
     expected = connector_record['left pins'] + connector_record['right pins']
     if len(set(expected)) != len(expected):
         raise RuntimeError(f'{name}: duplicate pin names in Excel, refusing ambiguous lookup.')
     expected_set = set(expected)
+    if not expected_set:
+        raise RuntimeError(f'{name}: no pin names were provided in Excel.')
     sheet_symbol_cache = {}
     valid = []
     section(f'CONNECTOR DESIGNATION / BLOCK MATCH - {name}')
@@ -995,12 +997,16 @@ def select_labeled_block(prj, sht, connector_record, candidates, sheet_names):
             log(f"      MISSING FROM BLOCK: {missing[:15]}")
         if extra:
             log(f"      EXTRA IN BLOCK: {extra[:15]}")
-        if not scan['duplicates'] and found == expected_set and len(found) == len(expected):
+        if not scan['duplicates'] and not missing:
+            # Keep ALL matching physical pins so the unlisted ones can be
+            # preserved in the final layout; only the selection criteria are
+            # relaxed to allow a subset of pin numbers in Excel.
             valid.append({'block_geometry': dict(block), 'pin_symbols': scan['pins'],
                           'labels': scan['labels'], 'main_device_id': block['main_device_id']})
-            log('      RESULT: EXACT connector designation and pin inventory MATCH')
+            log(f'      RESULT: connector designation and all {len(expected_set)} '
+                f'requested pins MATCH ({len(extra)} additional E3 pins allowed)')
         elif found:
-            log('      RESULT: connector label found, but pin inventory does NOT match')
+            log('      RESULT: connector label found, but requested pin(s) are missing or duplicates exist')
         else:
             log('      RESULT: no matching connector designation within block')
     if len(valid) == 1:
@@ -1010,7 +1016,7 @@ def select_labeled_block(prj, sht, connector_record, candidates, sheet_names):
         return selected
     if not valid:
         raise RuntimeError(f'{name}: no CABBLOCK has the matching connector designation '
-                           'AND the complete Excel pin inventory. No pins modified.')
+                           'AND every requested Excel pin. No pins modified.')
     details = ', '.join(f"symbol {v['block_geometry']['block_symbol_id']} "
                         f"page {sheet_names.get(v['block_geometry']['sheet_id'])!r} "
                         f"owner {v['main_device_id']}" for v in valid)
@@ -1532,14 +1538,54 @@ def decide_edge_ordering_mode(connector_name, sorted_pin_records, final_plan,
     }
 
 def validate_excel_against_e3(connector_excel_record, sorted_pin_records):
+    """Require each Excel pin to exist in E3, but allow unlisted E3 pins."""
+    name = connector_excel_record["connector name"]
     excel_pins = connector_excel_record["left pins"] + connector_excel_record["right pins"]
     e3_pins = [record["pin_name"] for record in sorted_pin_records]
-    if len(e3_pins) != connector_excel_record["number of pins"]:
-        raise RuntimeError(f"{connector_excel_record['connector name']}: E3 has {len(e3_pins)} pins but Excel expects {connector_excel_record['number of pins']}.")
-    if set(excel_pins) != set(e3_pins):
-        missing_from_excel = sorted(set(e3_pins) - set(excel_pins))
-        missing_from_e3 = sorted(set(excel_pins) - set(e3_pins))
-        raise RuntimeError(f"{connector_excel_record['connector name']}: Excel/E3 mismatch. Missing from Excel: {missing_from_excel}. Missing from E3: {missing_from_e3}.")
+    if len(excel_pins) != connector_excel_record["number of pins"]:
+        raise RuntimeError(f"{name}: Excel pin count is {connector_excel_record['number of pins']} "
+                           f"but {len(excel_pins)} pins were provided.")
+    if len(set(excel_pins)) != len(excel_pins):
+        raise RuntimeError(f"{name}: duplicate Excel pin names found; no changes made.")
+    if len(set(e3_pins)) != len(e3_pins):
+        raise RuntimeError(f"{name}: duplicate pin names in E3; no changes made.")
+    missing_from_e3 = sorted(set(excel_pins) - set(e3_pins))
+    if missing_from_e3:
+        raise RuntimeError(f"{name}: requested Excel pins not found in E3: "
+                           f"{missing_from_e3}. No changes made.")
+
+
+def complete_partial_pin_order(connector_excel_record, sorted_pin_records):
+    """Append unspecified E3 pins in their existing top-to-bottom order.
+
+    The existing mover requires a COMPLETE one-sided stack to avoid collisions
+    with pins left behind on the block edge. Keep that algorithm unchanged:
+    listed pins take priority, while unlisted pins fill the remaining rows.
+    Every actual E3 pin is still moved exactly once when reordering is needed.
+    """
+    name = connector_excel_record['connector name']
+    left = connector_excel_record['left pins']
+    right = connector_excel_record['right pins']
+    if bool(left) == bool(right):
+        raise RuntimeError(
+            f'{name}: specify pins on exactly one Excel side; the existing '
+            'edge-staging algorithm does not support mixed left/right destinations.'
+        )
+    specified = set(left + right)
+    unspecified = [record['pin_name'] for record in sorted_pin_records
+                   if record['pin_name'] not in specified]
+    if unspecified:
+        requested_side = 'LEFT' if left else 'RIGHT'
+        (left if left else right).extend(unspecified)
+        log(f'{name}: PARTIAL PIN LIST - {len(specified)} pin(s) explicitly requested, '
+            f'{len(unspecified)} E3 pin(s) automatically appended to {requested_side} '
+            'in their original top-to-bottom order.')
+        log(f'  Automatically appended: {unspecified}')
+    else:
+        log(f'{name}: all {len(specified)} E3 pins are listed in Excel; original behavior.')
+    connector_excel_record['auto-added pins'] = unspecified
+    connector_excel_record['total E3 pins'] = len(sorted_pin_records)
+
 def verify_detached_symbol_load(prj):
     probe = prj.CreateSymbolObject()
     result = probe.Load(DETACHED_SYMBOL_NAME, 1)
@@ -2592,15 +2638,11 @@ if NUMBER_OF_CONNECTORS is None:
 
 NUMBER_OF_CONNECTORS = int(NUMBER_OF_CONNECTORS)
 
-CONNECTOR_MODEL_CHECK = ws["B2"].value
+# The old model check has been removed. B2 now contains duplicate-pin check.
+DUPLICATE_PIN_CHECK = ws["B2"].value
 
-if CONNECTOR_MODEL_CHECK != "Pass":
-    raise Exception("Connector model check is failing, fix it")
-
-DUPLICATE_PIN_CHECK = ws["C2"].value
-
-if DUPLICATE_PIN_CHECK != "Pass":
-    raise Exception("Duplicate pin check is failing, fix it")
+if str(DUPLICATE_PIN_CHECK).strip().casefold() != "pass":
+    raise Exception("Duplicate pin check (B2) is failing; fix duplicate pins in Excel")
 
 CONNECTOR_PIN_INFO = []
 
@@ -2609,23 +2651,27 @@ for i in range(NUMBER_OF_CONNECTORS):
     left_pin_col = 9 + (i * BLOCK_OFFSET)
     right_pin_col = left_pin_col + 1
 
-    number_of_pins = ws.cell(row=5, column=right_pin_col).value
+    declared_pin_rows = ws.cell(row=5, column=right_pin_col).value
     connector_name = ws.cell(row=6, column=right_pin_col).value
 
-    if number_of_pins is None:
-        number_of_pins = 0
-
-    number_of_pins = int(number_of_pins)
-    connector_name = str(connector_name).strip()
+    # The header defines how many pin rows to READ, not how many must be
+    # filled in. A connector with 50 physical pin rows can list only 8 pins.
+    if declared_pin_rows is None:
+        declared_pin_rows = 0
+    declared_pin_rows = int(declared_pin_rows)
+    if declared_pin_rows < 0:
+        raise ValueError(f'Connector {i + 1}: pin row count cannot be negative')
+    connector_name = str(connector_name).strip() if connector_name is not None else ''
 
     temp = [{
         "connector name": connector_name,
-        "number of pins": number_of_pins,
+        "number of pins": 0,  # populated with the ACTUAL provided Excel pin count
+        "declared pin rows": declared_pin_rows,
         "left pins": [],
         "right pins": [],
     }]
 
-    end_row = 8 + number_of_pins - 1
+    end_row = 8 + declared_pin_rows - 1
 
     left = []
     right = []
@@ -2644,12 +2690,25 @@ for i in range(NUMBER_OF_CONNECTORS):
     temp[0]["left pins"].extend(left)
     temp[0]["right pins"].extend(right)
 
-    if len(left) + len(right) != number_of_pins:
-        raise Exception(f"{connector_name}: Excel contains {len(left) + len(right)} pin entries but pin count is {number_of_pins}")
+    provided_pin_count = len(left) + len(right)
+    temp[0]['number of pins'] = provided_pin_count
+    log(f'Excel connector {connector_name!r}: {provided_pin_count} provided pin(s) '
+        f'within {declared_pin_rows} scanned pin row(s).')
+
+    # Connectors with no requested pins need no changes. They can be omitted
+    # without triggering a false model-completeness requirement.
+    if provided_pin_count == 0:
+        log(f'Excel connector {connector_name!r}: zero requested pins; skipping.')
+        continue
+    if not connector_name:
+        raise RuntimeError(f'Connector {i + 1}: Excel connector name is blank.')
 
     CONNECTOR_PIN_INFO.append(temp)
 
 wb.close()
+
+if not CONNECTOR_PIN_INFO:
+    raise RuntimeError('No pins were specified in the Excel sheet; nothing to arrange.')
 
 print(CONNECTOR_PIN_INFO)
 
@@ -2752,6 +2811,7 @@ try:
 
         validate_connector_snapshot_location(connector_name, sorted_pin_records, block_geometry)
         validate_excel_against_e3(connector_excel_record, sorted_pin_records)
+        complete_partial_pin_order(connector_excel_record, sorted_pin_records)
 
         pin_geometry = derive_pin_geometry(
             block_geometry, sorted_pin_records, connector_excel_record,
@@ -2835,6 +2895,9 @@ try:
         log(f"CONNECTOR: {connector_name}")
         log(f"OWNING MAIN DEVICE ID: {connector_device_id}")
         log(f"MATCHED E3 CONNECTOR LABELS: {selected['labels']}")
+        log(f"EXCEL REQUESTED PINS: {connector_excel_record['number of pins']} | "
+            f"AUTO-INCLUDED PINS: {len(connector_excel_record['auto-added pins'])} | "
+            f"TOTAL E3 PINS: {connector_excel_record['total E3 pins']}")
         log(f"SELECTED MAIN DEVICE ID: {main_device_id}")
         log(f"SELECTED SHEET: {SHEET_NAME_BY_ID[block_geometry['sheet_id']]!r} (E3 ID {block_geometry['sheet_id']})")
         log(f"CONNECTOR VIEW NUMBER: {block_geometry['connector_view_number']}")
