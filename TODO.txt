@@ -2,28 +2,15 @@ cur.execute("""
 SELECT
     c.ENTRY,
     c.VERSION,
-    c.Description,
     c.Class,
-    COUNT(DISTINCT p.PinNumber) AS NumberOfPins
+    a.AttributeName,
+    a.AttributeValue
 FROM dbo.ComponentData c
-LEFT JOIN dbo.PhysPin p
-    ON p.Entry = c.ENTRY
-WHERE c.ENTRYTYP = 24
-GROUP BY
-    c.ENTRY,
-    c.VERSION,
-    c.Description,
-    c.Class
-ORDER BY
-    c.ENTRY,
-    c.VERSION
-""")
-for entry, version, description, component_class, number_of_pins in cur.fetchall():
-    component_class = str(component_class)
-    # if "SIMS" in component_class or "SCAU" in component_class or "MAU" in component_class or "Coaxial" in component_class or "VHDCI" in component_class or "Generic" in component_class:
-    if "AC" in component_class:
-        # print(f"{entry} | Version {version} | {component_class} | {description} | {number_of_pins}")
-        print(f"{entry} | {component_class}")
+LEFT JOIN dbo.ComponentAttribute a
+    ON a.ENTRY = c.ENTRY
+WHERE c.ENTRY = ?
+  AND a.AttributeName LIKE '%Connector%Type%'
+""", ("M24308/4-1F_9P SD",))
 
-cur.close()
-conn.close()
+for row in cur.fetchall():
+    print(row)
