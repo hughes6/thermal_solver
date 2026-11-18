@@ -1259,6 +1259,55 @@ for data in SCHEMATIC_DATA:
     format_main_block_view(data["parent_block"], layout["x start"], layout["y start"], layout["width"], layout["height"], block_symbol_id=data["block_symbol_id"])
 
 #=========================================
+# FINAL SECONDARY PIN COMPONENT-CODE VISIBILITY
+#=========================================
+# E3's default MIL pin symbols often display the component code (text type 5)
+# on each individual secondary pin.  Work from the exact symbol IDs saved
+# during PlacePins instead of relying on pin.GetViewIds(), which can miss
+# these separately placed pin-view symbols.  Do this AFTER all pins have been
+# placed so subsequent placements cannot reset the visibility.
+print("\nHIDING COMPONENT CODE ON INDIVIDUAL SECONDARY PINS", flush=True)
+hidden_component_codes = 0
+visibility_warnings = []
+
+for data in SCHEMATIC_DATA:
+    for placed_pin in data.get("placed_pin_symbols", []):
+        placed_symbol_id = int(placed_pin["symbol_id"])
+        pin_name = str(placed_pin["pin_name"])
+        try:
+            sym.SetId(placed_symbol_id)
+            if not sym.GetSymbolTypeName():
+                visibility_warnings.append(
+                    f"{data['name']} pin {pin_name}: symbol {placed_symbol_id} no longer resolves"
+                )
+                continue
+
+            text_result = sym.GetTextIds(None)
+            text_ids = [tid for tid in text_result[1] if isinstance(tid, int) and tid > 0]
+
+            for text_id in text_ids:
+                text.SetId(text_id)
+                if text.GetType() != 5:  # Component code
+                    continue
+                text.SetVisibility(0)
+                if text.GetVisibility() == 0:
+                    hidden_component_codes += 1
+                    print("COMPONENT CODE OFF:", data["name"], "PIN:", pin_name,
+                          "SYMBOL:", placed_symbol_id, "TEXT:", text_id, flush=True)
+                else:
+                    visibility_warnings.append(
+                        f"{data['name']} pin {pin_name}: type-5 text {text_id} is still visible"
+                    )
+        except Exception as exc:
+            visibility_warnings.append(
+                f"{data['name']} pin {pin_name}, symbol {placed_symbol_id}: {exc!r}"
+            )
+
+print("SECONDARY COMPONENT CODES HIDDEN:", hidden_component_codes, flush=True)
+for warning in visibility_warnings:
+    print("WARNING - SECONDARY COMPONENT CODE:", warning, flush=True)
+
+#=========================================
 # MAIN CREATION PHASE COMPLETE
 #
 # IMPORTANT:
