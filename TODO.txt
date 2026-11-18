@@ -1,46 +1,724 @@
-=== E3 MIL POST-PLACEMENT INSPECTION (READ-ONLY) ===
-Connector: OTX-J1 component: M24308/4-1F_9P SD
-Designation: TEST_OTX-J1_113418
-No E3 objects will be modified, and there is no interactive pause.
-MIL setting at placement: 16
-MIL setting NOW: 16
 
-TOP: saved ID 147367 / requested 'MilBlockPlugInt¶FULL'
-  ACTUAL: 'MilBlockPlug¶FULL'
-  CHARACTERISTIC: 'FULL'
-  MATCH: FAIL
-  Text types, values and visibility: unchanged
+import sys
+import json
+from pathlib import Path
+from datetime import datetime
 
-SECONDARY 1: saved ID 146637 / requested 'MilBlockPlugInt¶END_TOP'
-  Saved ID is no longer a valid symbol (E3 may have replaced it).
+STATE_FILE = Path(__file__).with_name("e3_mil_test_results.json")
 
-SECONDARY 2: saved ID 146451 / requested 'MilBlockPlugInt¶SPLIT_BOTTOM'
-  ACTUAL: 'MilBlockPlugInt¶SPLIT_BOTTOM'
-  CHARACTERISTIC: 'SPLIT_BOTTOM'
-  MATCH: PASS
-  Text types, values and visibility: unchanged
-ENUMERATED 5 unique candidate symbol IDs from:
-  Job.GetSymbolIds 5
-  Job.GetAllSymbolIds 0
-  Sheet204828.GetSymbolIds 5
-  Sheet204828.GetAllSymbolIds 0
-  Device147977.GetSymbolIds 1
-  Device147977.GetAllSymbolIds 0
-  Device147221.GetSymbolIds 1
-  Device147221.GetAllSymbolIds 0
-  Device146885.GetSymbolIds 2
-  Device146885.GetAllSymbolIds 0
-  Device65151.GetSymbolIds 1
-  Device65151.GetAllSymbolIds 0
+# Separate locations so baseline and inside tests don't overlap
+POSITIONS = {
+    "baseline": (3.0, 11.0),
+    "inside": (19.0, 27.0),
+}
 
-REPLACEMENT MATCHES FOR SECONDARY 1
-  146321 'MilBlockPlugInt¶END_TOP' score 38 evidence ['requested symbol', 'component code', 'EXACT pin number', 'secondary device designation']
-  146451 'MilBlockPlugInt¶SPLIT_BOTTOM' score 18 evidence ['same internal family', 'component code', 'secondary device designation']
-  147367 'MilBlockPlug¶FULL' score 3 evidence ['component code']
-  UNIQUE replacement symbol ID: 146321
-  BEFORE library symbol: 'MilBlockPlugInt¶END_SPLIT'
-  AFTER library symbol:  'MilBlockPlugInt¶END_TOP'
-  REQUEST MATCH: PASS
-  CHARACTERISTIC: 'END_SPLIT' -> 'END_TOP'
-  Text types, values and visibility: unchanged
+BLOCK_WIDTH = 3.0
+BLOCK_HEIGHT = 5.0
+BLOCK_Y = 4.0
+SHEET_NAME = "1"
 
+SETTING_METHODS = [
+    "GetDisplayMILStandard",
+    "GetConnectorSymbolFormat",
+    "GetDetermineConnectorSymbol",
+    "GetDetermineConnectorViewSymbol",
+    "GetPinViewSymbolForBlockConnectorPins",
+]
+
+
+def safe(obj, method, *args):
+    try:
+        return getattr(obj, method)(*args)
+    except Exception:
+        return None
+
+
+def get_ids(result):
+    if isinstance(result, (tuple, list)):
+        if len(result) >= 2 and isinstance(result[1], (tuple, list)):
+            result = result[1]
+        elif not all(type(x) is int for x in result):
+            return []
+        return [x for x in result if type(x) is int and x > 0]
+    return []
+
+
+def one_id(result):
+    if isinstance(result, (tuple, list)):
+        result = result[0] if result else 0
+    return result if type(result) is int and result > 0 else 0
+
+
+def load_state():
+    if STATE_FILE.exists():
+        return json.loads(STATE_FILE.read_text(encoding="utf-8"))
+    return {}
+
+
+def save_state(data):
+    STATE_FILE.write_text(
+        json.dumps(data, indent=2, default=str),
+        encoding="utf-8"
+    )
+
+
+def select_connector():
+    # All interaction happens BEFORE E3 COM is acquired.
+    from tkinter import Tk, filedialog
+    from openpyxl import load_workbook
+
+    root = Tk()
+    root.withdraw()
+    root.attributes("-topmost", True)
+
+    try:
+        filename = filedialog.askopenfilename(
+            parent=root,
+            title="Select Block Maker workbook",
+            filetypes=[("Excel", "*.xlsm *.xlsx")]
+        )
+    finally:
+        root.destroy()
+
+    if not filename:
+        raise SystemExit("No workbook selected.")
+
+    wb = load_workbook(filename, data_only=True, read_only=True)
+
+    try:
+        ws = wb.active
+        count = int(ws["C5"].value)
+
+        connectors = []
+        for i in range(count):
+            name = ws.cell(i + 7, 2).value
+            component = ws.cell(i + 7, 3).value
+
+            if name and component:
+                connectors.append(
+                    (i, str(name).strip(), str(component).strip())
+                )
+
+        if not connectors:
+            raise RuntimeError("No connectors found in Excel.")
+
+        print("\nConnectors:")
+        for n, (_, name, comp) in enumerate(connectors, 1):
+            print(f"  {n}. {name} [{comp}]")
+
+        answer = input("Select connector [Enter=1]: ").strip()
+        index = (int(answer) if answer else 1) - 1
+
+        i, name, component = connectors[index]
+
+        pin_col = 9 + i * 5
+        pin_count = int(ws.cell(5, pin_col + 1).value or 0)
+
+        excel_pins = []
+        for r in range(8, 8 + pin_count):
+            value = ws.cell(r, pin_col).value
+            if value is not None:
+                excel_pins.append(str(value).strip())
+
+    finally:
+        wb.close()
+
+    family = (
+        input("MIL symbol family [MilBlockPlugInt]: ").strip()
+        or "MilBlockPlugInt"
+    )
+
+    if "¶" in family:
+        raise ValueError("Enter symbol family without characteristic.")
+
+    return {
+        "name": name,
+        "component": component,
+        "pins": excel_pins,
+        "family": family,
+    }
+
+
+def settings(job):
+    return {name: safe(job, name) for name in SETTING_METHODS}
+
+
+def get_sheet(job):
+    sheet = job.CreateSheetObject()
+
+    for sid in get_ids(job.GetAllSheetIds(None)):
+        sheet.SetId(sid)
+        if str(sheet.GetName()) == SHEET_NAME:
+            return sid
+
+    raise RuntimeError("Sheet 1 not found.")
+
+
+def create_block(job, sheet_id, x, parent=None):
+    sym = job.CreateSymbolObject()
+
+    if not sym.Load("CABBLOCK", 1):
+        raise RuntimeError("Cannot load CABBLOCK.")
+
+    args = (sheet_id, x, BLOCK_Y, BLOCK_WIDTH, BLOCK_HEIGHT)
+
+    if parent is None:
+        result = sym.PlaceBlock(*args)
+    else:
+        result = sym.PlaceBlock(*args, parent)
+
+    sid = one_id(result)
+
+    if not sid:
+        raise RuntimeError(f"PlaceBlock failed: {result!r}")
+
+    return sid
+
+
+def get_pins(job, device_id, all_pins=False):
+    dev = job.CreateDeviceObject()
+    pin = job.CreatePinObject()
+
+    dev.SetId(device_id)
+
+    result = (
+        dev.GetAllPinIds(None)
+        if all_pins else dev.GetPinIds(None)
+    )
+
+    output = {}
+
+    for pid in get_ids(result):
+        pin.SetId(pid)
+        output[str(pin.GetName()).strip()] = pid
+
+    return output
+
+
+def read_symbol(job, symbol_id, show_text=False):
+    sym = job.CreateSymbolObject()
+    txt = job.CreateTextObject()
+    sym.SetId(symbol_id)
+
+    library = safe(sym, "GetSymbolTypeName")
+    type_id = safe(sym, "GetSymbolTypeId")
+
+    if not library or not isinstance(type_id, int) or type_id <= 0:
+        return None
+
+    texts = []
+
+    for tid in get_ids(safe(sym, "GetTextIds", None)):
+        txt.SetId(tid)
+        kind = safe(txt, "GetType")
+
+        if show_text and kind in (5, 12):
+            safe(txt, "SetVisibility", 1)
+
+        texts.append({
+            "type": kind,
+            "value": safe(txt, "GetText"),
+            "visible": safe(txt, "GetVisibility"),
+        })
+
+    return {
+        "id": symbol_id,
+        "library": str(library),
+        "characteristic": safe(sym, "GetCharacteristic"),
+        "texts": texts,
+    }
+
+
+def place_pins(job, pin_ids, symbol, sheet_id, x, y):
+    sym = job.CreateSymbolObject()
+
+    result = sym.PlacePins(
+        list(pin_ids),
+        symbol,
+        1,
+        sheet_id,
+        x,
+        y,
+        0,
+        1.0
+    )
+
+    sid = one_id(result)
+
+    if not sid:
+        raise RuntimeError(
+            f"PlacePins failed: {symbol}, result={result!r}"
+        )
+
+    info = read_symbol(job, sid, show_text=True)
+
+    if info is None:
+        raise RuntimeError(f"Cannot inspect symbol {sid}")
+
+    info["requested"] = symbol
+
+    print(f"\nRequested: {symbol}")
+    print(f"Actual:    {info['library']}")
+    print(f"ID:        {sid}")
+    print(f"Result:    {'PASS' if symbol == info['library'] else 'SUBSTITUTED'}")
+
+    return info
+
+
+def pin_order(excel_pins, e3_pins):
+    ordered = []
+
+    for name in excel_pins:
+        if name in e3_pins:
+            ordered.append(name)
+        else:
+            matches = [
+                n for n in e3_pins
+                if n.split("-", 1)[0] == name
+            ]
+            if len(matches) == 1:
+                ordered.append(matches[0])
+
+    ordered.extend(n for n in e3_pins if n not in ordered)
+    return list(dict.fromkeys(ordered))
+
+
+def compare_settings(old, new):
+    changed = False
+
+    for method in SETTING_METHODS:
+        a = old.get(method)
+        b = new.get(method)
+
+        if a != b:
+            changed = True
+            print(f"  {method}: {a!r} -> {b!r}")
+
+            if type(a) is int and type(b) is int:
+                print(f"    Changed bits: {hex(a ^ b)}")
+
+    if not changed:
+        print("  No changes detected in readable settings.")
+
+
+def place_test(label):
+    choice = select_connector()
+    x_top, x_secondary = POSITIONS[label]
+
+    print("\n=== MIL PLACEMENT TEST ===")
+    print("Test:", label)
+    print("Connector:", choice["name"])
+    print("Component:", choice["component"])
+    print("Top edge offset: 0.0")
+    print("Secondary edge offset: 0.0")
+    print("Creates NEW objects. Use a disposable project copy.\n")
+
+    import win32com.client as win32
+
+    app = win32.GetActiveObject("CT.Application")
+    job = app.CreateJobObject()
+
+    result = {
+        "label": label,
+        "choice": choice,
+        "created": datetime.now().isoformat(),
+        "settings": settings(job),
+        "top": None,
+        "secondary": [],
+        "errors": [],
+    }
+
+    try:
+        sheet_id = get_sheet(job)
+
+        print("MIL SETTINGS:")
+        for k, v in result["settings"].items():
+            print(f"  {k}: {v!r}")
+
+        db = app.GetDatabaseTableSelectedComponents(
+            choice["component"], 1
+        )
+
+        if isinstance(db, (tuple, list)) and db[0] != 0:
+            raise RuntimeError(f"Database lookup failed: {db}")
+
+        original_devices = set(
+            get_ids(job.GetAllDeviceIds(None))
+        )
+
+        create_block(job, sheet_id, x_top)
+
+        new_devices = (
+            set(get_ids(job.GetAllDeviceIds(None)))
+            - original_devices
+        )
+
+        if len(new_devices) != 1:
+            raise RuntimeError(
+                f"Cannot identify CABBLOCK device: {new_devices}"
+            )
+
+        main_id = next(iter(new_devices))
+
+        dev = job.CreateDeviceObject()
+
+        designation = (
+            f"TEST_{choice['name']}_"
+            f"{datetime.now():%H%M%S%f}"
+        )
+
+        result["designation"] = designation
+
+        created = dev.Create(
+            designation, "", "",
+            choice["component"], 1, 0
+        )
+
+        if not one_id(created):
+            raise RuntimeError("Connector device creation failed.")
+
+        connector_id = None
+
+        for did in get_ids(job.GetAllDeviceIds(None)):
+            dev.SetId(did)
+            if str(dev.GetName()) == designation:
+                connector_id = did
+                break
+
+        if connector_id is None:
+            raise RuntimeError("Connector device not found.")
+
+        pins = get_pins(job, connector_id)
+
+        if not pins:
+            raise RuntimeError("Connector has no pins.")
+
+        family = choice["family"]
+
+        # TOP LEVEL
+        print("\n========== TOP LEVEL ==========")
+
+        result["top"] = place_pins(
+            job,
+            pins.values(),
+            family + "¶FULL",
+            sheet_id,
+            x_top + BLOCK_WIDTH,
+            BLOCK_Y + 3.8
+        )
+
+        # SECONDARY VIEW
+        print("\n========== SECONDARY ==========")
+
+        dev.SetId(main_id)
+        main_view = one_id(
+            dev.CreateView(main_id, 1, 0, "0")
+        )
+
+        if not main_view:
+            raise RuntimeError("Main CreateView failed.")
+
+        create_block(
+            job, sheet_id, x_secondary, main_view
+        )
+
+        dev.SetId(connector_id)
+        connector_view = one_id(
+            dev.CreateView(connector_id, 1, main_view)
+        )
+
+        if not connector_view:
+            raise RuntimeError("Connector CreateView failed.")
+
+        view_pins = get_pins(
+            job, connector_view, all_pins=True
+        )
+
+        selected = pin_order(
+            choice["pins"], view_pins
+        )[:2]
+
+        if len(selected) < 2:
+            raise RuntimeError("Need two secondary pins.")
+
+        for i, name in enumerate(selected):
+            characteristic = (
+                "END_TOP" if i == 0 else "SPLIT_BOTTOM"
+            )
+
+            item = place_pins(
+                job,
+                [view_pins[name]],
+                family + "¶" + characteristic,
+                sheet_id,
+                x_secondary + BLOCK_WIDTH,
+                BLOCK_Y + 3.8 - i * 0.2
+            )
+
+            item["pin"] = name
+            result["secondary"].append(item)
+
+    except Exception as exc:
+        result["errors"].append(repr(exc))
+        print("\nTEST ERROR:", repr(exc))
+
+    finally:
+        # No input or GUI pause. Save evidence and exit.
+        del job
+        del app
+
+        history = load_state()
+        history[label] = result
+        save_state(history)
+
+    print("\n========== SUMMARY ==========")
+
+    if result["top"]:
+        print("TOP:", result["top"]["library"])
+
+    for item in result["secondary"]:
+        print(
+            f"SECONDARY {item['pin']}: "
+            f"{item['library']}"
+        )
+
+    if label == "inside":
+        history = load_state()
+
+        if "baseline" in history:
+            baseline = history["baseline"]
+
+            print("\nBASELINE vs INSIDE SETTINGS:")
+            compare_settings(
+                baseline["settings"],
+                result["settings"]
+            )
+
+            if baseline["top"] and result["top"]:
+                print(
+                    "TOP SYMBOL:",
+                    baseline["top"]["library"],
+                    "->",
+                    result["top"]["library"]
+                )
+
+    print("\nResults saved:", STATE_FILE)
+    print("Python process exits now. E3 will be editable.")
+
+    if result["errors"]:
+        raise SystemExit(1)
+
+
+def symbol_ids(job):
+    found = set(
+        get_ids(safe(job, "GetSymbolIds", None))
+    )
+
+    sht = job.CreateSheetObject()
+
+    for sid in get_ids(
+        safe(job, "GetAllSheetIds", None)
+    ):
+        sht.SetId(sid)
+        found.update(
+            get_ids(safe(sht, "GetSymbolIds", None))
+        )
+
+    return sorted(found)
+
+
+def text_match(snap, kind, value, prefix=False):
+    for t in snap["texts"]:
+        text = str(t.get("value") or "")
+
+        if t.get("type") == kind:
+            if prefix and text.startswith(value):
+                return True
+            if not prefix and text == value:
+                return True
+
+    return False
+
+
+def find_replacement(pool, before, role, state):
+    ranked = []
+
+    for s in pool:
+        score = 0
+
+        if text_match(
+            s, 5, state["choice"]["component"]
+        ):
+            score += 3
+
+        if s["library"] == before["requested"]:
+            score += 7
+
+        if role == "TOP":
+            if text_match(
+                s, 12, state["designation"]
+            ):
+                score += 30
+
+            if s["characteristic"] == "FULL":
+                score += 3
+
+        else:
+            if text_match(s, 203, before["pin"]):
+                score += 20
+
+            if text_match(
+                s, 12, state["designation"] + "#",
+                prefix=True
+            ):
+                score += 15
+
+        ranked.append((score, s))
+
+    ranked.sort(key=lambda item: item[0], reverse=True)
+
+    if not ranked or ranked[0][0] < 30:
+        return None
+
+    if len(ranked) > 1:
+        if ranked[0][0] == ranked[1][0]:
+            return None
+
+    return ranked[0][1]
+
+
+def probe_test(label):
+    history = load_state()
+
+    if label not in history:
+        raise RuntimeError(
+            f"No saved placement for {label}."
+        )
+
+    state = history[label]
+
+    import win32com.client as win32
+
+    app = win32.GetActiveObject("CT.Application")
+    job = app.CreateJobObject()
+
+    try:
+        print("\n=== READ-ONLY INSPECTION ===")
+        print("Test:", label)
+        print("Connector:", state["choice"]["name"])
+        print("Designation:", state["designation"])
+
+        print(
+            "MIL setting at placement:",
+            state["settings"].get("GetDisplayMILStandard")
+        )
+
+        print(
+            "MIL setting now:",
+            safe(job, "GetDisplayMILStandard")
+        )
+
+        records = []
+
+        if state["top"]:
+            records.append(("TOP", state["top"]))
+
+        for item in state["secondary"]:
+            records.append(
+                (f"SECONDARY {item['pin']}", item)
+            )
+
+        missing = []
+
+        for role, before in records:
+            current = read_symbol(job, before["id"])
+
+            if current is None:
+                print(
+                    f"\n{role}: old ID {before['id']} "
+                    "is no longer valid."
+                )
+                missing.append((role, before))
+                continue
+
+            print(f"\n{role}:")
+            print("  Before:", before["library"])
+            print("  After: ", current["library"])
+            print(
+                "  Characteristic:",
+                before["characteristic"],
+                "->",
+                current["characteristic"]
+            )
+
+        if missing:
+            pool = []
+
+            for sid in symbol_ids(job):
+                snap = read_symbol(job, sid)
+                if snap:
+                    pool.append(snap)
+
+            for role, before in missing:
+                replacement = find_replacement(
+                    pool, before, role, state
+                )
+
+                print(f"\n{role} REPLACEMENT:")
+
+                if replacement is None:
+                    print(
+                        "  Inconclusive: no unique "
+                        "replacement found."
+                    )
+                    continue
+
+                print(
+                    "  New ID:",
+                    replacement["id"]
+                )
+
+                print(
+                    "  Library symbol:",
+                    before["library"],
+                    "->",
+                    replacement["library"]
+                )
+
+                print(
+                    "  Characteristic:",
+                    before["characteristic"],
+                    "->",
+                    replacement["characteristic"]
+                )
+
+    finally:
+        del job
+        del app
+
+    print("\nInspection complete. E3 was not modified.")
+
+
+if __name__ == "__main__":
+    if len(sys.argv) < 2:
+        print("Usage:")
+        print("  python e3_mil_test.py place baseline")
+        print("  python e3_mil_test.py place inside")
+        print("  python e3_mil_test.py probe inside")
+        sys.exit(2)
+
+    mode = sys.argv[1].lower()
+    label = (
+        sys.argv[2].lower()
+        if len(sys.argv) > 2 else "inside"
+    )
+
+    if label not in POSITIONS:
+        raise SystemExit("Use baseline or inside.")
+
+    if mode == "place":
+        place_test(label)
+    elif mode == "probe":
+        probe_test(label)
+    else:
+        raise SystemExit("Use place or probe.")
