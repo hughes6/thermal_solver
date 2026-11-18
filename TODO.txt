@@ -1,96 +1,29 @@
-"""E3 connector-type attribute probe (READ ONLY).
+cur.execute("""
+SELECT
+    c.ENTRY,
+    c.VERSION,
+    c.Description,
+    c.Class,
+    COUNT(DISTINCT p.PinNumber) AS NumberOfPins
+FROM dbo.ComponentData c
+LEFT JOIN dbo.PhysPin p
+    ON p.Entry = c.ENTRY
+WHERE c.ENTRYTYP = 24
+GROUP BY
+    c.ENTRY,
+    c.VERSION,
+    c.Description,
+    c.Class
+ORDER BY
+    c.ENTRY,
+    c.VERSION
+""")
+for entry, version, description, component_class, number_of_pins in cur.fetchall():
+    component_class = str(component_class)
+    # if "SIMS" in component_class or "SCAU" in component_class or "MAU" in component_class or "Coaxial" in component_class or "VHDCI" in component_class or "Generic" in component_class:
+    if "AC" in component_class:
+        # print(f"{entry} | Version {version} | {component_class} | {description} | {number_of_pins}")
+        print(f"{entry} | {component_class}")
 
-Uses the SAME Excel connector list as Block Maker (C5, B7:C...).
-Tries E3's database component list with the 'Connector Type' attribute,
-then checks existing project devices and components for a matching attribute.
-
-No project changes, no database changes, no placements, no waits for editing.
-Requires: pywin32 and openpyxl. Run with E3.series open.
-"""
-
-from __future__ import annotations
-
-import re
-import traceback
-from pathlib import Path
-
-ATTRIBUTE_NAMES = (
-    "Connector Type",    # Exact display name reported in your component properties
-    "CONNECTOR_TYPE",    # Try possible raw database attribute names
-    "CONNECTORTYPE",
-)
-
-REPORT_PATH = Path(__file__).with_name("e3_connector_type_probe_results.txt")
-OUTPUT = []
-
-
-def say(*parts):
-    s = " ".join(map(str, parts))
-    print(s, flush=True)
-    OUTPUT.append(s)
-
-
-def call(obj, method, *args):
-    try:
-        return getattr(obj, method)(*args)
-    except Exception:
-        return None
-
-
-def ids(value):
-    """Extract E3 IDs from (count, ids) or a simple ID array."""
-    if isinstance(value, (tuple, list)):
-        if len(value) >= 2 and isinstance(value[1], (tuple, list)):
-            value = value[1]
-        return [v for v in value if type(v) is int and v > 0]
-    return [value] if type(value) is int and value > 0 else []
-
-
-def normalize(value):
-    return re.sub(r"[^a-z0-9]", "", str(value or "").casefold())
-
-
-def classification(value):
-    raw = normalize(value)
-    if raw == "plug":
-        return "PLUG"
-    if raw in ("recepticle", "receptacle"):
-        return "RECEPTACLE"
-    return None
-
-
-def choose_workbook():
-    # All dialogs and input happen BEFORE the E3 COM connection.
-    from tkinter import Tk, filedialog
-    from openpyxl import load_workbook
-
-    root = Tk()
-    root.withdraw()
-    root.attributes("-topmost", True)
-    try:
-        path = filedialog.askopenfilename(
-            parent=root,
-            title="Choose your Block Maker Excel workbook",
-            filetypes=[("Excel workbooks", "*.xlsm *.xlsx"), ("All files", "*.*")],
-        )
-    finally:
-        root.destroy()
-
-    if not path:
-        raise SystemExit("Canceled workbook selection")
-
-    wb = load_workbook(path, read_only=True, data_only=True)
-    try:
-        sh = wb.active
-        n = int(sh["C5"].value)
-        choices = []
-        for i in range(n):
-            name = sh.cell(row=7 + i, column=2).value
-            code = sh.cell(row=7 + i, column=3).value
-            if name is not None and code is not None:
-                choices.append((str(name).strip(), str(code).strip()))
-    finally:
-        wb.close()
-
-    if not choices:
-        raise RuntimeError("No connector names/component codes found in B7:C... of workbook")
+cur.close()
+conn.close()
