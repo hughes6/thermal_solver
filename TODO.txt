@@ -1,245 +1,46 @@
-"""E3 MIL BLOCK CONNECTOR: read-only inspector (PHASE 2).
+=== E3 MIL POST-PLACEMENT INSPECTION (READ-ONLY) ===
+Connector: OTX-J1 component: M24308/4-1F_9P SD
+Designation: TEST_OTX-J1_113418
+No E3 objects will be modified, and there is no interactive pause.
+MIL setting at placement: 16
+MIL setting NOW: 16
 
-Usage: python e3_mil_block_test_inspect.py
+TOP: saved ID 147367 / requested 'MilBlockPlugInt¶FULL'
+  ACTUAL: 'MilBlockPlug¶FULL'
+  CHARACTERISTIC: 'FULL'
+  MATCH: FAIL
+  Text types, values and visibility: unchanged
 
-Run as a NEW, SEPARATE Python process after e3_mil_block_test_place.py
-has fully exited and E3 is editable. You may mate/edit the test objects in E3
-before running this inspector. It NEVER edits E3 and NEVER pauses for input.
+SECONDARY 1: saved ID 146637 / requested 'MilBlockPlugInt¶END_TOP'
+  Saved ID is no longer a valid symbol (E3 may have replaced it).
 
-Requires e3_mil_block_test_state.json from Phase 1 in this script's folder.
-Accounts for symbol IDs changing during E3 symbol-view edits.
-"""
+SECONDARY 2: saved ID 146451 / requested 'MilBlockPlugInt¶SPLIT_BOTTOM'
+  ACTUAL: 'MilBlockPlugInt¶SPLIT_BOTTOM'
+  CHARACTERISTIC: 'SPLIT_BOTTOM'
+  MATCH: PASS
+  Text types, values and visibility: unchanged
+ENUMERATED 5 unique candidate symbol IDs from:
+  Job.GetSymbolIds 5
+  Job.GetAllSymbolIds 0
+  Sheet204828.GetSymbolIds 5
+  Sheet204828.GetAllSymbolIds 0
+  Device147977.GetSymbolIds 1
+  Device147977.GetAllSymbolIds 0
+  Device147221.GetSymbolIds 1
+  Device147221.GetAllSymbolIds 0
+  Device146885.GetSymbolIds 2
+  Device146885.GetAllSymbolIds 0
+  Device65151.GetSymbolIds 1
+  Device65151.GetAllSymbolIds 0
 
-from __future__ import annotations
-from collections import defaultdict
-import json
-from pathlib import Path
-import sys
-import traceback
-import win32com.client as win32
+REPLACEMENT MATCHES FOR SECONDARY 1
+  146321 'MilBlockPlugInt¶END_TOP' score 38 evidence ['requested symbol', 'component code', 'EXACT pin number', 'secondary device designation']
+  146451 'MilBlockPlugInt¶SPLIT_BOTTOM' score 18 evidence ['same internal family', 'component code', 'secondary device designation']
+  147367 'MilBlockPlug¶FULL' score 3 evidence ['component code']
+  UNIQUE replacement symbol ID: 146321
+  BEFORE library symbol: 'MilBlockPlugInt¶END_SPLIT'
+  AFTER library symbol:  'MilBlockPlugInt¶END_TOP'
+  REQUEST MATCH: PASS
+  CHARACTERISTIC: 'END_SPLIT' -> 'END_TOP'
+  Text types, values and visibility: unchanged
 
-HERE = Path(__file__).resolve().parent
-STATE_PATH = HERE / "e3_mil_block_test_state.json"
-REPORT_PATH = HERE / "e3_mil_block_test_inspection.log"
-
-
-class Tee:
-    def __init__(self, filename):
-        self.file = filename.open("w", encoding="utf-8")
-        self.old = sys.stdout
-    def write(self, s):
-        self.old.write(s)
-        self.file.write(s)
-        self.file.flush()
-    def flush(self):
-        self.old.flush()
-        self.file.flush()
-    def close(self):
-        self.file.close()
-
-
-def safe_call(obj, method, *args):
-    try:
-        return getattr(obj, method)(*args)
-    except Exception:
-        return None
-
-
-def ids(result):
-    if isinstance(result, (tuple, list)):
-        if len(result) >= 2 and isinstance(result[1], (tuple, list)):
-            seq = result[1]
-        elif all(type(x) is int for x in result):
-            seq = result
-        else:
-            return []
-        return [int(x) for x in seq if type(x) is int and x > 0]
-    return []
-
-
-def get_ids(obj, method):
-    for args in ((None,), ()):
-        value = safe_call(obj, method, *args)
-        if value is not None:
-            return ids(value)
-    return []
-
-
-def snapshot(prj, symbol_id):
-    sym = prj.CreateSymbolObject()
-    sym.SetId(int(symbol_id))
-    libname = safe_call(sym, "GetSymbolTypeName")
-    typeid = safe_call(sym, "GetSymbolTypeId")
-    # Invalid symbol IDs on this E3 installation returned '' and type ID 0.
-    if not isinstance(libname, str) or not libname.strip() or not isinstance(typeid, int) or typeid <= 0:
-        return None
-    txt = prj.CreateTextObject()
-    texts = []
-    for tid in get_ids(sym, "GetTextIds"):
-        txt.SetId(tid)
-        texts.append({"id": tid,
-                      "type": safe_call(txt, "GetType"),
-                      "value": safe_call(txt, "GetText"),
-                      "visible": safe_call(txt, "GetVisibility")})
-    return {"symbol_id": int(symbol_id), "library_symbol": libname,
-            "characteristic": safe_call(sym, "GetCharacteristic"),
-            "type_id": typeid, "designation": safe_call(sym, "GetName"),
-            "texts": texts}
-
-
-def collect_candidate_ids(prj, state):
-    sources = defaultdict(list)
-    for method in ("GetSymbolIds", "GetAllSymbolIds"):
-        sources[f"Job.{method}"] = get_ids(prj, method)
-    sht = prj.CreateSheetObject()
-    for sheet_id in get_ids(prj, "GetAllSheetIds"):
-        sht.SetId(sheet_id)
-        if sheet_id == int(state["sheet_id"]) or str(safe_call(sht, "GetName")) == "1":
-            for method in ("GetSymbolIds", "GetAllSymbolIds"):
-                sources[f"Sheet{sheet_id}.{method}"] = get_ids(sht, method)
-    dev = prj.CreateDeviceObject()
-    device_ids = get_ids(prj, "GetAllDeviceIds")
-    names = []
-    for did in device_ids:
-        dev.SetId(did)
-        name = safe_call(dev, "GetName")
-        if str(name).startswith(str(state["test_name"])):
-            names.append(did)
-    related = names + [state.get("connector_device_id"), state.get("connector_view_id"),
-                       state.get("main_device_id"), state.get("main_view_id")]
-    for did in set(int(x) for x in related if x):
-        dev.SetId(did)
-        for method in ("GetSymbolIds", "GetAllSymbolIds"):
-            sources[f"Device{did}.{method}"] = get_ids(dev, method)
-    unique = sorted(set(i for group in sources.values() for i in group))
-    print("ENUMERATED", len(unique), "unique candidate symbol IDs from:")
-    for where, found in sources.items():
-        print(" ", where, len(found))
-    return unique
-
-
-def value_present(snap, text_type, exact):
-    return any(t.get("type") == text_type and str(t.get("value") or "") == exact
-               for t in snap["texts"])
-
-
-def rank_candidate(snap, entry, state, role):
-    """Only compare a candidate after confirming identity beyond library type."""
-    actual = str(snap["library_symbol"] or "")
-    requested = str(entry["requested"])
-    family = str(state["symbol_base"])
-    if not actual.startswith(family.removesuffix("Int")):
-        return 0, []
-    reasons = []
-    score = 0
-    if actual == requested:
-        score += 8; reasons.append("requested symbol")
-    elif actual.split("¶")[0] == requested.split("¶")[0]:
-        score += 3; reasons.append("same internal family")
-    elif role == "TOP" and actual.endswith("¶FULL"):
-        score += 2; reasons.append("full top symbol family")
-    if value_present(snap, 5, state["component_code"]):
-        score += 3; reasons.append("component code")
-    if role == "TOP":
-        if value_present(snap, 12, state["test_name"]):
-            score += 20; reasons.append("EXACT device designation")
-        elif any(t.get("type") == 12 and str(t.get("value") or "").startswith(state["test_name"])
-                 for t in snap["texts"]):
-            score += 2; reasons.append("related device designation")
-    else:
-        pin_name = str(entry["pin_name"])
-        if value_present(snap, 203, pin_name):
-            score += 15; reasons.append("EXACT pin number")
-        if any(t.get("type") == 12 and str(t.get("value") or "").startswith(state["test_name"] + "#")
-               for t in snap["texts"]):
-            score += 12; reasons.append("secondary device designation")
-    return score, reasons
-
-
-def compare_texts(a, b):
-    # E3 reallocates text IDs when its graphic is replaced. Match by type/value.
-    def canon(snap):
-        return sorted((str(t.get("type")), str(t.get("value")), str(t.get("visible")))
-                      for t in snap.get("texts", []))
-    old, new = canon(a), canon(b)
-    if old == new:
-        print("  Text types, values and visibility: unchanged")
-    else:
-        print("  Texts BEFORE (type, value, visibility):")
-        for rec in old: print("   ", rec)
-        print("  Texts AFTER (type, value, visibility):")
-        for rec in new: print("   ", rec)
-    return old == new
-
-
-def inspect():
-    if not STATE_PATH.is_file():
-        raise RuntimeError(f"Missing {STATE_PATH}. Run the PLACEMENT test first.")
-    state = json.loads(STATE_PATH.read_text(encoding="utf-8"))
-    print("=== E3 MIL POST-PLACEMENT INSPECTION (READ-ONLY) ===")
-    print("Connector:", state["connector_name"], "component:", state["component_code"])
-    print("Designation:", state["test_name"])
-    print("No E3 objects will be modified, and there is no interactive pause.")
-    app = win32.GetActiveObject("CT.Application")
-    prj = app.CreateJobObject()
-    current_mil = safe_call(prj, "GetDisplayMILStandard")
-    print("MIL setting at placement:", repr(state.get("mil_setting")))
-    print("MIL setting NOW:", repr(current_mil))
-    if current_mil != state.get("mil_setting"):
-        print("  WARNING: Settings changed since placement; existing symbol comparison is still valid.")
-    entries = [("TOP", state.get("top"))]
-    entries.extend(("SECONDARY " + str(e["pin_name"]), e) for e in state.get("secondary", []))
-    entries = [(label, e) for label, e in entries if e]
-    if not entries:
-        raise RuntimeError("Baseline contains no placed connector symbols.")
-    unmatched = []
-    for label, e in entries:
-        print(f"\n{label}: saved ID {e['symbol_id']} / requested {e['requested']!r}")
-        current = snapshot(prj, e["symbol_id"])
-        if current is None:
-            print("  Saved ID is no longer a valid symbol (E3 may have replaced it).")
-            unmatched.append((label, e))
-            continue
-        print("  ACTUAL:", repr(current["library_symbol"]))
-        print("  CHARACTERISTIC:", repr(current["characteristic"]))
-        print("  MATCH:", "PASS" if current["library_symbol"] == e["requested"] else "FAIL")
-        compare_texts(e["snapshot"], current)
-
-    if unmatched:
-        all_ids = collect_candidate_ids(prj, state)
-        symbol_pool = [x for x in (snapshot(prj, sid) for sid in all_ids) if x is not None]
-        for label, e in unmatched:
-            role = "TOP" if label == "TOP" else "SECONDARY"
-            scored = []
-            for s in symbol_pool:
-                score, why = rank_candidate(s, e, state, role)
-                if score:
-                    scored.append((score, s, why))
-            scored.sort(key=lambda a: -a[0])
-            print("\nREPLACEMENT MATCHES FOR", label)
-            for score, s, why in scored[:6]:
-                print(" ", s["symbol_id"], repr(s["library_symbol"]), "score", score, "evidence", why)
-            if not scored or scored[0][0] < 18 or (len(scored) > 1 and scored[0][0] == scored[1][0]):
-                print("  INCONCLUSIVE: no unique, strong replacement match")
-                continue
-            new = scored[0][1]
-            print("  UNIQUE replacement symbol ID:", new["symbol_id"])
-            print("  BEFORE library symbol:", repr(e["snapshot"]["library_symbol"]))
-            print("  AFTER library symbol: ", repr(new["library_symbol"]))
-            print("  REQUEST MATCH:", "PASS" if new["library_symbol"] == e["requested"] else "FAIL")
-            print("  CHARACTERISTIC:", repr(e["snapshot"]["characteristic"]), "->", repr(new["characteristic"]))
-            compare_texts(e["snapshot"], new)
-    print("\nINSPECTION COMPLETE. E3 unchanged. Report:", REPORT_PATH)
-
-
-if __name__ == "__main__":
-    tee = Tee(REPORT_PATH)
-    sys.stdout = tee
-    try:
-        inspect()
-    except Exception:
-        print("\nINSPECTION FAILED:\n" + traceback.format_exc())
-        sys.exit(1)
-    finally:
-        sys.stdout = tee.old
-        tee.close()
