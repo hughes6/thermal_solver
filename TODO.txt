@@ -223,19 +223,23 @@ def format_current_secondary_pin_views(prj, metadata_path, modified_texts):
 
             required = {5, 617, 203}
             if pos == 1:
-                required.add(12)
+                required.update((12, 15))  # type 15 = Location on top pin
             present = {typ for typ, _, _ in current["items"]}
             for missing in sorted(required - present):
                 print(f"    WARNING: expected text type {missing} not present on current symbol", flush=True)
 
             for typ, val, tid in current["items"]:
-                if typ not in (5, 12, 617, 203):
+                if typ not in (5, 12, 15, 617, 203):
                     continue
+                if typ == 15 and pos != 1:
+                    continue  # Do not change lower pins' Location visibility.
                 # 5: component code off on ALL pins
                 # 12: top designation visible, bold, 0.2"; others hidden
+                # 15: Location OFF on TOP pin ONLY (preserve other pins)
                 # 617: local signal visible, black, bold, 0.15"
                 # 203: pin number visible and bold
-                desired_visibility = 0 if (typ == 5 or (typ == 12 and pos != 1)) else 1
+                desired_visibility = 0 if (typ == 5 or (typ == 12 and pos != 1)
+                                           or (typ == 15 and pos == 1)) else 1
                 text_obj.SetId(tid)
                 checks = []
                 ok, actual = set_and_check("SetVisibility", desired_visibility, "GetVisibility")
@@ -280,6 +284,161 @@ def format_current_secondary_pin_views(prj, metadata_path, modified_texts):
     print(f"PIN TEXT READBACK: PASS={total_text_success} FAIL={total_text_fail}", flush=True)
     if total_failed or total_text_fail:
         print("WARNING: Some pin text was NOT verified; see lines above", flush=True)
+
+
+def format_current_main_connector_symbols(prj, metadata_path, modified_texts, text_size=0.2):
+    """Format top-level FULL MIL connectors, without replacing or moving anything.
+
+    These symbols are separate from the secondary split-pin views. The metadata
+    created by main.py identifies each connector and its drawing sheet but does
+    not retain its original FULL symbol ID, so identify current symbols by the
+    exact type-12 connector designation. Ambiguous matches are left untouched.
+    """
+    if not metadata_path or not os.path.isfile(metadata_path):
+        print("MAIN CONNECTOR FORMAT: No metadata available", flush=True)
+        return
+    try:
+        with open(metadata_path, "r", encoding="utf-8") as handle:
+            blocks = json.load(handle)
+    except Exception as exc:
+        print("MAIN CONNECTOR FORMAT: Metadata read error:", repr(exc), flush=True)
+        return
+
+    sym_obj = prj.CreateSymbolObject()
+    text_obj = prj.CreateTextObject()
+    sheet_obj = prj.CreateSheetObject()
+
+    def ids(result):
+        if isinstance(result, (list, tuple)):
+            if len(result) >= 2 and isinstance(result[1], (tuple, list)):
+                result = result[1]
+            elif not all(type(i) is int for i in result):
+                return []
+            return [i for i in result if type(i) is int and i > 0]
+        return [result] if type(result) is int and result > 0 else []
+
+    def get_ids(obj, method):
+        fn = getattr(obj, method, None)
+        if fn is None:
+            return []
+        for args in ((None,), ()):
+            try:
+                return ids(fn(*args))
+            except Exception:
+                continue
+        return []
+
+    def readback(text_id, setters, desired_visibility):
+        text_obj.SetId(text_id)
+        checks = []
+        for setter, getter, val in setters:
+            try:
+                getattr(text_obj, setter)(val)
+                observed = getattr(text_obj, getter)()
+                if getter == "GetHeight":
+                    ok = isinstance(observed, (int, float)) and abs(float(observed) - float(val)) < 1e-4
+                else:
+                    ok = observed == val
+            except Exception as exc:
+                observed = repr(exc)
+                ok = False
+            checks.append(ok)
+        try:
+            actual_visibility = text_obj.GetVisibility()
+        except Exception as exc:
+            actual_visibility = repr(exc)
+            checks.append(False)
+        return all(checks) and actual_visibility == desired_visibility, actual_visibility
+
+    print("\n" + "=" * 60, flush=True)
+    print("TOP-LEVEL FULL MIL CONNECTOR TEXT FORMATTING", flush=True)
+    print("Format existing text only; no connector/symbol changes", flush=True)
+    print("=" * 60, flush=True)
+
+    success = fail = matched = 0
+    seen = set()
+    for block in blocks:
+        name = str(block.get("name", "")).strip()
+        sheet_id = block.get("sheet_id")
+        if not name or not sheet_id:
+            continue
+        try:
+            sheet_obj.SetId(int(sheet_id))
+            candidates = get_ids(sheet_obj, "GetSymbolIds")
+        except Exception as exc:
+            print(f"MAIN {name}: sheet {sheet_id} not readable: {exc!r}", flush=True)
+            fail += 1
+            continue
+
+        eligible = []
+        for sid in candidates:
+            try:
+                sym_obj.SetId(sid)
+                library = str(sym_obj.GetSymbolTypeName() or "").strip()
+                if not library.startswith("MilBlock") or "¶FULL" not in library:
+                    continue
+                items = []
+                for tid in get_ids(sym_obj, "GetTextIds"):
+                    try:
+                        text_obj.SetId(tid)
+                        items.append((int(text_obj.GetType()), str(text_obj.GetText() or "").strip(), tid))
+                    except Exception:
+                        continue
+                # E3 may prefix the connector designation with an assignment
+                # or location. The last whitespace-delimited component must be
+                # the EXACT connector designation, never its secondary '#1'.
+                designations = [v for typ, v, _ in items if typ == 12]
+                if not any(v == name or (v.split() and v.split()[-1] == name)
+                           for v in designations):
+                    continue
+                eligible.append((sid, library, items))
+            except Exception:
+                continue
+
+        if len(eligible) != 1:
+            print(f"MAIN {name}: SKIP; {len(eligible)} FULL symbols match its exact designation", flush=True)
+            fail += 1
+            continue
+        sid, library, items = eligible[0]
+        if sid in seen:
+            print(f"MAIN {name}: SKIP; symbol {sid} already used", flush=True)
+            fail += 1
+            continue
+        seen.add(sid)
+        matched += 1
+        print(f"MAIN {name}: CURRENT symbol {sid}, {library}", flush=True)
+
+        for typ, value, tid in items:
+            # 5 = component code, 12 = connector device designation,
+            # 203 = pin/group number. Leave location (15) and other nodes alone.
+            if typ not in (5, 12, 203):
+                continue
+            operations = [("SetVisibility", "GetVisibility", 0 if typ == 5 else 1)]
+            if typ == 12:
+                operations.extend([
+                    ("SetColour", "GetColour", 0),
+                    ("SetStyle", "GetStyle", 1),
+                    ("SetHeight", "GetHeight", float(text_size)),
+                ])
+            elif typ == 203:
+                operations.extend([
+                    ("SetColour", "GetColour", 0),
+                    ("SetStyle", "GetStyle", 1),
+                ])
+            ok, visibility = readback(tid, operations, 0 if typ == 5 else 1)
+            print(f"    TYPE {typ} {value!r}: text {tid}, visible={visibility}, "
+                  f"{'PASS' if ok else 'FAIL'}", flush=True)
+            if ok:
+                success += 1
+            else:
+                fail += 1
+            modified_texts.append({
+                "device": name, "pin": "MAIN", "position": 0,
+                "view": sid, "text_id": tid, "type": typ,
+                "value": value, "desired": 0 if typ == 5 else 1,
+            })
+    print(f"MAIN CONNECTOR TEXT: symbols matched={matched}, "
+          f"text PASS={success}, FAIL={fail}", flush=True)
 
 
 def runn(secondary=False, TEXT_SIZE=0.25):
@@ -901,6 +1060,13 @@ def runn(secondary=False, TEXT_SIZE=0.25):
     # apply formatting to displayed text objects with immediate readback.
     format_current_secondary_pin_views(
         prj, os.environ.get("E3_SECONDARY_BLOCK_FILE"), modified_texts
+    )
+
+    # Format top-level FULL MIL connectors only after E3 has placed all views.
+    # main.py may have enabled their component code; hide it here.
+    format_current_main_connector_symbols(
+        prj, os.environ.get("E3_SECONDARY_BLOCK_FILE"),
+        modified_texts, TEXT_SIZE
     )
 
     # ================================================
