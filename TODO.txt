@@ -1,486 +1,67 @@
-"""Standalone E3 primary/secondary block-connector test with post-placement symbol correction.
+Connectors from workbook:
+  1. OTX-J1  [M24308/4-1F_9P SD]
+Select connector [Enter=1]: 
+Internal MIL block symbol base [MilBlockPlugInt]: 
 
-Run with E3 open, against a DISPOSABLE COPY of the project:
-    python test_e3_primary_secondary.py
+Workbook: C:\Users\conner.hughes\OneDrive - BAE Systems Inc\Documents\Python\Block Maker\test.xlsm
+Connector: 'OTX-J1'; component: 'M24308/4-1F_9P SD'
+Top-level requested symbol: MilBlockPlugInt¶FULL
+Top-level fallback for placing: MilBlockPlug¶FULL
+Secondary symbols: MilBlockPlugInt¶END_SPLIT / ¶SPLIT_BOTTOM
+NOTE: Creates objects in E3! Use an UNSAVED TEST PROJECT COPY.
 
-Choose the same .xlsm workbook as main.py, then select one connector.
-Creates a fresh CABBLOCK and one test connector, places it on the RIGHT block
-edge (offset 0.0), creates the main-device view and a single secondary CABBLOCK,
-then places up to two connector *view* pins on the new block's right edge.
+Database lookup for 'M24308/4-1F_9P SD': (0, 'M24308/4-1F_9P SD', 1)
+PlaceBlock parent=None, x=3.0, y=4.0 -> 148316
+Created MAIN CABBLOCK symbol=148316, device=155202
+dev.Create('TEST_OTX-J1_103906', 'M24308/4-1F_9P SD') -> 145801
+pin map (device 145801, all_pins=False): {'1': 204829, '2': 147494, '3': 146376, '4': 147065, '5': 147592, '6': 148303, '7': 146276, '8': 146280, '9': 146416, 'BS': 146422}
 
-IMPORTANT: This creates E3 objects. It does not edit main.py or delete existing
-objects. Close the test project WITHOUT saving when finished.
+========= TEST 1: TOP-LEVEL (RIGHT EDGE, OFFSET=0.0) =========
+PlacePins pin_ids=[204829, 147494, 146376, 147065, 147592, 148303, 146276, 146280, 146416, 146422], symbol='MilBlockPlugInt¶FULL', version=1, sheet=204828, x=6.0, y=7.8, flip=0
+  raw result: (147247, (204829, 147494, 146376, 147065, 147592, 148303, 146276, 146280, 146416, 146422))
+  Symbol Designation (text type 4): []
+  NOTE: type 4 isn't present on this symbol; visibility cannot add it
+  Device Designation (text type 12): [(147241, 0, 1, 1)]
+TOP-LEVEL SUCCEEDED, placed symbol ID 147247
 
-The test intentionally retains the same CreateView hierarchy as main.py.
-Top connector is requested as MilBlockPlugInt; if E3 ignores the requested
-symbol (or placement fails), the script uses the known working MilBlockPlug
-placement and tries to switch to the Int form AFTER placement. When the local
-E3 COM interface does not expose a confirmed symbol-swap method, it pauses
-so the change can be made safely via Symbol Properties before proceeding.
-This script never deletes/replaces the pin to change its graphic.
-"""
+========= TOP-LEVEL SYMBOL VALIDATION =========
+  ACTUAL top symbol BEFORE attempted swap: 'P1'
+  E3 symbol COM methods relevant to a graphic swap: ['GetCharacteristic', 'GetSymbolCount', 'GetSymbolExtend', 'GetSymbolIds', 'GetSymbolType', 'GetSymbolTypeId', 'GetSymbolTypeName', 'GetValidCharacteristics', 'SetCharacteristic']
+  Automated symbol swap could not be VERIFIED on this E3 interface.
+  The pin is still placed on the block's RIGHT EDGE (offset 0.0).
 
-from datetime import datetime
-from pathlib import Path
-import tkinter as tk
-from tkinter import filedialog
-import traceback
+  In E3 select the NEW top-level test connector symbol (ID: 147247 ).
+  Right-click -> Symbol Properties -> Symbol View.
+  Change Symbol Name from MilBlockPlug to MilBlockPlugInt (FULL).
+  Re-enable Symbol Designation and Device Designation if needed.
+  Do NOT delete/re-place the connector.
+  After applying that change in E3, press Enter to continue with the SECONDARY view...
+  AFTER user intervention actual symbol name: 'P1'
+  NOTE: E3 did not report MilBlockPlugInt; check Symbol Properties.
+  Symbol Designation (text type 4): []
+  NOTE: type 4 isn't present on this symbol; visibility cannot add it
+  Device Designation (text type 12): [(147241, 1, 1, 1)]
 
-from openpyxl import load_workbook
-import win32com.client as win32
+========= TEST 2: SECONDARY VIEW & SPLIT BLOCK =========
+CreateView(main CABBLOCK, view 1) -> 147114
+PlaceBlock parent=147114, x=11.0, y=4.0 -> 146972
+SECONDARY BLOCK symbol ID=146972, main view=147114
+CreateView(connector, view 1, parent main view 147114) -> 146690
+pin map (device 146690, all_pins=True): {'1': 146688, '2': 146687, '3': 146686, '4': 146683, '5': 146680, '6': 146677, '7': 146674, '8': 146671, '9': 146668, 'BS': 146665}
+Testing these secondary pins: ['1', '2']
+PlacePins pin_ids=[146688], symbol='MilBlockPlugInt¶END_SPLIT', version=1, sheet=204828, x=14.0, y=7.8, flip=0
+  raw result: (146563, (146688,))
+  Symbol Designation (text type 4): []
+  NOTE: type 4 isn't present on this symbol; visibility cannot add it
+  Device Designation (text type 12): [(146557, 1, 1, 1)]
+SECONDARY OK: pin=1, symbol_id=146563
+PlacePins pin_ids=[146687], symbol='MilBlockPlugInt¶SPLIT_BOTTOM', version=1, sheet=204828, x=14.0, y=7.6, flip=0
+  raw result: (146315, (146687,))
+  Symbol Designation (text type 4): []
+  NOTE: type 4 isn't present on this symbol; visibility cannot add it
+  Device Designation (text type 12): [(146309, 0, 1, 1)]
+SECONDARY OK: pin=2, symbol_id=146315
 
-# ==================== CONFIG (EDIT IF NEEDED) ====================
-SHEET_NAME = "1"
-BLOCK_SYMBOL = "CABBLOCK"
-BLOCK_VERSION = 1
-COMPONENT_VERSION = 1
+TEST COMPLETE. Inspect and attempt mating in E3. Discard test changes.
 
-# Use the precise INTERNAL symbol name from your E3 library.
-# For a receptacle-based component, your original script used
-# "MilBlockSymbolReceptacleInt" instead of a Plug family.
-DEFAULT_MIL_BASE = "MilBlockPlugInt"
-TOP_PLACEMENT_FALLBACK_BASE = "MilBlockPlug"
-TOP_TARGET_BASE = "MilBlockPlugInt"
-# Enable this so the script offers a manual Symbol Properties correction when
-# E3 places the component default symbol despite requesting PlugInt.
-PAUSE_FOR_MANUAL_TOP_SWAP = True
-
-# Place both test blocks in EMPTY space on sheet 1.
-TOP_X, TOP_Y = 3.0, 4.0
-SECONDARY_X, SECONDARY_Y = 11.0, 4.0
-BLOCK_WIDTH, BLOCK_HEIGHT = 3.0, 5.0
-
-# Verified block-edge placement: NO 0.3 inset.
-RIGHT_EDGE_OFFSET = 0.0
-TOP_PIN_Y_FROM_BOTTOM = 3.8
-SECONDARY_FIRST_PIN_Y_FROM_BOTTOM = 3.8
-SECONDARY_PIN_SPACING = 0.2
-
-# Your main.py used 0 for the right-facing primary and '/1' for secondary.
-# Start with the same RIGHT-edge orientation in both tests; adjust to the
-# orientation of a manually placed working connector if needed.
-TOP_FLIP = 0
-SECONDARY_FLIP = 0
-
-MAX_SECONDARY_PINS_TO_TEST = 2
-# ================================================================
-
-
-def extract_ids(result):
-    if not isinstance(result, (tuple, list)):
-        return []
-    if len(result) >= 2 and isinstance(result[1], (tuple, list)):
-        return [int(v) for v in result[1] if isinstance(v, int) and v > 0]
-    if all(isinstance(v, int) for v in result):
-        return [int(v) for v in result if v > 0]
-    return []
-
-
-def first_id(result):
-    result = result[0] if isinstance(result, (tuple, list)) else result
-    return int(result) if isinstance(result, (int, float)) else 0
-
-
-def choose_workbook():
-    root = tk.Tk()
-    root.withdraw()
-    root.attributes("-topmost", True)
-    root.update()
-    try:
-        path = filedialog.askopenfilename(
-            parent=root,
-            title="Select the same Block Maker Excel workbook as main.py",
-            filetypes=[("Excel workbook", "*.xlsm *.xlsx"), ("All files", "*.*")],
-        )
-    finally:
-        root.destroy()
-    if not path:
-        raise SystemExit("Cancelled: no workbook selected")
-    return Path(path)
-
-
-def choose_connector(workbook):
-    wb = load_workbook(workbook, data_only=True, read_only=True)
-    try:
-        ws = wb.active
-        n = int(ws["C5"].value)
-        connectors = []
-        for idx in range(n):
-            # Same B/C connector list starting at row 7 as main.py.
-            row = idx + 7
-            name = ws.cell(row=row, column=2).value
-            code = ws.cell(row=row, column=3).value
-            if name is not None and code is not None:
-                connectors.append((idx, str(name).strip(), str(code).strip()))
-        if not connectors:
-            raise RuntimeError("No connector name/type pairs in B/C from row 7")
-        print("\nConnectors from workbook:")
-        for i, (_, name, code) in enumerate(connectors, 1):
-            print(f" {i:2}. {name}  [{code}]")
-        raw = input("Select connector [Enter=1]: ").strip()
-        index = int(raw) if raw else 1
-        if index not in range(1, len(connectors) + 1):
-            raise ValueError("Connector selection out of range")
-        excel_index, name, code = connectors[index - 1]
-        pin_col = 9 + excel_index * 5
-        requested_pins = []
-        try:
-            count = int(ws.cell(row=5, column=pin_col + 1).value or 0)
-            for row in range(8, 8 + count):
-                value = ws.cell(row=row, column=pin_col).value
-                if value is not None:
-                    requested_pins.append(str(value).strip())
-        except (ValueError, TypeError):
-            pass
-        return name, code, requested_pins
-    finally:
-        wb.close()
-
-
-def get_ids_for_project_devices(prj):
-    return set(extract_ids(prj.GetAllDeviceIds(None)))
-
-
-def get_sheet(prj):
-    sht = prj.CreateSheetObject()
-    for sid in extract_ids(prj.GetAllSheetIds(None)):
-        sht.SetId(sid)
-        if str(sht.GetName()) == SHEET_NAME:
-            return sid
-    raise RuntimeError(f"Couldn't find E3 sheet named {SHEET_NAME!r}")
-
-
-def create_block(prj, sheet_id, x, y, parent_view_id=None):
-    sym = prj.CreateSymbolObject()
-    if not sym.Load(BLOCK_SYMBOL, BLOCK_VERSION):
-        raise RuntimeError(f"Couldn't load block symbol {BLOCK_SYMBOL}")
-    if parent_view_id is None:
-        result = sym.PlaceBlock(sheet_id, x, y, BLOCK_WIDTH, BLOCK_HEIGHT)
-    else:
-        result = sym.PlaceBlock(
-            sheet_id, x, y, BLOCK_WIDTH, BLOCK_HEIGHT, parent_view_id
-        )
-    sid = first_id(result)
-    print(f"PlaceBlock parent={parent_view_id}, x={x}, y={y} -> {result!r}")
-    if sid <= 0:
-        raise RuntimeError(f"PlaceBlock failed: {result!r}")
-    return sid
-
-
-def get_pin_map(prj, dev_id, *, all_pins):
-    dev = prj.CreateDeviceObject()
-    pin = prj.CreatePinObject()
-    dev.SetId(dev_id)
-    result = dev.GetAllPinIds(None) if all_pins else dev.GetPinIds(None)
-    pins = {}
-    for pid in extract_ids(result):
-        pin.SetId(pid)
-        name = str(pin.GetName()).strip()
-        if name and name not in pins:
-            pins[name] = pid
-    print(f"pin map (device {dev_id}, all_pins={all_pins}): {pins!r}")
-    return pins
-
-
-def choose_pin_names(excel_pin_names, pin_map):
-    # Preserve workbook ordering where possible; handle E3 suffixes like 1-C.
-    resolved = []
-    for excel_name in excel_pin_names:
-        name = excel_name if excel_name in pin_map else None
-        if name is None:
-            candidates = [p for p in pin_map if p.split("-", 1)[0] == excel_name]
-            if len(candidates) == 1:
-                name = candidates[0]
-        if name is not None and name not in resolved:
-            resolved.append(name)
-    for name in pin_map:
-        if name not in resolved:
-            resolved.append(name)
-    return resolved[:MAX_SECONDARY_PINS_TO_TEST]
-
-
-def show_text(sym, text, symbol_id):
-    """E3 types 4=Symbol designation, 12=Device designation.
-
-    Does not create a missing text node and cannot change the symbol's library
-    name, which is a property rather than a visibility-controlled text.
-    """
-    sym.SetId(symbol_id)
-    result = sym.GetTextIds(None)
-    present = {4: [], 12: []}
-    for text_id in extract_ids(result):
-        text.SetId(text_id)
-        try:
-            t = int(text.GetType())
-        except Exception:
-            continue
-        if t in present:
-            try:
-                before = text.GetVisibility()
-                outcome = text.SetVisibility(1)
-                after = text.GetVisibility()
-                present[t].append((text_id, before, outcome, after))
-            except Exception as exc:
-                present[t].append((text_id, "ERROR", str(exc)))
-    for t, label in ((4, "Symbol Designation"), (12, "Device Designation")):
-        print(f"  {label} (text type {t}): {present[t]!r}")
-        if not present[t]:
-            print(f"  NOTE: type {t} isn't present on this symbol; visibility cannot add it")
-
-
-def place_pins(prj, pin_ids, mil_name, version, sheet_id, x, y, flip):
-    """Always passes an ID list: crucial difference vs original main.py secondary."""
-    sym = prj.CreateSymbolObject()
-    print(
-        f"PlacePins pin_ids={pin_ids!r}, symbol={mil_name!r}, version={version!r}, "
-        f"sheet={sheet_id}, x={x}, y={y}, flip={flip!r}",
-        flush=True,
-    )
-    try:
-        result = sym.PlacePins(pin_ids, mil_name, version, sheet_id, x, y, flip, 1.0)
-    except Exception:
-        print("COM exception during PlacePins:\n" + traceback.format_exc(), flush=True)
-        return 0
-    print(f"  raw result: {result!r}", flush=True)
-    symbol_id = first_id(result)
-    if symbol_id > 0:
-        try:
-            text = prj.CreateTextObject()
-            show_text(sym, text, symbol_id)
-        except Exception:
-            print("Visibility inspection failed:\n" + traceback.format_exc())
-    return symbol_id
-
-
-
-def get_placed_symbol_name(prj, symbol_id):
-    """Read the actual symbol from E3 (PlacePins can ignore requested symname)."""
-    sym = prj.CreateSymbolObject()
-    sym.SetId(symbol_id)
-    for method in ("GetName", "GetSymbolName"):
-        try:
-            obj = getattr(sym, method)
-            value = obj()
-            if isinstance(value, str) and value.strip():
-                return value.strip()
-        except Exception:
-            pass
-    return None
-
-
-def is_internal_plug(name):
-    return bool(name) and name.split("¶", 1)[0].lower() == TOP_TARGET_BASE.lower()
-
-
-def attempt_swap_top_symbol(prj, symbol_id, target_full_name):
-    """Try only symbol-changing COM methods that actually exist on this install.
-
-    The exact COM method signature varies with E3.version, so if no supported
-    method can be verified the script stops mutating and offers a manual swap.
-    Does NOT use SetCharacteristic: Int is a different symbol BASE, not simply
-    a characteristic such as FULL or END_SPLIT.
-    """
-    sym = prj.CreateSymbolObject()
-    sym.SetId(symbol_id)
-    before = get_placed_symbol_name(prj, symbol_id)
-    print(f"  ACTUAL top symbol BEFORE attempted swap: {before!r}")
-    if is_internal_plug(before):
-        print("  Already MilBlockPlugInt: nothing to change.")
-        return True
-
-    # No SetName(): that can refer to the symbol designation, NOT the graphic.
-    change_methods = (
-        "ChangeSymbol", "ReplaceSymbol", "ExchangeSymbol",
-        "SetSymbolName", "ChangeSymbolName",
-    )
-    available = [x for x in dir(sym) if any(t in x.lower() for t in
-                  ("symbol", "replace", "exchange", "characteristic"))]
-    print("  E3 symbol COM methods relevant to a graphic swap:", available)
-
-    for meth in change_methods:
-        if meth not in available:
-            continue
-        fn = getattr(sym, meth)
-        print(f"  Attempting {meth} to {target_full_name!r} ...")
-        # Standard plausible COM signatures for a symbol name + version.
-        # Try a one-arg form first; argument errors generally do not mutate.
-        for args in ((target_full_name,), (target_full_name, COMPONENT_VERSION)):
-            try:
-                sym.SetId(symbol_id)
-                result = fn(*args)
-                after = get_placed_symbol_name(prj, symbol_id)
-                print(f"  {meth}{args!r} -> {result!r}; actual symbol={after!r}")
-                if is_internal_plug(after):
-                    print("  POST-PLACEMENT SYMBOL SWAP VERIFIED.")
-                    return True
-                # No further attempts once E3 has accepted a call but not
-                # changed the graphic; defer to manual instead of guessing.
-                if isinstance(result, (int, float)) and result > 0:
-                    return False
-            except Exception as exc:
-                print(f"  {meth}{args!r} unavailable/rejected: {exc}")
-    return False
-
-
-def confirm_top_internal_symbol(prj, symbol_id):
-    """Switch the SAME placed symbol after PlacePins; never re-place pin IDs."""
-    target = f"{TOP_TARGET_BASE}¶FULL"
-    print("\n========= TOP-LEVEL SYMBOL VALIDATION =========")
-    success = attempt_swap_top_symbol(prj, symbol_id, target)
-    if success:
-        return True
-    print("  Automated symbol swap could not be VERIFIED on this E3 interface.")
-    print("  The pin is still placed on the block's RIGHT EDGE (offset 0.0).")
-    if PAUSE_FOR_MANUAL_TOP_SWAP:
-        print("\n  In E3 select the NEW top-level test connector symbol (ID:",
-              symbol_id, ").")
-        print("  Right-click -> Symbol Properties -> Symbol View.")
-        print("  Change Symbol Name from MilBlockPlug to MilBlockPlugInt (FULL).")
-        print("  Re-enable Symbol Designation and Device Designation if needed.")
-        print("  Do NOT delete/re-place the connector.")
-        input("  After applying that change in E3, press Enter to continue with the SECONDARY view...")
-        after = get_placed_symbol_name(prj, symbol_id)
-        print(f"  AFTER user intervention actual symbol name: {after!r}")
-        if not is_internal_plug(after):
-            print("  NOTE: E3 did not report MilBlockPlugInt; check Symbol Properties.")
-        return is_internal_plug(after)
-    return False
-
-
-def run():
-    workbook = choose_workbook()
-    name, component_code, excel_pins = choose_connector(workbook)
-    sym_base = input(
-        f"Internal MIL block symbol base [{DEFAULT_MIL_BASE}]: "
-    ).strip() or DEFAULT_MIL_BASE
-    print(f"\nWorkbook: {workbook}")
-    print(f"Connector: {name!r}; component: {component_code!r}")
-    print(f"Top-level requested symbol: {TOP_TARGET_BASE}¶FULL")
-    print(f"Top-level fallback for placing: {TOP_PLACEMENT_FALLBACK_BASE}¶FULL")
-    print(f"Secondary symbols: {sym_base}¶END_SPLIT / ¶SPLIT_BOTTOM")
-    print("NOTE: Creates objects in E3! Use an UNSAVED TEST PROJECT COPY.\n")
-
-    app = win32.GetActiveObject("CT.Application")
-    prj = app.CreateJobObject()
-    sheet_id = get_sheet(prj)
-    # Same component availability check as main.py before dev.Create.
-    lookup = app.GetDatabaseTableSelectedComponents(component_code, COMPONENT_VERSION)
-    print(f"Database lookup for {component_code!r}: {lookup!r}")
-    if isinstance(lookup, (tuple, list)) and lookup and lookup[0] != 0:
-        raise RuntimeError(f"Connector component is not available in E3 database: {lookup!r}")
-
-    before = get_ids_for_project_devices(prj)
-    top_block_symbol_id = create_block(prj, sheet_id, TOP_X, TOP_Y)
-    after = get_ids_for_project_devices(prj)
-    new_main_ids = sorted(after - before)
-    if len(new_main_ids) != 1:
-        raise RuntimeError(
-            "Cannot identify newly created CABBLOCK device uniquely. "
-            f"Device IDs newly appeared: {new_main_ids}. "
-            "Use a new empty test project; no existing objects have been deleted."
-        )
-    main_dev_id = new_main_ids[0]
-    print(f"Created MAIN CABBLOCK symbol={top_block_symbol_id}, device={main_dev_id}")
-
-    dev = prj.CreateDeviceObject()
-    test_name = f"TEST_{name}_{datetime.now():%H%M%S}"
-    raw = dev.Create(test_name, "", "", component_code, COMPONENT_VERSION, 0)
-    print(f"dev.Create({test_name!r}, {component_code!r}) -> {raw!r}")
-    if first_id(raw) <= 0:
-        raise RuntimeError(f"Cannot create test connector {test_name!r}: {raw!r}")
-    device_id = None
-    for did in sorted(get_ids_for_project_devices(prj)):
-        dev.SetId(did)
-        if str(dev.GetName()) == test_name:
-            device_id = did
-            break
-    if device_id is None:
-        raise RuntimeError("Cannot find newly created connector in device tree")
-    top_pins = get_pin_map(prj, device_id, all_pins=False)
-    if not top_pins:
-        raise RuntimeError("New test connector has no pins")
-
-    print("\n========= TEST 1: TOP-LEVEL (RIGHT EDGE, OFFSET=0.0) =========")
-    # 1. Request the final graphic first. E3 may still place the connector's
-    # component-default MilBlockPlug regardless of the requested name.
-    top_symbol_id = place_pins(
-        prj, list(top_pins.values()), f"{TOP_TARGET_BASE}¶FULL", COMPONENT_VERSION,
-        sheet_id, TOP_X + BLOCK_WIDTH - RIGHT_EDGE_OFFSET,
-        TOP_Y + TOP_PIN_Y_FROM_BOTTOM, TOP_FLIP,
-    )
-    # 2. If that could not place, use the known-good symbol, then change it.
-    if top_symbol_id <= 0:
-        print("TOP: Int placement failed; placing standard MilBlockPlug first.")
-        top_symbol_id = place_pins(
-            prj, list(top_pins.values()), f"{TOP_PLACEMENT_FALLBACK_BASE}¶FULL",
-            COMPONENT_VERSION, sheet_id,
-            TOP_X + BLOCK_WIDTH - RIGHT_EDGE_OFFSET,
-            TOP_Y + TOP_PIN_Y_FROM_BOTTOM, TOP_FLIP,
-        )
-    if top_symbol_id <= 0:
-        print("Top-level PlacePins failed with both symbol requests. Secondary test aborted.")
-        return
-    print(f"TOP-LEVEL SUCCEEDED, placed symbol ID {top_symbol_id}")
-    # 3. Change ONLY the graphic on that exact placed symbol ID.
-    confirm_top_internal_symbol(prj, top_symbol_id)
-    # Restore visibility after the swap; the graphic may have recreated text.
-    show_text(prj.CreateSymbolObject(), prj.CreateTextObject(), top_symbol_id)
-
-    print("\n========= TEST 2: SECONDARY VIEW & SPLIT BLOCK =========")
-    dev.SetId(main_dev_id)
-    raw_main_view = dev.CreateView(main_dev_id, 1, 0, "0")
-    main_view_id = first_id(raw_main_view)
-    print(f"CreateView(main CABBLOCK, view 1) -> {raw_main_view!r}")
-    if main_view_id <= 0:
-        print("Failed to create main block view 1. No secondary pins attempted.")
-        return
-    secondary_block_symbol = create_block(
-        prj, sheet_id, SECONDARY_X, SECONDARY_Y, main_view_id
-    )
-    print(f"SECONDARY BLOCK symbol ID={secondary_block_symbol}, main view={main_view_id}")
-
-    dev.SetId(device_id)
-    raw_conn_view = dev.CreateView(device_id, 1, main_view_id)
-    conn_view_id = first_id(raw_conn_view)
-    print(f"CreateView(connector, view 1, parent main view {main_view_id}) -> {raw_conn_view!r}")
-    if conn_view_id <= 0:
-        print("Connector CreateView failed: secondary PlacePins not attempted.")
-        return
-
-    secondary_pin_map = get_pin_map(prj, conn_view_id, all_pins=True)
-    if not secondary_pin_map:
-        print("NO view pin IDs returned; cannot place secondary pins.")
-        return
-    pin_names = choose_pin_names(excel_pins, secondary_pin_map)
-    print(f"Testing these secondary pins: {pin_names}")
-    for i, pin_name in enumerate(pin_names):
-        characteristic = "END_SPLIT" if i == 0 else "SPLIT_BOTTOM"
-        symbol_name = f"{sym_base}¶{characteristic}"
-        x = SECONDARY_X + BLOCK_WIDTH - RIGHT_EDGE_OFFSET
-        y = SECONDARY_Y + SECONDARY_FIRST_PIN_Y_FROM_BOTTOM - i * SECONDARY_PIN_SPACING
-        result = place_pins(
-            prj,
-            [secondary_pin_map[pin_name]],  # array, not scalar!
-            symbol_name,
-            COMPONENT_VERSION,
-            sheet_id,
-            x, y, SECONDARY_FLIP,
-        )
-        if result <= 0:
-            print(
-                "SECONDARY PLACEPINS FAILED. Check: pin-array fix, symbol name/"
-                "characteristic, and whether the new CABBLOCK is a true split block."
-            )
-            break
-        print(f"SECONDARY OK: pin={pin_name}, symbol_id={result}")
-
-    print("\nTEST COMPLETE. Inspect and attempt mating in E3. Discard test changes.")
-
-
-if __name__ == "__main__":
-    try:
-        run()
-    except Exception:
-        print("\nTEST FAILED:\n" + traceback.format_exc(), flush=True)
-    finally:
-        input("\nPress Enter to close test console...")
+Press Enter to close test console...
