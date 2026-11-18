@@ -1,200 +1,1192 @@
-Option Explicit
-
-' New layout: F = Connector Gender, G = Number of Pins.
-' The first connector block moved from H:L to I:M.
-Private Const BLOCK_WIDTH As Long = 5
-Private Const FIRST_COL As Long = 9         ' I (was H)
-Private Const CENTER_COL As Long = 11       ' K (was J)
-Private Const MAX_BLOCKS As Long = 40
-Private Const LAST_ROW As Long = 307
-
-Private Sub Worksheet_Change(ByVal Target As Range)
-
-    Dim n As Long
-    Dim i As Long
-    Dim j As Long
-    Dim maxCreated As Long
-
-    Dim srcHeader As Range
-    Dim destHeader As Range
-    Dim destInput As Range
-    Dim pinCountCell As Range
-    Dim connectorNameCell As Range
-
-    If Intersect(Target, Me.Range("C5")) Is Nothing Then Exit Sub
-
-    On Error GoTo ErrHandler
-    Application.EnableEvents = False
-    Application.ScreenUpdating = False
-
-    n = CLng(Me.Range("C5").Value)
-    If n < 1 Then n = 1
-    If n > MAX_BLOCKS Then n = MAX_BLOCKS
-
-    Set srcHeader = Me.Range("I5:M10")
-
-    ' Determine how many connector blocks already contain data.
-    maxCreated = 1
-    For i = 1 To MAX_BLOCKS - 1
-        If Application.WorksheetFunction.CountA( _
-            Me.Range( _
-                Me.Cells(5, FIRST_COL + i * BLOCK_WIDTH), _
-                Me.Cells(LAST_ROW, FIRST_COL + i * BLOCK_WIDTH + 4) _
-            )) > 0 Then
-            maxCreated = i + 1
-        Else
-            Exit For
-        End If
-    Next i
-
-    ' Create only genuinely new blocks; existing data stays untouched.
-    If n > maxCreated Then
-        For i = maxCreated To n - 1
-
-            Set destHeader = Me.Range( _
-                Me.Cells(5, FIRST_COL + i * BLOCK_WIDTH), _
-                Me.Cells(10, FIRST_COL + i * BLOCK_WIDTH + 4))
-
-            srcHeader.Copy Destination:=destHeader
-
-            ' Clear copied pin count in K5, P5, U5, Z5, etc.
-            Me.Cells(5, CENTER_COL + i * BLOCK_WIDTH) _
-                .MergeArea.ClearContents
-
-            ' Clear copied user-entered constants in the pin-data area.
-            ' J:L, O:Q, T:V, Y:AA, etc.; preserve formulas.
-            Set destInput = Me.Range( _
-                Me.Cells(8, FIRST_COL + i * BLOCK_WIDTH + 1), _
-                Me.Cells(LAST_ROW, FIRST_COL + i * BLOCK_WIDTH + 3))
-
-            On Error Resume Next
-            destInput.SpecialCells(xlCellTypeConstants).ClearContents
-            On Error GoTo ErrHandler
-
-            For j = 0 To BLOCK_WIDTH - 1
-                Me.Columns(FIRST_COL + i * BLOCK_WIDTH + j).ColumnWidth = _
-                    Me.Columns(FIRST_COL + j).ColumnWidth
-            Next j
-
-            RebuildBlockRules i
-        Next i
-
-        maxCreated = n
-    End If
-
-    ' K6 = B7, P6 = B8, U6 = B9, etc.
-    ' K5, P5, U5, etc. find the pin count in new column G.
-    For i = 0 To maxCreated - 1
-
-        Set connectorNameCell = Me.Cells(6, CENTER_COL + i * BLOCK_WIDTH)
-        connectorNameCell.MergeArea.Cells(1, 1).Formula = _
-            "=$B$" & (7 + i)
-
-        Set pinCountCell = Me.Cells(5, CENTER_COL + i * BLOCK_WIDTH)
-        pinCountCell.MergeArea.Cells(1, 1).Formula2 = _
-            "=XLOOKUP(" & _
-            connectorNameCell.MergeArea.Cells(1, 1).Address(False, False) & _
-            ",$B$7:$B$500,$G$7:$G$500,"""")"
-    Next i
-
-    ' Repair rules on all existing generated blocks.
-    For i = 1 To maxCreated - 1
-        RebuildBlockRules i
-    Next i
-
-    ' Hide unused blocks without clearing their data.
-    For i = 0 To maxCreated - 1
-        Me.Range( _
-            Me.Columns(FIRST_COL + i * BLOCK_WIDTH), _
-            Me.Columns(FIRST_COL + i * BLOCK_WIDTH + 4) _
-        ).EntireColumn.Hidden = (i >= n)
-    Next i
-
-SafeExit:
-    Application.CutCopyMode = False
-    Application.ScreenUpdating = True
-    Application.EnableEvents = True
-    Exit Sub
-
-ErrHandler:
-    MsgBox "Macro error " & Err.Number & ":" & vbCrLf & Err.Description
-    Resume SafeExit
-
-End Sub
+import time
+import json
+import os
+import win32com.client as win32
 
 
-Private Sub RebuildBlockRules(ByVal blockIndex As Long)
+def format_current_secondary_pin_views(prj, metadata_path, modified_texts):
+    """Format the CURRENT E3 pin-view symbols, not PlacePins' stale IDs.
 
-    Dim colOffset As Long
-    Dim srcRange As Range
-    Dim destRange As Range
-    Dim fc As FormatCondition
-    Dim f As String
+    Based on the working Pin Arranger approach: Pin.GetViewIds and the
+    split-position text type 213. E3 may rebuild earlier END_SPLIT symbols
+    while placing later pins, invalidating the IDs returned by PlacePins.
+    If Pin.GetViewIds is unavailable, recover by inspecting the symbols on
+    the connector's actual sheet, matching designation + pin number + position.
+    This function changes TEXT ONLY; never re-places symbols or changes nets.
+    """
+    import re
 
-    colOffset = blockIndex * BLOCK_WIDTH
+    if not metadata_path or not os.path.isfile(metadata_path):
+        print("PIN TEXT FORMAT: No secondary metadata available", flush=True)
+        return
+    try:
+        with open(metadata_path, "r", encoding="utf-8") as handle:
+            blocks = json.load(handle)
+    except Exception as exc:
+        print("PIN TEXT FORMAT: Could not read metadata:", repr(exc), flush=True)
+        return
 
-    Set srcRange = Me.Range("I5:M" & LAST_ROW)
-    Set destRange = Me.Range( _
-        Me.Cells(5, FIRST_COL + colOffset), _
-        Me.Cells(LAST_ROW, FIRST_COL + colOffset + 4))
+    dev_obj = prj.CreateDeviceObject()
+    pin_obj = prj.CreatePinObject()
+    sym_obj = prj.CreateSymbolObject()
+    text_obj = prj.CreateTextObject()
+    sht_obj = prj.CreateSheetObject()
 
-    destRange.FormatConditions.Delete
+    def ids(result):
+        if isinstance(result, (tuple, list)):
+            if len(result) >= 2 and isinstance(result[1], (tuple, list)):
+                result = result[1]
+            elif all(type(x) is int for x in result):
+                pass
+            else:
+                return []
+            return [x for x in result if type(x) is int and x > 0]
+        return [result] if type(result) is int and result > 0 else []
 
-    ' Copy source formatting and conditional formatting.
-    srcRange.Copy
-    destRange.PasteSpecial Paste:=xlPasteFormats
-    Application.CutCopyMode = False
+    def call_ids(obj, method):
+        fn = getattr(obj, method, None)
+        if fn is None:
+            return []
+        for args in ((None,), ()):
+            try:
+                return ids(fn(*args))
+            except Exception:
+                pass
+        return []
 
-    ' Examples for block 2:
-    ' $I8 -> $N8, $J8 -> $O8, $K$5 -> $P$5,
-    ' $L8 -> $Q8, $M8 -> $R8.
-    For Each fc In destRange.FormatConditions
-        If fc.Type = xlExpression Then
-            f = fc.Formula1
-            f = TranslateBlockFormula(f, FIRST_COL, FIRST_COL + colOffset)
-            If f <> fc.Formula1 Then
-                fc.Modify Type:=xlExpression, Formula1:=f
-            End If
-        End If
-    Next fc
+    def clean(value):
+        return str(value or "").strip().casefold()
 
-    ' Copy data validation / dropdowns.
-    srcRange.Copy
-    On Error Resume Next
-    destRange.PasteSpecial Paste:=xlPasteValidation
-    On Error GoTo 0
-    Application.CutCopyMode = False
+    def same_pin(actual, expected):
+        actual, expected = clean(actual), clean(expected)
+        return (actual == expected or
+                actual.split("-", 1)[0] == expected or
+                expected.split("-", 1)[0] == actual)
 
-End Sub
+    cache = {}
+
+    def snap(symbol_id):
+        if symbol_id in cache:
+            return cache[symbol_id]
+        try:
+            sym_obj.SetId(symbol_id)
+            library = str(sym_obj.GetSymbolTypeName() or "").strip()
+            if not library.lower().startswith("milblock"):
+                cache[symbol_id] = None
+                return None
+            items = []
+            for tid in call_ids(sym_obj, "GetTextIds"):
+                try:
+                    text_obj.SetId(tid)
+                    items.append((int(text_obj.GetType()),
+                                  str(text_obj.GetText() or "").strip(), tid))
+                except Exception:
+                    continue
+            positions = []
+            for typ, val, _ in items:
+                if typ == 213:
+                    match = re.fullmatch(r"\s*(\d+)\s*/\s*(\d+)\s*", val)
+                    if match:
+                        positions.append(int(match.group(1)))
+            data = {"id": symbol_id, "library": library, "items": items,
+                    "position": positions[0] if len(positions) == 1 else None}
+            cache[symbol_id] = data
+            return data
+        except Exception:
+            cache[symbol_id] = None
+            return None
+
+    def values(candidate, typ):
+        return [val for t, val, _ in candidate["items"] if t == typ]
+
+    def belongs(candidate, connector):
+        # E3 assigns view suffixes dynamically (#1, #2, ...) when multiple
+        # connectors share the main device view. Never hardcode #1.
+        # Compare the COMPLETE connector designation before the suffix so
+        # J1 cannot accidentally match X-J1 or another connector of the
+        # same part number. The prefix may include E3 location text.
+        expected = clean(connector)
+        for val in values(candidate, 12):
+            last = clean(val).split()[-1] if clean(val) else ""
+            match = re.fullmatch(r"(.+?)#\d+", last)
+            if match and match.group(1).lstrip("-") == expected:
+                return True
+        return False
+
+    def qualifies(candidate, connector, pin_name, position):
+        if not candidate:
+            return False
+        if candidate["position"] is not None and candidate["position"] != position:
+            return False
+        num_matches = any(same_pin(n, pin_name) for n in values(candidate, 203))
+        if not num_matches:
+            return False
+        return belongs(candidate, connector)
+
+    def pin_views(pin_id):
+        try:
+            pin_obj.SetId(pin_id)
+            return call_ids(pin_obj, "GetViewIds")
+        except Exception:
+            return []
+
+    def get_current_pin_ids(block):
+        mapping = {}
+        view_id = block.get("placed_pin_symbols", [{}])[0].get("connector_view_id")
+        if view_id:
+            try:
+                dev_obj.SetId(int(view_id))
+                for pid in call_ids(dev_obj, "GetAllPinIds"):
+                    try:
+                        pin_obj.SetId(pid)
+                        mapping[str(pin_obj.GetName()).strip()] = pid
+                    except Exception:
+                        pass
+            except Exception:
+                pass
+        return mapping
+
+    def get_sheet_symbols(sheet_id):
+        if sheet_id:
+            try:
+                sht_obj.SetId(int(sheet_id))
+                result = call_ids(sht_obj, "GetSymbolIds")
+                if result:
+                    return result
+            except Exception:
+                pass
+        return call_ids(prj, "GetSymbolIds")
+
+    def set_and_check(method, value, getter):
+        try:
+            getattr(text_obj, method)(value)
+            observed = getattr(text_obj, getter)()
+            if getter == "GetHeight":
+                return (isinstance(observed, (int, float)) and
+                        abs(float(observed) - float(value)) < 0.0001), observed
+            return observed == value, observed
+        except Exception as exc:
+            return False, repr(exc)
+
+    print("\n" + "=" * 60, flush=True)
+    print("PIN ARRANGER-STYLE CURRENT SECONDARY PIN FORMATTING", flush=True)
+    print("Resolving live views, not the original PlacePins symbol IDs", flush=True)
+    print("=" * 60, flush=True)
+
+    total_expected = total_resolved = total_failed = 0
+    total_text_success = total_text_fail = 0
+    seen_symbols = set()
+    for block in blocks:
+        connector = str(block.get("name", "")).strip()
+        entries = block.get("placed_pin_symbols", [])
+        if not entries:
+            continue
+        current_pin_ids = get_current_pin_ids(block)
+        sheet_symbols = get_sheet_symbols(block.get("sheet_id"))
+        print(f"CONNECTOR {connector}: {len(entries)} pins; sheet candidates={len(sheet_symbols)}", flush=True)
+
+        for entry in entries:
+            total_expected += 1
+            name = str(entry["pin_name"]).strip()
+            pos = int(entry["position"])
+            old_id = int(entry["symbol_id"])
+            possible_pids = [int(entry["pin_id"])]
+            for current_name, current_pid in current_pin_ids.items():
+                if same_pin(current_name, name) and current_pid not in possible_pids:
+                    possible_pids.append(current_pid)
+
+            # Try the Pin Arranger's live Pin.GetViewIds path first.
+            via_pin = []
+            for pid in possible_pids:
+                via_pin.extend(pin_views(pid))
+            via_pin = list(dict.fromkeys(via_pin))
+            matches = [snap(sid) for sid in via_pin]
+            matches = [s for s in matches if qualifies(s, connector, name, pos)]
+
+            # Some E3 builds don't return newly split symbols from GetViewIds.
+            # Enumerate placed symbols on the *same sheet* as a safe fallback.
+            if not matches:
+                matches = [snap(sid) for sid in sheet_symbols]
+                matches = [s for s in matches if qualifies(s, connector, name, pos)]
+
+            # Never silently format the wrong pin if ownership is ambiguous.
+            matches = {s["id"]: s for s in matches}.values()
+            matches = list(matches)
+            if len(matches) != 1:
+                total_failed += 1
+                print(f"  FAIL pin {name} position {pos}: found {len(matches)} current matching symbols; "
+                      f"old PlacePins ID={old_id}, Pin.GetViewIds={via_pin}", flush=True)
+                continue
+
+            current = matches[0]
+            sid = current["id"]
+            if sid in seen_symbols:
+                total_failed += 1
+                print(f"  FAIL pin {name}: current symbol {sid} already assigned to another pin", flush=True)
+                continue
+            seen_symbols.add(sid)
+            total_resolved += 1
+            print(f"  PIN {name} position {pos}: old ID {old_id} -> CURRENT {sid} "
+                  f"({current['library']})", flush=True)
+
+            required = {5, 617, 203}
+            if pos == 1:
+                required.update((12, 15))  # type 15 = Location on top pin
+            present = {typ for typ, _, _ in current["items"]}
+            for missing in sorted(required - present):
+                print(f"    WARNING: expected text type {missing} not present on current symbol", flush=True)
+
+            for typ, val, tid in current["items"]:
+                if typ not in (5, 12, 15, 617, 203):
+                    continue
+                if typ == 15 and pos != 1:
+                    continue  # Do not change lower pins' Location visibility.
+                # 5: component code off on ALL pins
+                # 12: top designation visible, bold, 0.2"; others hidden
+                # 15: Location OFF on TOP pin ONLY (preserve other pins)
+                # 617: local signal visible, black, bold, 0.15"
+                # 203: pin number visible and bold
+                desired_visibility = 0 if (typ == 5 or (typ == 12 and pos != 1)
+                                           or (typ == 15 and pos == 1)) else 1
+                text_obj.SetId(tid)
+                checks = []
+                ok, actual = set_and_check("SetVisibility", desired_visibility, "GetVisibility")
+                checks.append(ok)
+                if typ == 12 and pos == 1:
+                    checks.append(set_and_check("SetStyle", 1, "GetStyle")[0])
+                    checks.append(set_and_check("SetHeight", 0.2, "GetHeight")[0])
+                    checks.append(set_and_check("SetColour", 0, "GetColour")[0])
+                elif typ == 617:
+                    checks.append(set_and_check("SetStyle", 1, "GetStyle")[0])
+                    checks.append(set_and_check("SetHeight", 0.15, "GetHeight")[0])
+                    checks.append(set_and_check("SetColour", 0, "GetColour")[0])
+                    try:
+                        text_obj.SetAlignment(3)
+                    except Exception:
+                        pass
+                elif typ == 203:
+                    checks.append(set_and_check("SetStyle", 1, "GetStyle")[0])
+
+                if all(checks):
+                    total_text_success += 1
+                else:
+                    total_text_fail += 1
+                # Readback proves the glyph, not just the logical pin, changed.
+                try:
+                    final_style = text_obj.GetStyle()
+                except Exception:
+                    final_style = "N/A"
+                try:
+                    final_height = text_obj.GetHeight()
+                except Exception:
+                    final_height = "N/A"
+                print(f"    TYPE {typ} {val!r}: visible={actual!r}/{desired_visibility} "
+                      f"style={final_style!r} height={final_height!r} "
+                      f"{'PASS' if all(checks) else 'FAIL'}", flush=True)
+                modified_texts.append({
+                    "device": connector, "pin": name, "position": pos,
+                    "view": sid, "text_id": tid, "type": typ,
+                    "value": val, "desired": desired_visibility,
+                })
+    print(f"PIN VIEW RESOLUTION: {total_resolved}/{total_expected} pins; unresolved={total_failed}", flush=True)
+    print(f"PIN TEXT READBACK: PASS={total_text_success} FAIL={total_text_fail}", flush=True)
+    if total_failed or total_text_fail:
+        print("WARNING: Some pin text was NOT verified; see lines above", flush=True)
 
 
-Private Function TranslateBlockFormula( _
-    ByVal formulaText As String, _
-    ByVal sourceStartCol As Long, _
-    ByVal destStartCol As Long) As String
+def format_current_main_connector_symbols(prj, metadata_path, modified_texts, text_size=0.2):
+    """Format every current FULL connector on the main drawing, not just one.
 
-    Dim i As Long
-    Dim f As String
-    Dim sourceLetter As String
-    Dim destLetter As String
+    Important when there are multiple connectors: metadata `sheet_id` is the
+    SECONDARY schematic-block sheet, not necessarily the TOP-LEVEL connector
+    sheet. E3 can also replace a symbol ID while rearranging MIL views.
 
-    f = formulaText
+    Resolve current FULL symbols across ALL project sheets, using their current
+    type-12 device designation and, if present, the original connector device's
+    GetSymbolIds() as ownership evidence. Never edit an ambiguous match.
+    Only text styling/visibility changes; no pin/device placement or nets.
+    """
+    if not metadata_path or not os.path.isfile(metadata_path):
+        print("MAIN CONNECTOR FORMAT: No metadata available", flush=True)
+        return
+    try:
+        with open(metadata_path, "r", encoding="utf-8") as handle:
+            blocks = json.load(handle)
+    except Exception as exc:
+        print("MAIN CONNECTOR FORMAT: Metadata read error:", repr(exc), flush=True)
+        return
 
-    ' Placeholder pass avoids cascading substitutions.
-    For i = 0 To BLOCK_WIDTH - 1
-        sourceLetter = ColLetter(sourceStartCol + i)
-        f = Replace(f, "$" & sourceLetter, "{BLOCKCOL" & CStr(i) & "}")
-    Next i
+    sym_obj = prj.CreateSymbolObject()
+    text_obj = prj.CreateTextObject()
+    sheet_obj = prj.CreateSheetObject()
+    dev_obj = prj.CreateDeviceObject()
 
-    For i = 0 To BLOCK_WIDTH - 1
-        destLetter = ColLetter(destStartCol + i)
-        f = Replace(f, "{BLOCKCOL" & CStr(i) & "}", "$" & destLetter)
-    Next i
+    def ids(result):
+        if isinstance(result, (tuple, list)):
+            if len(result) >= 2 and isinstance(result[1], (list, tuple)):
+                result = result[1]
+            elif not all(type(x) is int for x in result):
+                return []
+            return [x for x in result if type(x) is int and x > 0]
+        return [result] if type(result) is int and result > 0 else []
 
-    TranslateBlockFormula = f
-End Function
+    def get_ids(obj, method):
+        func = getattr(obj, method, None)
+        if func is None:
+            return []
+        for args in ((None,), ()):
+            try:
+                return ids(func(*args))
+            except Exception:
+                continue
+        return []
+
+    def clean(s):
+        return str(s or "").strip().casefold().lstrip("-")
+
+    def name_in_designation(display, name):
+        """Match FULL connector designation, not a secondary '-J1#1' label."""
+        v = clean(display)
+        expected = clean(name)
+        if not v or not expected or "#" in v.rsplit(None, 1)[-1]:
+            return False
+        if v == expected:
+            return True
+        return v.split()[-1].lstrip("-") == expected
+
+    def text_set(text_id, setter, getter, desired):
+        text_obj.SetId(text_id)
+        try:
+            result = getattr(text_obj, setter)(desired)
+            actual = getattr(text_obj, getter)()
+            ok = (isinstance(actual, (int, float)) and
+                  abs(float(actual) - float(desired)) < 0.0001) if getter == "GetHeight" else actual == desired
+            if result is False or (type(result) is int and result < 0):
+                ok = False
+            return ok, actual
+        except Exception as exc:
+            return False, repr(exc)
+
+    # Across all sheets, because secondary-block sheet != main connector sheet.
+    sheet_ids = get_ids(prj, "GetAllSheetIds") or get_ids(prj, "GetSheetIds")
+    all_ids = set(get_ids(prj, "GetSymbolIds"))
+    for sheet_id in sheet_ids:
+        try:
+            sheet_obj.SetId(sheet_id)
+            all_ids.update(get_ids(sheet_obj, "GetSymbolIds"))
+        except Exception as exc:
+            print(f"MAIN FORMAT: cannot scan sheet {sheet_id}: {exc!r}", flush=True)
+
+    # Also include direct symbols from the connector's original DEVICE ID.
+    device_symbol_ids = {}
+    for block in blocks:
+        cname = str(block.get("name", "")).strip()
+        original_device_ids = {
+            int(x["parent_connector_id"])
+            for x in block.get("placed_pin_symbols", [])
+            if type(x.get("parent_connector_id")) is int and x["parent_connector_id"] > 0
+        }
+        associated = set()
+        for did in original_device_ids:
+            try:
+                dev_obj.SetId(did)
+                associated.update(get_ids(dev_obj, "GetSymbolIds"))
+            except Exception:
+                pass
+        device_symbol_ids[cname] = associated
+        all_ids.update(associated)
+
+    # Snapshot valid, currently placed FULL MIL connectors exactly once.
+    full = {}
+    for sid in sorted(all_ids):
+        try:
+            sym_obj.SetId(sid)
+            family = str(sym_obj.GetSymbolTypeName() or "").strip()
+            if not family.startswith("MilBlock") or "¶FULL" not in family:
+                continue
+            items = []
+            for tid in get_ids(sym_obj, "GetTextIds"):
+                try:
+                    text_obj.SetId(tid)
+                    items.append((int(text_obj.GetType()),
+                                  str(text_obj.GetText() or "").strip(), tid))
+                except Exception:
+                    continue
+            if not any(typ == 5 for typ, _, _ in items):
+                # Not a connector component-code symbol; don't touch it.
+                continue
+            full[sid] = (family, items)
+        except Exception:
+            continue
+
+    print("\n" + "=" * 60, flush=True)
+    print("MAIN CONNECTORS: MULTI-CONNECTOR CURRENT FULL SYMBOL FORMATTING", flush=True)
+    print(f"Scanned {len(sheet_ids)} sheets; found {len(full)} FULL MIL connector symbols", flush=True)
+    print("=" * 60, flush=True)
+
+    matched = 0
+    passed = failed = missing = 0
+    used_symbols = set()
+    for block in blocks:
+        name = str(block.get("name", "")).strip()
+        if not name:
+            continue
+        candidates = []
+        direct_ids = device_symbol_ids.get(name, set())
+        for sid, (family, items) in full.items():
+            designations = [val for typ, val, _ in items if typ == 12]
+            text_identity = any(name_in_designation(val, name) for val in designations)
+            device_identity = sid in direct_ids
+            if text_identity or device_identity:
+                candidates.append((sid, family, items, text_identity, device_identity))
+
+        # Device ownership is stronger than a rendered label, but never
+        # silently choose among multiple actual FULL symbols.
+        owned = [c for c in candidates if c[4]]
+        if len(owned) == 1:
+            candidates = owned
+        elif len(owned) > 1:
+            candidates = owned
+        if len(candidates) != 1:
+            missing += 1
+            print(f"MAIN {name}: SKIP; {len(candidates)} unambiguous-match candidates "
+                  f"(device-owned={len(owned)}, IDs={[c[0] for c in candidates]})", flush=True)
+            continue
+        sid, family, items, by_text, by_device = candidates[0]
+        if sid in used_symbols:
+            missing += 1
+            print(f"MAIN {name}: SKIP; FULL symbol {sid} matched more than one connector", flush=True)
+            continue
+        used_symbols.add(sid)
+        matched += 1
+        print(f"MAIN {name}: CURRENT symbol {sid} ({family}), "
+              f"match={'device' if by_device else 'designation'}", flush=True)
+
+        for typ, value, tid in items:
+            if typ not in (5, 12, 203):
+                continue
+            desired = 0 if typ == 5 else 1
+            ops = [("SetVisibility", "GetVisibility", desired)]
+            if typ == 12:
+                ops += [("SetColour", "GetColour", 0),
+                        ("SetStyle", "GetStyle", 1),
+                        ("SetHeight", "GetHeight", float(text_size))]
+            elif typ == 203:
+                ops += [("SetColour", "GetColour", 0), ("SetStyle", "GetStyle", 1)]
+            checks = [text_set(tid, *op) for op in ops]
+            ok = all(result[0] for result in checks)
+            if ok:
+                passed += 1
+            else:
+                failed += 1
+            print(f"    TYPE {typ} {value!r} ID={tid}, "
+                  f"visible={checks[0][1]!r}/{desired}, "
+                  f"{'PASS' if ok else 'FAIL'}", flush=True)
+            modified_texts.append({
+                "device": name, "pin": "MAIN", "position": 0,
+                "view": sid, "text_id": tid, "type": typ,
+                "value": value, "desired": desired,
+            })
+    print(f"MAIN CONNECTOR TEXT: matched={matched}/{len(blocks)} "
+          f"component-code/other text PASS={passed} FAIL={failed} "
+          f"unmatched={missing}", flush=True)
+    if missing or failed:
+        print("WARNING: Check MAIN connector skips/failures above", flush=True)
+
+def runn(secondary=False, TEXT_SIZE=0.25):
+    # ================================================
+    # CONNECT TO ACTIVE E3 PROJECT
+    # ================================================
+    app = win32.GetActiveObject("CT.Application")
+    prj = app.CreateJobObject()
+    dev = prj.CreateDeviceObject()
+    pin = prj.CreatePinObject()
+    sym = prj.CreateSymbolObject()
+    text = prj.CreateTextObject()
+    attr = prj.CreateAttributeObject()
 
 
-Private Function ColLetter(ByVal colNum As Long) As String
-    ColLetter = Split(Me.Cells(1, colNum).Address, "$")(1)
-End Function
+    # ================================================
+    # HELPERS
+    # ================================================
+    def extract_ids(result):
+        if result is None:
+            return []
+
+        if isinstance(result, (tuple, list)):
+            if len(result) >= 2 and isinstance(result[1], (tuple, list)):
+                return [x for x in result[1] if x is not None and x != 0]
+
+            return [x for x in result if isinstance(x, int) and x != 0]
+
+        if isinstance(result, int):
+            if result != 0:
+                return [result]
+
+        return []
+
+
+    def get_visibility(text_id):
+        text.SetId(text_id)
+
+        try:
+            return text.GetVisibility()
+        except Exception as e:
+            return "GET VIS ERROR: " + repr(e)
+
+
+    def get_pin_view_ids(pin_id):
+        pin.SetId(pin_id)
+
+        try:
+            result = pin.GetViewIds(None)
+            return extract_ids(result)
+        except Exception:
+            pass
+
+        try:
+            result = pin.GetViewIds()
+            return extract_ids(result)
+        except Exception as e:
+            print("GetViewIds ERROR:", pin_id, repr(e))
+            return []
+
+
+    def get_schema_location(text_id):
+        text.SetId(text_id)
+
+        xloc = [0.0]
+        yloc = [0.0]
+        grid = [""]
+        column = [""]
+        row = [""]
+
+        try:
+            text.GetSchemaLocation(xloc, yloc, grid, column, row)
+            return float(xloc[0]), float(yloc[0])
+        except Exception as e:
+            print("GET SCHEMA LOCATION ERROR:", text_id, repr(e))
+            return None, None
+
+
+    def format_equipment_identification(TEXT_SIZE):
+        print("")
+        print("============================================================")
+        print("FORMATTING EQUIPMENT IDENTIFACATION")
+        print("USING EXACT BLOCK SYMBOL IDS FROM MAIN.PY")
+        print("============================================================")
+
+        metadata_path = os.environ.get("E3_SECONDARY_BLOCK_FILE")
+
+
+        if not metadata_path:
+            print("E3_SECONDARY_BLOCK_FILE WAS NOT PROVIDED BY LAUNCHER.PY")
+            return 0
+
+        if not os.path.isfile(metadata_path):
+            print("SECONDARY BLOCK METADATA FILE NOT FOUND:", metadata_path)
+            return 0
+
+        try:
+            with open(metadata_path, "r", encoding="utf-8") as metadata_handle:
+                secondary_blocks = json.load(metadata_handle)
+        except Exception as e:
+            print("FAILED TO READ SECONDARY BLOCK METADATA:", repr(e))
+            return 0
+
+        formatted_count = 0
+        block_count = 0
+        found_attribute_count = 0
+
+        for block_data in secondary_blocks:
+            block_count += 1
+
+            block_name = str(block_data.get("name", ""))
+            block_symbol_id = int(block_data["block_symbol_id"])
+            parent_block = int(block_data["parent_block"])
+            x = float(block_data["x"])
+            y = float(block_data["y"])
+            width = float(block_data["width"])
+            height = float(block_data["height"])
+
+            x_center = x + (width / 2.0)
+            equipment_y = y + height - 1.1
+
+            print("")
+            print("SECONDARY BLOCK:", block_name, "VIEW:", parent_block, "SYMBOL:", block_symbol_id)
+
+            try:
+                sym.SetId(block_symbol_id)
+            except Exception as e:
+                print("FAILED TO SET BLOCK SYMBOL ID:", block_symbol_id, repr(e))
+                continue
+
+            try:
+                attribute_result = sym.GetAttributeIds(None)
+                attribute_ids = extract_ids(attribute_result)
+            except Exception as e:
+                print("FAILED TO GET BLOCK ATTRIBUTES:", block_symbol_id, repr(e))
+                continue
+
+            print("BLOCK ATTRIBUTE IDS:", attribute_ids)
+
+            equipment_attribute_id = None
+
+            for attribute_id in attribute_ids:
+                attr.SetId(attribute_id)
+
+                try:
+                    attribute_name = str(attr.GetName()).strip()
+                except Exception:
+                    continue
+
+                print("BLOCK ATTRIBUTE:", attribute_id, repr(attribute_name))
+
+                if attribute_name == "Equipment Identifacation":
+                    equipment_attribute_id = attribute_id
+                    break
+
+            if equipment_attribute_id is None:
+                print("EQUIPMENT IDENTIFACATION NOT FOUND ON EXACT BLOCK SYMBOL:", block_symbol_id)
+                continue
+
+            found_attribute_count += 1
+            attr.SetId(equipment_attribute_id)
+
+            equipment_value = ""
+
+            try:
+                equipment_value = str(attr.GetValue()).strip()
+            except Exception:
+                try:
+                    equipment_value = str(attr.GetFormattedValue()).strip()
+                except Exception:
+                    equipment_value = ""
+
+            print("EQUIPMENT IDENTIFACATION VALUE:", repr(equipment_value))
+
+            try:
+                before_text_result = sym.GetTextIds(None)
+                before_text_ids = extract_ids(before_text_result)
+            except Exception:
+                before_text_ids = []
+
+            print("SYMBOL TEXT IDS BEFORE DISPLAY:", before_text_ids)
+
+            try:
+                display_result = attr.DisplayAttribute()
+                print("DISPLAY ATTRIBUTE RESULT:", display_result)
+            except Exception as e:
+                print("DISPLAY ATTRIBUTE ERROR:", block_symbol_id, equipment_attribute_id, repr(e))
+                continue
+
+            time.sleep(0.5)
+
+            try:
+                after_text_result = sym.GetTextIds(None)
+                after_text_ids = extract_ids(after_text_result)
+            except Exception as e:
+                print("FAILED TO GET SYMBOL TEXT IDS AFTER DISPLAY:", block_symbol_id, repr(e))
+                after_text_ids = []
+
+            print("SYMBOL TEXT IDS AFTER DISPLAY:", after_text_ids)
+
+            new_text_ids = [text_id for text_id in after_text_ids if text_id not in before_text_ids]
+            matching_text_ids = []
+
+            for symbol_text_id in after_text_ids:
+                text.SetId(symbol_text_id)
+
+                try:
+                    symbol_text_value = str(text.GetText()).strip()
+                except Exception:
+                    continue
+
+                if equipment_value and symbol_text_value == equipment_value:
+                    matching_text_ids.append(symbol_text_id)
+
+            candidate_text_ids = []
+
+            for text_id in matching_text_ids:
+                if text_id not in candidate_text_ids:
+                    candidate_text_ids.append(text_id)
+
+            if not candidate_text_ids:
+                for text_id in new_text_ids:
+                    if text_id not in candidate_text_ids:
+                        candidate_text_ids.append(text_id)
+
+            print("NEW SYMBOL TEXT IDS:", new_text_ids)
+            print("MATCHING EQUIPMENT TEXT IDS:", matching_text_ids)
+            print("CANDIDATE EQUIPMENT TEXT IDS:", candidate_text_ids)
+
+            if not candidate_text_ids:
+                print("ATTRIBUTE EXISTS BUT NO DISPLAYED SYMBOL TEXT WAS FOUND:", equipment_attribute_id)
+                continue
+
+            for equipment_text_id in candidate_text_ids:
+                text.SetId(equipment_text_id)
+
+                try:
+                    equipment_text_value = str(text.GetText()).strip()
+                except Exception:
+                    equipment_text_value = ""
+
+                if equipment_value and equipment_text_value != equipment_value:
+                    print("SKIPPING NON-MATCHING NEW TEXT:", equipment_text_id, repr(equipment_text_value))
+                    continue
+
+                text.SetVisibility(1)
+                text.SetColour(0)
+                text.SetMode(1)
+                text.SetAlignment(2)
+                text.SetStyle(1)
+                text.SetHeight(TEXT_SIZE)
+                text.SetSchemaLocation(x_center, equipment_y)
+
+                print(
+                    "EQUIPMENT IDENTIFACATION FORMATTED:",
+                    "BLOCK:",
+                    block_name,
+                    "SYMBOL:",
+                    block_symbol_id,
+                    "ATTR:",
+                    equipment_attribute_id,
+                    "TEXT:",
+                    equipment_text_id,
+                    "VALUE:",
+                    repr(equipment_text_value),
+                    "X:",
+                    x_center,
+                    "Y:",
+                    equipment_y
+                )
+
+                formatted_count += 1
+
+        print("")
+        print("EQUIPMENT IDENTIFACATION BLOCKS READ:", block_count)
+        print("EQUIPMENT IDENTIFACATION ATTRIBUTES FOUND:", found_attribute_count)
+        print("EQUIPMENT IDENTIFACATION TEXTS FORMATTED:", formatted_count)
+
+        return formatted_count
+
+
+    # ================================================
+    # SECONDARY RUN
+    #
+    # After Equipment Identifacation attributes have
+    # been turned on, secondary=True means ONLY format
+    # those Equipment Identifacation texts and exit.
+    #
+    # This skips:
+    # - connector scanning
+    # - pin scanning
+    # - component code formatting
+    # - device designation formatting
+    # - local signal formatting
+    # - pin number formatting
+    # - 5 second wait
+    # - visibility verification
+    # ================================================
+    if secondary:
+        print("")
+        print("============================================================")
+        print("SECONDARY FORMATTER RUN")
+        print("EQUIPMENT IDENTIFACATION ONLY")
+        print("============================================================")
+
+        formatted_count = format_equipment_identification(TEXT_SIZE)
+
+        print("")
+        print("============================================================")
+        print("SECONDARY FORMATTER COMPLETE")
+        print("EQUIPMENT IDENTIFACATION TEXTS FORMATTED:", formatted_count)
+        print("============================================================")
+
+        return formatted_count
+
+
+    # ================================================
+    # TRACK EVERYTHING WE MODIFY
+    # ================================================
+    modified_texts = []
+
+
+    print("")
+    print("============================================================")
+    print("E3 VISIBILITY TEST")
+    print("============================================================")
+
+
+    # ================================================
+    # GET ALL LOGICAL DEVICES
+    # ================================================
+    device_result = prj.GetAllDeviceIds(None)
+    device_ids = extract_ids(device_result)
+
+
+    for device_id in device_ids:
+        dev.SetId(device_id)
+
+        try:
+            device_name = str(dev.GetName())
+        except Exception:
+            continue
+
+        # ================================================
+        # DETECT CONNECTOR DEVICE
+        # ================================================
+        try:
+            symbol_result = dev.GetSymbolIds(None)
+            logical_symbol_ids = extract_ids(symbol_result)
+        except Exception:
+            logical_symbol_ids = []
+
+        is_connector = False
+
+        for logical_symbol_id in logical_symbol_ids:
+            sym.SetId(logical_symbol_id)
+
+            try:
+                text_result = sym.GetTextIds(None)
+                text_ids = extract_ids(text_result)
+            except Exception:
+                text_ids = []
+
+            for text_id in text_ids:
+                text.SetId(text_id)
+
+                try:
+                    text_type = text.GetType()
+                except Exception:
+                    continue
+
+                if text_type == 5:
+                    is_connector = True
+                    break
+
+            if is_connector:
+                break
+
+        if not is_connector:
+            continue
+
+        print("")
+        print("############################################################")
+        print("CONNECTOR:", device_name)
+        print("DEVICE ID:", device_id)
+        print("############################################################")
+
+        # ================================================
+        # GET LOGICAL CONNECTOR PINS
+        # ================================================
+        try:
+            pin_result = dev.GetPinIds(None)
+            logical_pin_ids = extract_ids(pin_result)
+        except Exception:
+            logical_pin_ids = []
+
+        for logical_pin_id in logical_pin_ids:
+            pin.SetId(logical_pin_id)
+
+            try:
+                pin_name = str(pin.GetName())
+            except Exception:
+                pin_name = "UNKNOWN"
+
+            pin_view_ids = get_pin_view_ids(logical_pin_id)
+
+            for pin_view_id in pin_view_ids:
+                sym.SetId(pin_view_id)
+                sym.SetBlockHatchColour(58)
+
+                try:
+                    text_result = sym.GetTextIds(None)
+                    symbol_text_ids = extract_ids(text_result)
+                except Exception:
+                    symbol_text_ids = []
+
+                # ================================================
+                # DETERMINE POSITION FROM TYPE 213
+                # ================================================
+                split_position = None
+
+                for text_id in symbol_text_ids:
+                    text.SetId(text_id)
+
+                    try:
+                        text_type = text.GetType()
+                        text_value = str(text.GetText()).strip()
+                    except Exception:
+                        continue
+
+                    if text_type == 213 and "/" in text_value and not text_value.startswith("*"):
+                        try:
+                            split_position = int(text_value.split("/")[0])
+                        except Exception:
+                            split_position = None
+
+                        break
+
+                if split_position is None:
+                    continue
+
+                print("")
+                print("PIN:", pin_name, "VIEW:", pin_view_id, "POSITION:", split_position)
+
+                # ================================================
+                # TEST EVERY RELEVANT TEXT
+                # ================================================
+                for text_id in symbol_text_ids:
+                    text.SetId(text_id)
+
+                    try:
+                        text_type = text.GetType()
+                        text_value = str(text.GetText()).strip()
+                    except Exception:
+                        continue
+
+                    # ================================================
+                    # TYPE 5 - COMPONENT CODE
+                    # ALWAYS OFF
+                    # ================================================
+                    if text_type == 5:
+                        before = get_visibility(text_id)
+                        text.SetId(text_id)
+                        result = text.SetVisibility(0)
+                        after = get_visibility(text_id)
+
+                        print("    TYPE 5")
+                        print("    TEXT ID:", text_id)
+                        print("    VALUE:", repr(text_value))
+                        print("    BEFORE:", before)
+                        print("    SET RESULT:", result)
+                        print("    AFTER:", after)
+
+                        if after == 0:
+                            print("    IMMEDIATE RESULT: PASS")
+                        else:
+                            print("    IMMEDIATE RESULT: FAIL")
+
+                        modified_texts.append({
+                            "device": device_name,
+                            "pin": pin_name,
+                            "position": split_position,
+                            "view": pin_view_id,
+                            "text_id": text_id,
+                            "type": 5,
+                            "value": text_value,
+                            "desired": 0
+                        })
+
+                    # ================================================
+                    # TYPE 12 - DEVICE DESIGNATION
+                    # ONLY TURN OFF NON-TOP PINS
+                    # ================================================
+                    elif text_type == 12 and split_position != 1:
+                        before = get_visibility(text_id)
+                        text.SetId(text_id)
+                        result = text.SetVisibility(0)
+                        after = get_visibility(text_id)
+
+                        print("    TYPE 12 NON-TOP")
+                        print("    TEXT ID:", text_id)
+                        print("    VALUE:", repr(text_value))
+                        print("    BEFORE:", before)
+                        print("    SET RESULT:", result)
+                        print("    AFTER:", after)
+
+                        if after == 0:
+                            print("    IMMEDIATE RESULT: PASS")
+                        else:
+                            print("    IMMEDIATE RESULT: FAIL")
+
+                        modified_texts.append({
+                            "device": device_name,
+                            "pin": pin_name,
+                            "position": split_position,
+                            "view": pin_view_id,
+                            "text_id": text_id,
+                            "type": 12,
+                            "value": text_value,
+                            "desired": 0
+                        })
+
+                    # ================================================
+                    # TYPE 12 TOP PIN
+                    # DO NOT TOUCH
+                    # ================================================
+                    elif text_type == 12 and split_position == 1:
+                        visibility = get_visibility(text_id)
+                        text.SetStyle(1)
+                        text.SetHeight(0.2)
+
+                        print("    TYPE 12 TOP - LEFT ALONE")
+                        print("    TEXT ID:", text_id)
+                        print("    VALUE:", repr(text_value))
+                        print("    VISIBILITY:", visibility)
+
+                    # ================================================
+                    # TYPE 617 - LOCAL SIGNAL NAME
+                    # ALWAYS ON
+                    # ================================================
+                    elif text_type == 617:
+                        before = get_visibility(text_id)
+
+                        text.SetId(text_id)
+                        result = text.SetVisibility(1)
+                        text.SetColour(0)
+                        text.SetAlignment(3)
+                        text.SetStyle(1)
+                        text.SetHeight(0.15)
+
+                        after = get_visibility(text_id)
+
+                        print("    TYPE 617 LOCAL SIGNAL")
+                        print("    TEXT ID:", text_id)
+                        print("    VALUE:", repr(text_value))
+                        print("    BEFORE:", before)
+                        print("    SET RESULT:", result)
+                        print("    AFTER:", after)
+
+                        if after == 1:
+                            print("    IMMEDIATE RESULT: PASS")
+                        else:
+                            print("    IMMEDIATE RESULT: FAIL")
+
+                        modified_texts.append({
+                            "device": device_name,
+                            "pin": pin_name,
+                            "position": split_position,
+                            "view": pin_view_id,
+                            "text_id": text_id,
+                            "type": 617,
+                            "value": text_value,
+                            "desired": 1
+                        })
+
+                    # ================================================
+                    # TYPE 203 - PIN NUMBER
+                    # ALWAYS VISIBLE AND BOLD
+                    # ================================================
+                    elif text_type == 203:
+                        before = get_visibility(text_id)
+
+                        text.SetId(text_id)
+                        result = text.SetVisibility(1)
+                        text.SetStyle(1)
+
+                        after = get_visibility(text_id)
+
+                        print("    TYPE 203 PIN NUMBER")
+                        print("    TEXT ID:", text_id)
+                        print("    VALUE:", repr(text_value))
+                        print("    BEFORE:", before)
+                        print("    SET RESULT:", result)
+                        print("    AFTER:", after)
+
+                        if after == 1:
+                            print("    IMMEDIATE RESULT: PASS")
+                        else:
+                            print("    IMMEDIATE RESULT: FAIL")
+
+                        modified_texts.append({
+                            "device": device_name,
+                            "pin": pin_name,
+                            "position": split_position,
+                            "view": pin_view_id,
+                            "text_id": text_id,
+                            "type": 203,
+                            "value": text_value,
+                            "desired": 1
+                        })
+
+
+    # ================================================
+    # FORMAT THE ACTUAL CURRENT SECONDARY PIN VIEW SYMBOLS
+    # ================================================
+    # Placing later split pins can replace earlier E3 symbol objects.
+    # The IDs returned by PlacePins and saved in the metadata can be stale.
+    # Resolve current pin views like the working Block Pin Arranger, then
+    # apply formatting to displayed text objects with immediate readback.
+    format_current_secondary_pin_views(
+        prj, os.environ.get("E3_SECONDARY_BLOCK_FILE"), modified_texts
+    )
+
+    # Format top-level FULL MIL connectors only after E3 has placed all views.
+    # main.py may have enabled their component code; hide it here.
+    format_current_main_connector_symbols(
+        prj, os.environ.get("E3_SECONDARY_BLOCK_FILE"),
+        modified_texts, TEXT_SIZE
+    )
+
+    # ================================================
+    # FORMAT EQUIPMENT IDENTIFACATION ON SECONDARY BLOCKS
+    # ================================================
+    format_equipment_identification(TEXT_SIZE)
+
+
+    # ================================================
+    # WAIT TO SEE WHETHER E3 RESETS VISIBILITY
+    # ================================================
+    print("")
+    print("============================================================")
+    print("IMMEDIATE FORMATTING COMPLETE")
+    print("WAITING 1 SECONDS")
+    print("============================================================")
+
+    time.sleep(1.0)
+
+
+    # ================================================
+    # SECOND PASS - DO NOT MODIFY ANYTHING
+    # JUST READ VISIBILITY BACK
+    # ================================================
+    print("")
+    print("============================================================")
+    print("5 SECOND VISIBILITY VERIFICATION")
+    print("============================================================")
+
+    passed = 0
+    failed = 0
+
+    for item in modified_texts:
+        current_visibility = get_visibility(item["text_id"])
+
+        print("")
+        print("DEVICE:", item["device"])
+        print("PIN:", item["pin"])
+        print("POSITION:", item["position"])
+        print("VIEW:", item["view"])
+        print("TEXT ID:", item["text_id"])
+        print("TYPE:", item["type"])
+        print("VALUE:", repr(item["value"]))
+        print("EXPECTED VISIBILITY:", item["desired"])
+        print("ACTUAL VISIBILITY:", current_visibility)
+
+        if current_visibility == item["desired"]:
+            print("FINAL RESULT: PASS")
+            passed += 1
+        else:
+            print("FINAL RESULT: FAIL")
+            failed += 1
+
+
+    # ================================================
+    # FINAL SUMMARY
+    # ================================================
+    print("")
+    print("============================================================")
+    print("FINAL SUMMARY")
+    print("============================================================")
+    print("PASS:", passed)
+    print("FAIL:", failed)
+    print("TOTAL:", len(modified_texts))
+    print("============================================================")
+
+
+
+
+
+
