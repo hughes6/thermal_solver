@@ -1,130 +1,15 @@
-"""E3 two-process symbol swap probe — PHASE 2: INSPECT AND EXIT.
+Created: 2026-11-18T11:08:42
+Connector: OTX-J1 [M24308/4-1F_9P SD]
+Expected symbol designation: TEST_OTX-J1_110842
+Top symbol ID: 57268
 
-Run only AFTER e3_probe_1_place.py has COMPLETELY EXITED and you've manually
-switched the top-level connector's library symbol in E3 to MilBlockPlugInt.
-This process reads E3 properties without modifying or placing anything.
-It compares the original baseline in e3_symbol_probe_state.json.
-"""
-from pathlib import Path
-import json
-import traceback
-import win32com.client as win32
+Connecting to active E3 project in READ-ONLY mode...
 
-STATE_FILE = Path(__file__).with_name("e3_symbol_probe_state.json")
-
-
-def extract_ids(result):
-    if isinstance(result, (tuple, list)) and len(result) >= 2 and isinstance(result[1], (tuple, list)):
-        return [int(v) for v in result[1] if isinstance(v, int) and v > 0]
-    if isinstance(result, (tuple, list)) and all(isinstance(v, int) for v in result):
-        return [int(v) for v in result if v > 0]
-    return []
-
-
-def safe_get(obj, method):
-    try:
-        if not hasattr(obj, method):
-            return "<not exposed>"
-        return repr(getattr(obj, method)())
-    except Exception as exc:
-        return f"<unavailable: {type(exc).__name__}: {exc}>"
-
-
-def get_snapshot(prj, symbol_id):
-    sym = prj.CreateSymbolObject()
-    sym.SetId(symbol_id)
-    methods = (
-        "GetName", "GetSymbolTypeName", "GetSymbolType", "GetSymbolTypeId",
-        "GetCharacteristic", "GetValidCharacteristics", "GetVersion",
-        "GetView", "GetViewId", "GetViewNumber", "GetSymbolView",
-        "GetComponentName", "GetDeviceId", "GetSheetId",
-    )
-    getters = {method: safe_get(sym, method) for method in methods}
-    txt = prj.CreateTextObject()
-    texts = []
-    for tid in extract_ids(sym.GetTextIds(None)):
-        txt.SetId(tid)
-        item = {"id": tid}
-        for method, field in (("GetType", "type"), ("GetText", "value"),
-                              ("GetVisibility", "visible")):
-            try:
-                item[field] = getattr(txt, method)()
-            except Exception as exc:
-                item[field] = f"<unavailable: {exc}>"
-        texts.append(item)
-    return {"symbol_id": symbol_id, "getters": getters, "texts": texts}
-
-
-def show_diff(before, after):
-    print("  COM getter differences:")
-    changed = 0
-    for key, old_val in before.get("getters", {}).items():
-        new_val = after["getters"].get(key)
-        if old_val != new_val:
-            changed += 1
-            print(f"    {key}: {old_val}  ->  {new_val}")
-    if not changed:
-        print("    (No changes in exposed zero-argument getters.)")
-    before_text = before.get("texts", [])
-    after_text = after.get("texts", [])
-    print(f"  Texts before ({len(before_text)}): {before_text}")
-    print(f"  Texts after  ({len(after_text)}): {after_text}")
-    if before_text == after_text:
-        print("    (Text list unchanged.)")
-    print("  Note: GetName() is symbol DESIGNATION, not library Symbol Name.")
-    print("  Lack of a getter difference does NOT prove the symbol did not change.")
-
-
-def inspect():
-    if not STATE_FILE.is_file():
-        raise RuntimeError(f"Missing {STATE_FILE}. Run e3_probe_1_place.py first.")
-    state = json.loads(STATE_FILE.read_text(encoding="utf-8"))
-    print(f"BASELINE: {STATE_FILE}")
-    print(f"Created: {state['created_at']}")
-    print(f"Connector: {state['connector_name']} [{state['component_code']}]")
-    print(f"Expected symbol designation: {state['test_device_designation']}")
-    print(f"Top symbol ID: {state['top']['symbol_id']}")
-    print("\nConnecting to active E3 project in READ-ONLY mode...")
-
-    app = win32.GetActiveObject("CT.Application")
-    prj = app.CreateJobObject()
-    sheet_ids = extract_ids(prj.GetAllSheetIds(None))
-    if state['sheet_id'] not in sheet_ids:
-        raise RuntimeError("Original sheet ID not found: probably a different E3 project is open.")
-    dev_ids = extract_ids(prj.GetAllDeviceIds(None))
-    if state['connector_id'] not in dev_ids:
-        raise RuntimeError("Original test connector ID not found. Don't run in another project or delete the test.")
-    dev = prj.CreateDeviceObject()
-    dev.SetId(state['connector_id'])
-    current_name = str(dev.GetName())
-    if current_name != state['test_device_designation']:
-        raise RuntimeError(f"Connector changed/incorrect project. Expected {state['test_device_designation']!r}, got {current_name!r}.")
-
-    top_id = state['top']['symbol_id']
-    print("\n========== TOP LEVEL ==========", flush=True)
-    print(f"Symbol ID {top_id} / requested: {state['top']['requested_symbol']}")
-    top_after = get_snapshot(prj, top_id)
-    show_diff(state['top']['before'], top_after)
-
-    for item in state.get('secondary', []):
-        print(f"\n========== SECONDARY PIN {item['pin_name']} ==========", flush=True)
-        print(f"Symbol ID {item['symbol_id']}, requested: {item['requested_symbol']}")
-        show_diff(item['before'], get_snapshot(prj, item['symbol_id']))
-
-    print("\n========== EXPOSED METHODS (NO CALLS) ==========")
-    for title, obj in (("Symbol", prj.CreateSymbolObject()), ("Job", prj)):
-        found = sorted(name for name in dir(obj) if not name.startswith('_')
-                       and any(x in name.lower() for x in ('swap','replace','symbol','view','character')))
-        print(f"{title}: {found}")
-
-    print("\nINSPECTION COMPLETE. This Python process will exit now.")
-    print("Compare with the manual Symbol Properties display. No E3 changes were made.", flush=True)
-
-
-if __name__ == '__main__':
-    try:
-        inspect()
-    except Exception:
-        print("\nINSPECTION FAILED:\n" + traceback.format_exc(), flush=True)
-        raise SystemExit(1)
-    # no input(): E3 is immediately released by process termination
+INSPECTION FAILED:
+Traceback (most recent call last):
+  File "C:\Users\conner.hughes\OneDrive - BAE Systems Inc\Documents\Python\Block Maker\testingprobe.py", line 126, in <module>
+    inspect()
+    ~~~~~~~^^
+  File "C:\Users\conner.hughes\OneDrive - BAE Systems Inc\Documents\Python\Block Maker\testingprobe.py", line 96, in inspect
+    raise RuntimeError("Original test connector ID not found. Don't run in another project or delete the test.")
+RuntimeError: Original test connector ID not found. Don't run in another project or delete the test.
