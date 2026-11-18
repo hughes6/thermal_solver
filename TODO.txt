@@ -1,246 +1,632 @@
-# -*- coding: utf-8 -*-
-"""E3 TOP-LEVEL PLUG: standalone automatic placement tests, NO SETTING CHANGES.
-
-Run: py e3_plug_no_settings_probe.py
-
-Use a DISPOSABLE COPY of your E3 project. This test CREATES test blocks/devices
-on sheet '1'; it never changes MIL settings, database data, existing symbols,
-or your main.py. Close the test project without saving when finished.
-
-This compares several ways to request the top-level internal plug and reports
-what E3 actually chooses. Nothing needs to be clicked while the script runs.
-"""
-
-from datetime import datetime
-import json
-from pathlib import Path
-import traceback
-
-# Change only these if necessary; no interaction during execution.
-COMPONENT_CODE = "M24308/4-1F_9P SD"  # Verified plug component
-COMPONENT_VERSION = 1
-SHEET_NAME = "1"
-BLOCK_SYMBOL = "CABBLOCK"
-BLOCK_VERSION = 1
-BLOCK_WIDTH = 3.0
-BLOCK_HEIGHT = 5.0
-PIN_Y_OFFSET = 3.8
-START_X = 3.0
-START_Y = 4.0
-COL_GAP = 11.0
-ROW_GAP = 10.0
-OUTPUT = Path(__file__).with_name("e3_plug_no_settings_results.json")
-
-# These symbol names come from the working Block Maker / earlier tests.
-CASES = [
-    {"label": "plug-int-full", "request": "MilBlockPlugInt\u00b6FULL", "side": "right"},
-    {"label": "plug-full-control", "request": "MilBlockPlug\u00b6FULL", "side": "right"},
-    {"label": "plug-int-pin", "request": "MilBlockPlugInt\u00b6CONNECTOR_PIN", "side": "right"},
-    {"label": "plug-int-preload", "request": "MilBlockPlugInt\u00b6FULL", "side": "right", "preload": True},
-    {"label": "plug-int-left", "request": "MilBlockPlugInt\u00b6FULL", "side": "left"},
-    {"label": "receptacle-control", "request": "MilBlockSymbolReceptacleInt\u00b6FULL", "side": "right"},
-]
-
-
-def one_id(value):
-    if isinstance(value, (tuple, list)):
-        value = value[0] if value else 0
-    return int(value) if type(value) is int and value > 0 else 0
-
-
-def many_ids(value):
-    if isinstance(value, (list, tuple)):
-        if len(value) >= 2 and isinstance(value[1], (tuple, list)):
-            value = value[1]
-        return [int(v) for v in value if type(v) is int and v > 0]
-    return []
-
-
-def read(obj, name, *args):
-    try:
-        return getattr(obj, name)(*args)
-    except Exception as exc:
-        return "ERROR: " + repr(exc)
-
-
-def save(report):
-    OUTPUT.write_text(json.dumps(report, indent=2, ensure_ascii=False, default=str), encoding="utf-8")
-
-
-def find_sheet(job):
-    sheet = job.CreateSheetObject()
-    for sid in many_ids(job.GetAllSheetIds(None)):
-        sheet.SetId(sid)
-        if str(sheet.GetName()).strip() == SHEET_NAME:
-            return sid
-    raise RuntimeError("Drawing sheet named %r not found" % SHEET_NAME)
-
-
-def new_block(job, sheet_id, x, y):
-    symbol = job.CreateSymbolObject()
-    result = symbol.Load(BLOCK_SYMBOL, BLOCK_VERSION)
-    if result is False or result == 0:
-        raise RuntimeError("Cannot load CABBLOCK: %r" % (result,))
-    reply = symbol.PlaceBlock(sheet_id, x, y, BLOCK_WIDTH, BLOCK_HEIGHT)
-    sid = one_id(reply)
-    if not sid:
-        raise RuntimeError("PlaceBlock failed at (%s,%s): %r" % (x, y, reply))
-    return sid
-
-
-def new_connector(job, component, unique_name):
-    device = job.CreateDeviceObject()
-    raw = device.Create(unique_name, "", "", component, COMPONENT_VERSION, 0)
-    if not one_id(raw):
-        raise RuntimeError("Device.Create failed: %r" % (raw,))
-    for did in many_ids(job.GetAllDeviceIds(None)):
-        device.SetId(did)
-        if str(device.GetName()).strip() == unique_name:
-            pin_ids = many_ids(device.GetPinIds(None))
-            if not pin_ids:
-                raise RuntimeError("Created connector has no pins")
-            return did, pin_ids
-    raise RuntimeError("Created connector not found by name %r" % unique_name)
-
-
-def snapshot(job, sid):
-    symbol = job.CreateSymbolObject()
-    symbol.SetId(sid)
-    family = read(symbol, "GetSymbolTypeName")
-    result = {
-        "symbol_id": sid,
-        "library_symbol": family,
-        "symbol_type_id": read(symbol, "GetSymbolTypeId"),
-        "characteristic": read(symbol, "GetCharacteristic"),
+{
+  "date": "2026-11-18T16:52:03.225176",
+  "component_code": "M24308/4-1F_9P SD",
+  "project_settings_modified": false,
+  "cases": [
+    {
+      "label": "plug-int-full",
+      "request": "MilBlockPlugInt¶FULL",
+      "side": "right",
+      "block_xy": [
+        3.0,
+        4.0
+      ],
+      "connector_xy": [
+        6.0,
+        7.8
+      ],
+      "flip": 0,
+      "block_id": 66104,
+      "device_id": 12005,
+      "device_name": "PLUGPROBE_165203273713_1",
+      "pin_count": 10,
+      "placepins_response": [
+        57763,
+        [
+          147518,
+          147515,
+          65143,
+          65133,
+          147508,
+          147505,
+          65110,
+          65103,
+          147498,
+          147495
+        ]
+      ],
+      "initial_symbol": {
+        "symbol_id": 57763,
+        "library_symbol": "MilBlockPlug¶FULL",
+        "symbol_type_id": 148997,
+        "characteristic": "FULL",
+        "texts": [
+          {
+            "id": 57750,
+            "type": 213,
+            "value": "*9/9"
+          },
+          {
+            "id": 57687,
+            "type": 203,
+            "value": "*9"
+          },
+          {
+            "id": 57686,
+            "type": 5,
+            "value": "M24308/4-1F_9P SD"
+          },
+          {
+            "id": 57670,
+            "type": 12,
+            "value": "PLUGPROBE_165203273713_1"
+          },
+          {
+            "id": 57647,
+            "type": 15,
+            "value": ""
+          }
+        ]
+      },
+      "placed_symbol_id": 57763,
+      "exact_internal_full": false,
+      "final_symbol_at_original_id": {
+        "symbol_id": 57763,
+        "library_symbol": "MilBlockPlug¶FULL",
+        "symbol_type_id": 148997,
+        "characteristic": "FULL",
+        "texts": [
+          {
+            "id": 57750,
+            "type": 213,
+            "value": "*9/9"
+          },
+          {
+            "id": 57687,
+            "type": 203,
+            "value": "*9"
+          },
+          {
+            "id": 57686,
+            "type": 5,
+            "value": "M24308/4-1F_9P SD"
+          },
+          {
+            "id": 57670,
+            "type": 12,
+            "value": "PLUGPROBE_165203273713_1"
+          },
+          {
+            "id": 57647,
+            "type": 15,
+            "value": ""
+          }
+        ]
+      }
+    },
+    {
+      "label": "plug-full-control",
+      "request": "MilBlockPlug¶FULL",
+      "side": "right",
+      "block_xy": [
+        14.0,
+        4.0
+      ],
+      "connector_xy": [
+        17.0,
+        7.8
+      ],
+      "flip": 0,
+      "block_id": 55308,
+      "device_id": 64505,
+      "device_name": "PLUGPROBE_165203273713_2",
+      "pin_count": 10,
+      "placepins_response": [
+        147348,
+        [
+          64760,
+          64700,
+          64691,
+          64694,
+          64608,
+          64615,
+          64618,
+          64532,
+          64543,
+          64542
+        ]
+      ],
+      "initial_symbol": {
+        "symbol_id": 147348,
+        "library_symbol": "MilBlockPlug¶FULL",
+        "symbol_type_id": 148997,
+        "characteristic": "FULL",
+        "texts": [
+          {
+            "id": 62628,
+            "type": 213,
+            "value": "*9/9"
+          },
+          {
+            "id": 147346,
+            "type": 203,
+            "value": "*9"
+          },
+          {
+            "id": 147345,
+            "type": 5,
+            "value": "M24308/4-1F_9P SD"
+          },
+          {
+            "id": 62606,
+            "type": 12,
+            "value": "PLUGPROBE_165203273713_2"
+          },
+          {
+            "id": 147344,
+            "type": 15,
+            "value": ""
+          }
+        ]
+      },
+      "placed_symbol_id": 147348,
+      "exact_internal_full": false,
+      "final_symbol_at_original_id": {
+        "symbol_id": 147348,
+        "library_symbol": "MilBlockPlug¶FULL",
+        "symbol_type_id": 148997,
+        "characteristic": "FULL",
+        "texts": [
+          {
+            "id": 62628,
+            "type": 213,
+            "value": "*9/9"
+          },
+          {
+            "id": 147346,
+            "type": 203,
+            "value": "*9"
+          },
+          {
+            "id": 147345,
+            "type": 5,
+            "value": "M24308/4-1F_9P SD"
+          },
+          {
+            "id": 62606,
+            "type": 12,
+            "value": "PLUGPROBE_165203273713_2"
+          },
+          {
+            "id": 147344,
+            "type": 15,
+            "value": ""
+          }
+        ]
+      }
+    },
+    {
+      "label": "plug-int-pin",
+      "request": "MilBlockPlugInt¶CONNECTOR_PIN",
+      "side": "right",
+      "block_xy": [
+        25.0,
+        4.0
+      ],
+      "connector_xy": [
+        28.0,
+        7.8
+      ],
+      "flip": 0,
+      "block_id": 147281,
+      "device_id": 61168,
+      "device_name": "PLUGPROBE_165203273713_3",
+      "pin_count": 10,
+      "placepins_response": [
+        67519,
+        [
+          147151,
+          60864,
+          60840,
+          147144,
+          147141,
+          60479,
+          147135,
+          60456,
+          60432,
+          147126
+        ]
+      ],
+      "initial_symbol": {
+        "symbol_id": 67519,
+        "library_symbol": "MilBlockPlug¶FULL",
+        "symbol_type_id": 148997,
+        "characteristic": "FULL",
+        "texts": [
+          {
+            "id": 67515,
+            "type": 213,
+            "value": "*9/9"
+          },
+          {
+            "id": 67513,
+            "type": 203,
+            "value": "*9"
+          },
+          {
+            "id": 67512,
+            "type": 5,
+            "value": "M24308/4-1F_9P SD"
+          },
+          {
+            "id": 67510,
+            "type": 12,
+            "value": "PLUGPROBE_165203273713_3"
+          },
+          {
+            "id": 67507,
+            "type": 15,
+            "value": ""
+          }
+        ]
+      },
+      "placed_symbol_id": 67519,
+      "exact_internal_full": false,
+      "final_symbol_at_original_id": {
+        "symbol_id": 67519,
+        "library_symbol": "MilBlockPlug¶FULL",
+        "symbol_type_id": 148997,
+        "characteristic": "FULL",
+        "texts": [
+          {
+            "id": 67515,
+            "type": 213,
+            "value": "*9/9"
+          },
+          {
+            "id": 67513,
+            "type": 203,
+            "value": "*9"
+          },
+          {
+            "id": 67512,
+            "type": 5,
+            "value": "M24308/4-1F_9P SD"
+          },
+          {
+            "id": 67510,
+            "type": 12,
+            "value": "PLUGPROBE_165203273713_3"
+          },
+          {
+            "id": 67507,
+            "type": 15,
+            "value": ""
+          }
+        ]
+      }
+    },
+    {
+      "label": "plug-int-preload",
+      "request": "MilBlockPlugInt¶FULL",
+      "side": "right",
+      "preload": true,
+      "block_xy": [
+        3.0,
+        14.0
+      ],
+      "connector_xy": [
+        6.0,
+        17.8
+      ],
+      "flip": 0,
+      "block_id": 67302,
+      "device_id": 67058,
+      "device_name": "PLUGPROBE_165203273713_4",
+      "pin_count": 10,
+      "preload_result": 148981,
+      "placepins_response": [
+        69355,
+        [
+          67899,
+          67889,
+          67879,
+          67869,
+          68221,
+          68211,
+          68201,
+          68191,
+          68181,
+          68395
+        ]
+      ],
+      "initial_symbol": {
+        "symbol_id": 69355,
+        "library_symbol": "MilBlockPlug¶FULL",
+        "symbol_type_id": 148997,
+        "characteristic": "FULL",
+        "texts": [
+          {
+            "id": 69349,
+            "type": 213,
+            "value": "*9/9"
+          },
+          {
+            "id": 69347,
+            "type": 203,
+            "value": "*9"
+          },
+          {
+            "id": 69345,
+            "type": 5,
+            "value": "M24308/4-1F_9P SD"
+          },
+          {
+            "id": 69343,
+            "type": 12,
+            "value": "PLUGPROBE_165203273713_4"
+          },
+          {
+            "id": 69339,
+            "type": 15,
+            "value": ""
+          }
+        ]
+      },
+      "placed_symbol_id": 69355,
+      "exact_internal_full": false,
+      "final_symbol_at_original_id": {
+        "symbol_id": 69355,
+        "library_symbol": "MilBlockPlug¶FULL",
+        "symbol_type_id": 148997,
+        "characteristic": "FULL",
+        "texts": [
+          {
+            "id": 69349,
+            "type": 213,
+            "value": "*9/9"
+          },
+          {
+            "id": 69347,
+            "type": 203,
+            "value": "*9"
+          },
+          {
+            "id": 69345,
+            "type": 5,
+            "value": "M24308/4-1F_9P SD"
+          },
+          {
+            "id": 69343,
+            "type": 12,
+            "value": "PLUGPROBE_165203273713_4"
+          },
+          {
+            "id": 69339,
+            "type": 15,
+            "value": ""
+          }
+        ]
+      }
+    },
+    {
+      "label": "plug-int-left",
+      "request": "MilBlockPlugInt¶FULL",
+      "side": "left",
+      "block_xy": [
+        14.0,
+        14.0
+      ],
+      "connector_xy": [
+        14.0,
+        17.8
+      ],
+      "flip": "/1",
+      "block_id": 69783,
+      "device_id": 70371,
+      "device_name": "PLUGPROBE_165203273713_5",
+      "pin_count": 10,
+      "placepins_response": [
+        71335,
+        [
+          70451,
+          70441,
+          70431,
+          70539,
+          70529,
+          70519,
+          70509,
+          70499,
+          70489,
+          70667
+        ]
+      ],
+      "initial_symbol": {
+        "symbol_id": 71335,
+        "library_symbol": "MilBlockPlug¶FULL",
+        "symbol_type_id": 148997,
+        "characteristic": "FULL",
+        "texts": [
+          {
+            "id": 71329,
+            "type": 213,
+            "value": "*9/9"
+          },
+          {
+            "id": 71327,
+            "type": 203,
+            "value": "*9"
+          },
+          {
+            "id": 71325,
+            "type": 5,
+            "value": "M24308/4-1F_9P SD"
+          },
+          {
+            "id": 71323,
+            "type": 12,
+            "value": "PLUGPROBE_165203273713_5"
+          },
+          {
+            "id": 71319,
+            "type": 15,
+            "value": ""
+          }
+        ]
+      },
+      "placed_symbol_id": 71335,
+      "exact_internal_full": false,
+      "final_symbol_at_original_id": {
+        "symbol_id": 71335,
+        "library_symbol": "MilBlockPlug¶FULL",
+        "symbol_type_id": 148997,
+        "characteristic": "FULL",
+        "texts": [
+          {
+            "id": 71329,
+            "type": 213,
+            "value": "*9/9"
+          },
+          {
+            "id": 71327,
+            "type": 203,
+            "value": "*9"
+          },
+          {
+            "id": 71325,
+            "type": 5,
+            "value": "M24308/4-1F_9P SD"
+          },
+          {
+            "id": 71323,
+            "type": 12,
+            "value": "PLUGPROBE_165203273713_5"
+          },
+          {
+            "id": 71319,
+            "type": 15,
+            "value": ""
+          }
+        ]
+      }
+    },
+    {
+      "label": "receptacle-control",
+      "request": "MilBlockSymbolReceptacleInt¶FULL",
+      "side": "right",
+      "block_xy": [
+        25.0,
+        14.0
+      ],
+      "connector_xy": [
+        28.0,
+        17.8
+      ],
+      "flip": 0,
+      "block_id": 71447,
+      "device_id": 71749,
+      "device_name": "PLUGPROBE_165203273713_6",
+      "pin_count": 10,
+      "placepins_response": [
+        66378,
+        [
+          71829,
+          71819,
+          71809,
+          71799,
+          71877,
+          71883,
+          71937,
+          71927,
+          71917,
+          71907
+        ]
+      ],
+      "initial_symbol": {
+        "symbol_id": 66378,
+        "library_symbol": "MilBlockPlug¶FULL",
+        "symbol_type_id": 148997,
+        "characteristic": "FULL",
+        "texts": [
+          {
+            "id": 66372,
+            "type": 213,
+            "value": "*9/9"
+          },
+          {
+            "id": 66370,
+            "type": 203,
+            "value": "*9"
+          },
+          {
+            "id": 66368,
+            "type": 5,
+            "value": "M24308/4-1F_9P SD"
+          },
+          {
+            "id": 66366,
+            "type": 12,
+            "value": "PLUGPROBE_165203273713_6"
+          },
+          {
+            "id": 66362,
+            "type": 15,
+            "value": ""
+          }
+        ]
+      },
+      "placed_symbol_id": 66378,
+      "exact_internal_full": false,
+      "final_symbol_at_original_id": {
+        "symbol_id": 66378,
+        "library_symbol": "MilBlockPlug¶FULL",
+        "symbol_type_id": 148997,
+        "characteristic": "FULL",
+        "texts": [
+          {
+            "id": 66372,
+            "type": 213,
+            "value": "*9/9"
+          },
+          {
+            "id": 66370,
+            "type": 203,
+            "value": "*9"
+          },
+          {
+            "id": 66368,
+            "type": 5,
+            "value": "M24308/4-1F_9P SD"
+          },
+          {
+            "id": 66366,
+            "type": 12,
+            "value": "PLUGPROBE_165203273713_6"
+          },
+          {
+            "id": 66362,
+            "type": 15,
+            "value": ""
+          }
+        ]
+      }
     }
-    text = job.CreateTextObject()
-    result["texts"] = []
-    for tid in many_ids(read(symbol, "GetTextIds", None)):
-        text.SetId(tid)
-        typ = read(text, "GetType")
-        if typ in (5, 12, 15, 203, 213):
-            result["texts"].append({"id": tid, "type": typ, "value": read(text, "GetText")})
-    return result
-
-
-def try_one(job, sheet_id, item, index, unique_suffix):
-    column, row = index % 3, index // 3
-    bx = START_X + column * COL_GAP
-    by = START_Y + row * ROW_GAP
-    side = item["side"]
-    connector_x = bx + BLOCK_WIDTH if side == "right" else bx
-    flip = 0 if side == "right" else "/1"
-    info = {
-        **item,
-        "block_xy": [bx, by],
-        "connector_xy": [connector_x, by + PIN_Y_OFFSET],
-        "flip": flip,
-    }
-    info["block_id"] = new_block(job, sheet_id, bx, by)
-    unique_name = "PLUGPROBE_%s_%d" % (unique_suffix, index + 1)
-    device_id, pin_ids = new_connector(job, COMPONENT_CODE, unique_name)
-    info["device_id"] = device_id
-    info["device_name"] = unique_name
-    info["pin_count"] = len(pin_ids)
-
-    symbol = job.CreateSymbolObject()
-    if item.get("preload"):
-        # Explicitly test whether loading the exact full symbol before PlacePins
-        # changes E3's automatic selection. Never assume that it does.
-        info["preload_result"] = read(symbol, "Load", item["request"], 1)
-    raw = symbol.PlacePins(list(pin_ids), item["request"], 1,
-                           sheet_id, connector_x, by + PIN_Y_OFFSET, flip, 1.0)
-    info["placepins_response"] = raw
-    sid = one_id(raw)
-    if not sid:
-        raise RuntimeError("PlacePins(%s) returned %r" % (item["request"], raw))
-    info["initial_symbol"] = snapshot(job, sid)
-    info["placed_symbol_id"] = sid
-    info["exact_internal_full"] = (info["initial_symbol"]["library_symbol"] == "MilBlockPlugInt\u00b6FULL")
-    return info
-
-
-def main():
-    import win32com.client as win32
-
-    report = {
-        "date": datetime.now().isoformat(),
-        "component_code": COMPONENT_CODE,
-        "project_settings_modified": False,
-        "cases": [],
-        "errors": [],
-    }
-    print("E3 TOP-LEVEL PLUG PROBE — NO SETTING CHANGES", flush=True)
-    print("Component:", COMPONENT_CODE, flush=True)
-    print("WARNING: creates six test blocks/connectors — use a disposable project copy.", flush=True)
-
-    # Attach to ALREADY-RUNNING E3. No prompts or pause after this point.
-    app = win32.GetActiveObject("CT.Application")
-    job = app.CreateJobObject()
-    try:
-        # MIL setting is READ ONLY, for diagnostic purposes.
-        report["mil_setting_read_only"] = read(job, "GetDisplayMILStandard")
-        report["connector_symbol_setting_read_only"] = read(job, "GetDetermineConnectorSymbol")
-        report["connector_view_setting_read_only"] = read(job, "GetDetermineConnectorViewSymbol")
-        print("Current MIL setting (READ ONLY):", report["mil_setting_read_only"], flush=True)
-
-        # COM method inventory: discover an available type-change method, if any.
-        sym = job.CreateSymbolObject()
-        report["symbol_candidate_methods"] = sorted(
-            name for name in dir(sym)
-            if ("Symbol" in name or "Characteristic" in name or "Change" in name or "Replace" in name)
-            and not name.startswith("_")
-        )
-        print("Relevant COM methods:", report["symbol_candidate_methods"], flush=True)
-
-        lookup = app.GetDatabaseTableSelectedComponents(COMPONENT_CODE, COMPONENT_VERSION)
-        if isinstance(lookup, (tuple, list)) and lookup and lookup[0] != 0:
-            raise RuntimeError("Database component lookup failed: %r" % (lookup,))
-        sheet_id = find_sheet(job)
-        report["sheet_id"] = sheet_id
-        stamp = datetime.now().strftime("%H%M%S%f")
-
-        for index, item in enumerate(CASES):
-            print("\nCASE %d/%d: %s" % (index + 1, len(CASES), item["label"]), flush=True)
-            try:
-                result = try_one(job, sheet_id, item, index, stamp)
-                actual = result["initial_symbol"]["library_symbol"]
-                print("REQUESTED:", result["request"], flush=True)
-                print("ACTUAL:   ", actual, flush=True)
-                print("EXACT INTERNAL PLUG:", result["exact_internal_full"], flush=True)
-                report["cases"].append(result)
-            except Exception as exc:
-                msg = "%s: %s: %s" % (item["label"], type(exc).__name__, exc)
-                report["errors"].append(msg)
-                report["cases"].append({**item, "error": msg})
-                print("FAILED:", msg, flush=True)
-            save(report)
-
-        # E3 may replace earlier symbol IDs when later connector views are
-        # placed. The final read-back distinguishes replacement from success.
-        for item in report["cases"]:
-            sid = item.get("placed_symbol_id")
-            if sid:
-                item["final_symbol_at_original_id"] = snapshot(job, sid)
-        successes = [x["label"] for x in report["cases"] if x.get("exact_internal_full")]
-        report["exact_internal_full_cases"] = successes
-        print("\nFINAL RESULTS", flush=True)
-        print("Exact internal FULL plug placements:", successes or "NONE", flush=True)
-        if not successes:
-            print("Every tested request was substituted or failed.", flush=True)
-            print("Next likely investigation: the component's DBE MIL Plug/Internal assignments.", flush=True)
-        print("No project setting setter was called.", flush=True)
-    except Exception as exc:
-        report["errors"].append("FATAL: " + repr(exc))
-        report["errors"].append(traceback.format_exc())
-        print("FATAL:", traceback.format_exc(), flush=True)
-    finally:
-        save(report)
-        del job, app
-    print("Report:", OUTPUT, flush=True)
-    print("After the script exits, inspect E3 or close the project WITHOUT SAVING.", flush=True)
-    return 1 if report["errors"] else 0
-
-
-if __name__ == "__main__":
-    raise SystemExit(main())
+  ],
+  "errors": [],
+  "mil_setting_read_only": 16,
+  "connector_symbol_setting_read_only": 0,
+  "connector_view_setting_read_only": 0,
+  "symbol_candidate_methods": [
+    "GetCharacteristic",
+    "GetSymbolCount",
+    "GetSymbolExtend",
+    "GetSymbolIds",
+    "GetSymbolType",
+    "GetSymbolTypeId",
+    "GetSymbolTypeName",
+    "GetValidCharacteristics",
+    "SetCharacteristic"
+  ],
+  "sheet_id": 204828,
+  "exact_internal_full_cases": []
+}
