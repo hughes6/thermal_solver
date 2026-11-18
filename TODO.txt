@@ -229,9 +229,11 @@ def format_current_secondary_pin_views(prj, metadata_path, modified_texts):
             print(f"  PIN {name} position {pos}: old ID {old_id} -> CURRENT {sid} "
                   f"({current['library']})", flush=True)
 
-            required = {5, 617, 203}
+            # Every split-pin symbol may carry its own Location text (type 15),
+            # especially the receptacle family. Hide Location on ALL pin views.
+            required = {5, 15, 617, 203}
             if pos == 1:
-                required.update((12, 15))  # type 15 = Location on top pin
+                required.add(12)
             present = {typ for typ, _, _ in current["items"]}
             for missing in sorted(required - present):
                 print(f"    WARNING: expected text type {missing} not present on current symbol", flush=True)
@@ -239,15 +241,12 @@ def format_current_secondary_pin_views(prj, metadata_path, modified_texts):
             for typ, val, tid in current["items"]:
                 if typ not in (5, 12, 15, 617, 203):
                     continue
-                if typ == 15 and pos != 1:
-                    continue  # Do not change lower pins' Location visibility.
                 # 5: component code off on ALL pins
                 # 12: top designation visible, bold, 0.2"; others hidden
-                # 15: Location OFF on TOP pin ONLY (preserve other pins)
+                # 15: Location OFF on EVERY secondary pin (plug + receptacle)
                 # 617: local signal visible, black, bold, 0.15"
                 # 203: pin number visible and bold
-                desired_visibility = 0 if (typ == 5 or (typ == 12 and pos != 1)
-                                           or (typ == 15 and pos == 1)) else 1
+                desired_visibility = 0 if (typ in (5, 15) or (typ == 12 and pos != 1)) else 1
                 text_obj.SetId(tid)
                 checks = []
                 ok, actual = set_and_check("SetVisibility", desired_visibility, "GetVisibility")
