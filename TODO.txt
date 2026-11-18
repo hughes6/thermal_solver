@@ -1,383 +1,444 @@
-"""ONE-FILE isolated E3 MIL block-connector test. Does not import your main.py.
-Usage:
-    python e3_mil_onefile.py place baseline
-    # Wait for process to exit; change E3 MIL settings manually.
-    python e3_mil_onefile.py place inside
-    python e3_mil_onefile.py probe inside   # optional, after manual symbol edits
-
-Run with a COPY of your E3 project. 'place' creates test objects; 'probe' is read-only.
-Never asks for user interaction after acquiring an E3 COM object.
-"""
-import json
-import sys
-from pathlib import Path
-from datetime import datetime
-from tkinter import Tk, filedialog
-
-STATE = Path(__file__).with_name('e3_mil_onefile_results.json')
-DEFAULT_BLOCK_POSITIONS = {'baseline': (3.0, 4.0), 'inside': (3.0, 14.0)}
-SHEET_NAME = '1'
-WIDTH, HEIGHT = 3.0, 5.0
-MIL_GETTERS = ('GetDisplayMILStandard', 'GetConnectorSymbolFormat',
-               'GetDetermineConnectorSymbol', 'GetDetermineConnectorViewSymbol',
-               'GetPinViewSymbolForBlockConnectorPins')
-
-
-def safe(obj, method, *args):
-    try:
-        return getattr(obj, method)(*args)
-    except Exception:
-        return None
-
-
-def ids(raw):
-    if isinstance(raw, (tuple, list)):
-        if len(raw) >= 2 and isinstance(raw[1], (tuple, list)):
-            raw = raw[1]
-        elif not all(type(i) is int for i in raw):
-            return []
-        return [int(i) for i in raw if type(i) is int and i > 0]
-    return []
-
-
-def obj_id(raw):
-    if isinstance(raw, (tuple, list)):
-        raw = raw[0] if raw else 0
-    return int(raw) if type(raw) is int and raw > 0 else 0
-
-
-def load_runs():
-    if not STATE.exists():
-        return {}
-    return json.loads(STATE.read_text(encoding='utf-8'))
-
-
-def write_runs(data):
-    STATE.write_text(json.dumps(data, indent=2, ensure_ascii=False, default=str), encoding='utf-8')
-
-
-def excel_connector():  # All GUI/terminal prompts happen before attaching to E3.
-    from openpyxl import load_workbook
-    root = Tk()
-    root.withdraw()
-    root.attributes('-topmost', True)
-    try:
-        path = filedialog.askopenfilename(parent=root, title='Choose Block Maker Excel workbook',
-                filetypes=[('Excel workbooks', '*.xlsm *.xlsx')])
-    finally:
-        root.destroy()
-    if not path:
-        raise SystemExit('Workbook selection canceled.')
-    wb = load_workbook(path, data_only=True, read_only=True)
-    try:
-        ws = wb.active
-        count = int(ws['C5'].value)
-        rows = []
-        for i in range(count):
-            name, component = ws.cell(i + 7, 2).value, ws.cell(i + 7, 3).value
-            if name and component:
-                rows.append((i, str(name).strip(), str(component).strip()))
-        if not rows:
-            raise RuntimeError('No connectors found in worksheet columns B/C.')
-        for j, (_, name, comp) in enumerate(rows, 1):
-            print(f'  {j}: {name} [{comp}]')
-        answer = input('Connector number [Enter=1]: ').strip()
-        selected = (int(answer) if answer else 1) - 1
-        i, name, comp = rows[selected]
-        pin_col = 9 + i * 5
-        n = int(ws.cell(5, pin_col + 1).value or 0)
-        pin_names = [str(v).strip() for r in range(8, 8 + n)
-                     if (v := ws.cell(r, pin_col).value) is not None]
-    finally:
-        wb.close()
-    # This is the tested OTX-J1 plug family. Avoid accidental invalid entries.
-    family = 'MilBlockPlugInt'
-    print('MIL internal family (fixed for this test):', family)
-    return {'name': name, 'component': comp, 'pins': pin_names, 'family': family}
-
-
-def sheet_id(job):
-    sht = job.CreateSheetObject()
-    for sid in ids(job.GetAllSheetIds(None)):
-        sht.SetId(sid)
-        if str(sht.GetName()) == SHEET_NAME:
-            return sid
-    raise RuntimeError(f'E3 sheet {SHEET_NAME!r} not found.')
-
-
-def read_settings(job):
-    return {name: safe(job, name) for name in MIL_GETTERS}
-
-
-def get_pins(job, did, all_pins=False):
-    dev, pin = job.CreateDeviceObject(), job.CreatePinObject()
-    dev.SetId(did)
-    raw = dev.GetAllPinIds(None) if all_pins else dev.GetPinIds(None)
-    result = {}
-    for pid in ids(raw):
-        pin.SetId(pid)
-        result[str(pin.GetName()).strip()] = pid
-    return result
-
-
-def snapshot(job, sid, reveal=False):
-    sym, txt = job.CreateSymbolObject(), job.CreateTextObject()
-    sym.SetId(sid)
-    lib, typeid = safe(sym, 'GetSymbolTypeName'), safe(sym, 'GetSymbolTypeId')
-    if not lib or not isinstance(typeid, int) or typeid <= 0:
-        return None
-    texts = []
-    for tid in ids(safe(sym, 'GetTextIds', None)):
-        txt.SetId(tid)
-        kind = safe(txt, 'GetType')
-        if reveal and kind in (5, 12):
-            safe(txt, 'SetVisibility', 1)
-        texts.append({'type': kind, 'value': safe(txt, 'GetText'),
-                      'visible': safe(txt, 'GetVisibility')})
-    return {'id': sid, 'library': str(lib), 'characteristic': safe(sym, 'GetCharacteristic'),
-            'texts': texts}
-
-
-def place_block(job, shid, x, y, parent=None):
-    sym = job.CreateSymbolObject()
-    if not sym.Load('CABBLOCK', 1):
-        raise RuntimeError('Cannot load CABBLOCK version 1')
-    args = (shid, x, y, WIDTH, HEIGHT)
-    raw = sym.PlaceBlock(*(args + ((parent,) if parent else ())))
-    sid = obj_id(raw)
-    if not sid:
-        raise RuntimeError(f'PlaceBlock failed: sheet={shid}, x={x}, y={y}, parent={parent}, result={raw!r}')
-    return sid
-
-
-def place_pins(job, pinids, lib, shid, x, y):
-    sym = job.CreateSymbolObject()
-    raw = sym.PlacePins(list(pinids), lib, 1, shid, x, y, 0, 1.0)
-    sid = obj_id(raw)
-    if not sid:
-        raise RuntimeError(f'PlacePins FAILED: requested={lib!r}, result={raw!r}')
-    info = snapshot(job, sid, reveal=True)
-    if info is None:
-        raise RuntimeError(f'Placed symbol {sid} could not be inspected')
-    info['requested'] = lib
-    print(f'  Requested {lib} -> ACTUAL {info["library"]} [{"PASS" if lib == info["library"] else "SUBSTITUTED"}] ID={sid}')
-    return info
-
-
-def order_pins(preferred, pins):
-    names = []
-    for wanted in preferred:
-        if wanted in pins:
-            names.append(wanted)
-        else:
-            matches = [n for n in pins if n.split('-', 1)[0] == wanted]
-            if len(matches) == 1:
-                names.append(matches[0])
-    names += [n for n in pins if n not in names]
-    return list(dict.fromkeys(names))
-
-
-def compare_settings(a, b):
-    for key in MIL_GETTERS:
-        va, vb = a.get(key), b.get(key)
-        if va != vb:
-            print(f'  {key}: {va!r} -> {vb!r}' +
-                  (f' (XOR {hex(va ^ vb)})' if type(va) is int and type(vb) is int else ''))
-    if a == b:
-        print('  No change in these readable settings. This is NOT a MIL-mode A/B comparison.')
-
-
-def place(label):
-    # Ask for workbook and symbol family before holding E3 COM.
-    choice = excel_connector()
-    print('USE A DISPOSABLE E3 PROJECT COPY: test symbols/devices WILL be created.')
-    # Choose a free location BEFORE attaching to E3. No script-run pause inside E3.
-    default_x, default_y = DEFAULT_BLOCK_POSITIONS[label]
-    raw_xy = input(f'Empty area for top block X,Y [Enter={default_x:g},{default_y:g}]: ').strip()
-    if not raw_xy:
-        x_top, y_top = default_x, default_y
-    else:
-        try:
-            x_top, y_top = (float(part.strip()) for part in raw_xy.split(','))
-        except Exception:
-            raise SystemExit('Location must be two numbers separated by a comma, e.g. 3,14')
-    x_sec = x_top + 8.0
-    if x_top < 0 or y_top < 0 or x_sec + WIDTH > 42.9 or y_top + HEIGHT > 32.9:
-        raise SystemExit('Blocks would be outside the ANSI E-size sheet. Pick another X,Y.')
-    print(f'Top block at ({x_top:g}, {y_top:g}); secondary block at ({x_sec:g}, {y_top:g})')
-    print('Connectors will be at the RIGHT block edges (offset 0.0).')
-    import win32com.client as win32
-    app = win32.GetActiveObject('CT.Application')
-    job = app.CreateJobObject()
-    result = {'label': label, 'choice': choice, 'created': datetime.now().isoformat(),
-              'settings': read_settings(job), 'top': None, 'secondary': [], 'errors': []}
-    try:
-        shid = sheet_id(job)
-        print('\nMIL/connector settings:', result['settings'])
-        result['position'] = {'top': [x_top, y_top], 'secondary': [x_sec, y_top]}
-        lookup = app.GetDatabaseTableSelectedComponents(choice['component'], 1)
-        if isinstance(lookup, (tuple, list)) and lookup and lookup[0] != 0:
-            raise RuntimeError(f'Database component lookup failed: {lookup!r}')
-        old = set(ids(job.GetAllDeviceIds(None)))
-        result['top_block_id'] = place_block(job, shid, x_top, y_top)
-        created = set(ids(job.GetAllDeviceIds(None))) - old
-        if len(created) != 1:
-            raise RuntimeError(f'Cannot uniquely identify new CABBLOCK device: {sorted(created)}')
-        main_id = next(iter(created))
-        dev = job.CreateDeviceObject()
-        design = f'TEST_{choice["name"]}_{datetime.now():%H%M%S%f}'
-        result['designation'] = design
-        raw = dev.Create(design, '', '', choice['component'], 1, 0)
-        if not obj_id(raw):
-            raise RuntimeError(f'Cannot create connector device: {raw!r}')
-        conn_id = None
-        for did in ids(job.GetAllDeviceIds(None)):
-            dev.SetId(did)
-            if str(dev.GetName()) == design:
-                conn_id = did
-                break
-        if not conn_id:
-            raise RuntimeError('Cannot find newly created connector device')
-        pinlist = get_pins(job, conn_id)
-        if not pinlist:
-            raise RuntimeError('Connector has no base pins')
-        family = choice['family']
-        print('\nTOP (edge offset 0.0):')
-        result['top'] = place_pins(job, pinlist.values(), family + '¶FULL',
-                                    shid, x_top + WIDTH, y_top + 3.8)
-        print('\nSECONDARY:')
-        dev.SetId(main_id)
-        main_view = obj_id(dev.CreateView(main_id, 1, 0, '0'))
-        if not main_view:
-            raise RuntimeError('CreateView on CABBLOCK failed')
-        result['secondary_block_id'] = place_block(job, shid, x_sec, y_top, main_view)
-        dev.SetId(conn_id)
-        view_id = obj_id(dev.CreateView(conn_id, 1, main_view))
-        if not view_id:
-            raise RuntimeError('CreateView on connector failed')
-        view_pins = get_pins(job, view_id, all_pins=True)
-        selected = order_pins(choice['pins'], view_pins)[:2]
-        if len(selected) < 2:
-            raise RuntimeError(f'Only {len(selected)} secondary pins available')
-        for i, name in enumerate(selected):
-            characteristic = 'END_TOP' if i == 0 else 'SPLIT_BOTTOM'
-            item = place_pins(job, [view_pins[name]], family + '¶' + characteristic,
-                              shid, x_sec + WIDTH, y_top + 3.8 - i * 0.2)
-            item['pin'] = name
-            result['secondary'].append(item)
-    except Exception as ex:
-        result['errors'].append(repr(ex))
-        print('TEST ERROR:', repr(ex))
-    finally:
-        del job, app  # Separate Python process exits immediately; E3 becomes editable.
-        history = load_runs()
-        history[label] = result
-        write_runs(history)
-    print(f'\nSaved: {STATE.name}')
-    print('Process is now ending. Test mating/change MIL settings only AFTER it closes.')
-    history = load_runs()
-    if label == 'inside' and 'baseline' in history:
-        base = history['baseline']
-        print('\nBASELINE vs INSIDE SETTINGS:')
-        compare_settings(base['settings'], result['settings'])
-        if base.get('top') and result.get('top'):
-            print('TOP SYMBOL:', base['top']['library'], '->', result['top']['library'])
-    if result['errors']:
-        raise SystemExit(1)
-
-
-def all_symbols(job):
-    values = set(ids(safe(job, 'GetSymbolIds', None)))
-    sht = job.CreateSheetObject()
-    for shid in ids(safe(job, 'GetAllSheetIds', None)):
-        sht.SetId(shid)
-        values.update(ids(safe(sht, 'GetSymbolIds', None)))
-    return sorted(values)
-
-
-def texts_match(snap, typ, value, prefix=False):
-    for t in snap['texts']:
-        v = str(t.get('value') or '')
-        if t.get('type') == typ and (v.startswith(value) if prefix else v == value):
-            return True
-    return False
-
-
-def find_replacement(pool, record, role, state):
-    choice = state['choice']
-    ranked = []
-    for s in pool:
-        score = 0
-        if texts_match(s, 5, choice['component']):
-            score += 3
-        if s['library'] == record['requested']:
-            score += 7
-        if role == 'TOP':
-            if texts_match(s, 12, state['designation']):
-                score += 30
-            if s['characteristic'] == 'FULL':
-                score += 3
-        else:
-            if texts_match(s, 203, record['pin']):
-                score += 20
-            if texts_match(s, 12, state['designation'] + '#', prefix=True):
-                score += 15
-        ranked.append((score, s))
-    ranked.sort(key=lambda item: item[0], reverse=True)
-    if not ranked or ranked[0][0] < 30 or (len(ranked) > 1 and ranked[0][0] == ranked[1][0]):
-        return None, ranked[:3]
-    return ranked[0][1], ranked[:3]
-
-
-def probe(label):
-    history = load_runs()
-    if label not in history:
-        raise RuntimeError(f'No saved run {label!r}; run place {label} first.')
-    state = history[label]
-    import win32com.client as win32
-    app = win32.GetActiveObject('CT.Application')
-    job = app.CreateJobObject()
-    try:
-        print('Saved MIL setting:', state['settings'].get('GetDisplayMILStandard'))
-        print('Current MIL setting:', safe(job, 'GetDisplayMILStandard'))
-        records = [('TOP', state['top'])] if state.get('top') else []
-        records += [('SECONDARY ' + str(s['pin']), s) for s in state['secondary']]
-        need_search = []
-        for role, before in records:
-            s = snapshot(job, before['id'])
-            if s is None:
-                need_search.append((role, before))
-                print(f'{role}: saved ID {before["id"]} invalid; searching replacement')
-                continue
-            print(f'{role}: {before["library"]} -> {s["library"]} (ID={s["id"]})')
-            print('  characteristic:', before['characteristic'], '->', s['characteristic'])
-        if need_search:
-            pool = [s for sid in all_symbols(job) if (s := snapshot(job, sid))]
-            for role, before in need_search:
-                found, candidates = find_replacement(pool, before, role, state)
-                if found:
-                    print(f'{role}: {before["library"]} -> {found["library"]} '
-                          f'(replacement ID={found["id"]})')
-                    print('  characteristic:', before['characteristic'], '->', found['characteristic'])
-                else:
-                    print(f'{role}: INCONCLUSIVE; candidates:',
-                          [(n, x['id'], x['library']) for n, x in candidates])
-    finally:
-        del job, app
-    print('READ-ONLY inspection complete. Process exits; no E3 edits made.')
-
-
-if __name__ == '__main__':
-    if len(sys.argv) < 2 or sys.argv[1].lower() not in ('place', 'probe'):
-        print('Usage: python e3_mil_onefile.py place baseline')
-        print('       python e3_mil_onefile.py place inside')
-        print('       python e3_mil_onefile.py probe inside')
-        sys.exit(2)
-    mode = sys.argv[1].lower()
-    label = (sys.argv[2].lower() if len(sys.argv) > 2 else 'inside')
-    if label not in DEFAULT_BLOCK_POSITIONS:
-        raise SystemExit('Label must be baseline or inside.')
-    if mode == 'place':
-        place(label)
-    else:
-        probe(label)
+{
+  "baseline": {
+    "label": "baseline",
+    "choice": {
+      "name": "OTX-J1",
+      "component": "M24308/4-1F_9P SD",
+      "pins": [
+        "1",
+        "2",
+        "3",
+        "4",
+        "5",
+        "6",
+        "7",
+        "8",
+        "9"
+      ],
+      "family": "MilBlockPlugInt"
+    },
+    "created": "2026-11-18T11:54:45.200135",
+    "settings": {
+      "GetDisplayMILStandard": 16,
+      "GetConnectorSymbolFormat": [
+        12,
+        [
+          null,
+          4,
+          5,
+          12,
+          14,
+          15,
+          1010,
+          1062,
+          1078,
+          1082,
+          1079,
+          1080,
+          1081
+        ],
+        [
+          null,
+          0,
+          128,
+          32,
+          32,
+          32,
+          32,
+          32,
+          32,
+          32,
+          32,
+          32,
+          32
+        ]
+      ],
+      "GetDetermineConnectorSymbol": 0,
+      "GetDetermineConnectorViewSymbol": 0,
+      "GetPinViewSymbolForBlockConnectorPins": "BL_BU_SIG"
+    },
+    "top": {
+      "id": 145773,
+      "library": "MilBlockPlug¶FULL",
+      "characteristic": "FULL",
+      "texts": [
+        {
+          "type": 7,
+          "value": "",
+          "visible": 1
+        },
+        {
+          "type": 213,
+          "value": "*9/9",
+          "visible": 0
+        },
+        {
+          "type": 203,
+          "value": "*9",
+          "visible": 1
+        },
+        {
+          "type": 5,
+          "value": "M24308/4-1F_9P SD",
+          "visible": 1
+        },
+        {
+          "type": 12,
+          "value": "TEST_OTX-J1_115445225454",
+          "visible": 1
+        },
+        {
+          "type": 14,
+          "value": "",
+          "visible": 0
+        },
+        {
+          "type": 15,
+          "value": "",
+          "visible": 0
+        },
+        {
+          "type": 617,
+          "value": "",
+          "visible": 1
+        }
+      ],
+      "requested": "MilBlockPlugInt¶FULL"
+    },
+    "secondary": [
+      {
+        "id": 146697,
+        "library": "MilBlockPlugInt¶END_SPLIT",
+        "characteristic": "END_SPLIT",
+        "texts": [
+          {
+            "type": 7,
+            "value": "",
+            "visible": 1
+          },
+          {
+            "type": 213,
+            "value": "1/9",
+            "visible": 1
+          },
+          {
+            "type": 203,
+            "value": "1",
+            "visible": 1
+          },
+          {
+            "type": 5,
+            "value": "M24308/4-1F_9P SD",
+            "visible": 1
+          },
+          {
+            "type": 12,
+            "value": "TEST_OTX-J1_115445225454#1",
+            "visible": 1
+          },
+          {
+            "type": 14,
+            "value": "",
+            "visible": 1
+          },
+          {
+            "type": 15,
+            "value": "",
+            "visible": 1
+          },
+          {
+            "type": 617,
+            "value": "",
+            "visible": 1
+          }
+        ],
+        "requested": "MilBlockPlugInt¶END_TOP",
+        "pin": "1"
+      },
+      {
+        "id": 146483,
+        "library": "MilBlockPlugInt¶SPLIT_BOTTOM",
+        "characteristic": "SPLIT_BOTTOM",
+        "texts": [
+          {
+            "type": 7,
+            "value": "",
+            "visible": 1
+          },
+          {
+            "type": 213,
+            "value": "2/9",
+            "visible": 1
+          },
+          {
+            "type": 203,
+            "value": "2",
+            "visible": 1
+          },
+          {
+            "type": 5,
+            "value": "M24308/4-1F_9P SD",
+            "visible": 1
+          },
+          {
+            "type": 12,
+            "value": "TEST_OTX-J1_115445225454#1",
+            "visible": 1
+          },
+          {
+            "type": 14,
+            "value": "",
+            "visible": 0
+          },
+          {
+            "type": 15,
+            "value": "",
+            "visible": 0
+          },
+          {
+            "type": 617,
+            "value": "",
+            "visible": 1
+          }
+        ],
+        "requested": "MilBlockPlugInt¶SPLIT_BOTTOM",
+        "pin": "2"
+      }
+    ],
+    "errors": [],
+    "position": {
+      "top": [
+        3.0,
+        4.0
+      ],
+      "secondary": [
+        11.0,
+        4.0
+      ]
+    },
+    "top_block_id": 148306,
+    "designation": "TEST_OTX-J1_115445225454",
+    "secondary_block_id": 147539
+  },
+  "inside": {
+    "label": "inside",
+    "choice": {
+      "name": "OTX-J1",
+      "component": "M24308/4-1F_9P SD",
+      "pins": [
+        "1",
+        "2",
+        "3",
+        "4",
+        "5",
+        "6",
+        "7",
+        "8",
+        "9"
+      ],
+      "family": "MilBlockPlugInt"
+    },
+    "created": "2026-11-18T11:55:09.080624",
+    "settings": {
+      "GetDisplayMILStandard": 16,
+      "GetConnectorSymbolFormat": [
+        12,
+        [
+          null,
+          4,
+          5,
+          12,
+          14,
+          15,
+          1010,
+          1062,
+          1078,
+          1082,
+          1079,
+          1080,
+          1081
+        ],
+        [
+          null,
+          0,
+          128,
+          32,
+          32,
+          32,
+          32,
+          32,
+          32,
+          32,
+          32,
+          32,
+          32
+        ]
+      ],
+      "GetDetermineConnectorSymbol": 0,
+      "GetDetermineConnectorViewSymbol": 0,
+      "GetPinViewSymbolForBlockConnectorPins": "BL_BU_SIG"
+    },
+    "top": {
+      "id": 146865,
+      "library": "MilBlockPlug¶FULL",
+      "characteristic": "FULL",
+      "texts": [
+        {
+          "type": 7,
+          "value": "",
+          "visible": 1
+        },
+        {
+          "type": 213,
+          "value": "*9/9",
+          "visible": 0
+        },
+        {
+          "type": 203,
+          "value": "*9",
+          "visible": 1
+        },
+        {
+          "type": 5,
+          "value": "M24308/4-1F_9P SD",
+          "visible": 1
+        },
+        {
+          "type": 12,
+          "value": "TEST_OTX-J1_115509105951",
+          "visible": 1
+        },
+        {
+          "type": 14,
+          "value": "",
+          "visible": 0
+        },
+        {
+          "type": 15,
+          "value": "",
+          "visible": 0
+        },
+        {
+          "type": 617,
+          "value": "",
+          "visible": 1
+        }
+      ],
+      "requested": "MilBlockPlugInt¶FULL"
+    },
+    "secondary": [
+      {
+        "id": 146038,
+        "library": "MilBlockPlugInt¶END_SPLIT",
+        "characteristic": "END_SPLIT",
+        "texts": [
+          {
+            "type": 7,
+            "value": "",
+            "visible": 1
+          },
+          {
+            "type": 213,
+            "value": "1/9",
+            "visible": 1
+          },
+          {
+            "type": 203,
+            "value": "1",
+            "visible": 1
+          },
+          {
+            "type": 5,
+            "value": "M24308/4-1F_9P SD",
+            "visible": 1
+          },
+          {
+            "type": 12,
+            "value": "TEST_OTX-J1_115509105951#1",
+            "visible": 1
+          },
+          {
+            "type": 14,
+            "value": "",
+            "visible": 1
+          },
+          {
+            "type": 15,
+            "value": "",
+            "visible": 1
+          },
+          {
+            "type": 617,
+            "value": "",
+            "visible": 1
+          }
+        ],
+        "requested": "MilBlockPlugInt¶END_TOP",
+        "pin": "1"
+      },
+      {
+        "id": 145848,
+        "library": "MilBlockPlugInt¶SPLIT_BOTTOM",
+        "characteristic": "SPLIT_BOTTOM",
+        "texts": [
+          {
+            "type": 7,
+            "value": "",
+            "visible": 1
+          },
+          {
+            "type": 213,
+            "value": "2/9",
+            "visible": 1
+          },
+          {
+            "type": 203,
+            "value": "2",
+            "visible": 1
+          },
+          {
+            "type": 5,
+            "value": "M24308/4-1F_9P SD",
+            "visible": 1
+          },
+          {
+            "type": 12,
+            "value": "TEST_OTX-J1_115509105951#1",
+            "visible": 1
+          },
+          {
+            "type": 14,
+            "value": "",
+            "visible": 0
+          },
+          {
+            "type": 15,
+            "value": "",
+            "visible": 0
+          },
+          {
+            "type": 617,
+            "value": "",
+            "visible": 1
+          }
+        ],
+        "requested": "MilBlockPlugInt¶SPLIT_BOTTOM",
+        "pin": "2"
+      }
+    ],
+    "errors": [],
+    "position": {
+      "top": [
+        3.0,
+        14.0
+      ],
+      "secondary": [
+        11.0,
+        14.0
+      ]
+    },
+    "top_block_id": 147666,
+    "designation": "TEST_OTX-J1_115509105951",
+    "secondary_block_id": 146633
+  }
+}
