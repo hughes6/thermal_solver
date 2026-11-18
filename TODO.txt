@@ -1,11 +1,12 @@
 Option Explicit
 
+' New layout: F = Connector Gender, G = Number of Pins.
+' The first connector block moved from H:L to I:M.
 Private Const BLOCK_WIDTH As Long = 5
-Private Const FIRST_COL As Long = 8
-Private Const CENTER_COL As Long = 10
+Private Const FIRST_COL As Long = 9         ' I (was H)
+Private Const CENTER_COL As Long = 11       ' K (was J)
 Private Const MAX_BLOCKS As Long = 40
 Private Const LAST_ROW As Long = 307
-
 
 Private Sub Worksheet_Change(ByVal Target As Range)
 
@@ -20,299 +21,151 @@ Private Sub Worksheet_Change(ByVal Target As Range)
     Dim pinCountCell As Range
     Dim connectorNameCell As Range
 
-    If Target.Address <> "$C$5" Then Exit Sub
+    If Intersect(Target, Me.Range("C5")) Is Nothing Then Exit Sub
 
     On Error GoTo ErrHandler
-
     Application.EnableEvents = False
     Application.ScreenUpdating = False
 
     n = CLng(Me.Range("C5").Value)
-
     If n < 1 Then n = 1
     If n > MAX_BLOCKS Then n = MAX_BLOCKS
 
-    Set srcHeader = Me.Range("H5:L10")
+    Set srcHeader = Me.Range("I5:M10")
 
-
-    '==================================================
-    'FIND HOW MANY BLOCKS HAVE ALREADY BEEN CREATED
-    '==================================================
-
+    ' Determine how many connector blocks already contain data.
     maxCreated = 1
-
     For i = 1 To MAX_BLOCKS - 1
-
         If Application.WorksheetFunction.CountA( _
             Me.Range( _
                 Me.Cells(5, FIRST_COL + i * BLOCK_WIDTH), _
                 Me.Cells(LAST_ROW, FIRST_COL + i * BLOCK_WIDTH + 4) _
             )) > 0 Then
-
             maxCreated = i + 1
-
         Else
-
             Exit For
-
         End If
-
     Next i
 
-
-    '==================================================
-    'CREATE ONLY BRAND-NEW BLOCKS
-    '
-    'Existing blocks are never recopied or erased,
-    'so entered data persists.
-    '==================================================
-
+    ' Create only genuinely new blocks; existing data stays untouched.
     If n > maxCreated Then
-
         For i = maxCreated To n - 1
 
             Set destHeader = Me.Range( _
                 Me.Cells(5, FIRST_COL + i * BLOCK_WIDTH), _
                 Me.Cells(10, FIRST_COL + i * BLOCK_WIDTH + 4))
 
-
-            '------------------------------------------
-            'COPY ORIGINAL H5:L10 BLOCK
-            '------------------------------------------
-
             srcHeader.Copy Destination:=destHeader
 
-
-            '------------------------------------------
-            'CLEAR COPIED NUMBER OF PINS
-            '
-            'J5, O5, T5, Y5...
-            '------------------------------------------
-
+            ' Clear copied pin count in K5, P5, U5, Z5, etc.
             Me.Cells(5, CENTER_COL + i * BLOCK_WIDTH) _
                 .MergeArea.ClearContents
 
-
-            '------------------------------------------
-            'CLEAR COPIED USER-ENTERED CONSTANTS
-            '
-            'Preserves formulas if there are any.
-            '------------------------------------------
-
+            ' Clear copied user-entered constants in the pin-data area.
+            ' J:L, O:Q, T:V, Y:AA, etc.; preserve formulas.
             Set destInput = Me.Range( _
                 Me.Cells(8, FIRST_COL + i * BLOCK_WIDTH + 1), _
                 Me.Cells(LAST_ROW, FIRST_COL + i * BLOCK_WIDTH + 3))
 
             On Error Resume Next
-
-            destInput.SpecialCells( _
-                xlCellTypeConstants).ClearContents
-
+            destInput.SpecialCells(xlCellTypeConstants).ClearContents
             On Error GoTo ErrHandler
 
-
-            '------------------------------------------
-            'COPY COLUMN WIDTHS
-            '------------------------------------------
-
             For j = 0 To BLOCK_WIDTH - 1
-
-                Me.Columns( _
-                    FIRST_COL + i * BLOCK_WIDTH + j _
-                ).ColumnWidth = _
+                Me.Columns(FIRST_COL + i * BLOCK_WIDTH + j).ColumnWidth = _
                     Me.Columns(FIRST_COL + j).ColumnWidth
-
             Next j
 
-
-            '------------------------------------------
-            'BUILD RULES FOR THIS BLOCK
-            '------------------------------------------
-
             RebuildBlockRules i
-
         Next i
 
         maxCreated = n
-
     End If
 
-
-    '==================================================
-    'CONNECTOR NAMES + NUMBER OF PINS
-    '
-    'J6 = B7
-    'O6 = B8
-    'T6 = B9
-    'Y6 = B10
-    '
-    'Pin count:
-    'J5 looks up J6 in B:F
-    'O5 looks up O6 in B:F
-    'etc.
-    '==================================================
-
+    ' K6 = B7, P6 = B8, U6 = B9, etc.
+    ' K5, P5, U5, etc. find the pin count in new column G.
     For i = 0 To maxCreated - 1
 
-        Set connectorNameCell = _
-            Me.Cells(6, CENTER_COL + i * BLOCK_WIDTH)
-
+        Set connectorNameCell = Me.Cells(6, CENTER_COL + i * BLOCK_WIDTH)
         connectorNameCell.MergeArea.Cells(1, 1).Formula = _
             "=$B$" & (7 + i)
 
-
-        Set pinCountCell = _
-            Me.Cells(5, CENTER_COL + i * BLOCK_WIDTH)
-
+        Set pinCountCell = Me.Cells(5, CENTER_COL + i * BLOCK_WIDTH)
         pinCountCell.MergeArea.Cells(1, 1).Formula2 = _
             "=XLOOKUP(" & _
             connectorNameCell.MergeArea.Cells(1, 1).Address(False, False) & _
-            ",$B$7:$B$500,$F$7:$F$500,"""")"
-
+            ",$B$7:$B$500,$G$7:$G$500,"""")"
     Next i
 
-
-    '==================================================
-    'REBUILD RULES FOR ALL GENERATED BLOCKS
-    '
-    'This fixes any broken rules left by previous
-    'versions of the macro.
-    '==================================================
-
+    ' Repair rules on all existing generated blocks.
     For i = 1 To maxCreated - 1
-
         RebuildBlockRules i
-
     Next i
 
-
-    '==================================================
-    'SHOW / HIDE BASED ON C5
-    '
-    'Hiding preserves all entered data.
-    '==================================================
-
+    ' Hide unused blocks without clearing their data.
     For i = 0 To maxCreated - 1
-
         Me.Range( _
             Me.Columns(FIRST_COL + i * BLOCK_WIDTH), _
             Me.Columns(FIRST_COL + i * BLOCK_WIDTH + 4) _
         ).EntireColumn.Hidden = (i >= n)
-
     Next i
 
-
 SafeExit:
-
     Application.CutCopyMode = False
     Application.ScreenUpdating = True
     Application.EnableEvents = True
-
     Exit Sub
 
-
 ErrHandler:
-
-    MsgBox "Macro error " & Err.Number & ":" & vbCrLf & _
-           Err.Description
-
+    MsgBox "Macro error " & Err.Number & ":" & vbCrLf & Err.Description
     Resume SafeExit
 
 End Sub
 
 
-
 Private Sub RebuildBlockRules(ByVal blockIndex As Long)
 
     Dim colOffset As Long
-
     Dim srcRange As Range
     Dim destRange As Range
-
     Dim fc As FormatCondition
     Dim f As String
 
     colOffset = blockIndex * BLOCK_WIDTH
 
-    Set srcRange = Me.Range("H5:L" & LAST_ROW)
-
+    Set srcRange = Me.Range("I5:M" & LAST_ROW)
     Set destRange = Me.Range( _
         Me.Cells(5, FIRST_COL + colOffset), _
         Me.Cells(LAST_ROW, FIRST_COL + colOffset + 4))
 
-
-    '==================================================
-    'DELETE OLD / BROKEN RULES FROM THIS BLOCK
-    '==================================================
-
     destRange.FormatConditions.Delete
 
-
-    '==================================================
-    'COPY ORIGINAL FORMATTING + RULES
-    '
-    'Excel automatically moves the Applies To range.
-    '==================================================
-
+    ' Copy source formatting and conditional formatting.
     srcRange.Copy
-
     destRange.PasteSpecial Paste:=xlPasteFormats
-
     Application.CutCopyMode = False
 
-
-    '==================================================
-    'TRANSLATE FORMULAS WITHOUT CHANGING ROW LOGIC
-    '
-    'Examples for Block 2:
-    '
-    '$H8   -> $M8
-    '$I8   -> $N8
-    '$J$5  -> $O$5
-    '$K8   -> $P8
-    '$L8   -> $Q8
-    '==================================================
-
+    ' Examples for block 2:
+    ' $I8 -> $N8, $J8 -> $O8, $K$5 -> $P$5,
+    ' $L8 -> $Q8, $M8 -> $R8.
     For Each fc In destRange.FormatConditions
-
         If fc.Type = xlExpression Then
-
             f = fc.Formula1
-
-            f = TranslateBlockFormula( _
-                    f, _
-                    FIRST_COL, _
-                    FIRST_COL + colOffset)
-
+            f = TranslateBlockFormula(f, FIRST_COL, FIRST_COL + colOffset)
             If f <> fc.Formula1 Then
-
-                fc.Modify _
-                    Type:=xlExpression, _
-                    Formula1:=f
-
+                fc.Modify Type:=xlExpression, Formula1:=f
             End If
-
         End If
-
     Next fc
 
-
-    '==================================================
-    'COPY DATA VALIDATION / DROPDOWNS
-    '==================================================
-
+    ' Copy data validation / dropdowns.
     srcRange.Copy
-
     On Error Resume Next
-
     destRange.PasteSpecial Paste:=xlPasteValidation
-
     On Error GoTo 0
-
     Application.CutCopyMode = False
 
 End Sub
-
 
 
 Private Function TranslateBlockFormula( _
@@ -322,55 +175,26 @@ Private Function TranslateBlockFormula( _
 
     Dim i As Long
     Dim f As String
-
     Dim sourceLetter As String
     Dim destLetter As String
 
     f = formulaText
 
-
-    '==================================================
-    'FIRST PASS
-    '==================================================
-
+    ' Placeholder pass avoids cascading substitutions.
     For i = 0 To BLOCK_WIDTH - 1
-
         sourceLetter = ColLetter(sourceStartCol + i)
-
-        f = Replace( _
-                f, _
-                "$" & sourceLetter, _
-                "{BLOCKCOL" & CStr(i) & "}")
-
+        f = Replace(f, "$" & sourceLetter, "{BLOCKCOL" & CStr(i) & "}")
     Next i
 
-
-    '==================================================
-    'SECOND PASS
-    '==================================================
-
     For i = 0 To BLOCK_WIDTH - 1
-
         destLetter = ColLetter(destStartCol + i)
-
-        f = Replace( _
-                f, _
-                "{BLOCKCOL" & CStr(i) & "}", _
-                "$" & destLetter)
-
+        f = Replace(f, "{BLOCKCOL" & CStr(i) & "}", "$" & destLetter)
     Next i
 
     TranslateBlockFormula = f
-
 End Function
-
 
 
 Private Function ColLetter(ByVal colNum As Long) As String
-
-    ColLetter = Split( _
-        Me.Cells(1, colNum).Address, _
-        "$")(1)
-
+    ColLetter = Split(Me.Cells(1, colNum).Address, "$")(1)
 End Function
-
