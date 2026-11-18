@@ -1,463 +1,130 @@
-"""E3 two-process symbol swap probe — PHASE 1: PLACE AND EXIT.
+"""E3 two-process symbol swap probe — PHASE 2: INSPECT AND EXIT.
 
-Run from Command Prompt/PowerShell: python e3_probe_1_place.py
-Creates a test top CABBLOCK + connector and a secondary block/view.
-Saves a baseline JSON, then EXITS IMMEDIATELY to unlock E3.
-Use only in an UNSAVED/DISPOSABLE COPY of your project.
-
-After this process has exited, manually change top connector's Symbol Name
-from MilBlockPlug to MilBlockPlugInt, enable designation texts, then run
-python e3_probe_2_inspect.py as an entirely new Python process.
+Run only AFTER e3_probe_1_place.py has COMPLETELY EXITED and you've manually
+switched the top-level connector's library symbol in E3 to MilBlockPlugInt.
+This process reads E3 properties without modifying or placing anything.
+It compares the original baseline in e3_symbol_probe_state.json.
 """
-
-from datetime import datetime
-import json
 from pathlib import Path
-import tkinter as tk
-from tkinter import filedialog
+import json
 import traceback
-
-from openpyxl import load_workbook
 import win32com.client as win32
 
-# ==================== CONFIG (EDIT IF NEEDED) ====================
-SHEET_NAME = "1"
-BLOCK_SYMBOL = "CABBLOCK"
-BLOCK_VERSION = 1
-COMPONENT_VERSION = 1
-
-# Use the precise INTERNAL symbol name from your E3 library.
-# For a receptacle-based component, your original script used
-# "MilBlockSymbolReceptacleInt" instead of a Plug family.
-DEFAULT_MIL_BASE = "MilBlockPlugInt"
-TOP_PLACEMENT_FALLBACK_BASE = "MilBlockPlug"
-TOP_TARGET_BASE = "MilBlockPlugInt"
-
-# Place both test blocks in EMPTY space on sheet 1.
-TOP_X, TOP_Y = 3.0, 4.0
-SECONDARY_X, SECONDARY_Y = 11.0, 4.0
-BLOCK_WIDTH, BLOCK_HEIGHT = 3.0, 5.0
-
-# Verified block-edge placement: NO 0.3 inset.
-RIGHT_EDGE_OFFSET = 0.0
-TOP_PIN_Y_FROM_BOTTOM = 3.8
-SECONDARY_FIRST_PIN_Y_FROM_BOTTOM = 3.8
-SECONDARY_PIN_SPACING = 0.2
-
-# Your main.py used 0 for the right-facing primary and '/1' for secondary.
-# Start with the same RIGHT-edge orientation in both tests; adjust to the
-# orientation of a manually placed working connector if needed.
-TOP_FLIP = 0
-SECONDARY_FLIP = 0
-
-MAX_SECONDARY_PINS_TO_TEST = 2
-# ================================================================
+STATE_FILE = Path(__file__).with_name("e3_symbol_probe_state.json")
 
 
 def extract_ids(result):
-    if not isinstance(result, (tuple, list)):
-        return []
-    if len(result) >= 2 and isinstance(result[1], (tuple, list)):
+    if isinstance(result, (tuple, list)) and len(result) >= 2 and isinstance(result[1], (tuple, list)):
         return [int(v) for v in result[1] if isinstance(v, int) and v > 0]
-    if all(isinstance(v, int) for v in result):
+    if isinstance(result, (tuple, list)) and all(isinstance(v, int) for v in result):
         return [int(v) for v in result if v > 0]
     return []
 
 
-def first_id(result):
-    result = result[0] if isinstance(result, (tuple, list)) else result
-    return int(result) if isinstance(result, (int, float)) else 0
-
-
-def choose_workbook():
-    root = tk.Tk()
-    root.withdraw()
-    root.attributes("-topmost", True)
-    root.update()
+def safe_get(obj, method):
     try:
-        path = filedialog.askopenfilename(
-            parent=root,
-            title="Select the same Block Maker Excel workbook as main.py",
-            filetypes=[("Excel workbook", "*.xlsm *.xlsx"), ("All files", "*.*")],
-        )
-    finally:
-        root.destroy()
-    if not path:
-        raise SystemExit("Cancelled: no workbook selected")
-    return Path(path)
-
-
-def choose_connector(workbook):
-    wb = load_workbook(workbook, data_only=True, read_only=True)
-    try:
-        ws = wb.active
-        n = int(ws["C5"].value)
-        connectors = []
-        for idx in range(n):
-            # Same B/C connector list starting at row 7 as main.py.
-            row = idx + 7
-            name = ws.cell(row=row, column=2).value
-            code = ws.cell(row=row, column=3).value
-            if name is not None and code is not None:
-                connectors.append((idx, str(name).strip(), str(code).strip()))
-        if not connectors:
-            raise RuntimeError("No connector name/type pairs in B/C from row 7")
-        print("\nConnectors from workbook:")
-        for i, (_, name, code) in enumerate(connectors, 1):
-            print(f" {i:2}. {name}  [{code}]")
-        raw = input("Select connector [Enter=1]: ").strip()
-        index = int(raw) if raw else 1
-        if index not in range(1, len(connectors) + 1):
-            raise ValueError("Connector selection out of range")
-        excel_index, name, code = connectors[index - 1]
-        pin_col = 9 + excel_index * 5
-        requested_pins = []
-        try:
-            count = int(ws.cell(row=5, column=pin_col + 1).value or 0)
-            for row in range(8, 8 + count):
-                value = ws.cell(row=row, column=pin_col).value
-                if value is not None:
-                    requested_pins.append(str(value).strip())
-        except (ValueError, TypeError):
-            pass
-        return name, code, requested_pins
-    finally:
-        wb.close()
-
-
-def get_ids_for_project_devices(prj):
-    return set(extract_ids(prj.GetAllDeviceIds(None)))
-
-
-def get_sheet(prj):
-    sht = prj.CreateSheetObject()
-    for sid in extract_ids(prj.GetAllSheetIds(None)):
-        sht.SetId(sid)
-        if str(sht.GetName()) == SHEET_NAME:
-            return sid
-    raise RuntimeError(f"Couldn't find E3 sheet named {SHEET_NAME!r}")
-
-
-def create_block(prj, sheet_id, x, y, parent_view_id=None):
-    sym = prj.CreateSymbolObject()
-    if not sym.Load(BLOCK_SYMBOL, BLOCK_VERSION):
-        raise RuntimeError(f"Couldn't load block symbol {BLOCK_SYMBOL}")
-    if parent_view_id is None:
-        result = sym.PlaceBlock(sheet_id, x, y, BLOCK_WIDTH, BLOCK_HEIGHT)
-    else:
-        result = sym.PlaceBlock(
-            sheet_id, x, y, BLOCK_WIDTH, BLOCK_HEIGHT, parent_view_id
-        )
-    sid = first_id(result)
-    print(f"PlaceBlock parent={parent_view_id}, x={x}, y={y} -> {result!r}")
-    if sid <= 0:
-        raise RuntimeError(f"PlaceBlock failed: {result!r}")
-    return sid
-
-
-def get_pin_map(prj, dev_id, *, all_pins):
-    dev = prj.CreateDeviceObject()
-    pin = prj.CreatePinObject()
-    dev.SetId(dev_id)
-    result = dev.GetAllPinIds(None) if all_pins else dev.GetPinIds(None)
-    pins = {}
-    for pid in extract_ids(result):
-        pin.SetId(pid)
-        name = str(pin.GetName()).strip()
-        if name and name not in pins:
-            pins[name] = pid
-    print(f"pin map (device {dev_id}, all_pins={all_pins}): {pins!r}")
-    return pins
-
-
-def choose_pin_names(excel_pin_names, pin_map):
-    # Preserve workbook ordering where possible; handle E3 suffixes like 1-C.
-    resolved = []
-    for excel_name in excel_pin_names:
-        name = excel_name if excel_name in pin_map else None
-        if name is None:
-            candidates = [p for p in pin_map if p.split("-", 1)[0] == excel_name]
-            if len(candidates) == 1:
-                name = candidates[0]
-        if name is not None and name not in resolved:
-            resolved.append(name)
-    for name in pin_map:
-        if name not in resolved:
-            resolved.append(name)
-    return resolved[:MAX_SECONDARY_PINS_TO_TEST]
-
-
-def show_text(sym, text, symbol_id):
-    """E3 types 4=Symbol designation, 12=Device designation.
-
-    Does not create a missing text node and cannot change the symbol's library
-    name, which is a property rather than a visibility-controlled text.
-    """
-    sym.SetId(symbol_id)
-    result = sym.GetTextIds(None)
-    present = {4: [], 12: []}
-    for text_id in extract_ids(result):
-        text.SetId(text_id)
-        try:
-            t = int(text.GetType())
-        except Exception:
-            continue
-        if t in present:
-            try:
-                before = text.GetVisibility()
-                outcome = text.SetVisibility(1)
-                after = text.GetVisibility()
-                present[t].append((text_id, before, outcome, after))
-            except Exception as exc:
-                present[t].append((text_id, "ERROR", str(exc)))
-    for t, label in ((4, "Symbol Designation"), (12, "Device Designation")):
-        print(f"  {label} (text type {t}): {present[t]!r}")
-        if not present[t]:
-            print(f"  NOTE: type {t} isn't present on this symbol; visibility cannot add it")
-
-
-def place_pins(prj, pin_ids, mil_name, version, sheet_id, x, y, flip):
-    """Always passes an ID list: crucial difference vs original main.py secondary."""
-    sym = prj.CreateSymbolObject()
-    print(
-        f"PlacePins pin_ids={pin_ids!r}, symbol={mil_name!r}, version={version!r}, "
-        f"sheet={sheet_id}, x={x}, y={y}, flip={flip!r}",
-        flush=True,
-    )
-    try:
-        result = sym.PlacePins(pin_ids, mil_name, version, sheet_id, x, y, flip, 1.0)
-    except Exception:
-        print("COM exception during PlacePins:\n" + traceback.format_exc(), flush=True)
-        return 0
-    print(f"  raw result: {result!r}", flush=True)
-    symbol_id = first_id(result)
-    if symbol_id > 0:
-        try:
-            text = prj.CreateTextObject()
-            show_text(sym, text, symbol_id)
-        except Exception:
-            print("Visibility inspection failed:\n" + traceback.format_exc())
-    return symbol_id
-
-
-
-def _read_zero_arg(obj, method_name):
-    """Read known-safe COM getters; never guesses setters or mutates symbols."""
-    if not hasattr(obj, method_name):
-        return "<not exposed>"
-    try:
-        return repr(getattr(obj, method_name)())
+        if not hasattr(obj, method):
+            return "<not exposed>"
+        return repr(getattr(obj, method)())
     except Exception as exc:
         return f"<unavailable: {type(exc).__name__}: {exc}>"
 
 
-def get_symbol_snapshot(prj, symbol_id):
-    """Snapshot meaningful *read-only* properties of the placed symbol."""
+def get_snapshot(prj, symbol_id):
     sym = prj.CreateSymbolObject()
     sym.SetId(symbol_id)
-    getters = (
+    methods = (
         "GetName", "GetSymbolTypeName", "GetSymbolType", "GetSymbolTypeId",
         "GetCharacteristic", "GetValidCharacteristics", "GetVersion",
         "GetView", "GetViewId", "GetViewNumber", "GetSymbolView",
         "GetComponentName", "GetDeviceId", "GetSheetId",
     )
-    return {name: _read_zero_arg(sym, name) for name in getters}
-
-
-def show_symbol_snapshot(prj, symbol_id, label):
-    info = get_symbol_snapshot(prj, symbol_id)
-    print(f"\n{label} — symbol object ID {symbol_id}")
-    for key, value in info.items():
-        print(f"  {key:24} {value}")
-    print("  IMPORTANT: GetName() returns the SYMBOL DESIGNATION (e.g., P1),"
-          " not the library Symbol Name field.")
-    return info
-
-
-def diff_snapshots(before, after):
-    print("\n  CHANGED COM GETTERS after manual Symbol Name switch:")
-    changed = [(k, before.get(k), after.get(k)) for k in before
-               if before.get(k) != after.get(k)]
-    if not changed:
-        print("  (No changes reported by the available zero-argument getters.)")
-    else:
-        for k, old, new in changed:
-            print(f"    {k}: {old} -> {new}")
-
-
-def show_possible_swap_apis(prj):
-    print("\n  READ-ONLY API INVENTORY (no swap attempted):")
-    sym = prj.CreateSymbolObject()
-    relevant = ("symbol", "swap", "replace", "exchange", "change",
-                "view", "character", "graphic", "load")
-    for name, obj in (("Symbol", sym), ("Job", prj)):
-        methods = sorted(n for n in dir(obj) if not n.startswith("_")
-                         and any(w in n.lower() for w in relevant))
-        print(f"    {name}: {methods}")
-    print("  Do not confuse SetCharacteristic() with changing the library"
-          " symbol view (Plug versus PlugInt).")
-
-
-
-
-STATE_FILE = Path(__file__).with_name("e3_symbol_probe_state.json")
-
-
-def get_text_snapshot(prj, symbol_id):
-    """Capture every visible/hidden text node; swapping symbols can change IDs."""
-    sym = prj.CreateSymbolObject()
+    getters = {method: safe_get(sym, method) for method in methods}
     txt = prj.CreateTextObject()
-    sym.SetId(symbol_id)
-    output = []
+    texts = []
     for tid in extract_ids(sym.GetTextIds(None)):
         txt.SetId(tid)
-        info = {"id": tid}
+        item = {"id": tid}
         for method, field in (("GetType", "type"), ("GetText", "value"),
                               ("GetVisibility", "visible")):
             try:
-                info[field] = getattr(txt, method)()
+                item[field] = getattr(txt, method)()
             except Exception as exc:
-                info[field] = f"<unavailable: {exc}>"
-        output.append(info)
-    return output
+                item[field] = f"<unavailable: {exc}>"
+        texts.append(item)
+    return {"symbol_id": symbol_id, "getters": getters, "texts": texts}
 
 
-def read_probe(prj, symbol_id):
-    return {"symbol_id": symbol_id,
-            "getters": get_symbol_snapshot(prj, symbol_id),
-            "texts": get_text_snapshot(prj, symbol_id)}
+def show_diff(before, after):
+    print("  COM getter differences:")
+    changed = 0
+    for key, old_val in before.get("getters", {}).items():
+        new_val = after["getters"].get(key)
+        if old_val != new_val:
+            changed += 1
+            print(f"    {key}: {old_val}  ->  {new_val}")
+    if not changed:
+        print("    (No changes in exposed zero-argument getters.)")
+    before_text = before.get("texts", [])
+    after_text = after.get("texts", [])
+    print(f"  Texts before ({len(before_text)}): {before_text}")
+    print(f"  Texts after  ({len(after_text)}): {after_text}")
+    if before_text == after_text:
+        print("    (Text list unchanged.)")
+    print("  Note: GetName() is symbol DESIGNATION, not library Symbol Name.")
+    print("  Lack of a getter difference does NOT prove the symbol did not change.")
 
 
-def write_state(metadata):
-    # Write atomically so an interrupted run doesn't leave partial JSON.
-    tmp = STATE_FILE.with_suffix(".json.tmp")
-    with tmp.open("w", encoding="utf-8") as handle:
-        json.dump(metadata, handle, indent=2, ensure_ascii=False)
-    tmp.replace(STATE_FILE)
-    print(f"\nSAVED BASELINE: {STATE_FILE}", flush=True)
+def inspect():
+    if not STATE_FILE.is_file():
+        raise RuntimeError(f"Missing {STATE_FILE}. Run e3_probe_1_place.py first.")
+    state = json.loads(STATE_FILE.read_text(encoding="utf-8"))
+    print(f"BASELINE: {STATE_FILE}")
+    print(f"Created: {state['created_at']}")
+    print(f"Connector: {state['connector_name']} [{state['component_code']}]")
+    print(f"Expected symbol designation: {state['test_device_designation']}")
+    print(f"Top symbol ID: {state['top']['symbol_id']}")
+    print("\nConnecting to active E3 project in READ-ONLY mode...")
 
-def run():
-    workbook = choose_workbook()
-    name, component_code, excel_pins = choose_connector(workbook)
-    sym_base = input(f"Internal MIL block symbol base [{DEFAULT_MIL_BASE}]: ").strip() or DEFAULT_MIL_BASE
-    print(f"\nWorkbook: {workbook}")
-    print(f"Connector: {name!r}; component: {component_code!r}")
-    print("Will create top-level and secondary connectors at EXACT block edges (offset=0.0).")
-    print("IMPORTANT: Use an UNSAVED COPY of the E3 project.\n")
-
-    # All E3 work is completed in this process. It exits before manual editing.
     app = win32.GetActiveObject("CT.Application")
     prj = app.CreateJobObject()
-    sheet_id = get_sheet(prj)
-    lookup = app.GetDatabaseTableSelectedComponents(component_code, COMPONENT_VERSION)
-    print(f"Database lookup: {lookup!r}")
-    if isinstance(lookup, (tuple, list)) and lookup and lookup[0] != 0:
-        raise RuntimeError(f"Connector component missing: {lookup!r}")
-
-    before_devices = get_ids_for_project_devices(prj)
-    top_block_symbol_id = create_block(prj, sheet_id, TOP_X, TOP_Y)
-    new_main_ids = sorted(get_ids_for_project_devices(prj) - before_devices)
-    if len(new_main_ids) != 1:
-        raise RuntimeError(f"Cannot identify new CABBLOCK device uniquely: {new_main_ids}")
-    main_dev_id = new_main_ids[0]
-    print(f"New main block symbol={top_block_symbol_id}, device={main_dev_id}")
-
+    sheet_ids = extract_ids(prj.GetAllSheetIds(None))
+    if state['sheet_id'] not in sheet_ids:
+        raise RuntimeError("Original sheet ID not found: probably a different E3 project is open.")
+    dev_ids = extract_ids(prj.GetAllDeviceIds(None))
+    if state['connector_id'] not in dev_ids:
+        raise RuntimeError("Original test connector ID not found. Don't run in another project or delete the test.")
     dev = prj.CreateDeviceObject()
-    test_name = f"TEST_{name}_{datetime.now():%H%M%S}"
-    result = dev.Create(test_name, "", "", component_code, COMPONENT_VERSION, 0)
-    print(f"dev.Create({test_name!r}) -> {result!r}")
-    if first_id(result) <= 0:
-        raise RuntimeError(f"Cannot create connector: {result!r}")
-    device_id = None
-    for did in sorted(get_ids_for_project_devices(prj)):
-        dev.SetId(did)
-        if str(dev.GetName()) == test_name:
-            device_id = did
-            break
-    if device_id is None:
-        raise RuntimeError("Couldn't identify new test connector in E3 device tree")
-    top_pins = get_pin_map(prj, device_id, all_pins=False)
-    if not top_pins:
-        raise RuntimeError("New connector has no pins")
+    dev.SetId(state['connector_id'])
+    current_name = str(dev.GetName())
+    if current_name != state['test_device_designation']:
+        raise RuntimeError(f"Connector changed/incorrect project. Expected {state['test_device_designation']!r}, got {current_name!r}.")
 
-    print("\n===== TOP-LEVEL PLACEMENT =====", flush=True)
-    top_symbol_id = place_pins(
-        prj, list(top_pins.values()), f"{TOP_TARGET_BASE}¶FULL", COMPONENT_VERSION,
-        sheet_id, TOP_X + BLOCK_WIDTH - RIGHT_EDGE_OFFSET,
-        TOP_Y + TOP_PIN_Y_FROM_BOTTOM, TOP_FLIP,
-    )
-    if top_symbol_id <= 0:
-        print("Trying standard MilBlockPlug¶FULL, because Int request failed.")
-        top_symbol_id = place_pins(
-            prj, list(top_pins.values()), f"{TOP_PLACEMENT_FALLBACK_BASE}¶FULL",
-            COMPONENT_VERSION, sheet_id, TOP_X + BLOCK_WIDTH - RIGHT_EDGE_OFFSET,
-            TOP_Y + TOP_PIN_Y_FROM_BOTTOM, TOP_FLIP,
-        )
-    if top_symbol_id <= 0:
-        raise RuntimeError("Both top-level PlacePins attempts failed")
+    top_id = state['top']['symbol_id']
+    print("\n========== TOP LEVEL ==========", flush=True)
+    print(f"Symbol ID {top_id} / requested: {state['top']['requested_symbol']}")
+    top_after = get_snapshot(prj, top_id)
+    show_diff(state['top']['before'], top_after)
 
-    print("\n===== SECONDARY VIEW =====", flush=True)
-    dev.SetId(main_dev_id)
-    main_view_result = dev.CreateView(main_dev_id, 1, 0, "0")
-    main_view_id = first_id(main_view_result)
-    print(f"CreateView(CABBLOCK, 1): {main_view_result!r}")
-    if main_view_id <= 0:
-        raise RuntimeError("Could not create main device view 1")
+    for item in state.get('secondary', []):
+        print(f"\n========== SECONDARY PIN {item['pin_name']} ==========", flush=True)
+        print(f"Symbol ID {item['symbol_id']}, requested: {item['requested_symbol']}")
+        show_diff(item['before'], get_snapshot(prj, item['symbol_id']))
 
-    secondary_block_symbol_id = create_block(prj, sheet_id, SECONDARY_X, SECONDARY_Y, main_view_id)
-    dev.SetId(device_id)
-    conn_view_result = dev.CreateView(device_id, 1, main_view_id)
-    conn_view_id = first_id(conn_view_result)
-    print(f"CreateView(connector, 1): {conn_view_result!r}")
-    if conn_view_id <= 0:
-        raise RuntimeError("Could not create connector view 1")
-    secondary_map = get_pin_map(prj, conn_view_id, all_pins=True)
-    if not secondary_map:
-        raise RuntimeError("No pins found on connector view 1")
+    print("\n========== EXPOSED METHODS (NO CALLS) ==========")
+    for title, obj in (("Symbol", prj.CreateSymbolObject()), ("Job", prj)):
+        found = sorted(name for name in dir(obj) if not name.startswith('_')
+                       and any(x in name.lower() for x in ('swap','replace','symbol','view','character')))
+        print(f"{title}: {found}")
 
-    secondary = []
-    for i, pin_name in enumerate(choose_pin_names(excel_pins, secondary_map)):
-        characteristic = "END_SPLIT" if i == 0 else "SPLIT_BOTTOM"
-        sym_name = f"{sym_base}¶{characteristic}"
-        x = SECONDARY_X + BLOCK_WIDTH - RIGHT_EDGE_OFFSET
-        y = SECONDARY_Y + SECONDARY_FIRST_PIN_Y_FROM_BOTTOM - i * SECONDARY_PIN_SPACING
-        sid = place_pins(prj, [secondary_map[pin_name]], sym_name,
-                         COMPONENT_VERSION, sheet_id, x, y, SECONDARY_FLIP)
-        if sid <= 0:
-            print(f"SECONDARY FAILED: pin={pin_name!r}, symbol={sym_name!r}")
-            break
-        secondary.append({"pin_name": pin_name, "pin_id": secondary_map[pin_name],
-                          "requested_symbol": sym_name, "symbol_id": sid,
-                          "before": read_probe(prj, sid)})
-        print(f"SECONDARY OK: {pin_name} / symbol ID {sid}")
-
-    metadata = {
-        "created_at": datetime.now().isoformat(timespec="seconds"),
-        "workbook": str(workbook), "connector_name": name,
-        "component_code": component_code, "test_device_designation": test_name,
-        "sheet_id": sheet_id, "main_device_id": main_dev_id,
-        "main_block_symbol_id": top_block_symbol_id,
-        "main_view_id": main_view_id,
-        "secondary_block_symbol_id": secondary_block_symbol_id,
-        "connector_id": device_id, "connector_view_id": conn_view_id,
-        "top": {"symbol_id": top_symbol_id,
-                "requested_symbol": f"{TOP_TARGET_BASE}¶FULL",
-                "fallback_symbol": f"{TOP_PLACEMENT_FALLBACK_BASE}¶FULL",
-                "before": read_probe(prj, top_symbol_id)},
-        "secondary": secondary,
-    }
-    write_state(metadata)
-    print("\nPLACEMENT COMPLETE. Python will EXIT and RELEASE E3 now.")
-    print("1) Wait for this Python process to CLOSE completely.")
-    print("2) In E3, manually switch the top symbol to MilBlockPlugInt and enable its text.")
-    print("3) Run: python e3_probe_2_inspect.py")
-    print("Do not delete/re-place the same test symbol.", flush=True)
+    print("\nINSPECTION COMPLETE. This Python process will exit now.")
+    print("Compare with the manual Symbol Properties display. No E3 changes were made.", flush=True)
 
 
-if __name__ == "__main__":
+if __name__ == '__main__':
     try:
-        run()
+        inspect()
     except Exception:
-        print("\nPLACEMENT FAILED:\n" + traceback.format_exc(), flush=True)
+        print("\nINSPECTION FAILED:\n" + traceback.format_exc(), flush=True)
         raise SystemExit(1)
-    # NO input(), Tk window, or sleep here: Python exits and E3 unlocks.
+    # no input(): E3 is immediately released by process termination
