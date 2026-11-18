@@ -1,4 +1,4 @@
-"""Standalone E3 block-connector PRIMARY + SECONDARY view diagnostic.
+"""Standalone E3 primary/secondary block-connector test with post-placement symbol correction.
 
 Run with E3 open, against a DISPOSABLE COPY of the project:
     python test_e3_primary_secondary.py
@@ -12,7 +12,12 @@ IMPORTANT: This creates E3 objects. It does not edit main.py or delete existing
 objects. Close the test project WITHOUT saving when finished.
 
 The test intentionally retains the same CreateView hierarchy as main.py.
-It checks whether passing [pin_id] to PlacePins fixes secondary placement.
+Top connector is requested as MilBlockPlugInt; if E3 ignores the requested
+symbol (or placement fails), the script uses the known working MilBlockPlug
+placement and tries to switch to the Int form AFTER placement. When the local
+E3 COM interface does not expose a confirmed symbol-swap method, it pauses
+so the change can be made safely via Symbol Properties before proceeding.
+This script never deletes/replaces the pin to change its graphic.
 """
 
 from datetime import datetime
@@ -34,6 +39,11 @@ COMPONENT_VERSION = 1
 # For a receptacle-based component, your original script used
 # "MilBlockSymbolReceptacleInt" instead of a Plug family.
 DEFAULT_MIL_BASE = "MilBlockPlugInt"
+TOP_PLACEMENT_FALLBACK_BASE = "MilBlockPlug"
+TOP_TARGET_BASE = "MilBlockPlugInt"
+# Enable this so the script offers a manual Symbol Properties correction when
+# E3 places the component default symbol despite requesting PlugInt.
+PAUSE_FOR_MANUAL_TOP_SWAP = True
 
 # Place both test blocks in EMPTY space on sheet 1.
 TOP_X, TOP_Y = 3.0, 4.0
@@ -242,6 +252,101 @@ def place_pins(prj, pin_ids, mil_name, version, sheet_id, x, y, flip):
     return symbol_id
 
 
+
+def get_placed_symbol_name(prj, symbol_id):
+    """Read the actual symbol from E3 (PlacePins can ignore requested symname)."""
+    sym = prj.CreateSymbolObject()
+    sym.SetId(symbol_id)
+    for method in ("GetName", "GetSymbolName"):
+        try:
+            obj = getattr(sym, method)
+            value = obj()
+            if isinstance(value, str) and value.strip():
+                return value.strip()
+        except Exception:
+            pass
+    return None
+
+
+def is_internal_plug(name):
+    return bool(name) and name.split("¶", 1)[0].lower() == TOP_TARGET_BASE.lower()
+
+
+def attempt_swap_top_symbol(prj, symbol_id, target_full_name):
+    """Try only symbol-changing COM methods that actually exist on this install.
+
+    The exact COM method signature varies with E3.version, so if no supported
+    method can be verified the script stops mutating and offers a manual swap.
+    Does NOT use SetCharacteristic: Int is a different symbol BASE, not simply
+    a characteristic such as FULL or END_SPLIT.
+    """
+    sym = prj.CreateSymbolObject()
+    sym.SetId(symbol_id)
+    before = get_placed_symbol_name(prj, symbol_id)
+    print(f"  ACTUAL top symbol BEFORE attempted swap: {before!r}")
+    if is_internal_plug(before):
+        print("  Already MilBlockPlugInt: nothing to change.")
+        return True
+
+    # No SetName(): that can refer to the symbol designation, NOT the graphic.
+    change_methods = (
+        "ChangeSymbol", "ReplaceSymbol", "ExchangeSymbol",
+        "SetSymbolName", "ChangeSymbolName",
+    )
+    available = [x for x in dir(sym) if any(t in x.lower() for t in
+                  ("symbol", "replace", "exchange", "characteristic"))]
+    print("  E3 symbol COM methods relevant to a graphic swap:", available)
+
+    for meth in change_methods:
+        if meth not in available:
+            continue
+        fn = getattr(sym, meth)
+        print(f"  Attempting {meth} to {target_full_name!r} ...")
+        # Standard plausible COM signatures for a symbol name + version.
+        # Try a one-arg form first; argument errors generally do not mutate.
+        for args in ((target_full_name,), (target_full_name, COMPONENT_VERSION)):
+            try:
+                sym.SetId(symbol_id)
+                result = fn(*args)
+                after = get_placed_symbol_name(prj, symbol_id)
+                print(f"  {meth}{args!r} -> {result!r}; actual symbol={after!r}")
+                if is_internal_plug(after):
+                    print("  POST-PLACEMENT SYMBOL SWAP VERIFIED.")
+                    return True
+                # No further attempts once E3 has accepted a call but not
+                # changed the graphic; defer to manual instead of guessing.
+                if isinstance(result, (int, float)) and result > 0:
+                    return False
+            except Exception as exc:
+                print(f"  {meth}{args!r} unavailable/rejected: {exc}")
+    return False
+
+
+def confirm_top_internal_symbol(prj, symbol_id):
+    """Switch the SAME placed symbol after PlacePins; never re-place pin IDs."""
+    target = f"{TOP_TARGET_BASE}¶FULL"
+    print("\n========= TOP-LEVEL SYMBOL VALIDATION =========")
+    success = attempt_swap_top_symbol(prj, symbol_id, target)
+    if success:
+        return True
+    print("  Automated symbol swap could not be VERIFIED on this E3 interface.")
+    print("  The pin is still placed on the block's RIGHT EDGE (offset 0.0).")
+    if PAUSE_FOR_MANUAL_TOP_SWAP:
+        print("\n  In E3 select the NEW top-level test connector symbol (ID:",
+              symbol_id, ").")
+        print("  Right-click -> Symbol Properties -> Symbol View.")
+        print("  Change Symbol Name from MilBlockPlug to MilBlockPlugInt (FULL).")
+        print("  Re-enable Symbol Designation and Device Designation if needed.")
+        print("  Do NOT delete/re-place the connector.")
+        input("  After applying that change in E3, press Enter to continue with the SECONDARY view...")
+        after = get_placed_symbol_name(prj, symbol_id)
+        print(f"  AFTER user intervention actual symbol name: {after!r}")
+        if not is_internal_plug(after):
+            print("  NOTE: E3 did not report MilBlockPlugInt; check Symbol Properties.")
+        return is_internal_plug(after)
+    return False
+
+
 def run():
     workbook = choose_workbook()
     name, component_code, excel_pins = choose_connector(workbook)
@@ -250,7 +355,8 @@ def run():
     ).strip() or DEFAULT_MIL_BASE
     print(f"\nWorkbook: {workbook}")
     print(f"Connector: {name!r}; component: {component_code!r}")
-    print(f"Top-level symbol: {sym_base}¶FULL")
+    print(f"Top-level requested symbol: {TOP_TARGET_BASE}¶FULL")
+    print(f"Top-level fallback for placing: {TOP_PLACEMENT_FALLBACK_BASE}¶FULL")
     print(f"Secondary symbols: {sym_base}¶END_SPLIT / ¶SPLIT_BOTTOM")
     print("NOTE: Creates objects in E3! Use an UNSAVED TEST PROJECT COPY.\n")
 
@@ -295,15 +401,30 @@ def run():
         raise RuntimeError("New test connector has no pins")
 
     print("\n========= TEST 1: TOP-LEVEL (RIGHT EDGE, OFFSET=0.0) =========")
+    # 1. Request the final graphic first. E3 may still place the connector's
+    # component-default MilBlockPlug regardless of the requested name.
     top_symbol_id = place_pins(
-        prj, list(top_pins.values()), f"{sym_base}¶FULL", COMPONENT_VERSION,
+        prj, list(top_pins.values()), f"{TOP_TARGET_BASE}¶FULL", COMPONENT_VERSION,
         sheet_id, TOP_X + BLOCK_WIDTH - RIGHT_EDGE_OFFSET,
         TOP_Y + TOP_PIN_Y_FROM_BOTTOM, TOP_FLIP,
     )
+    # 2. If that could not place, use the known-good symbol, then change it.
     if top_symbol_id <= 0:
-        print("Top-level PlacePins failed. Secondary test aborted.")
+        print("TOP: Int placement failed; placing standard MilBlockPlug first.")
+        top_symbol_id = place_pins(
+            prj, list(top_pins.values()), f"{TOP_PLACEMENT_FALLBACK_BASE}¶FULL",
+            COMPONENT_VERSION, sheet_id,
+            TOP_X + BLOCK_WIDTH - RIGHT_EDGE_OFFSET,
+            TOP_Y + TOP_PIN_Y_FROM_BOTTOM, TOP_FLIP,
+        )
+    if top_symbol_id <= 0:
+        print("Top-level PlacePins failed with both symbol requests. Secondary test aborted.")
         return
     print(f"TOP-LEVEL SUCCEEDED, placed symbol ID {top_symbol_id}")
+    # 3. Change ONLY the graphic on that exact placed symbol ID.
+    confirm_top_internal_symbol(prj, top_symbol_id)
+    # Restore visibility after the swap; the graphic may have recreated text.
+    show_text(prj.CreateSymbolObject(), prj.CreateTextObject(), top_symbol_id)
 
     print("\n========= TEST 2: SECONDARY VIEW & SPLIT BLOCK =========")
     dev.SetId(main_dev_id)
