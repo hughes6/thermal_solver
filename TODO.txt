@@ -1,262 +1,365 @@
-"""E3.series block connector positioning A/B test driven by your Excel pin sheet.
+"""Standalone E3 block-connector PRIMARY + SECONDARY view diagnostic.
 
-Run on a COPY of your E3 project while E3 is open:
-    python test_e3_block_connector_edge.py
+Run with E3 open, against a DISPOSABLE COPY of the project:
+    python test_e3_primary_secondary.py
 
-As in main.py, a file-picker opens to select the .xlsm workbook. The active
-worksheet supplies the connector names/types from columns B/C, beginning at
-row 7 (connector count in C5). Choose one connector to test; press Enter to
-use the first connector.
+Choose the same .xlsm workbook as main.py, then select one connector.
+Creates a fresh CABBLOCK and one test connector, places it on the RIGHT block
+edge (offset 0.0), creates the main-device view and a single secondary CABBLOCK,
+then places up to two connector *view* pins on the new block's right edge.
 
-Creates TWO new CABBLOCK symbols and two NEW connector devices on E3 sheet 1:
-    INSET: connector symbol origin 0.3 inside the right block edge
-    EDGE:  connector symbol origin exactly on the right block edge
+IMPORTANT: This creates E3 objects. It does not edit main.py or delete existing
+objects. Close the test project WITHOUT saving when finished.
 
-It does not delete or move pre-existing items. Run in a sacrificial project
-copy and discard the test changes when finished.
+The test intentionally retains the same CreateView hierarchy as main.py.
+It checks whether passing [pin_id] to PlacePins fixes secondary placement.
 """
 
 from datetime import datetime
 from pathlib import Path
 import tkinter as tk
 from tkinter import filedialog
+import traceback
 
 from openpyxl import load_workbook
 import win32com.client as win32
 
-# ---------------------- TEST CONFIGURATION ----------------------
-E3_SHEET_NAME = "1"                # E3 sheet to place the test symbols on
+# ==================== CONFIG (EDIT IF NEEDED) ====================
+SHEET_NAME = "1"
 BLOCK_SYMBOL = "CABBLOCK"
 BLOCK_VERSION = 1
-CONNECTOR_SYMBOL = "MilBlockSymbolReceptacleInt¶FULL"
-CONNECTOR_VERSION = 1
+COMPONENT_VERSION = 1
 
-# Choose an EMPTY area of E3 sheet 1. Coordinates use main.py units.
-X_A, Y_A = 3.0, 4.0
-X_B, Y_B = 11.0, 4.0
-BLOCK_WIDTH, BLOCK_HEIGHT = 3.0, 4.0
+# Use the precise INTERNAL symbol name from your E3 library.
+# For a receptacle-based component, your original script used
+# "MilBlockSymbolReceptacleInt" instead of a Plug family.
+DEFAULT_MIL_BASE = "MilBlockPlugInt"
 
-RIGHT_SIDE_INSET = 0.3
-PIN_Y_FROM_BOTTOM = 1.5
-ROTATION = 0                      # Right edge, as in main.py
-# ----------------------------------------------------------------
+# Place both test blocks in EMPTY space on sheet 1.
+TOP_X, TOP_Y = 3.0, 4.0
+SECONDARY_X, SECONDARY_Y = 11.0, 4.0
+BLOCK_WIDTH, BLOCK_HEIGHT = 3.0, 5.0
+
+# Verified block-edge placement: NO 0.3 inset.
+RIGHT_EDGE_OFFSET = 0.0
+TOP_PIN_Y_FROM_BOTTOM = 3.8
+SECONDARY_FIRST_PIN_Y_FROM_BOTTOM = 3.8
+SECONDARY_PIN_SPACING = 0.2
+
+# Your main.py used 0 for the right-facing primary and '/1' for secondary.
+# Start with the same RIGHT-edge orientation in both tests; adjust to the
+# orientation of a manually placed working connector if needed.
+TOP_FLIP = 0
+SECONDARY_FLIP = 0
+
+MAX_SECONDARY_PINS_TO_TEST = 2
+# ================================================================
 
 
-def pick_excel_sheet():
-    """Replicates main.py's Tk Excel workbook picker (not an E3 sheet picker)."""
+def extract_ids(result):
+    if not isinstance(result, (tuple, list)):
+        return []
+    if len(result) >= 2 and isinstance(result[1], (tuple, list)):
+        return [int(v) for v in result[1] if isinstance(v, int) and v > 0]
+    if all(isinstance(v, int) for v in result):
+        return [int(v) for v in result if v > 0]
+    return []
+
+
+def first_id(result):
+    result = result[0] if isinstance(result, (tuple, list)) else result
+    return int(result) if isinstance(result, (int, float)) else 0
+
+
+def choose_workbook():
     root = tk.Tk()
     root.withdraw()
     root.attributes("-topmost", True)
     root.update()
     try:
-        selected = filedialog.askopenfilename(
+        path = filedialog.askopenfilename(
             parent=root,
-            title="Select the block maker Excel sheet",
-            filetypes=[
-                ("Macro-enabled Excel files", "*.xlsm"),
-                ("Excel files", "*.xlsx"),
-                ("All files", "*.*"),
-            ],
+            title="Select the same Block Maker Excel workbook as main.py",
+            filetypes=[("Excel workbook", "*.xlsm *.xlsx"), ("All files", "*.*")],
         )
     finally:
         root.destroy()
-    if not selected:
-        raise SystemExit("No Excel workbook selected; test cancelled.")
-    return Path(selected)
+    if not path:
+        raise SystemExit("Cancelled: no workbook selected")
+    return Path(path)
 
 
-def read_connectors_from_excel(path):
-    """Match the main.py workbook layout: C5 count, B/C rows 7 onward."""
-    wb = load_workbook(path, data_only=True, read_only=True)
+def choose_connector(workbook):
+    wb = load_workbook(workbook, data_only=True, read_only=True)
     try:
         ws = wb.active
-        raw_count = ws["C5"].value
-        try:
-            number_of_connectors = int(raw_count)
-        except (ValueError, TypeError):
-            raise ValueError(
-                f"{path.name}: active worksheet {ws.title!r} has invalid C5 "
-                f"(number of connectors): {raw_count!r}"
-            )
-
-        if number_of_connectors < 1:
-            raise ValueError("The selected sheet does not contain any connectors (C5).")
-
+        n = int(ws["C5"].value)
         connectors = []
-        # main.py uses min_row=7 and max_row=7+NUMBER_OF_CONNECTORS,
-        # then filters entries with no connector type.
-        for row_num in range(7, 8 + number_of_connectors):
-            connector_name = ws.cell(row=row_num, column=2).value
-            connector_type = ws.cell(row=row_num, column=3).value
-            if connector_name is None or connector_type is None:
-                continue
-            name = str(connector_name).strip()
-            component = str(connector_type).strip()
-            if name and component:
-                connectors.append((name, component, row_num))
-
+        for idx in range(n):
+            # Same B/C connector list starting at row 7 as main.py.
+            row = idx + 7
+            name = ws.cell(row=row, column=2).value
+            code = ws.cell(row=row, column=3).value
+            if name is not None and code is not None:
+                connectors.append((idx, str(name).strip(), str(code).strip()))
         if not connectors:
-            raise ValueError(
-                "No connector names/types found in the active sheet's "
-                "columns B/C starting at row 7."
-            )
-        return ws.title, connectors
+            raise RuntimeError("No connector name/type pairs in B/C from row 7")
+        print("\nConnectors from workbook:")
+        for i, (_, name, code) in enumerate(connectors, 1):
+            print(f" {i:2}. {name}  [{code}]")
+        raw = input("Select connector [Enter=1]: ").strip()
+        index = int(raw) if raw else 1
+        if index not in range(1, len(connectors) + 1):
+            raise ValueError("Connector selection out of range")
+        excel_index, name, code = connectors[index - 1]
+        pin_col = 9 + excel_index * 5
+        requested_pins = []
+        try:
+            count = int(ws.cell(row=5, column=pin_col + 1).value or 0)
+            for row in range(8, 8 + count):
+                value = ws.cell(row=row, column=pin_col).value
+                if value is not None:
+                    requested_pins.append(str(value).strip())
+        except (ValueError, TypeError):
+            pass
+        return name, code, requested_pins
     finally:
         wb.close()
 
 
-def select_connector(connectors):
-    print("\nConnectors found in the workbook:")
-    for index, (name, component, excel_row) in enumerate(connectors, 1):
-        print(f"  {index:>2}. {name}  /  {component}  (row {excel_row})")
-    raw = input("\nWhich connector to test? [Enter = 1]: ").strip()
-    if not raw:
-        return connectors[0]
-    try:
-        index = int(raw)
-    except ValueError:
-        raise ValueError(f"Invalid connector selection: {raw!r}")
-    if not 1 <= index <= len(connectors):
-        raise ValueError(f"Choose a number between 1 and {len(connectors)}")
-    return connectors[index - 1]
+def get_ids_for_project_devices(prj):
+    return set(extract_ids(prj.GetAllDeviceIds(None)))
 
 
-def ids(result):
-    if isinstance(result, (tuple, list)):
-        if len(result) > 1 and isinstance(result[1], (tuple, list)):
-            return [int(v) for v in result[1] if v is not None and v != 0]
-        if all(isinstance(v, int) for v in result):
-            return [int(v) for v in result if v != 0]
-    return []
-
-
-def first_id(result):
-    return result[0] if isinstance(result, (tuple, list)) else result
-
-
-def say(app, msg):
-    print(msg, flush=True)
-    try:
-        app.PutMessage(msg)
-    except Exception:
-        pass
-
-
-def get_sheet_id(prj):
+def get_sheet(prj):
     sht = prj.CreateSheetObject()
-    for sheet_id in ids(prj.GetAllSheetIds(None)):
-        sht.SetId(sheet_id)
-        if str(sht.GetName()) == E3_SHEET_NAME:
-            return sheet_id
-    raise RuntimeError(f"Could not find E3 sheet named {E3_SHEET_NAME!r}.")
+    for sid in extract_ids(prj.GetAllSheetIds(None)):
+        sht.SetId(sid)
+        if str(sht.GetName()) == SHEET_NAME:
+            return sid
+    raise RuntimeError(f"Couldn't find E3 sheet named {SHEET_NAME!r}")
 
 
-def new_block(prj, sheet_id, x, y):
-    symbol = prj.CreateSymbolObject()
-    if not symbol.Load(BLOCK_SYMBOL, BLOCK_VERSION):
-        raise RuntimeError(f"Cannot load block symbol {BLOCK_SYMBOL!r}.")
-    result = symbol.PlaceBlock(sheet_id, x, y, BLOCK_WIDTH, BLOCK_HEIGHT)
-    block_id = first_id(result)
-    if not isinstance(block_id, int) or block_id <= 0:
-        raise RuntimeError(f"PlaceBlock failed at ({x}, {y}): {result!r}")
-    return block_id
-
-
-def new_connector(prj, component, device_name):
-    dev = prj.CreateDeviceObject()
-    result = dev.Create(device_name, "", "", component, CONNECTOR_VERSION, 0)
-    if not isinstance(result, int) or result <= 0:
-        raise RuntimeError(f"dev.Create failed for {device_name}: {result!r}")
-
-    # Resolve by exact name, as in the original main.py.
-    device_id = None
-    for did in ids(prj.GetAllDeviceIds(None)):
-        dev.SetId(did)
-        if str(dev.GetName()) == device_name:
-            device_id = did
-            break
-    if device_id is None:
-        raise RuntimeError(f"Cannot find new connector {device_name} in Device Tree")
-
-    dev.SetId(device_id)
-    pin_ids = ids(dev.GetPinIds(None))
-    if not pin_ids:
-        raise RuntimeError(f"Connector {device_name} has no pins")
-    return device_id, pin_ids
-
-
-def make_case(app, prj, sheet_id, component, label, x, y, inset, stamp):
-    block_id = new_block(prj, sheet_id, x, y)
-    say(app, f"{label}: placed CABBLOCK ID {block_id} at ({x}, {y})")
-
-    device_name = f"BM_{label}_{stamp}"
-    device_id, pin_ids = new_connector(prj, component, device_name)
-    say(app, f"{label}: created device {device_name}, ID {device_id}, {len(pin_ids)} pins")
-
-    # Everything except the horizontal insertion coordinate is identical.
-    pin_x = x + BLOCK_WIDTH - inset
-    pin_y = y + PIN_Y_FROM_BOTTOM
+def create_block(prj, sheet_id, x, y, parent_view_id=None):
     sym = prj.CreateSymbolObject()
-    result = sym.PlacePins(
-        pin_ids,
-        CONNECTOR_SYMBOL,
-        CONNECTOR_VERSION,
-        sheet_id,
-        pin_x,
-        pin_y,
-        ROTATION,
-        1.0,
-    )
-    symbol_id = first_id(result)
-    say(app, f"{label}: PlacePins result={result!r}; x={pin_x}, y={pin_y}, flip={ROTATION}")
-    if not isinstance(symbol_id, int) or symbol_id <= 0:
-        say(app, f"{label}: PlacePins FAILED (test objects might still exist)")
+    if not sym.Load(BLOCK_SYMBOL, BLOCK_VERSION):
+        raise RuntimeError(f"Couldn't load block symbol {BLOCK_SYMBOL}")
+    if parent_view_id is None:
+        result = sym.PlaceBlock(sheet_id, x, y, BLOCK_WIDTH, BLOCK_HEIGHT)
     else:
-        say(app, f"{label}: placed connector symbol ID {symbol_id}")
+        result = sym.PlaceBlock(
+            sheet_id, x, y, BLOCK_WIDTH, BLOCK_HEIGHT, parent_view_id
+        )
+    sid = first_id(result)
+    print(f"PlaceBlock parent={parent_view_id}, x={x}, y={y} -> {result!r}")
+    if sid <= 0:
+        raise RuntimeError(f"PlaceBlock failed: {result!r}")
+    return sid
+
+
+def get_pin_map(prj, dev_id, *, all_pins):
+    dev = prj.CreateDeviceObject()
+    pin = prj.CreatePinObject()
+    dev.SetId(dev_id)
+    result = dev.GetAllPinIds(None) if all_pins else dev.GetPinIds(None)
+    pins = {}
+    for pid in extract_ids(result):
+        pin.SetId(pid)
+        name = str(pin.GetName()).strip()
+        if name and name not in pins:
+            pins[name] = pid
+    print(f"pin map (device {dev_id}, all_pins={all_pins}): {pins!r}")
+    return pins
+
+
+def choose_pin_names(excel_pin_names, pin_map):
+    # Preserve workbook ordering where possible; handle E3 suffixes like 1-C.
+    resolved = []
+    for excel_name in excel_pin_names:
+        name = excel_name if excel_name in pin_map else None
+        if name is None:
+            candidates = [p for p in pin_map if p.split("-", 1)[0] == excel_name]
+            if len(candidates) == 1:
+                name = candidates[0]
+        if name is not None and name not in resolved:
+            resolved.append(name)
+    for name in pin_map:
+        if name not in resolved:
+            resolved.append(name)
+    return resolved[:MAX_SECONDARY_PINS_TO_TEST]
+
+
+def show_text(sym, text, symbol_id):
+    """E3 types 4=Symbol designation, 12=Device designation.
+
+    Does not create a missing text node and cannot change the symbol's library
+    name, which is a property rather than a visibility-controlled text.
+    """
+    sym.SetId(symbol_id)
+    result = sym.GetTextIds(None)
+    present = {4: [], 12: []}
+    for text_id in extract_ids(result):
+        text.SetId(text_id)
+        try:
+            t = int(text.GetType())
+        except Exception:
+            continue
+        if t in present:
+            try:
+                before = text.GetVisibility()
+                outcome = text.SetVisibility(1)
+                after = text.GetVisibility()
+                present[t].append((text_id, before, outcome, after))
+            except Exception as exc:
+                present[t].append((text_id, "ERROR", str(exc)))
+    for t, label in ((4, "Symbol Designation"), (12, "Device Designation")):
+        print(f"  {label} (text type {t}): {present[t]!r}")
+        if not present[t]:
+            print(f"  NOTE: type {t} isn't present on this symbol; visibility cannot add it")
+
+
+def place_pins(prj, pin_ids, mil_name, version, sheet_id, x, y, flip):
+    """Always passes an ID list: crucial difference vs original main.py secondary."""
+    sym = prj.CreateSymbolObject()
+    print(
+        f"PlacePins pin_ids={pin_ids!r}, symbol={mil_name!r}, version={version!r}, "
+        f"sheet={sheet_id}, x={x}, y={y}, flip={flip!r}",
+        flush=True,
+    )
+    try:
+        result = sym.PlacePins(pin_ids, mil_name, version, sheet_id, x, y, flip, 1.0)
+    except Exception:
+        print("COM exception during PlacePins:\n" + traceback.format_exc(), flush=True)
+        return 0
+    print(f"  raw result: {result!r}", flush=True)
+    symbol_id = first_id(result)
+    if symbol_id > 0:
+        try:
+            text = prj.CreateTextObject()
+            show_text(sym, text, symbol_id)
+        except Exception:
+            print("Visibility inspection failed:\n" + traceback.format_exc())
     return symbol_id
 
 
-def main():
-    excel_path = pick_excel_sheet()
-    excel_tab, connectors = read_connectors_from_excel(excel_path)
-    name, component, excel_row = select_connector(connectors)
-    print(f"\nSelected workbook: {excel_path}")
-    print(f"Active Excel sheet: {excel_tab}")
-    print(f"Connector: {name}; type: {component}; Excel row: {excel_row}")
+def run():
+    workbook = choose_workbook()
+    name, component_code, excel_pins = choose_connector(workbook)
+    sym_base = input(
+        f"Internal MIL block symbol base [{DEFAULT_MIL_BASE}]: "
+    ).strip() or DEFAULT_MIL_BASE
+    print(f"\nWorkbook: {workbook}")
+    print(f"Connector: {name!r}; component: {component_code!r}")
+    print(f"Top-level symbol: {sym_base}¶FULL")
+    print(f"Secondary symbols: {sym_base}¶END_SPLIT / ¶SPLIT_BOTTOM")
+    print("NOTE: Creates objects in E3! Use an UNSAVED TEST PROJECT COPY.\n")
 
     app = win32.GetActiveObject("CT.Application")
     prj = app.CreateJobObject()
-    sheet_id = get_sheet_id(prj)
-
-    stamp = datetime.now().strftime("%H%M%S")
-    say(app, f"A/B placement test on E3 sheet {E3_SHEET_NAME} (ID {sheet_id})")
-    say(app, f"Selected {name} / component {component} from {excel_path.name}")
-    say(app, "IMPORTANT: run only in an unsaved PROJECT COPY")
-
-    lookup = app.GetDatabaseTableSelectedComponents(component, CONNECTOR_VERSION)
+    sheet_id = get_sheet(prj)
+    # Same component availability check as main.py before dev.Create.
+    lookup = app.GetDatabaseTableSelectedComponents(component_code, COMPONENT_VERSION)
+    print(f"Database lookup for {component_code!r}: {lookup!r}")
     if isinstance(lookup, (tuple, list)) and lookup and lookup[0] != 0:
-        raise RuntimeError(f"Component {component!r} not in database: {lookup!r}")
+        raise RuntimeError(f"Connector component is not available in E3 database: {lookup!r}")
 
-    results = {}
-    for label, x, y, inset in (
-        ("INSET", X_A, Y_A, RIGHT_SIDE_INSET),
-        ("EDGE", X_B, Y_B, 0.0),
-    ):
-        try:
-            results[label] = make_case(
-                app, prj, sheet_id, component, label, x, y, inset, stamp
+    before = get_ids_for_project_devices(prj)
+    top_block_symbol_id = create_block(prj, sheet_id, TOP_X, TOP_Y)
+    after = get_ids_for_project_devices(prj)
+    new_main_ids = sorted(after - before)
+    if len(new_main_ids) != 1:
+        raise RuntimeError(
+            "Cannot identify newly created CABBLOCK device uniquely. "
+            f"Device IDs newly appeared: {new_main_ids}. "
+            "Use a new empty test project; no existing objects have been deleted."
+        )
+    main_dev_id = new_main_ids[0]
+    print(f"Created MAIN CABBLOCK symbol={top_block_symbol_id}, device={main_dev_id}")
+
+    dev = prj.CreateDeviceObject()
+    test_name = f"TEST_{name}_{datetime.now():%H%M%S}"
+    raw = dev.Create(test_name, "", "", component_code, COMPONENT_VERSION, 0)
+    print(f"dev.Create({test_name!r}, {component_code!r}) -> {raw!r}")
+    if first_id(raw) <= 0:
+        raise RuntimeError(f"Cannot create test connector {test_name!r}: {raw!r}")
+    device_id = None
+    for did in sorted(get_ids_for_project_devices(prj)):
+        dev.SetId(did)
+        if str(dev.GetName()) == test_name:
+            device_id = did
+            break
+    if device_id is None:
+        raise RuntimeError("Cannot find newly created connector in device tree")
+    top_pins = get_pin_map(prj, device_id, all_pins=False)
+    if not top_pins:
+        raise RuntimeError("New test connector has no pins")
+
+    print("\n========= TEST 1: TOP-LEVEL (RIGHT EDGE, OFFSET=0.0) =========")
+    top_symbol_id = place_pins(
+        prj, list(top_pins.values()), f"{sym_base}¶FULL", COMPONENT_VERSION,
+        sheet_id, TOP_X + BLOCK_WIDTH - RIGHT_EDGE_OFFSET,
+        TOP_Y + TOP_PIN_Y_FROM_BOTTOM, TOP_FLIP,
+    )
+    if top_symbol_id <= 0:
+        print("Top-level PlacePins failed. Secondary test aborted.")
+        return
+    print(f"TOP-LEVEL SUCCEEDED, placed symbol ID {top_symbol_id}")
+
+    print("\n========= TEST 2: SECONDARY VIEW & SPLIT BLOCK =========")
+    dev.SetId(main_dev_id)
+    raw_main_view = dev.CreateView(main_dev_id, 1, 0, "0")
+    main_view_id = first_id(raw_main_view)
+    print(f"CreateView(main CABBLOCK, view 1) -> {raw_main_view!r}")
+    if main_view_id <= 0:
+        print("Failed to create main block view 1. No secondary pins attempted.")
+        return
+    secondary_block_symbol = create_block(
+        prj, sheet_id, SECONDARY_X, SECONDARY_Y, main_view_id
+    )
+    print(f"SECONDARY BLOCK symbol ID={secondary_block_symbol}, main view={main_view_id}")
+
+    dev.SetId(device_id)
+    raw_conn_view = dev.CreateView(device_id, 1, main_view_id)
+    conn_view_id = first_id(raw_conn_view)
+    print(f"CreateView(connector, view 1, parent main view {main_view_id}) -> {raw_conn_view!r}")
+    if conn_view_id <= 0:
+        print("Connector CreateView failed: secondary PlacePins not attempted.")
+        return
+
+    secondary_pin_map = get_pin_map(prj, conn_view_id, all_pins=True)
+    if not secondary_pin_map:
+        print("NO view pin IDs returned; cannot place secondary pins.")
+        return
+    pin_names = choose_pin_names(excel_pins, secondary_pin_map)
+    print(f"Testing these secondary pins: {pin_names}")
+    for i, pin_name in enumerate(pin_names):
+        characteristic = "END_SPLIT" if i == 0 else "SPLIT_BOTTOM"
+        symbol_name = f"{sym_base}¶{characteristic}"
+        x = SECONDARY_X + BLOCK_WIDTH - RIGHT_EDGE_OFFSET
+        y = SECONDARY_Y + SECONDARY_FIRST_PIN_Y_FROM_BOTTOM - i * SECONDARY_PIN_SPACING
+        result = place_pins(
+            prj,
+            [secondary_pin_map[pin_name]],  # array, not scalar!
+            symbol_name,
+            COMPONENT_VERSION,
+            sheet_id,
+            x, y, SECONDARY_FLIP,
+        )
+        if result <= 0:
+            print(
+                "SECONDARY PLACEPINS FAILED. Check: pin-array fix, symbol name/"
+                "characteristic, and whether the new CABBLOCK is a true split block."
             )
-        except Exception as exc:
-            results[label] = f"ERROR: {exc!r}"
-            say(app, f"{label}: {results[label]}")
+            break
+        print(f"SECONDARY OK: pin={pin_name}, symbol_id={result}")
 
-    say(app, "====================================")
-    say(app, f"RESULTS: {results}")
-    say(app, "Try mating the SAME compatible connector to INSET and EDGE.")
-    say(app, "If only EDGE works, the original 0.3 inset is the likely cause.")
-    say(app, "If both fail, investigate block association/PlacePins behavior.")
-    say(app, "Discard the test changes when finished.")
+    print("\nTEST COMPLETE. Inspect and attempt mating in E3. Discard test changes.")
 
 
 if __name__ == "__main__":
-    main()
+    try:
+        run()
+    except Exception:
+        print("\nTEST FAILED:\n" + traceback.format_exc(), flush=True)
+    finally:
+        input("\nPress Enter to close test console...")
