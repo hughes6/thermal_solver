@@ -1,253 +1,288 @@
 # -*- coding: utf-8 -*-
-"""E3 top-level PLUG MIL-placement A/B test. Standalone. No main.py imports.
+"""AUTOMATED E3 TOP-LEVEL PLUG MIL SYMBOL TEST - ONE FILE.
 
-USE ONLY WITH A COPY OF YOUR E3 PROJECT. This script creates two small test
-blocks and two connector devices per run; it does not delete existing objects.
+Run:   py e3_top_plug_autonomous_test.py
 
-1) In E3: Tools > Settings > MIL-Standard > Place Block Connectors:
-   choose "on the block's outline". Then, from a terminal, run:
-       py e3_top_plug_mode_test.py outline
-2) AFTER the Python process exits, set that option to "inside block".
-   Run again, choosing a DIFFERENT empty area:
-       py e3_top_plug_mode_test.py inside
+- No Excel file, user prompts, second pass, or manual MIL-setting changes.
+- Uses known PLUG database component: M24308/4-1F_9P SD, version 1.
+- Auto-tests the requested MilBlockPlugInt¶FULL at BOTH block edges.
+- Changes one project MIL-setting bit at a time, verifies readback, then places.
+- ALWAYS attempts to restore the original MIL setting in a finally block.
+- Writes a JSON report next to this script.
+- Creates CABBLOCK blocks and temporary connector devices: RUN ONLY ON A COPY
+  of your E3 project. It does not delete existing objects.
 
-Both runs request MilBlockPlugInt¶FULL. The script compares the ACTUAL E3
-symbol families and GetDisplayMILStandard() settings. It tests RIGHT and LEFT
-block edges because main.py uses both orientations.
-
-No edits to main.py, utils.py, test.py, or launcher.py.
+IMPORTANT: E3's public documentation confirms Get/SetDisplayMILStandard but
+DOES NOT publish the bit positions for 'outline', 'inside', and 'outside'.
+The candidate values below are therefore EXPERIMENTAL bit flips; the script
+reports actual numbers/results, NOT guessed names for modes.
 """
 
 import json
 import sys
+import traceback
 from datetime import datetime
 from pathlib import Path
-from tkinter import Tk, filedialog
 
-SCRIPT_DIR = Path(__file__).resolve().parent
-REPORT = SCRIPT_DIR / "e3_top_plug_mode_results.json"
+# Existing verified plug component. No workbook selection required.
+COMPONENT_CODE = "M24308/4-1F_9P SD"
+COMPONENT_VERSION = 1
 REQUESTED_SYMBOL = "MilBlockPlugInt¶FULL"
-SHEET_NAME = "1"
 BLOCK_SYMBOL = "CABBLOCK"
-BLOCK_VERSION = 1
-BLOCK_W, BLOCK_H = 3.0, 5.0
-GAP_X = 8.0
+SHEET_NAME = "1"
+
+# Fresh copy of your E3 project recommended. Layout fits 42.9 x 32.9-inch sheet.
+START_X, START_Y = 2.0, 2.0
+COL_GAP, ROW_GAP = 10.0, 6.8
+BLOCK_WIDTH, BLOCK_HEIGHT = 3.0, 5.0
+LEFT_BLOCK_OFFSET = 4.5
+PINS_Y_OFFSET = 3.8
+
+# Toggle a single bit at a time from the ACTUAL current setting. We don't
+# pretend to know which bits encode inside/outline/outside. Stop early if both
+# right and left edges place the exact requested symbol.
+BITS_TO_TEST = (1, 2, 4, 8, 16, 32, 64, 128, 256, 512, 1024, 2048, 4096, 8192, 16384)
+STOP_ON_BOTH_EXACT = True
+
+REPORT = Path(__file__).with_name("e3_top_plug_autonomous_results.json")
 
 
-def positive_ids(value):
-    if isinstance(value, (list, tuple)):
-        if len(value) >= 2 and isinstance(value[1], (list, tuple)):
-            value = value[1]
-        return [v for v in value if type(v) is int and v > 0]
+def positive_id(raw):
+    if isinstance(raw, (list, tuple)):
+        raw = raw[0] if raw else None
+    return int(raw) if type(raw) is int and raw > 0 else 0
+
+
+def positive_ids(raw):
+    if isinstance(raw, (list, tuple)):
+        if len(raw) >= 2 and isinstance(raw[1], (tuple, list)):
+            raw = raw[1]
+        return [v for v in raw if type(v) is int and v > 0]
     return []
 
 
-def positive_id(value):
-    if isinstance(value, (list, tuple)):
-        value = value[0] if value else None
-    return value if type(value) is int and value > 0 else None
-
-
-def safe(obj, method, *args):
+def try_call(obj, method, *args):
     try:
         return getattr(obj, method)(*args)
     except Exception as exc:
         return "ERROR: " + repr(exc)
 
 
-def get_input():
-    """All file dialogs and prompts happen BEFORE connecting to E3."""
-    from openpyxl import load_workbook
-    root = Tk()
-    root.withdraw()
-    root.attributes("-topmost", True)
-    try:
-        path = filedialog.askopenfilename(
-            parent=root, title="Choose Block Maker workbook (PLUG in column F)",
-            filetypes=[("Excel workbooks", "*.xlsm *.xlsx")]
-        )
-    finally:
-        root.destroy()
-    if not path:
-        raise SystemExit("Workbook selection canceled")
-    wb = load_workbook(path, read_only=True, data_only=True)
-    try:
-        ws = wb.active
-        n = int(ws["C5"].value)
-        choices = []
-        for index in range(n):
-            row = index + 7
-            name = str(ws.cell(row, 2).value or "").strip()
-            part = str(ws.cell(row, 3).value or "").strip()
-            gender = str(ws.cell(row, 6).value or "").strip().upper()
-            if name and part and gender == "PLUG":
-                choices.append((name, part))
-        if not choices:
-            raise RuntimeError("No PLUG connectors found in Excel column F (rows 7+).")
-        print("\nPLUG connectors from Excel:")
-        for i, (name, component) in enumerate(choices, start=1):
-            print(f"  {i}: {name} | {component}")
-        selection = input("Number [Enter=1]: ").strip()
-        ix = (int(selection) if selection else 1) - 1
-        if ix < 0 or ix >= len(choices):
-            raise ValueError("Invalid connector number")
-        name, part = choices[ix]
-    finally:
-        wb.close()
-
-    answer = input("Empty test area: LOWER-LEFT X,Y [Enter=3,4]: ").strip()
-    if answer:
-        x, y = [float(k.strip()) for k in answer.split(",")]
-    else:
-        x, y = 3.0, 4.0
-    if x < 0 or y < 0:
-        raise ValueError("Use nonnegative sheet coordinates")
-    print(f"Test blocks: RIGHT-edge case at ({x}, {y}); "
-          f"LEFT-edge case at ({x + GAP_X}, {y})")
-    print("USE A PROJECT COPY. Two test blocks and connectors will be created.")
-    return (name, part, x, y)
+def save_json(report):
+    REPORT.write_text(json.dumps(report, indent=2, ensure_ascii=False, default=str), encoding="utf-8")
 
 
 def get_sheet_id(job):
-    sh = job.CreateSheetObject()
-    for shid in positive_ids(job.GetAllSheetIds(None)):
-        sh.SetId(shid)
-        if str(sh.GetName()).strip() == SHEET_NAME:
-            return shid
-    raise RuntimeError(f"Cannot find E3 sheet called {SHEET_NAME!r}")
+    sheet = job.CreateSheetObject()
+    ids = positive_ids(job.GetAllSheetIds(None))
+    for sheet_id in ids:
+        sheet.SetId(sheet_id)
+        if str(sheet.GetName()).strip() == SHEET_NAME:
+            return sheet_id
+    raise RuntimeError(f"No drawing sheet named {SHEET_NAME!r}. Available sheet IDs: {ids!r}")
 
 
-def create_block(job, sheet_id, x, y):
+def place_block(job, sheet_id, x, y):
     sym = job.CreateSymbolObject()
-    if not sym.Load(BLOCK_SYMBOL, BLOCK_VERSION):
-        raise RuntimeError(f"Could not load {BLOCK_SYMBOL} v{BLOCK_VERSION}")
-    answer = sym.PlaceBlock(sheet_id, x, y, BLOCK_W, BLOCK_H)
-    sid = positive_id(answer)
-    if not sid:
-        raise RuntimeError(f"PlaceBlock returned {answer!r}")
-    return sid
+    if not sym.Load(BLOCK_SYMBOL, 1):
+        raise RuntimeError(f"Could not Load {BLOCK_SYMBOL!r} version 1")
+    reply = sym.PlaceBlock(sheet_id, x, y, BLOCK_WIDTH, BLOCK_HEIGHT)
+    result = positive_id(reply)
+    if not result:
+        raise RuntimeError(f"PlaceBlock({x}, {y}) returned {reply!r}")
+    return result
 
 
-def new_connector(job, app, part, unique_name):
-    check = app.GetDatabaseTableSelectedComponents(part, 1)
-    if isinstance(check, (list, tuple)) and check and check[0] != 0:
-        raise RuntimeError(f"Database component not found: {part!r}: {check!r}")
-    device = job.CreateDeviceObject()
-    raw = device.Create(unique_name, "", "", part, 1, 0)
+def create_connector(job, app, name):
+    dev = job.CreateDeviceObject()
+    raw = dev.Create(name, "", "", COMPONENT_CODE, COMPONENT_VERSION, 0)
     if not positive_id(raw):
-        raise RuntimeError(f"Device.Create({unique_name!r}) returned {raw!r}")
-    dev_id = None
+        raise RuntimeError(f"Device.Create({name}) returned {raw!r}")
+
+    # Tested in the existing block-maker workflow: resolve created device by name.
     for did in positive_ids(job.GetAllDeviceIds(None)):
-        device.SetId(did)
-        if str(device.GetName()) == unique_name:
-            dev_id = did
-            break
-    if not dev_id:
-        raise RuntimeError(f"Could not resolve new connector {unique_name!r}")
-    device.SetId(dev_id)
-    pins = positive_ids(device.GetPinIds(None))
-    if not pins:
-        raise RuntimeError(f"No connector pins for {unique_name!r}")
-    return dev_id, pins
+        dev.SetId(did)
+        if str(dev.GetName()).strip() == name:
+            dev.SetId(did)
+            pins = positive_ids(dev.GetPinIds(None))
+            if not pins:
+                raise RuntimeError(f"Connector {name} contains no pins")
+            return did, pins
+    raise RuntimeError(f"Created connector device {name!r} was not found")
 
 
-def place_and_inspect(job, pins, sheet_id, x, y, flip, unique_name):
-    symbol = job.CreateSymbolObject()
-    raw = symbol.PlacePins(list(pins), REQUESTED_SYMBOL, 1,
-                           sheet_id, x, y, flip, 1.0)
+def place_connector(job, sheet_id, pin_ids, x, y, flip):
+    sym = job.CreateSymbolObject()
+    raw = sym.PlacePins(list(pin_ids), REQUESTED_SYMBOL, 1,
+                        sheet_id, x, y, flip, 1.0)
     sid = positive_id(raw)
     if not sid:
-        raise RuntimeError(f"PlacePins({unique_name}): returned {raw!r}")
-    symbol.SetId(sid)
-    actual = safe(symbol, "GetSymbolTypeName")
-    record = {
-        "connector": unique_name, "symbol_id": sid,
-        "x": x, "y": y, "flip": flip,
+        raise RuntimeError(f"PlacePins at ({x}, {y}) returned {raw!r}")
+    sym.SetId(sid)
+    actual = try_call(sym, "GetSymbolTypeName")
+    type_id = try_call(sym, "GetSymbolTypeId")
+    return {
+        "symbol_id": sid,
         "requested": REQUESTED_SYMBOL,
         "actual": actual,
-        "characteristic": safe(symbol, "GetCharacteristic"),
-        "type_id": safe(symbol, "GetSymbolTypeId"),
-        "pin_count": len(pins),
+        "exact_match": actual == REQUESTED_SYMBOL,
+        "symbol_type_id": type_id,
+        "characteristic": try_call(sym, "GetCharacteristic"),
+        "x": x, "y": y, "flip": flip,
+        "pin_count": len(pin_ids),
     }
-    print("  REQUESTED:", REQUESTED_SYMBOL)
-    print("  ACTUAL:   ", actual)
-    print("  MATCH:    ", "YES" if actual == REQUESTED_SYMBOL else "NO (E3 substituted)")
-    print("  SYMBOL ID:", sid, "CHARACTERISTIC:", record["characteristic"])
-    return record
 
 
-def run(label):
-    name, component, x, y = get_input()
+def run_case(job, app, sheet_id, idx, mil_value, label, timestamp):
+    # Four cases per row, each with two blocks to compare RIGHT and LEFT.
+    col, row = idx % 4, idx // 4
+    bx = START_X + col * COL_GAP
+    by = START_Y + row * ROW_GAP
+    case = {"label": label, "requested_setting": mil_value,
+            "setting_readback": None, "results": {}, "errors": []}
+
+    raw = try_call(job, "SetDisplayMILStandard", mil_value)
+    case["setter_result"] = raw
+    now = try_call(job, "GetDisplayMILStandard")
+    case["setting_readback"] = now
+    if type(now) is not int or now != mil_value:
+        msg = f"SetDisplayMILStandard({mil_value}) not verified: result={raw!r}, readback={now!r}"
+        print("  SKIPPED:", msg, flush=True)
+        case["errors"].append(msg)
+        return case
+
+    for side, block_x, connector_x, flip in (
+        ("right", bx, bx + BLOCK_WIDTH, 0),
+        ("left", bx + LEFT_BLOCK_OFFSET, bx + LEFT_BLOCK_OFFSET, "/1"),
+    ):
+        item = {"block_x": block_x, "block_y": by}
+        case["results"][side] = item
+        try:
+            item["block_symbol_id"] = place_block(job, sheet_id, block_x, by)
+            devname = f"MILTEST_{timestamp}_{idx:02d}_{side[0].upper()}"
+            device_id, pin_ids = create_connector(job, app, devname)
+            item["device_name"] = devname
+            item["device_id"] = device_id
+            item["placed"] = place_connector(
+                job, sheet_id, pin_ids, connector_x, by + PINS_Y_OFFSET, flip
+            )
+            actual = item["placed"]["actual"]
+            match = item["placed"]["exact_match"]
+            print(f"  {side.upper():5} requested={REQUESTED_SYMBOL} actual={actual!r} "
+                  f"{'EXACT' if match else 'SUBSTITUTED'}", flush=True)
+        except Exception as exc:
+            msg = f"{side}: {type(exc).__name__}: {exc}"
+            case["errors"].append(msg)
+            item["error"] = msg
+            print("  ERROR:", msg, flush=True)
+    return case
+
+
+def main():
     import win32com.client as win32
+
+    report = {
+        "date": datetime.now().isoformat(),
+        "component": COMPONENT_CODE,
+        "requested_symbol": REQUESTED_SYMBOL,
+        "sheet_name": SHEET_NAME,
+        "original_mil_setting": None,
+        "restored_mil_setting": None,
+        "cases": [],
+        "best_case": None,
+        "errors": [],
+        "note": "Experimental bit flips are NOT confirmed inside/outside/outline mode names."
+    }
+
+    # Do not use Dispatch() here: GetActiveObject requires already-running E3.
     app = win32.GetActiveObject("CT.Application")
     job = app.CreateJobObject()
-    run_data = {
-        "label": label,
-        "timestamp": datetime.now().isoformat(),
-        "source_connector": name,
-        "component": component,
-        "mil_standard": safe(job, "GetDisplayMILStandard"),
-        "connector_symbol_format": str(safe(job, "GetConnectorSymbolFormat")),
-        "results": {},
-        "errors": [],
-    }
-    print("\nGetDisplayMILStandard():", run_data["mil_standard"])
-    print("Project MIL mode is a setting; this script does NOT modify it.")
+    original = None
     try:
-        sheet_id = get_sheet_id(job)
-        stamp = datetime.now().strftime("%H%M%S%f")
-        for side, bx, by, flip, edge_x in (
-            ("right", x, y, 0, x + BLOCK_W),
-            ("left", x + GAP_X, y, "/1", x + GAP_X),
-        ):
-            print(f"\n{side.upper()} EDGE:")
-            unique_name = f"MILTEST_{label}_{side}_{stamp}"
-            create_block(job, sheet_id, bx, by)
-            _, pin_ids = new_connector(job, app, component, unique_name)
-            try:
-                result = place_and_inspect(
-                    job, pin_ids, sheet_id, edge_x, by + 3.8, flip, unique_name
-                )
-                run_data["results"][side] = result
-            except Exception as ex:
-                run_data["errors"].append(f"{side} edge: {ex!r}")
-                print("  FAILED:", repr(ex))
-    except Exception as ex:
-        run_data["errors"].append(repr(ex))
-        print("TEST ERROR:", repr(ex))
-    finally:
-        del job, app
-        if REPORT.is_file():
-            try:
-                all_runs = json.loads(REPORT.read_text(encoding="utf-8"))
-            except Exception:
-                all_runs = {}
-        else:
-            all_runs = {}
-        all_runs[label] = run_data
-        REPORT.write_text(json.dumps(all_runs, indent=2, ensure_ascii=False, default=str),
-                          encoding="utf-8")
+        original = job.GetDisplayMILStandard()
+        if type(original) is not int or original < 0:
+            raise RuntimeError(f"Unexpected GetDisplayMILStandard value: {original!r}")
+        report["original_mil_setting"] = original
+        print("ORIGINAL MIL SETTING:", original, hex(original), flush=True)
+        print("REQUESTED SYMBOL:", REQUESTED_SYMBOL, flush=True)
+        print("Using project sheet", SHEET_NAME, "and creating new test blocks/devices.", flush=True)
 
-    print("\nSaved:", REPORT)
-    if "outline" in all_runs and "inside" in all_runs:
-        a, b = all_runs["outline"], all_runs["inside"]
-        print("\n===== MIL SETTING COMPARISON =====")
-        print("OUTLINE GetDisplayMILStandard:", a["mil_standard"])
-        print("INSIDE  GetDisplayMILStandard:", b["mil_standard"])
-        if a["mil_standard"] == b["mil_standard"]:
-            print("WARNING: settings are identical; this is not yet a proven MIL-mode A/B test.")
-        elif type(a["mil_standard"]) is int and type(b["mil_standard"]) is int:
-            print("Changed bits (XOR):", hex(a["mil_standard"] ^ b["mil_standard"]))
-        for side in ("right", "left"):
-            old = a.get("results", {}).get(side, {}).get("actual", "NOT PLACED")
-            new = b.get("results", {}).get(side, {}).get("actual", "NOT PLACED")
-            print(f"{side.upper():5}: OUTLINE {old}  ->  INSIDE {new}")
-    print("\nPython process ending: inspect/move objects in E3 ONLY AFTER it exits.")
-    if run_data["errors"]:
-        raise SystemExit(1)
+        # Verify our known component exists before making project changes.
+        available = app.GetDatabaseTableSelectedComponents(COMPONENT_CODE, COMPONENT_VERSION)
+        if isinstance(available, (tuple, list)) and available and available[0] != 0:
+            raise RuntimeError(f"DB component {COMPONENT_CODE} not available: {available!r}")
+        sheet_id = get_sheet_id(job)
+        report["sheet_id"] = sheet_id
+
+        # Baseline first, then one-bit-at-a-time candidate masks. Remove dupes.
+        candidates = [("original", original)]
+        candidates += [(f"xor_0x{b:X}", original ^ b) for b in BITS_TO_TEST]
+        unique = []
+        used = set()
+        for label, value in candidates:
+            if value not in used:
+                used.add(value)
+                unique.append((label, value))
+
+        if len(unique) > 16:
+            raise RuntimeError("More than 16 tests would exceed the configured grid")
+        for idx, (label, value) in enumerate(unique):
+            print(f"\nCASE {idx + 1}/{len(unique)}: {label}; MIL {value} ({value:#x})", flush=True)
+            case = run_case(job, app, sheet_id, idx, value, label, datetime.now().strftime('%H%M%S'))
+            report["cases"].append(case)
+            save_json(report)
+
+            # Success requires the requested internal plug symbol on BOTH edges.
+            both = all(case.get("results", {}).get(side, {}).get("placed", {}).get("exact_match")
+                       for side in ("right", "left"))
+            if both:
+                report["best_case"] = {"label": label, "mil_value": value,
+                                       "decimal": value, "hex": hex(value),
+                                       "right_and_left_exact": True}
+                print("\nSUCCESS: Both edges placed exactly", REQUESTED_SYMBOL, flush=True)
+                if STOP_ON_BOTH_EXACT:
+                    break
+
+    except Exception as exc:
+        report["errors"].append(f"{type(exc).__name__}: {exc}")
+        report["errors"].append(traceback.format_exc())
+        print("\nFATAL ERROR:", traceback.format_exc(), flush=True)
+    finally:
+        # Restore the setting even if any placement, inspection, or write fails.
+        if original is not None:
+            print("\nRESTORING MIL SETTING TO:", original, hex(original), flush=True)
+            try:
+                result = job.SetDisplayMILStandard(original)
+                readback = job.GetDisplayMILStandard()
+                report["restored_mil_setting"] = readback
+                report["restore_setter_result"] = result
+                report["restore_verified"] = readback == original
+                print("RESTORE RESULT:", result, "READBACK:", readback,
+                      "VERIFIED:", report["restore_verified"], flush=True)
+                if not report["restore_verified"]:
+                    report["errors"].append("MIL setting restore FAILED; check E3 Tools -> Settings")
+            except Exception as exc:
+                report["errors"].append("MIL setting restore ERROR: " + repr(exc))
+                print("WARNING: MIL setting restore ERROR:", repr(exc), flush=True)
+        save_json(report)
+        del job, app
+
+    print("\n" + "=" * 65)
+    print("AUTOMATIC TEST COMPLETE")
+    print("Results saved:", REPORT)
+    if report["best_case"]:
+        b = report["best_case"]
+        print("FOUND exact internal PLUG on both edges with setting", b["mil_value"], b["hex"])
+    else:
+        print("No candidate yielded an exact internal PLUG on BOTH edges.")
+        print("Next likely area: component database MIL plug-internal symbol assignment.")
+    print("Setting restored:", report.get("restore_verified", False))
+    print("Open E3 to inspect the test blocks only AFTER this Python process exits.")
+    if report["errors"]:
+        print("Errors:", *report["errors"][:4], sep="\n - ")
+        return 1
+    return 0
 
 
 if __name__ == "__main__":
-    if len(sys.argv) != 2 or sys.argv[1].lower() not in ("outline", "inside"):
-        raise SystemExit("Usage: py e3_top_plug_mode_test.py outline|inside")
-    run(sys.argv[1].lower())
+    sys.exit(main())
