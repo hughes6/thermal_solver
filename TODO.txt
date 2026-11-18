@@ -1,1 +1,38 @@
-('M24308/4-1F_9P SD', '1', 'Connectors D-Sub-SIMS', 'AV_ConnectorType', 'PLUG')
+cur.execute("""
+SELECT
+    c.ENTRY,
+    c.VERSION,
+    c.Description,
+    c.Class,
+    a.AttributeValue AS ConnectorType,
+    COUNT(DISTINCT p.PinNumber) AS NumberOfPins
+FROM dbo.ComponentData c
+LEFT JOIN dbo.PhysPin p
+    ON p.Entry = c.ENTRY
+LEFT JOIN dbo.ComponentAttribute a
+    ON a.ENTRY = c.ENTRY
+    AND a.AttributeName = 'AV_ConnectorType'
+WHERE c.ENTRYTYP = 24
+GROUP BY
+    c.ENTRY,
+    c.VERSION,
+    c.Description,
+    c.Class,
+    a.AttributeValue
+ORDER BY
+    c.ENTRY,
+    c.VERSION
+""")
+
+for entry, version, description, component_class, connector_type, number_of_pins in cur.fetchall():
+    component_class = str(component_class)
+    connector_type = str(connector_type).strip().upper() if connector_type else "UNKNOWN"
+
+    # Optional: only AC connectors
+    # if "AC" not in component_class:
+    #     continue
+
+    print(f"{entry} | {component_class} | {connector_type} | {number_of_pins} pins")
+
+cur.close()
+conn.close()
