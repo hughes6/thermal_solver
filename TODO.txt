@@ -1,57 +1,297 @@
-Created: 2026-11-18T11:08:42
-Connector: OTX-J1 [M24308/4-1F_9P SD]
-Expected device designation: TEST_OTX-J1_110842
-Saved top symbol ID: 57268
+"""E3 block connector: POST-EDIT inspector, independent READ-ONLY process.
 
-Connecting to E3 in READ-ONLY mode...
-NOTE: The old device ID is diagnostic only; its absence will NOT stop inspection.
+Run AFTER the placement process has exited and you have manually changed
+MilBlockPlug -> MilBlockPlugInt in E3. Do not rerun the placement script.
 
-========== TOP LEVEL ==========
-Saved symbol ID 57268 / requested library symbol: MilBlockPlugInt¶FULL
-  Reading symbol 57268 directly; no device-ID lookup required.
-  COM getter differences:
-    GetName: 'P1'  ->  ''
-    GetSymbolTypeName: 'MilBlockPlug¶FULL'  ->  ''
-    GetSymbolType: 45  ->  -1
-    GetSymbolTypeId: 148997  ->  0
-    GetCharacteristic: 'FULL'  ->  ''
-    GetValidCharacteristics: (6, -2147352572)  ->  (0, -2147352572)
-    GetVersion: '1'  ->  ''
-  Texts before (8): [{'id': 57254, 'type': 7, 'value': '', 'visible': 1}, {'id': 57253, 'type': 213, 'value': '*9/9', 'visible': 0}, {'id': 57240, 'type': 203, 'value': '*9', 'visible': 1}, {'id': 57239, 'type': 5, 'value': 'M24308/4-1F_9P SD', 'visible': 0}, {'id': 57226, 'type': 12, 'value': 'TEST_OTX-J1_110842', 'visible': 1}, {'id': 57225, 'type': 14, 'value': '', 'visible': 0}, {'id': 57203, 'type': 15, 'value': '', 'visible': 0}, {'id': 57202, 'type': 617, 'value': '', 'visible': 1}]
-  Texts after  (0): []
-  NOTE: GetName() is the symbol DESIGNATION, not the library Symbol Name.
-  An unchanged COM snapshot does not prove the library symbol stayed the same.
+Finds symbols even if E3 replaced their IDs during manual editing. Uses
+actual library-symbol type + connector/pin text, not stale ID validity guesses.
+Reports MIL block placement settings, which may cause E3 to select the
+non-internal library symbol at placement time.
 
-========== SECONDARY PIN 1 ==========
-Saved symbol ID 147448 / requested library symbol: MilBlockPlugInt¶END_SPLIT
-  Reading symbol 147448 directly; no device-ID lookup required.
-  COM getter differences:
-    GetName: 'P2'  ->  ''
-    GetSymbolTypeName: 'MilBlockPlugInt¶END_SPLIT'  ->  ''
-    GetSymbolType: 45  ->  -1
-    GetSymbolTypeId: 148973  ->  0
-    GetCharacteristic: 'END_SPLIT'  ->  ''
-    GetValidCharacteristics: (6, -2147352572)  ->  (0, -2147352572)
-    GetVersion: '1'  ->  ''
-  Texts before (8): [{'id': 63437, 'type': 7, 'value': '', 'visible': 1}, {'id': 63436, 'type': 213, 'value': '1/9', 'visible': 1}, {'id': 147446, 'type': 203, 'value': '1', 'visible': 1}, {'id': 147445, 'type': 5, 'value': 'M24308/4-1F_9P SD', 'visible': 1}, {'id': 63428, 'type': 12, 'value': 'TEST_OTX-J1_110842#1', 'visible': 1}, {'id': 63427, 'type': 14, 'value': '', 'visible': 1}, {'id': 147444, 'type': 15, 'value': '', 'visible': 1}, {'id': 147443, 'type': 617, 'value': '', 'visible': 1}]
-  Texts after  (0): []
-  NOTE: GetName() is the symbol DESIGNATION, not the library Symbol Name.
-  An unchanged COM snapshot does not prove the library symbol stayed the same.
+Requirements: pywin32; e3_symbol_probe_state.json from e3_probe_1_place.py.
+Never calls E3 setters or creates/deletes E3 drawing objects.
+"""
+from pathlib import Path
+from collections import defaultdict
+import json
+import sys
+import traceback
 
-========== SECONDARY PIN 2 ==========
-Saved symbol ID 62605 / requested library symbol: MilBlockPlugInt¶SPLIT_BOTTOM
-  Reading symbol 62605 directly; no device-ID lookup required.
-  COM getter differences:
-    (No changes in exposed zero-argument getters.)
-  Texts before (8): [{'id': 147343, 'type': 7, 'value': '', 'visible': 1}, {'id': 62583, 'type': 213, 'value': '2/9', 'visible': 1}, {'id': 62582, 'type': 203, 'value': '2', 'visible': 1}, {'id': 147342, 'type': 5, 'value': 'M24308/4-1F_9P SD', 'visible': 1}, {'id': 147341, 'type': 12, 'value': 'TEST_OTX-J1_110842#1', 'visible': 1}, {'id': 62577, 'type': 14, 'value': '', 'visible': 0}, {'id': 62576, 'type': 15, 'value': '', 'visible': 0}, {'id': 147340, 'type': 617, 'value': '', 'visible': 1}]
-  Texts after  (8): [{'id': 147343, 'type': 7, 'value': '', 'visible': 1}, {'id': 62583, 'type': 213, 'value': '2/9', 'visible': 1}, {'id': 62582, 'type': 203, 'value': '2', 'visible': 1}, {'id': 147342, 'type': 5, 'value': 'M24308/4-1F_9P SD', 'visible': 1}, {'id': 147341, 'type': 12, 'value': 'TEST_OTX-J1_110842#1', 'visible': 1}, {'id': 62577, 'type': 14, 'value': '', 'visible': 0}, {'id': 62576, 'type': 15, 'value': '', 'visible': 0}, {'id': 147340, 'type': 617, 'value': '', 'visible': 1}]
-    (Text list unchanged.)
-  NOTE: GetName() is the symbol DESIGNATION, not the library Symbol Name.
-  An unchanged COM snapshot does not prove the library symbol stayed the same.
+import win32com.client as win32
 
-========== READ-ONLY COM METHOD INVENTORY ==========
-  Symbol: ['GetCharacteristic', 'GetSymbolCount', 'GetSymbolExtend', 'GetSymbolIds', 'GetSymbolType', 'GetSymbolTypeId', 'GetSymbolTypeName', 'GetValidCharacteristics', 'IsPinView', 'PlacePinView', 'SetCharacteristic']
-  Job: ['CreateSymbolObject', 'ExportAllSymbolsToDB', 'ExportSymbolToDB', 'GetConnectorSymbolFormat', 'GetDetermineConnectorSymbol', 'GetDetermineConnectorViewSymbol', 'GetDisplayViewNumbers', 'GetFormboardAutoplaceTableSymbol', 'GetFormboardAutorotateConnectorSymbols', 'GetKeepConnectorSymbolsOnUpdate', 'GetKeepSymbolTextParametersOnUpdate', 'GetKeepSymbolTextVisibilityOnUpdate', 'GetNewSymbolIds', 'GetOutdatedSymbolTypeIds', 'GetPinViewSymbolForBlockConnectorPins', 'GetPinViewSymbolForConnectorPins', 'GetPinViewSymbolForDevicePins', 'GetPurgeUnplacedPinViewsBeforeSave', 'GetRestoreChangedPinNamesOnUpdate', 'GetSelectedSymbolCount', 'GetSelectedSymbolIds', 'GetSymbolCount', 'GetSymbolForBlockConnectorsWithoutCompcode', 'GetSymbolForConnectorsWithoutCompcode', 'GetSymbolIds', 'GetSymbolTypeIds', 'GetTableSymbol', 'GetTreeSelectedSymbolIds', 'GetViewSymbolForTerminalStrips', 'IsChanged', 'PurgeUnplacedPinViews', 'SetChanged', 'SetConnectorSymbolFormat', 'SetDetermineConnectorSymbol', 'SetDetermineConnectorViewSymbol', 'SetDisplayViewNumbers', 'SetDynamicSymbolOriginInUpperLeft', 'SetFormboardAutoplaceTableSymbol', 'SetFormboardAutorotateConnectorSymbols', 'SetKeepConnectorSymbolsOnUpdate', 'SetKeepSymbolTextParametersOnUpdate', 'SetKeepSymbolTextVisibilityOnUpdate', 'SetPinViewSymbolForBlockConnectorPins', 'SetPinViewSymbolForConnectorPins', 'SetPinViewSymbolForDevicePins', 'SetPurgeUnplacedPinViewsBeforeSave', 'SetRestoreChangedPinNamesOnUpdate', 'SetSymbolForBlockConnectorsWithoutCompcode', 'SetSymbolForConnectorsWithoutCompcode', 'SetTableSymbol', 'SetViewSymbolForTerminalStrips', 'ShowPartPreview', 'UpdateAllSymbols', 'UpdateSymbol']
+HERE = Path(__file__).resolve().parent
+STATE = HERE / 'e3_symbol_probe_state.json'
+REPORT = HERE / 'e3_symbol_inspection_v3.txt'
 
-INSPECTION COMPLETE
-This process exits immediately. No E3 objects were modified.
+
+class Log:
+    def __init__(self, target):
+        self.out = open(target, 'w', encoding='utf-8')
+    def __call__(self, *parts):
+        s = ' '.join(str(p) for p in parts)
+        print(s, flush=True)
+        self.out.write(s + '\n')
+        self.out.flush()
+    def close(self):
+        self.out.close()
+
+
+log = None
+
+
+def read_call(obj, method, *args):
+    try:
+        return getattr(obj, method)(*args)
+    except Exception:
+        return None
+
+
+def ids_from(response):
+    if isinstance(response, (list, tuple)):
+        if len(response) > 1 and isinstance(response[1], (list, tuple)):
+            values = response[1]
+        else:
+            values = response if all(isinstance(x, int) for x in response) else []
+        return [int(x) for x in values if type(x) is int and x > 0]
+    return []
+
+
+def get_ids(obj, method):
+    for args in ((None,), ()):  # E3 often uses an output-array argument.
+        x = read_call(obj, method, *args)
+        if x is not None:
+            return ids_from(x)
+    return []
+
+
+def snapshot(prj, sid):
+    """Require proof of a REAL MIL symbol, not just SetId() returning."""
+    sym = prj.CreateSymbolObject()
+    try:
+        sym.SetId(int(sid))
+        name = read_call(sym, 'GetSymbolTypeName')
+        type_id = read_call(sym, 'GetSymbolTypeId')
+        # On your installation invalid symbols have name='' and type ID=0.
+        if not isinstance(name, str) or not name.strip():
+            return None
+        if not isinstance(type_id, int) or type_id <= 0:
+            return None
+        getter_names = (
+            'GetName', 'GetSymbolTypeName', 'GetSymbolType', 'GetSymbolTypeId',
+            'GetCharacteristic', 'GetVersion', 'GetSheetId', 'GetDeviceId',
+            'GetViewNumber',
+        )
+        getters = {m: read_call(sym, m) for m in getter_names}
+        text = prj.CreateTextObject()
+        texts = []
+        for tid in get_ids(sym, 'GetTextIds'):
+            text.SetId(tid)
+            texts.append({
+                'id': tid,
+                'type': read_call(text, 'GetType'),
+                'value': read_call(text, 'GetText'),
+                'visible': read_call(text, 'GetVisibility'),
+            })
+        return {'symbol_id': int(sid), 'getters': getters, 'texts': texts}
+    except Exception:
+        return None
+
+
+def enumerate_symbols(prj, state):
+    """Collect IDs from multiple E3 enumeration routes. Never modify E3."""
+    source = defaultdict(list)
+    for method in ('GetSymbolIds', 'GetAllSymbolIds'):
+        source[f'Job.{method}'] = get_ids(prj, method)
+
+    sht = prj.CreateSheetObject()
+    old_sheet = int(state['sheet_id'])
+    sheet_list = get_ids(prj, 'GetAllSheetIds')
+    sheets = [old_sheet] if old_sheet in sheet_list or not sheet_list else sheet_list
+    for sid in sheets:
+        try:
+            sht.SetId(sid)
+            sheet_name = read_call(sht, 'GetName')
+            # Include original sheet even if E3 renamed it, otherwise sheet 1.
+            if sid != old_sheet and str(sheet_name).strip() != '1':
+                continue
+            for method in ('GetSymbolIds', 'GetAllSymbolIds'):
+                source[f'Sheet {sid}.{method}'] = get_ids(sht, method)
+        except Exception:
+            continue
+
+    dev = prj.CreateDeviceObject()
+    all_devices = get_ids(prj, 'GetAllDeviceIds')
+    expected_name = str(state['test_device_designation']).strip()
+    matched_device_ids = []
+    for did in all_devices:
+        try:
+            dev.SetId(did)
+            if str(read_call(dev, 'GetName')).strip() == expected_name:
+                matched_device_ids.append(did)
+        except Exception:
+            continue
+    for did in set(matched_device_ids + [int(state['connector_id']),
+                                        int(state.get('connector_view_id', 0))]):
+        if did <= 0:
+            continue
+        try:
+            dev.SetId(did)
+            for method in ('GetSymbolIds', 'GetAllSymbolIds'):
+                source[f'Device {did}.{method}'] = get_ids(dev, method)
+        except Exception:
+            continue
+
+    log('\nENUMERATION:')
+    log('  Current project sheet IDs:', sheet_list)
+    log('  Current device count:', len(all_devices))
+    log('  Devices matching saved designation:', matched_device_ids)
+    for key, ids in source.items():
+        log(f'  {key}: {len(ids)} IDs')
+    combined = sorted(set(i for values in source.values() for i in values))
+    log('  Total unique candidate symbols:', len(combined))
+    return combined
+
+
+def show_mil_settings(prj):
+    log('\nMIL STANDARD SETTINGS (READ-ONLY):')
+    value = read_call(prj, 'GetDisplayMILStandard')
+    log('  prj.GetDisplayMILStandard() =', repr(value))
+    if isinstance(value, int):
+        log('  numeric value (hex):', hex(value))
+    log('  E3 Tools > Settings > MIL-Standard > Place Block Connectors:')
+    log('  Check whether INSIDE BLOCK is selected before running placement.')
+    log('  No flags were changed by this script.')
+
+
+def match_score(snap, entry, state, role):
+    typ = str(snap['getters'].get('GetSymbolTypeName') or '')
+    expected = entry.get('requested_symbol') or ''
+    comp = state['component_code']
+    test_name = state['test_device_designation']
+    values = [(t.get('type'), str(t.get('value') or '')) for t in snap['texts']]
+    score, reasons = 0, []
+    if typ == expected:
+        score += 8; reasons.append('exact desired library symbol')
+    elif typ.split('¶')[0] == expected.split('¶')[0] and typ:
+        score += 3; reasons.append('same library symbol family')
+    elif role == 'TOP' and typ == entry.get('fallback_symbol'):
+        score += 2; reasons.append('old top symbol family')
+    else:
+        return 0, []
+
+    if any(t == 5 and v == comp for t, v in values):
+        score += 3; reasons.append('component text')
+    if role == 'TOP':
+        if any(t == 12 and v == test_name for t, v in values):
+            score += 15; reasons.append('EXACT top connector designation')
+        elif any(t == 12 and v.startswith(test_name) for t, v in values):
+            score += 2; reasons.append('related connector designation')
+    else:
+        if any(t == 12 and v.startswith(test_name + '#') for t, v in values):
+            score += 12; reasons.append('secondary connector designation')
+        pin_name = str(entry.get('pin_name', ''))
+        if pin_name and any(t == 203 and v == pin_name for t, v in values):
+            score += 10; reasons.append('EXACT pin name')
+    return score, reasons
+
+
+def compare(old, new):
+    if new is None:
+        return
+    old_g = old.get('getters', {})
+    new_g = new.get('getters', {})
+    log('  Library symbol BEFORE:', old_g.get('GetSymbolTypeName'))
+    log('  Library symbol AFTER: ', new_g.get('GetSymbolTypeName'))
+    log('  Characteristics: ', old_g.get('GetCharacteristic'), '->', new_g.get('GetCharacteristic'))
+    # IDs of text nodes can change, so compare type/value/visibility.
+    def normalize(texts):
+        return sorted((str(t.get('type')), str(t.get('value')), str(t.get('visible')))
+                      for t in texts)
+    a, b = normalize(old.get('texts', [])), normalize(new.get('texts', []))
+    if a == b:
+        log('  Text contents/visibility unchanged')
+    else:
+        log('  Text entries before:')
+        for t in a: log('   ', t)
+        log('  Text entries after:')
+        for t in b: log('   ', t)
+    log('  Note: GetName is a designation, NOT the library symbol name.')
+
+
+def run():
+    if not STATE.exists():
+        raise RuntimeError(f'Missing baseline {STATE}; leave Phase 1 JSON in this directory.')
+    state = json.loads(STATE.read_text(encoding='utf-8'))
+    log('BASELINE created', state.get('created_at'))
+    log('Connector:', state['connector_name'], 'component:', state['component_code'])
+    log('Expected device designation:', state['test_device_designation'])
+    log('DOES NOT MODIFY E3. No interactive pause.')
+    app = win32.GetActiveObject('CT.Application')
+    prj = app.CreateJobObject()
+    show_mil_settings(prj)
+    entries = [('TOP', state['top'])] + [
+        (f"SECONDARY PIN {e.get('pin_name')}", e) for e in state.get('secondary', [])
+    ]
+    results = {}
+    invalid = False
+    for role, e in entries:
+        sid = int(e['symbol_id'])
+        read = snapshot(prj, sid)
+        log(f'\n{role}: original symbol ID {sid}')
+        if read is None:
+            log('  Original ID no longer resolves as a VALID symbol.')
+            invalid = True
+        else:
+            log('  Original ID is still VALID:', read['getters'].get('GetSymbolTypeName'))
+            compare(e['before'], read)
+        results[role] = read
+
+    if invalid:
+        ids = enumerate_symbols(prj, state)
+        if not ids:
+            log('  Unable to enumerate symbols. Check E3 Project/Sheet context.')
+        # Only parse MIL symbols; other symbols cannot be replacement candidates.
+        snapshots = []
+        for sid in ids:
+            x = snapshot(prj, sid)
+            if x and 'MilBlockPlug' in str(x['getters']['GetSymbolTypeName']):
+                snapshots.append(x)
+        log('  Enumerated MIL plug symbol count:', len(snapshots))
+        for role, entry in entries:
+            if results[role] is not None:
+                continue
+            group = 'TOP' if role == 'TOP' else 'SECONDARY'
+            ranked = []
+            for x in snapshots:
+                score, why = match_score(x, entry, state, group)
+                if score:
+                    ranked.append((score, x, why))
+            ranked.sort(key=lambda a: -a[0])
+            log(f'\nREPLACEMENT CANDIDATES FOR {role}:')
+            for score, x, why in ranked[:10]:
+                log(f"  ID={x['symbol_id']} type={x['getters']['GetSymbolTypeName']!r} score={score} evidence={why}")
+            if not ranked:
+                log('  No candidate found (E3 enumeration may be incomplete).')
+                continue
+            winner = ranked[0]
+            # Be strict: a single strong winner must have actual connector identity
+            # beyond symbol type. Never silently compare an unrelated symbol.
+            if winner[0] < 15 or (len(ranked) > 1 and winner[0] == ranked[1][0]):
+                log('  INCONCLUSIVE: ambiguous/weak candidates; no comparison made.')
+            else:
+                log('  Unique replacement:', winner[1]['symbol_id'])
+                compare(entry['before'], winner[1])
+    log('\nINSPECTION COMPLETE. E3 was not modified.')
+    log('Saved report:', REPORT)
+
+
+if __name__ == '__main__':
+    logger = Log(REPORT)
+    log = logger
+    try:
+        run()
+    except Exception:
+        log('\nFAILED:\n', traceback.format_exc())
+        sys.exit(1)
+    finally:
+        logger.close()
