@@ -25,6 +25,10 @@ silently reuse type 14, 1010 or another guessed text type.
 If the selected CABBLOCK is missing Saber Parameter 1, an optional creation
 path checks for symbol-level AddAttributeValue and AddText COM members, and
 verifies that the new text ID is actually attached to that exact block.
+The text type must be proven to link to saberParam1; if E3 does not expose
+that information, the script stops. Use --inspect-api for a read-only report
+of the actual capabilities your E3 build exposes. Missing text is never
+substituted with a generic unlinked string.
 Creation is attempted only with a VERIFIED project-specific --saber-type N.
 If the COM interface cannot do this, it stops without creating an unrelated
 free text or editing the shared Device Function.
@@ -48,6 +52,8 @@ import traceback
 from collections import defaultdict
 from datetime import datetime
 from pathlib import Path
+
+BUILD_ID = 'SABER-CREATION-V4-2026-11-20'
 
 # Formatting rules (same schematic drawing units as your other E3 scripts)
 LOCATION_TYPE = 15
@@ -1107,14 +1113,54 @@ def _select_text(prj, tid):
         raise RuntimeError(f'Cannot select newly created text {tid}')
     return obj
 
+def inspect_creation_api(prj, blocks, all_texts):
+    """Read-only E3 COM inspection: no attribute writes, no added texts.
+
+    This is intentionally conservative. Some pywin32 COM dispatch objects
+    raise on str()/int(), so this never coerces live COM objects.
+    """
+    sym = prj.CreateSymbolObject()
+    log('SABER CREATION API CAPABILITIES (READ ONLY):')
+    member_names = ('GetAttributeValue', 'GetAttributeIds', 'GetAttributeNames',
+                    'GetAttributeName', 'AddAttributeValue', 'SetAttributeValue',
+                    'AddText', 'AddAttributeText', 'InsertText', 'CreateText',
+                    'AddTextNode', 'GetTextIds')
+    for block in blocks:
+        if not select_id(sym, block['id']):
+            log(f"  BLOCK {block['id']}: unable to bind symbol")
+            continue
+        log(f"  BLOCK {block['id']}:")
+        for name in member_names:
+            log(f'    {name}: {"AVAILABLE" if available_method(sym, name) else "not exposed"}')
+        for attr in (SABER_ATTRIBUTE_NAME, 'Saber Parameter 1'):
+            if not available_method(sym, 'GetAttributeValue'):
+                break
+            try:
+                value = sym.GetAttributeValue(attr)
+                if type(value) in (int, float, str, bool) or value is None:
+                    shown = repr(value)
+                elif type(value) in (tuple, list):
+                    shown = repr([repr(v) if type(v) in (int,float,str,bool) or v is None else f'<{type(v).__name__}>' for v in value])
+                else:
+                    shown = f'<{type(value).__name__} COM object>'
+                log(f'    GetAttributeValue({attr!r}) => {shown}')
+            except Exception as exc:
+                log(f'    GetAttributeValue({attr!r}) => {type(exc).__name__}: {str(exc)[:130]}')
+        types = sorted(all_texts[block['id']])
+        log(f'    Attached text types: {types}')
+    log('The mere existence of AddText does NOT prove its signature or that it creates attribute-linked text.')
+
+
 def run(preview=False, saber_type=None, equipment_type=None,
-        designation_type=None):
+        designation_type=None, inspect_api=False):
     global LOG_STREAM
     path = choose_log_path()
     try:
         LOG_STREAM = open(path, 'a', encoding='utf-8')
         log('\n' + '=' * 80)
         log('NEW SABER HEADER BATCH: ' + datetime.now().astimezone().strftime('%Y-%m-%d %H:%M:%S'))
+        log('BUILD: ' + BUILD_ID)
+        log('SOURCE FILE: ' + str(Path(__file__).resolve()))
         log('FORMAT: LOCATION > SABER PARAMETER 1 > EQUIPMENT ID > DEVICE DESIGNATION')
         log('KNOWN TYPES: LOCATION=15; EQUIPMENT=1000; DESIGNATION=212')
         log('Saber Parameter 1: attribute saberParam1, linked text-type dynamically resolved')
@@ -1128,6 +1174,12 @@ def run(preview=False, saber_type=None, equipment_type=None,
         sht = prj.CreateSheetObject()
         blocks = get_selected_cabblocks(prj, sht, app)
         all_texts = inspect_block_texts(prj, blocks)
+        inspect_creation_api(prj, blocks, all_texts)
+        if inspect_api:
+            log('INSPECT API MODE: no E3 writes attempted.')
+            popup('E3 COM API inspection completed with NO CHANGES.\n'
+                  'See log: ' + str(path) + '\n' + BUILD_ID)
+            return 0
         mapping = determine_mapping(prj, all_texts, saber_type, equipment_type,
                                     designation_type)
         plan = build_plan(blocks, all_texts, mapping)
@@ -1171,6 +1223,8 @@ def main(argv=None):
         description='Select any number of E3 CABBLOCKs and press Enter to '
                     'format a 4-line header on each block.')
     parser.add_argument('--dry-run', action='store_true', help='Preview only.')
+    parser.add_argument('--inspect-api', action='store_true',
+                        help='Inspect selected block attribute/text creation methods, no writes.')
     parser.add_argument('--saber-type', type=int, default=None,
                         help='Project-specific type ID linked to saberParam1 (after verifying in E3).')
     parser.add_argument('--equipment-type', type=int, default=None,
@@ -1178,6 +1232,8 @@ def main(argv=None):
     parser.add_argument('--designation-type', type=int, default=None,
                         help='Override observed CABBLOCK designation type 212.')
     args = parser.parse_args(argv)
+    print('E3 HEADER FORMATTER BUILD:', BUILD_ID, flush=True)
+    print('E3 HEADER FORMATTER FILE:', Path(__file__).resolve(), flush=True)
     while True:
         try:
             accepted = wait_for_block_selection(preview=args.dry_run)
@@ -1191,7 +1247,8 @@ def main(argv=None):
             run(preview=args.dry_run,
                 saber_type=args.saber_type,
                 equipment_type=args.equipment_type,
-                designation_type=args.designation_type)
+                designation_type=args.designation_type,
+                inspect_api=args.inspect_api)
         except Exception as exc:
             print('FAILED:', exc)
             popup(str(exc) + '\n\nThe instruction window will reopen.\n'
@@ -1200,53 +1257,3 @@ def main(argv=None):
 
 if __name__ == '__main__':
     sys.exit(main())
-================================================================================
-NEW SABER HEADER BATCH: 2026-11-20 16:54:38
-FORMAT: LOCATION > SABER PARAMETER 1 > EQUIPMENT ID > DEVICE DESIGNATION
-KNOWN TYPES: LOCATION=15; EQUIPMENT=1000; DESIGNATION=212
-Saber Parameter 1: attribute saberParam1, linked text-type dynamically resolved
-NEVER MODIFY DEVICE FUNCTION (14) OR COMBINED TEXT (1010)
-BOLD, BLACK (0), CENTER (2), HEIGHT 0.25, VISIBLE
-Using current E3 GUI selection. No spreadsheet required.
-================================================================================
-Active E3 sheet: 4112869
-GUI SELECTION READBACK:
-  job.GetSelectedSymbolIds(None,): [6655987]
-SELECTION: 1 selected CABBLOCK(s); 0 selected non-block symbol(s) ignored.
-  BLOCK 6655987: sheet 4112869 | 'CABBLOCK#0-3a-0-14b25e0' | X=[1.400,4.400] Y=[27.600,32.250]
-BLOCK 6655987 (sheet 4112869): 11 attached text IDs; 11 text types
-  TYPE 14    ID 6655982    VALUE='' HINT=''
-  TYPE 15    ID 6655981    VALUE='BxRxUx' HINT=''
-  TYPE 205   ID 6655986    VALUE='' HINT=''
-  TYPE 206   ID 6655985    VALUE='/12.D8' HINT=''
-  TYPE 212   ID 6655977    VALUE='SCP#1' HINT=''
-  TYPE 420   ID 6655984    VALUE='' HINT=''
-  TYPE 606   ID 6655979    VALUE='' HINT=''
-  TYPE 610   ID 6655980    VALUE='' HINT=''
-  TYPE 625   ID 6655978    VALUE='' HINT=''
-  TYPE 1000  ID 6642992    VALUE='2713303-700' HINT=''
-  TYPE 1010  ID 6655983    VALUE='BxRxUx SCP#1' HINT=''
-  job.GetTextTypes(None,): returned tuple
-ERROR: Traceback (most recent call last):
-  File "C:\Users\conner.hughes\\Documents\Python\Block Pin Aranger\header_formatter.py", line 997, in run
-    mapping = determine_mapping(prj, all_texts, saber_type, equipment_type,
-                                designation_type)
-  File "C:\Users\conner.hughes\\Documents\Python\Block Pin Aranger\header_formatter.py", line 667, in determine_mapping
-    candidates |= project_saber_text_types(prj)
-                  ~~~~~~~~~~~~~~~~~~~~~~~~^^^^^
-  File "C:\Users\conner.hughes\\Documents\Python\Block Pin Aranger\header_formatter.py", line 645, in project_saber_text_types
-    visit(result)
-    ~~~~~^^^^^^^^
-  File "C:\Users\conner.hughes\\Documents\Python\Block Pin Aranger\header_formatter.py", line 634, in visit
-    accept(value[1], value[0])
-    ~~~~~~^^^^^^^^^^^^^^^^^^^^
-  File "C:\Users\conner.hughes\\Documents\Python\Block Pin Aranger\header_formatter.py", line 610, in accept
-    n = int(number)
-  File "C:\Users\conner.hughes\AppData\Roaming\Python\Python313\site-packages\win32com\client\dynamic.py", line 285, in __int__
-    return int(self.__call__())
-               ~~~~~~~~~~~~~^^
-  File "C:\Users\conner.hughes\AppData\Roaming\Python\Python313\site-packages\win32com\client\dynamic.py", line 214, in __call__
-    self._oleobj_.Invoke(*allArgs), self._olerepr_.defaultDispatchName, None
-    ~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^
-pywintypes.com_error: (-2147352562, 'Invalid number of parameters.', None, None)
-
