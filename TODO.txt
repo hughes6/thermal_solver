@@ -9,8 +9,11 @@ HOW TO USE
      Press Enter in E3, or return to the instruction window and press Enter.
   4. The script checks ALL selected blocks and their pins/texts BEFORE making
      any change. Non-block objects in the selection are ignored.
-  5. Connection signal numbers on those blocks move to the opposite INSIDE edge,
-     become bold (SetStyle(1)) and E3 palette colour 4 (SetColour(4)).
+  5. Blocks with pins on only ONE edge: connection signal numbers move to the
+     opposite INSIDE edge. Blocks with pins on BOTH edges: signals move to the
+     CENTER. Same-row left/right signals use separate middle lanes so their
+     labels do not stack on each other. All become bold (SetStyle(1)) and E3
+     palette colour 4 (SetColour(4)).
   6. After the result message closes, the instructions return so you can select
      another batch. Use Close, the window X, or Esc when finished.
 
@@ -18,8 +21,8 @@ There is no Excel file or manually entered page/connector number.
 Pressing Enter authorizes changes if the full batch preflight succeeds.
 Press Esc, Close, or the window X to exit. Previously completed batches remain formatted.
 
-Optional read-only preview: python E3_Bulk_Selected_Block_Signal_Relocator.py --dry-run
-Optional type override:    python E3_Bulk_Selected_Block_Signal_Relocator.py --type 1007
+Optional read-only preview: python E3_Bulk_Signal_Relocator_Centered.py --dry-run
+Optional type override:    python E3_Bulk_Signal_Relocator_Centered.py --type 1007
 
 All blocks must have identifiable pin symbols; ambiguous pin/text ownership
 stops the batch BEFORE any changes. A COM error during execution can still
@@ -48,6 +51,12 @@ TEXT_TYPE_DESCRIPTIONS = {
     1007: 'Connection signal',
 }
 EDGE_MARGIN = 0.16
+# When left/right pins occupy the same Y row, keep their numbers on separate
+# sides of the block's centerline with a small visible gap. This is deliberate:
+# assigning both the exact same (center_x, y) would stack two independent texts.
+CENTER_LANE_GAP = 0.15
+SAME_ROW_Y_TOLERANCE = 0.06
+CENTER_ALIGNMENT = 2  # E3 text alignment: 1 left, 2 center, 3 right
 MAX_SHEET_TEXT_Y_DISTANCE = 0.16
 MAX_SHEET_TEXT_X_DISTANCE = 1.15
 POSITION_VERIFICATION_TOLERANCE = 0.015
@@ -510,21 +519,56 @@ def associate_signals(prj, plan, signal_texts, physical_blocks_by_sheet=None):
     return resolved
 
 
-def recover_already_placed_sheet_texts(prj, plan, signal_texts, associated):
-    """Recognize prior-run sheet texts at the EXACT finished edge position.
+def target_location_for_pin(pin):
+    """Return target x/y, E3 text alignment and readable placement mode.
 
-    After a successful relocation, an independent sheet text can be too far
-    from its original pin for the ordinary nearby-pin matching method. Such
-    labels must still be made bold on later runs. This recovery never moves
-    an unassigned label: it accepts only an exact, unambiguous match to the
-    intended destination for a selected connector pin, on that same pin row.
+    Only physical pins within THIS selected block determine its layout.
+    Unselected neighboring CABBLOCKs never alter the target. Paired rows use
+    right-/left-aligned labels bracketing the centerline to prevent collisions.
+    """
+    block = pin['block']
+    side = pin['side']
+    width = block['right'] - block['left']
+    if width <= 2 * EDGE_MARGIN:
+        raise RuntimeError(f'Block {block["id"]}: too narrow for signal placement.')
+    y = pin['location']['y']
+    if pin.get('both_edges'):
+        cx = (block['left'] + block['right']) / 2.0
+        if pin.get('paired_row'):
+            if width <= 2 * (CENTER_LANE_GAP + EDGE_MARGIN):
+                raise RuntimeError(
+                    f'Block {block["id"]}: too narrow for two center-row signal lanes.')
+            if side == 'LEFT':
+                return (cx - CENTER_LANE_GAP, y, 3, 'CENTER-LEFT LANE')
+            return (cx + CENTER_LANE_GAP, y, 1, 'CENTER-RIGHT LANE')
+        return (cx, y, CENTER_ALIGNMENT, 'CENTER')
+    if side == 'LEFT':
+        return (block['right'] - EDGE_MARGIN, y, 3, 'OPPOSITE RIGHT EDGE')
+    return (block['left'] + EDGE_MARGIN, y, 1, 'OPPOSITE LEFT EDGE')
+
+
+def recover_already_placed_sheet_texts(prj, plan, signal_texts, associated):
+    """Recover sheet-level texts already at their final destination.
+
+    For mixed-side blocks this includes the centerline/paired-row lanes.
+    Recover the previous version's opposite-edge position where it can be
+    attributed uniquely. Never assume an ambiguous label belongs to a pin.
     """
     matched_ids = {item['id'] for item in associated}
     destinations = defaultdict(list)
     for p in plan:
         b = p['block']
-        dest_x = b['right'] - EDGE_MARGIN if p['side'] == 'LEFT' else b['left'] + EDGE_MARGIN
-        destinations[(b['sheet_id'], b['id'])].append((p, dest_x, p['location']['y']))
+        dest_x, dest_y, _align, _mode = target_location_for_pin(p)
+        destinations[(b['sheet_id'], b['id'])].append((p, dest_x, dest_y, 'current'))
+        # The older script placed labels on the opposite edge even for
+        # two-sided blocks. A lone pin row can be safely migrated from there.
+        # On a paired row, the old destination overlaps the other pin's
+        # ORIGINAL location, so its ownership is ambiguous if sheet-level.
+        if p.get('both_edges') and not p.get('paired_row'):
+            old_x = (b['right'] - EDGE_MARGIN if p['side'] == 'LEFT'
+                     else b['left'] + EDGE_MARGIN)
+            destinations[(b['sheet_id'], b['id'])].append(
+                (p, old_x, dest_y, 'previous opposite-edge position'))
     txt = prj.CreateTextObject()
     recovered = []
     for item in signal_texts:
@@ -538,20 +582,20 @@ def recover_already_placed_sheet_texts(prj, plan, signal_texts, associated):
             loc = read_text_xy(txt, block)
             if loc is None or not within_block_xy(loc, block, tol=BLOCK_LOCATION_TOLERANCE):
                 continue
-            for p, x, y in group:
+            for p, x, y, which in group:
                 if abs(loc['x'] - x) <= .02 and abs(loc['y'] - y) <= .04:
-                    matches.append((p, loc))
+                    matches.append((p, loc, which))
         if len(matches) == 1:
-            p, loc = matches[0]
+            p, loc, which = matches[0]
             recovered.append({**item, 'pin': p, 'location': loc,
-                              'source': 'already-placed sheet-level'} )
-            log(f'  RECOVERED already placed sheet text {item["id"]} '
-                f'for {p["connector"]}:{p["pin_name"]}; bold + colour only')
+                              'source': f'recovered sheet-level ({which})'} )
+            log(f'  RECOVERED sheet text {item["id"]} '
+                f'for {p["connector"]}:{p["pin_name"]} from {which}')
         elif len(matches) > 1:
             log(f'  SKIPPED already placed text {item["id"]}: multiple '
                 'selected pin destinations at the same coordinates')
     log(f'ALREADY-PLACED RECOVERY: {len(recovered)} sheet-level text(s) '
-        'uniquely matched for bold/colour formatting without any movement.')
+        'uniquely matched for relocation/formatting.')
     return associated + recovered
 
 
@@ -578,19 +622,14 @@ def plan_relocations(associated, type_override=None):
             continue
         p = record['pin']
         b = p['block']
-        if b['right'] - b['left'] <= EDGE_MARGIN * 2:
-            raise RuntimeError(f'Block {b["id"]}: too narrow for margin {EDGE_MARGIN}.')
-        side = p['side']
-        dest_x = b['right'] - EDGE_MARGIN if side == 'LEFT' else b['left'] + EDGE_MARGIN
-        # Keep the Y position of the associated physical pin. The aim is an
-        # adjacent label across the interior of the SAME CABBLOCK.
-        dest_y = p['location']['y']
-        align = 3 if side == 'LEFT' else 1
+        dest_x, dest_y, align, placement = target_location_for_pin(p)
+        # Keep this connection number on the same Y row as its physical pin.
         loc = record['location']
         already = (abs(loc['x'] - dest_x) < .02 and
                    abs(loc['y'] - dest_y) < .02)
         moves.append({**record, 'x': dest_x, 'y': dest_y,
-                      'alignment': align, 'already': already})
+                      'alignment': align, 'placement': placement,
+                      'already': already})
     return moves
 
 
@@ -627,10 +666,17 @@ def relocate_one_text(txt, move):
         if (current is not None and
                 abs(current['x'] - move['x']) <= POSITION_VERIFICATION_TOLERANCE and
                 abs(current['y'] - move['y']) <= POSITION_VERIFICATION_TOLERANCE):
-            # Now and only now adjust alignment for interior edge placement.
+            # Correct alignment is essential for real centering (E3 stores
+            # anchor position and alignment separately). For a center move,
+            # failure must not be reported as success.
             try:
                 txt.SetAlignment(move['alignment'])
             except Exception as exc:
+                if move['placement'].startswith('CENTER'):
+                    raise RuntimeError(
+                        f'Text {move["id"]} reached its center target, but E3 '
+                        f'could not set center-lane alignment: {exc}. '
+                        'Inspect this text before continuing.') from exc
                 log(f'  WARNING: text {move["id"]} moved, but alignment not updated: {exc}')
             return kind
         # The call returned, but may have moved somewhere else, or done nothing.
@@ -673,7 +719,7 @@ def confirm_apply(move_count, bold_count, log_path):
         root = tk.Tk(); root.withdraw(); root.attributes('-topmost', True)
         result = messagebox.askyesno('E3 Connection Signal Relocator',
             f'The preflight found {bold_count} connection text(s) to make BOLD and COLOUR {SIGNAL_COLOUR}.\n'
-            f'Of these, {move_count} also need moving to the opposite edge.\n\n'
+            f'Of these, {move_count} also need repositioning.\n\n'
             'No pin symbols or signal values are changed.\n\n'
             f'Log: {log_path}\n\nApply now?', parent=root)
         root.destroy()
@@ -757,7 +803,8 @@ def wait_for_block_selection(preview=False):
         ttk.Separator(frame, orient='horizontal').pack(fill='x', pady=14)
         mode = ('PREVIEW ONLY - no E3 changes will be made.' if preview else
                 'On Enter: move connection signal numbers, make them bold,\n'
-                'and set text colour to E3 palette 4.')
+                'and set text colour to E3 palette 4.\n'
+                'One-sided blocks: opposite edge; two-sided blocks: middle.')
         ttk.Label(frame, text=mode, justify='left').pack(anchor='w', pady=(0, 12))
         buttons = ttk.Frame(frame)
         buttons.pack(fill='x')
@@ -1055,8 +1102,23 @@ def make_selected_block_plan(pins):
         group.sort(key=lambda p: (-p['location']['y'], p['pin_name']))
         for row, p in enumerate(group):
             result.append({**p, 'row': row})
+    # For each mixed-side block, detect opposing pins that share the same row.
+    # Those rows need two middle lanes, rather than two labels at one point.
+    both_edges = bool(sides['LEFT'] and sides['RIGHT'])
+    for record in result:
+        side = record['side']
+        opposite_side = 'RIGHT' if side == 'LEFT' else 'LEFT'
+        record['both_edges'] = both_edges
+        record['paired_row'] = both_edges and any(
+            abs(record['location']['y'] - other['location']['y'])
+            <= SAME_ROW_Y_TOLERANCE
+            for other in sides[opposite_side]
+        )
+    paired_count = sum(p['paired_row'] for p in result)
+    mode = 'CENTER (two-sided)' if both_edges else 'OPPOSITE EDGE (one-sided)'
     log(f'PRE-FLIGHT: {len(result)} unique pins on selected block: '
-        f'LEFT={len(sides["LEFT"])}, RIGHT={len(sides["RIGHT"])}')
+        f'LEFT={len(sides["LEFT"])}, RIGHT={len(sides["RIGHT"])} | '
+        f'mode={mode} | {paired_count} pin(s) on paired left/right rows')
     return sorted(result, key=lambda p: (p['side'], p['row']))
 
 
@@ -1068,7 +1130,7 @@ def run(preview=False, apply=False, type_override=None):
         LOG_STREAM = open(log_path, 'a', encoding='utf-8')
         log('\n' + '=' * 74)
         log('NEW RUN: ' + datetime.now().astimezone().strftime('%Y-%m-%d %H:%M:%S %Z'))
-        log(f'E3 BULK SELECTED-BLOCK SIGNAL RELOCATOR + BOLD + COLOUR {SIGNAL_COLOUR}')
+        log(f'E3 BULK SIGNAL RELOCATOR (CENTER FOR TWO-SIDED BLOCKS) + BOLD + COLOUR {SIGNAL_COLOUR}')
         log('No Excel, page, device or connector input. SELECTED CABBLOCKS ONLY.')
         log('EVERY block/pin/text is checked BEFORE ANY changes are applied.')
         log('=' * 74)
@@ -1083,6 +1145,20 @@ def run(preview=False, apply=False, type_override=None):
         associated = associate_signals(prj, plan, signals, physical_blocks_by_sheet)
         associated = recover_already_placed_sheet_texts(prj, plan, signals, associated)
         moves = plan_relocations(associated, type_override)
+        # Reject two distinct signal texts at the exact same destination.
+        # Paired left/right pins are split into center lanes above, but two
+        # unrelated labels on a single pin could still create a collision.
+        final_positions = defaultdict(list)
+        for m in moves:
+            b = m['pin']['block']
+            key = (b['sheet_id'], b['id'], round(m['x'], 3), round(m['y'], 3))
+            final_positions[key].append(m['id'])
+        collisions = {key: ids for key, ids in final_positions.items()
+                      if len(set(ids)) > 1}
+        if collisions:
+            raise RuntimeError(
+                f'Duplicate connection-number destinations: {list(collisions.items())[:8]}. '
+                'Batch cancelled BEFORE changes: multiple text objects would overlap.')
         # No one text ID may be modified more than once across the whole batch.
         if len({m['id'] for m in moves}) != len(moves):
             raise RuntimeError('Duplicate connection signal text in batch plan. '
@@ -1094,7 +1170,7 @@ def run(preview=False, apply=False, type_override=None):
             log(f'  text {m["id"]} type {m["type"]} {m["value"][:55]!r} | '
                 f'pin {p["pin_name"]} on block {p["block"]["id"]} ({p["side"]}) | '
                 f'({loc["x"]:.3f},{loc["y"]:.3f}) -> '
-                f'({m["x"]:.3f},{m["y"]:.3f}) | '
+                f'({m["x"]:.3f},{m["y"]:.3f}) {m["placement"]} | '
                 f'{"ALREADY POSITIONED" if m["already"] else "MOVE"} '
                 f'+ BOLD + COLOUR {SIGNAL_COLOUR}')
         if len(moves) > 350:
@@ -1108,7 +1184,10 @@ def run(preview=False, apply=False, type_override=None):
             block_moves = by_block[b['id']]
             n_pins = sum(p['block']['id'] == b['id'] for p in plan)
             count_moving = sum(not m['already'] for m in block_moves)
-            log(f'  BLOCK {b["id"]}: {n_pins} pins, '
+            target_mode = ('CENTER' if any(p['both_edges'] for p in plan
+                                           if p['block']['id'] == b['id'])
+                           else 'OPPOSITE EDGE')
+            log(f'  BLOCK {b["id"]}: {n_pins} pins, mode {target_mode}, '
                 f'{count_moving} to move, {len(block_moves)} bold/colour updates')
         log(f'\nBATCH SUMMARY: {len(blocks)} selected CABBLOCK(s); '
             f'{len(plan)} pins, {len(signals)} candidate signal texts, '
@@ -1140,6 +1219,12 @@ def run(preview=False, apply=False, type_override=None):
                     log(f'  MOVED text {m["id"]} on block {block_id} via {how}')
                 if not select_id(txt, m['id']):
                     raise RuntimeError(f'Text {m["id"]} disappeared before formatting.')
+                if m['already'] and m['placement'].startswith('CENTER'):
+                    try:
+                        txt.SetAlignment(m['alignment'])
+                    except Exception as exc:
+                        raise RuntimeError(
+                            f'Text {m["id"]}: could not set middle alignment: {exc}') from exc
                 try:
                     txt.SetStyle(BOLD_STYLE)
                 except Exception as exc:
