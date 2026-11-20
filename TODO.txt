@@ -1,27 +1,25 @@
-"""E3.series - CLICK A BLOCK, PRESS ENTER, FORMAT CONNECTION SIGNALS.
+"""E3.series - SELECT ONE OR MORE CABBLOCKS, PRESS ENTER, FORMAT SIGNALS.
 
 HOW TO USE
   1. Run this script. A small instruction window opens.
-  2. While it stays open, switch to E3.series and select ONE CABBLOCK border.
-  3. Press Enter while in E3 (Windows), or return to the instruction window
-     and press Enter / click "Run on selected block".
-  4. The script checks the E3 selection, then runs on ONLY that block.
+  2. Switch to E3.series and select one or more CABBLOCK borders
+     (Ctrl-click additional blocks, or use E3's multi-selection tools).
+  3. Press Enter in E3, or return to the instruction window and press Enter.
+  4. The script checks ALL selected blocks and their pins/texts BEFORE making
+     any change. Non-block objects in the selection are ignored.
+  5. Connection signal numbers on those blocks move to the opposite INSIDE edge,
+     become bold (SetStyle(1)) and E3 palette colour 4 (SetColour(4)).
 
-No Excel file or manual connector/page input. No second confirmation is shown:
-pressing Enter authorizes the preflight and changes on the selected block.
-Press Esc or Cancel at the instruction window to exit without changes.
+There is no Excel file or manually entered page/connector number.
+Pressing Enter authorizes changes if the full batch preflight succeeds.
+Press Esc or Cancel to exit without changes.
 
-Changes on the selected block only:
-  * Move associated connection signal numbers to the opposite INNER edge.
-  * Leave already-moved numbers in place.
-  * Make all assigned numbers BOLD (E3 SetStyle(1)).
-  * Set their E3 palette text colour to 4 (SetColour(4)).
+Optional read-only preview: python E3_Bulk_Selected_Block_Signal_Relocator.py --dry-run
+Optional type override:    python E3_Bulk_Selected_Block_Signal_Relocator.py --type 1007
 
-Optional read-only preview: python E3_Click_Block_Then_Enter.py --dry-run
-Optional type override:    python E3_Click_Block_Then_Enter.py --type 1007
-
-E3 COM selection getter names/signatures vary by version. The script verifies
-exactly one CABBLOCK is selected and refuses uncertain text/position changes.
+All blocks must have identifiable pin symbols; ambiguous pin/text ownership
+stops the batch BEFORE any changes. A COM error during execution can still
+leave partial formatting, which is reported in the log.
 Requires Windows, pywin32, tkinter and a running E3.series project.
 """
 from __future__ import annotations
@@ -443,7 +441,7 @@ def within_block_xy(point, block, tol=0.25):
             block['bottom']-tol <= point['y'] <= block['top']+tol)
 
 
-def associate_signals(prj, plan, signal_texts):
+def associate_signals(prj, plan, signal_texts, physical_blocks_by_sheet=None):
     """Find the one pin responsible for each signal text; never guess ties."""
     by_block = defaultdict(list)
     for p in plan:
@@ -474,6 +472,15 @@ def associate_signals(prj, plan, signal_texts):
             loc = read_text_xy(txt, block)
             if loc is None or not within_block_xy(loc, block):
                 continue
+            # A sheet-level label physically inside ANOTHER CABBLOCK is
+            # not our selected block's text, even if it is near one of our
+            # pins. Box/multi-selection must not steal a neighboring label.
+            if physical_blocks_by_sheet is not None:
+                containing = [other['id'] for other in
+                              physical_blocks_by_sheet.get(sheet_id, [])
+                              if within_block_xy(loc, other, tol=0.015)]
+                if containing and (len(containing) != 1 or containing[0] != block_id):
+                    continue
             for p in block_pins:
                 dy = abs(loc['y'] - p['location']['y'])
                 dx = abs(loc['x'] - p['location']['x'])
@@ -645,7 +652,7 @@ def choose_log_path():
     locations = [Path(__file__).resolve().parent, Path(tempfile.gettempdir())]
     for directory in locations:
         try:
-            path = directory / 'E3_Click_Block_Then_Enter_Log.txt'
+            path = directory / 'E3_Bulk_Selected_Block_Relocator_Log.txt'
             with open(path, 'w', encoding='utf-8'):
                 pass
             return path
@@ -721,7 +728,7 @@ def wait_for_block_selection(preview=False):
         root.quit()
 
     try:
-        root.title('E3 - Select a block')
+        root.title('E3 - Select one or more blocks')
         root.resizable(False, False)
         root.protocol('WM_DELETE_WINDOW', cancel)
         # Do not make the window modal or always-on-top: the user needs to
@@ -732,9 +739,10 @@ def wait_for_block_selection(preview=False):
         ttk.Label(frame, text='Connection Signal Relocator',
                   font=('Segoe UI', 13, 'bold')).pack(anchor='w', pady=(0, 12))
         ttk.Label(frame, text=(
-            '1. Switch to E3.series and click ONE CABBLOCK border.\n'
-            '2. Press ENTER to run on that selected block.\n'
-            '   (You can press Enter in E3, or return to this window.)'),
+            '1. In E3, select ONE OR MORE CABBLOCK borders.\n'
+            '   Use Ctrl+click or E3 multi-select for several blocks.\n'
+            '2. Press ENTER to format all selected blocks.\n'
+            '   (Enter in E3 or return here and press Enter.)'),
                   justify='left', font=('Segoe UI', 10)).pack(anchor='w')
         ttk.Separator(frame, orient='horizontal').pack(fill='x', pady=14)
         mode = ('PREVIEW ONLY - no E3 changes will be made.' if preview else
@@ -743,7 +751,7 @@ def wait_for_block_selection(preview=False):
         ttk.Label(frame, text=mode, justify='left').pack(anchor='w', pady=(0, 12))
         buttons = ttk.Frame(frame)
         buttons.pack(fill='x')
-        go_btn = ttk.Button(buttons, text='Run on selected block (Enter)', command=proceed)
+        go_btn = ttk.Button(buttons, text='Format selected blocks (Enter)', command=proceed)
         go_btn.pack(side='left')
         ttk.Button(buttons, text='Cancel (Esc)', command=cancel).pack(side='right')
         root.bind('<Return>', proceed)
@@ -864,105 +872,154 @@ def selected_symbol_id_candidates(prj, sht, app):
     if not found:
         raise RuntimeError(
             'No selected symbol IDs were returned by this E3 COM build. '
-            'Select ONE CABBLOCK (click its border) before launching. '
+            'Select one or more CABBLOCK borders in E3 before pressing Enter. '
             'If it is already selected, send the GUI SELECTION READBACK log; '
             'your E3 version may use another selection API. NO CHANGES MADE.'
         )
     return sorted(found)
 
 
-def get_one_selected_cabblock(prj, sht, app):
+def get_selected_cabblocks(prj, sht, app):
+    """Return ALL uniquely selected CABBLOCKs; ignore selected non-blocks.
+
+    A drag/box selection can include pins, lines or text as well as the blocks.
+    These are never used as targets. At least one placed CABBLOCK is required.
+    """
     ids = selected_symbol_id_candidates(prj, sht, app)
     sym = prj.CreateSymbolObject()
-    selected_symbols = []
+    other_symbols = []
     blocks = []
     for sid in ids:
         if not select_id(sym, sid):
-            log(f'  Selected ID {sid}: not a valid E3 symbol ID')
+            log(f'  Selected ID {sid}: not a valid E3 symbol ID; ignored')
             continue
         kind = str(optional_call(sym, 'GetSymbolTypeName') or '')
-        location, area = get_symbol_location(sym), get_symbol_area(sym)
-        if location is None:
-            log(f'  Selected ID {sid}: no valid placed-symbol location')
-            continue
-        selected_symbols.append((sid, kind))
-        log(f'  Selected symbol {sid}: {kind!r}, sheet {location["sheet_id"]}')
         if 'CABBLOCK' not in kind.upper():
+            other_symbols.append((sid, kind))
             continue
-        if area is None:
-            raise RuntimeError(f'Selected CABBLOCK {sid}: unreadable placed area. No changes made.')
-        blocks.append({
+        location, area = get_symbol_location(sym), get_symbol_area(sym)
+        if location is None or area is None:
+            raise RuntimeError(
+                f'Selected CABBLOCK {sid}: missing placed location/area. '
+                'Batch cancelled: NO CHANGES MADE.'
+            )
+        block = {
             'id': sid, 'sheet_id': location['sheet_id'], 'kind': kind,
             'owner': '<selected block>', 'view_id': None, 'view_number': None,
             **area,
-        })
-    if len(blocks) != 1:
+        }
+        blocks.append(block)
+    if not blocks:
         raise RuntimeError(
-            f'Expected EXACTLY ONE selected CABBLOCK, found {len(blocks)} '
-            f'(other selected symbols: {selected_symbols}). '
-            'Click once on ONE CABBLOCK border in E3 and rerun. NO CHANGES MADE.'
+            f'No placed CABBLOCK found among {len(ids)} selected E3 ID(s). '
+            f'Non-block symbols: {other_symbols[:12]}. '
+            'Click one or more CABBLOCK borders and press Enter again. '
+            'NO CHANGES MADE.'
         )
-    if len(selected_symbols) > 1:
-        raise RuntimeError(
-            f'More than one E3 symbol is selected: {selected_symbols}. '
-            'Deselect other objects and select only the CABBLOCK. NO CHANGES MADE.'
-        )
-    block = blocks[0]
-    log(f'CONFIRMED SELECTED CABBLOCK {block["id"]} | {block["kind"]!r} | '
-        f'sheet {block["sheet_id"]} | X=[{block["left"]:.3f},{block["right"]:.3f}] '
-        f'Y=[{block["bottom"]:.3f},{block["top"]:.3f}]')
-    return block
+    blocks.sort(key=lambda b: (b['sheet_id'], -b['top'], b['left'], b['id']))
+    log(f'SELECTION: {len(blocks)} selected CABBLOCK(s); '
+        f'{len(other_symbols)} selected non-block symbol(s) ignored.')
+    for b in blocks:
+        log(f'  BLOCK {b["id"]}: sheet {b["sheet_id"]} | {b["kind"]!r} | '
+            f'X=[{b["left"]:.3f},{b["right"]:.3f}] '
+            f'Y=[{b["bottom"]:.3f},{b["top"]:.3f}]')
+    if other_symbols:
+        log(f'  IGNORED non-block selections (first 15): {other_symbols[:15]}')
+    return blocks
 
 
-def get_pins_in_selected_block(prj, sht, block):
-    """All physical pin symbols in selected block; NO connector or Excel filter."""
-    ids = scan_sheet_symbols(prj, sht, block['sheet_id'])
-    log(f'Scanning ONLY sheet {block["sheet_id"]} for pins in selected block '
-        f'{block["id"]} ({len(ids)} placed symbols).')
-    selected = []
-    nearby_types = Counter()
-    other_blocks = []
-    local_symbol = prj.CreateSymbolObject()
-    for sid in set(ids):
-        if sid == block['id'] or not select_id(local_symbol, sid):
-            continue
-        kind = str(optional_call(local_symbol, 'GetSymbolTypeName') or '')
-        if 'CABBLOCK' not in kind.upper():
-            continue
-        area, loc = get_symbol_area(local_symbol), get_symbol_location(local_symbol)
-        if area is not None and loc is not None and loc['sheet_id'] == block['sheet_id']:
-            other_blocks.append({'id': sid, 'sheet_id': loc['sheet_id'], **area})
-    for sid in set(ids):
-        if sid == block['id']:
-            continue
-        pin = read_pin_identity(prj, sid)
-        if pin is None:
-            continue
-        if not inside_block(pin['location'], block):
-            continue
-        # If this pin also lies in a different CABBLOCK, its ownership is
-        # ambiguous. Refuse to risk changing another block's signal text.
-        overlap = [b['id'] for b in other_blocks if (
-            b['left'] - 0.015 <= pin['location']['x'] <= b['right'] + 0.015 and
-            b['bottom'] - 0.015 <= pin['location']['y'] <= b['top'] + 0.015)]
-        if overlap:
+def get_pins_in_selected_blocks(prj, sht, blocks):
+    """Scan each sheet only once, assigning pins to ONE selected CABBLOCK.
+
+    Preserve the single-block safety rules: a pin inside any second physical
+    CABBLOCK (selected or not) is ambiguous, so cancel the whole batch.
+    """
+    selected_by_sheet = defaultdict(list)
+    for b in blocks:
+        selected_by_sheet[b['sheet_id']].append(b)
+    found = {b['id']: [] for b in blocks}
+    all_blocks_by_sheet = {}
+    for sheet_id, selected_on_sheet in sorted(selected_by_sheet.items()):
+        ids = sorted(set(scan_sheet_symbols(prj, sht, sheet_id)))
+        log(f'Scanning sheet {sheet_id} ONCE: {len(ids)} symbol(s); '
+            f'{len(selected_on_sheet)} selected CABBLOCK(s)')
+        sym = prj.CreateSymbolObject()
+        all_physical_blocks = []
+        for sid in ids:
+            if not select_id(sym, sid):
+                continue
+            kind = str(optional_call(sym, 'GetSymbolTypeName') or '')
+            if 'CABBLOCK' not in kind.upper():
+                continue
+            area, loc = get_symbol_area(sym), get_symbol_location(sym)
+            if area is not None and loc is not None and loc['sheet_id'] == sheet_id:
+                all_physical_blocks.append({'id': sid, 'sheet_id': sheet_id, **area})
+        all_blocks_by_sheet[sheet_id] = all_physical_blocks
+        log(f'  Physical CABBLOCKs on sheet (selected + unselected): '
+            f'{len(all_physical_blocks)}')
+        for sid in ids:
+            pin = read_pin_identity(prj, sid)
+            if pin is None:
+                continue
+            owners = [b for b in selected_on_sheet if inside_block(pin['location'], b)]
+            if not owners:
+                continue
+            if len(owners) > 1:
+                raise RuntimeError(
+                    f'Pin symbol {sid} ({pin["pin_name"]!r}) intersects '
+                    f'multiple selected CABBLOCKs {[b["id"] for b in owners]}. '
+                    'Cannot attribute safely. Batch cancelled: NO CHANGES MADE.')
+            block = owners[0]
+            loc = pin['location']
+            overlaps = [other['id'] for other in all_physical_blocks
+                        if other['id'] != block['id']
+                        and other['left'] - .015 <= loc['x'] <= other['right'] + .015
+                        and other['bottom'] - .015 <= loc['y'] <= other['top'] + .015]
+            if overlaps:
+                raise RuntimeError(
+                    f'Pin symbol {sid} ({pin["pin_name"]!r}) in selected '
+                    f'CABBLOCK {block["id"]} also lies in CABBLOCK(s) {overlaps}. '
+                    'Cannot determine ownership safely. Batch cancelled: NO CHANGES MADE.')
+            found[block['id']].append({**pin, 'block': block})
+    all_pins = []
+    for b in blocks:
+        pins = found[b['id']]
+        labels = Counter(p['designation'] or '<no type-12 label>' for p in pins)
+        log(f'BLOCK {b["id"]}: {len(pins)} physical pin symbols; '
+            f'device labels: {labels.most_common(12)}')
+        for p in sorted(pins, key=lambda x: (-x['location']['y'], x['pin_name'])):
+            log(f'  PIN {p["pin_name"]!r} | symbol {p["symbol_id"]} | '
+                f'labels={p["designations"]!r} | '
+                f'X={p["location"]["x"]:.3f}, Y={p["location"]["y"]:.3f}')
+        if not pins:
+            dump_nearby_text_types(prj, sht, [b])
             raise RuntimeError(
-                f'Selected block {block["id"]} pin symbol {sid} '
-                f'(pin {pin["pin_name"]}) also lies in CABBLOCK(s) {overlap}. '
-                'Cannot determine ownership safely. NO CHANGES MADE.')
-        selected.append({**pin, 'block': block})
-        nearby_types[pin['designation'] or '<no type-12 label>'] += 1
-    log(f'Physical pin symbols inside selected CABBLOCK: {len(selected)}')
-    log(f'Device designations on pins: {nearby_types.most_common(20)}')
-    for p in sorted(selected, key=lambda x: (-x['location']['y'], x['pin_name'])):
-        log(f'  PIN {p["pin_name"]!r} | symbol {p["symbol_id"]} | '
-            f'labels={p["designations"]!r} | '
-            f'X={p["location"]["x"]:.3f}, Y={p["location"]["y"]:.3f}')
-    if not selected:
-        dump_nearby_text_types(prj, sht, [block])
-        raise RuntimeError('Selected CABBLOCK has no physical pin symbols with text type 203. '
-                           'No changes made. Review the diagnostic log.')
-    return selected
+                f'Selected CABBLOCK {b["id"]} has no identifiable physical pins '
+                '(pin number type 203). Batch cancelled; NO CHANGES MADE.')
+        all_pins.extend(pins)
+    return all_pins, all_blocks_by_sheet
+
+
+def make_bulk_selected_block_plan(pins, blocks):
+    """Plan each physical CABBLOCK independently, allowing repeated pin numbers."""
+    by_block = defaultdict(list)
+    for p in pins:
+        by_block[p['block']['id']].append(p)
+    combined = []
+    seen_symbols = set()
+    for b in blocks:
+        block_plan = make_selected_block_plan(by_block[b['id']])
+        for p in block_plan:
+            key = (p['block']['sheet_id'], p['symbol_id'])
+            if key in seen_symbols:
+                raise RuntimeError(
+                    f'Pin symbol {p["symbol_id"]} was assigned to more than one block. '
+                    'Batch cancelled: NO CHANGES MADE.')
+            seen_symbols.add(key)
+        combined.extend(block_plan)
+    log(f'BATCH PRE-FLIGHT: {len(blocks)} blocks, '
+        f'{len(combined)} uniquely assigned physical pin symbol(s).')
+    return combined
 
 
 def make_selected_block_plan(pins):
@@ -1000,23 +1057,27 @@ def run(preview=False, apply=False, type_override=None):
     try:
         LOG_STREAM = open(log_path, 'w', encoding='utf-8')
         log('=' * 74)
-        log(f'E3 SELECTED-BLOCK SIGNAL RELOCATOR + BOLD + COLOUR {SIGNAL_COLOUR}')
-        log('No Excel, page, device or connector input. Selected CABBLOCK only.')
-        log('No changes until selected block, pin and text preflight succeeds.')
+        log(f'E3 BULK SELECTED-BLOCK SIGNAL RELOCATOR + BOLD + COLOUR {SIGNAL_COLOUR}')
+        log('No Excel, page, device or connector input. SELECTED CABBLOCKS ONLY.')
+        log('EVERY block/pin/text is checked BEFORE ANY changes are applied.')
         log('=' * 74)
         import win32com.client as win32
         app = win32.gencache.EnsureDispatch('CT.Application')
         prj = app.CreateJobObject()
         sht = prj.CreateSheetObject()
-        block = get_one_selected_cabblock(prj, sht, app)
-        pins = get_pins_in_selected_block(prj, sht, block)
-        plan = make_selected_block_plan(pins)
+        blocks = get_selected_cabblocks(prj, sht, app)
+        pins, physical_blocks_by_sheet = get_pins_in_selected_blocks(prj, sht, blocks)
+        plan = make_bulk_selected_block_plan(pins, blocks)
         signals = collect_signal_texts(prj, sht, plan, type_override)
-        associated = associate_signals(prj, plan, signals)
+        associated = associate_signals(prj, plan, signals, physical_blocks_by_sheet)
         associated = recover_already_placed_sheet_texts(prj, plan, signals, associated)
         moves = plan_relocations(associated, type_override)
+        # No one text ID may be modified more than once across the whole batch.
+        if len({m['id'] for m in moves}) != len(moves):
+            raise RuntimeError('Duplicate connection signal text in batch plan. '
+                               'NO CHANGES MADE.')
         log('\nPROPOSED CONNECTION SIGNAL FORMATTING:')
-        for m in moves[:250]:
+        for m in moves[:350]:
             p = m['pin']
             loc = m['location']
             log(f'  text {m["id"]} type {m["type"]} {m["value"][:55]!r} | '
@@ -1025,20 +1086,31 @@ def run(preview=False, apply=False, type_override=None):
                 f'({m["x"]:.3f},{m["y"]:.3f}) | '
                 f'{"ALREADY POSITIONED" if m["already"] else "MOVE"} '
                 f'+ BOLD + COLOUR {SIGNAL_COLOUR}')
-        if len(moves) > 250:
-            log(f'  ... {len(moves)-250} more labels omitted from preview')
+        if len(moves) > 350:
+            log(f'  ... {len(moves) - 350} more labels omitted from preview')
         to_move = [m for m in moves if not m['already']]
-        log(f'\nSUMMARY: selected block {block["id"]}: {len(plan)} pins, '
-            f'{len(signals)} potential texts, {len(associated)} assigned, '
-            f'{len(to_move)} to relocate, {len(moves)} bold/colour updates.')
+        by_block = defaultdict(list)
+        for m in moves:
+            by_block[m['pin']['block']['id']].append(m)
+        log('\nPER-BLOCK SUMMARY:')
+        for b in blocks:
+            block_moves = by_block[b['id']]
+            n_pins = sum(p['block']['id'] == b['id'] for p in plan)
+            count_moving = sum(not m['already'] for m in block_moves)
+            log(f'  BLOCK {b["id"]}: {n_pins} pins, '
+                f'{count_moving} to move, {len(block_moves)} bold/colour updates')
+        log(f'\nBATCH SUMMARY: {len(blocks)} selected CABBLOCK(s); '
+            f'{len(plan)} pins, {len(signals)} candidate signal texts, '
+            f'{len(associated)} assigned, {len(to_move)} proposed moves, '
+            f'{len(moves)} bold/colour updates.')
         if not moves:
-            popup(f'No unambiguous connection signal text identified on selected block '
-                  f'{block["id"]}.\n\nSee log:\n{log_path}')
+            popup(f'{len(blocks)} CABBLOCK(s) checked, but no unambiguous '
+                  f'connection signal text identified.\n\nLog: {log_path}')
             return 0
         if preview:
             log('PREVIEW ONLY: E3 was not modified.')
-            popup(f'Selected block {block["id"]}: {len(plan)} pins; '
-                  f'{len(to_move)} proposed moves, {len(moves)} bold/colour updates.\n'
+            popup(f'{len(blocks)} selected CABBLOCK(s); {len(plan)} pins.\n'
+                  f'{len(to_move)} proposed moves and {len(moves)} bold/colour updates.\n'
                   f'No changes made.\n\nLog: {log_path}')
             return 0
         if not apply and not confirm_apply(len(to_move), len(moves), log_path):
@@ -1046,12 +1118,15 @@ def run(preview=False, apply=False, type_override=None):
             return 0
         txt = prj.CreateTextObject()
         moved = bolded = coloured = 0
+        per_block_counts = defaultdict(lambda: [0, 0, 0])
         try:
             for m in moves:
+                block_id = m['pin']['block']['id']
                 if not m['already']:
                     how = relocate_one_text(txt, m)
                     moved += 1
-                    log(f'  MOVED text {m["id"]} via {how}')
+                    per_block_counts[block_id][0] += 1
+                    log(f'  MOVED text {m["id"]} on block {block_id} via {how}')
                 if not select_id(txt, m['id']):
                     raise RuntimeError(f'Text {m["id"]} disappeared before formatting.')
                 try:
@@ -1059,21 +1134,31 @@ def run(preview=False, apply=False, type_override=None):
                 except Exception as exc:
                     raise RuntimeError(f'Text {m["id"]}: could not bold: {exc}') from exc
                 bolded += 1
+                per_block_counts[block_id][1] += 1
                 try:
                     txt.SetColour(SIGNAL_COLOUR)
                 except Exception as exc:
-                    raise RuntimeError(f'Text {m["id"]}: could not set colour {SIGNAL_COLOUR}: {exc}') from exc
+                    raise RuntimeError(
+                        f'Text {m["id"]}: could not set colour {SIGNAL_COLOUR}: {exc}') from exc
                 coloured += 1
-                log(f'  FORMATTED {m["id"]}: bold + colour {SIGNAL_COLOUR}')
+                per_block_counts[block_id][2] += 1
+                log(f'  FORMATTED text {m["id"]} on block {block_id}: '
+                    f'bold + colour {SIGNAL_COLOUR}')
         except Exception:
             log(f'PARTIAL FAILURE: {moved} moved; {bolded} bolded; '
-                f'{coloured} coloured. Inspect E3 before continuing.')
+                f'{coloured} coloured across {len(blocks)} block(s). '
+                'Inspect E3 before continuing. A runtime COM failure does not '
+                'automatically roll back earlier successfully formatted labels.')
             raise
-        log(f'SUCCESS: selected block {block["id"]}; {moved} moved, '
-            f'{bolded} bolded and {coloured} colour-{SIGNAL_COLOUR}. Save E3 project.')
-        popup(f'Block {block["id"]}: {len(plan)} pins. '
-              f'{moved} signal numbers relocated, {bolded} bolded, '
-              f'{coloured} set to colour {SIGNAL_COLOUR}.\n\n'
+        for b in blocks:
+            counts = per_block_counts[b['id']]
+            log(f'  DONE block {b["id"]}: {counts[0]} moved, '
+                f'{counts[1]} bolded, {counts[2]} colour-{SIGNAL_COLOUR}')
+        log(f'SUCCESS: {len(blocks)} selected CABBLOCK(s); {moved} moved, '
+            f'{bolded} bolded, {coloured} colour-{SIGNAL_COLOUR}. Save E3 project.')
+        popup(f'{len(blocks)} selected block(s), {len(plan)} pins.\n'
+              f'{moved} connection signal numbers relocated, '
+              f'{bolded} bolded, {coloured} set to colour {SIGNAL_COLOUR}.\n\n'
               'No pin symbols or local signal names changed.\n'
               f'Log: {log_path}\n\nSave your E3 project.')
         return 0
@@ -1088,7 +1173,7 @@ def run(preview=False, apply=False, type_override=None):
 
 def main(argv=None):
     parser = argparse.ArgumentParser(
-        description='Open instructions; click one E3 CABBLOCK; press Enter to '
+        description='Open instructions; select one or more E3 CABBLOCKs; press Enter to '
                     'relocate connection signal numbers, bold them and set colour 4.')
     parser.add_argument('--dry-run', action='store_true',
                         help='Preview only; Enter will not modify E3.')
@@ -1103,13 +1188,13 @@ def main(argv=None):
         if not wait_for_block_selection(preview=args.dry_run):
             log('CANCELLED in selection instructions: E3 was not modified.')
             return 0
-        # Enter is the user's approval. Existing strict read-only preflight
-        # still runs before any E3 modifications; no duplicate Yes/No popup.
+        # Enter authorizes the entire batch. Every selected block is preflighted
+        # before changes; no duplicate Yes/No popup.
         return run(preview=args.dry_run, apply=True,
                    type_override=args.type_override)
     except Exception as exc:
         print('FAILED:', exc)
-        popup(f'{exc}\n\nSee E3_Click_Block_Then_Enter_Log.txt '
+        popup(f'{exc}\n\nSee E3_Bulk_Selected_Block_Relocator_Log.txt '
               'beside this script (or in the system temp directory).', error=True)
         return 1
 
