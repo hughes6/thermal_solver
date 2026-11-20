@@ -1,35 +1,29 @@
-"""E3.series - SELECTED CABBLOCK connection signal relocator.
+"""E3.series - CLICK A BLOCK, PRESS ENTER, FORMAT CONNECTION SIGNALS.
 
 HOW TO USE
-  1. Open the desired sheet in E3.series.
-  2. Click ONCE on the actual CABBLOCK border so that exactly one block is selected.
-  3. Run this script. Review the preview and click Yes to apply.
+  1. Run this script. A small instruction window opens.
+  2. While it stays open, switch to E3.series and select ONE CABBLOCK border.
+  3. Press Enter while in E3 (Windows), or return to the instruction window
+     and press Enter / click "Run on selected block".
+  4. The script checks the E3 selection, then runs on ONLY that block.
 
-Only connection-signal text associated with pins physically inside THAT selected
-CABBLOCK is affected. No page/device/connector entry and no spreadsheet.
+No Excel file or manual connector/page input. No second confirmation is shown:
+pressing Enter authorizes the preflight and changes on the selected block.
+Press Esc or Cancel at the instruction window to exit without changes.
 
 Changes on the selected block only:
-  * Move connection signal number to the opposite INNER edge of the block,
-    preserving the pin's row; do not move an already-relocated number.
-  * Make all assigned numbers bold (E3 SetStyle(1)).
+  * Move associated connection signal numbers to the opposite INNER edge.
+  * Leave already-moved numbers in place.
+  * Make all assigned numbers BOLD (E3 SetStyle(1)).
   * Set their E3 palette text colour to 4 (SetColour(4)).
 
-Source code reuses the previously working no-Excel relocator's text discovery,
-preflight, position verification, alignment, and formatting methods. Dry-run:
-    python E3_Selected_Block_Signal_Relocator.py --dry-run
-To apply without the confirmation pop-up:
-    python E3_Selected_Block_Signal_Relocator.py --apply
-If both text types 7 and 1007 are present and relevant, use --type 7 or
---type 1007 to explicitly choose a type after reviewing the diagnostic log.
+Optional read-only preview: python E3_Click_Block_Then_Enter.py --dry-run
+Optional type override:    python E3_Click_Block_Then_Enter.py --type 1007
 
-E3 COM selection getter names/signatures can vary by version. This script tries
-known selection getter forms, verifies the selected symbol is a real CABBLOCK,
-and stops without modifying the drawing if the selection cannot be resolved.
-It does NOT infer a selection from the active sheet or use the first CABBLOCK.
-
-Requires Windows, pywin32, and a running E3.series project.
+E3 COM selection getter names/signatures vary by version. The script verifies
+exactly one CABBLOCK is selected and refuses uncertain text/position changes.
+Requires Windows, pywin32, tkinter and a running E3.series project.
 """
-
 from __future__ import annotations
 import argparse
 import math
@@ -651,7 +645,7 @@ def choose_log_path():
     locations = [Path(__file__).resolve().parent, Path(tempfile.gettempdir())]
     for directory in locations:
         try:
-            path = directory / 'E3_Selected_Block_Signal_Relocator_Log.txt'
+            path = directory / 'E3_Click_Block_Then_Enter_Log.txt'
             with open(path, 'w', encoding='utf-8'):
                 pass
             return path
@@ -688,6 +682,115 @@ def popup(message, error=False):
     except Exception:
         pass
 
+
+
+
+def wait_for_block_selection(preview=False):
+    """Nonmodal directions; E3 must remain usable while this window is open.
+
+    Return in the window works through Tk. On Windows, pressing Enter while
+    E3 is foreground also works via a *read-only* key-state poll (no global
+    hotkey registration, keyboard interception, or E3 focus manipulation).
+    """
+    try:
+        import tkinter as tk
+        from tkinter import ttk
+        root = tk.Tk()
+    except Exception as exc:
+        raise RuntimeError(
+            'Could not open the block-selection instruction window. '
+            'No E3 changes made. Check that tkinter is installed.'
+        ) from exc
+
+    accepted = False
+    finished = False
+
+    def proceed(event=None):
+        nonlocal accepted, finished
+        if finished:
+            return
+        accepted = True
+        finished = True
+        root.quit()
+
+    def cancel(event=None):
+        nonlocal finished
+        if finished:
+            return
+        finished = True
+        root.quit()
+
+    try:
+        root.title('E3 - Select a block')
+        root.resizable(False, False)
+        root.protocol('WM_DELETE_WINDOW', cancel)
+        # Do not make the window modal or always-on-top: the user needs to
+        # click the E3 drawing behind it without the dialog blocking selection.
+        root.attributes('-topmost', False)
+        frame = ttk.Frame(root, padding=20)
+        frame.pack(fill='both', expand=True)
+        ttk.Label(frame, text='Connection Signal Relocator',
+                  font=('Segoe UI', 13, 'bold')).pack(anchor='w', pady=(0, 12))
+        ttk.Label(frame, text=(
+            '1. Switch to E3.series and click ONE CABBLOCK border.\n'
+            '2. Press ENTER to run on that selected block.\n'
+            '   (You can press Enter in E3, or return to this window.)'),
+                  justify='left', font=('Segoe UI', 10)).pack(anchor='w')
+        ttk.Separator(frame, orient='horizontal').pack(fill='x', pady=14)
+        mode = ('PREVIEW ONLY - no E3 changes will be made.' if preview else
+                'On Enter: move connection signal numbers, make them bold,\n'
+                'and set text colour to E3 palette 4.')
+        ttk.Label(frame, text=mode, justify='left').pack(anchor='w', pady=(0, 12))
+        buttons = ttk.Frame(frame)
+        buttons.pack(fill='x')
+        go_btn = ttk.Button(buttons, text='Run on selected block (Enter)', command=proceed)
+        go_btn.pack(side='left')
+        ttk.Button(buttons, text='Cancel (Esc)', command=cancel).pack(side='right')
+        root.bind('<Return>', proceed)
+        root.bind('<KP_Enter>', proceed)
+        root.bind('<Escape>', cancel)
+
+        root.update_idletasks()
+        # Place instructions near upper right so the block remains easier to click.
+        width, height = root.winfo_width(), root.winfo_height()
+        x = max(0, root.winfo_screenwidth() - width - 50)
+        root.geometry(f'+{x}+80')
+        go_btn.focus_set()
+
+        # Tk's Return binding only works while its window is foreground.
+        # Windows GetAsyncKeyState lets Enter from E3 also complete the prompt
+        # without hijacking E3's keyboard or needing a third-party package.
+        try:
+            import ctypes
+            key_state = ctypes.windll.user32.GetAsyncKeyState
+            vk_enter = 0x0D
+            was_down = bool(key_state(vk_enter) & 0x8000)
+            ready = not was_down
+
+            def poll_enter():
+                nonlocal was_down, ready
+                if finished:
+                    return
+                try:
+                    down = bool(key_state(vk_enter) & 0x8000)
+                    if not down:
+                        ready = True
+                    if ready and down and not was_down:
+                        proceed()
+                    was_down = down
+                except Exception:
+                    # Dialog Enter/button remain usable if OS polling fails.
+                    pass
+                if not finished:
+                    root.after(25, poll_enter)
+
+            root.after(25, poll_enter)
+        except (AttributeError, OSError):
+            log('Global Enter detection not available. Use Enter/Run in the instruction box.')
+        root.mainloop()
+        return accepted
+    finally:
+        root.destroy()
 
 
 def selected_symbol_id_candidates(prj, sht, app):
@@ -898,7 +1001,7 @@ def run(preview=False, apply=False, type_override=None):
         LOG_STREAM = open(log_path, 'w', encoding='utf-8')
         log('=' * 74)
         log(f'E3 SELECTED-BLOCK SIGNAL RELOCATOR + BOLD + COLOUR {SIGNAL_COLOUR}')
-        log('No Excel or manual page/device/connector entry required.')
+        log('No Excel, page, device or connector input. Selected CABBLOCK only.')
         log('No changes until selected block, pin and text preflight succeeds.')
         log('=' * 74)
         import win32com.client as win32
@@ -985,23 +1088,28 @@ def run(preview=False, apply=False, type_override=None):
 
 def main(argv=None):
     parser = argparse.ArgumentParser(
-        description=f'Select one E3 CABBLOCK, then run: move and bold its '
-                    f'connection signal numbers, palette colour {SIGNAL_COLOUR}.')
+        description='Open instructions; click one E3 CABBLOCK; press Enter to '
+                    'relocate connection signal numbers, bold them and set colour 4.')
     parser.add_argument('--dry-run', action='store_true',
-                        help='Read-only preview; do not modify E3.')
+                        help='Preview only; Enter will not modify E3.')
     parser.add_argument('--apply', action='store_true',
-                        help='Apply after preflight without confirmation dialog.')
+                        help='Compatibility option; Enter already authorizes the operation.')
     parser.add_argument('--type', type=int, dest='type_override', metavar='N',
                         help='Explicit connection signal text type; usually 1007 or 7.')
     args = parser.parse_args(argv)
     if args.apply and args.dry_run:
         parser.error('--apply and --dry-run cannot be combined')
     try:
-        return run(preview=args.dry_run, apply=args.apply,
+        if not wait_for_block_selection(preview=args.dry_run):
+            log('CANCELLED in selection instructions: E3 was not modified.')
+            return 0
+        # Enter is the user's approval. Existing strict read-only preflight
+        # still runs before any E3 modifications; no duplicate Yes/No popup.
+        return run(preview=args.dry_run, apply=True,
                    type_override=args.type_override)
     except Exception as exc:
         print('FAILED:', exc)
-        popup(f'{exc}\n\nSee E3_Selected_Block_Signal_Relocator_Log.txt '
+        popup(f'{exc}\n\nSee E3_Click_Block_Then_Enter_Log.txt '
               'beside this script (or in the system temp directory).', error=True)
         return 1
 
