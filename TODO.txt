@@ -1,37 +1,40 @@
-"""E3.series | Bulk CABBLOCK Header Formatter (select blocks, press Enter).
+"""E3.series | Bulk CABBLOCK Header Formatter using Saber Parameter 1.
 
-Select one or more CABBLOCK borders in E3, press Enter in the always-on-top
-instruction window (or E3), and format their attached header texts:
-  Location                  bold, black, center, height 0.25
-  Device Function           bold, black, center, height 0.25
-  Equipment Identification  bold, black, center, height 0.25
-  Device Designation        bold, black, center, height 0.25
+SELECT one or more placed CABBLOCKs in E3, press Enter in the always-on-top
+instruction window (or while E3 has focus). Repeat until Close/X/Escape.
 
-The labels are stacked from the top INSIDE each selected block. Existing
-content is preserved. Empty Device Function texts are populated with XXX.
-No pins, wires, other blocks, or dimensions are altered.
+Each selected block displays, from top to bottom:
+  1. Location                text type 15
+  2. Saber Parameter 1       project-specific ATTRIBUTE TEXT TYPE linked to
+                            the symbol attribute named ``saberParam1``
+  3. Equipment Identification   text type 1000
+  4. Block Device Designation   text type 212
 
-Validated against the Nov 20 E3 CABBLOCK diagnostic for SCP/CTU:
-    15   Location                (e.g. BxRxUx)
-    14   Higher-level assignment / Function  (blank on your blocks)
-    1000 Equipment Identification           (e.g. 2713303-700)
-    212  Block/device designation displayed (e.g. SCP#1)
-    1010 Combined text (e.g. BxRxUx SCP#1); intentionally NOT edited.
-E3 officially defines text type 14 as Higher-level assignment; some
-E3 installations label this field Function. Changing its value can change
-the E3 device's linked assignment, not only its visual text. Test on a
-saved copy of your E3 project first.
+All four texts: visible, bold, black, center-justified, height 0.25.
+For a blank Saber Parameter 1, set the SELECTED SYMBOL's ``saberParam1``
+attribute to XXX, so the ordinary shared Device Function is NOT changed.
+Existing nonblank Saber Parameter 1 values are preserved.
 
-The old script incorrectly assumed text type 12 (device designation)
-was attached to each CABBLOCK. On your placed CABBLOCK symbols, the
-actual matching designation text is type 212. Old JSON type mappings
-are ignored so a previously selected type 1010 cannot be reused.
+IMPORTANT: ``saberParam1`` is an ATTRIBUTE NAME, not a universal E3 text-type
+number. The script tries to resolve the linked text type from the project's
+text-type definitions or from the attached text metadata. If the project does
+not expose that link, give the type number using ``--saber-type N`` AFTER
+checking the text type in the E3 database configuration. It will never
+silently reuse type 14, 1010 or another guessed text type.
 
-Optional preview: python E3_Bulk_Block_Header_Formatter_Fixed.py --dry-run
-Optional type overrides: --function-type N --equipment-type M
-                         --designation-type P
-Close, X or Escape exits; the window returns after every batch.
-Requires Windows, pywin32, tkinter, and open E3.series schematic.
+The placed CABBLOCK must ALREADY HAVE the attribute-linked Saber Parameter 1
+text node. Adding a missing symbol/template text node is intentionally NOT
+attempted through an unverified COM method. If it is absent, the whole batch
+stops before changing E3, with a diagnostic showing the available text types.
+
+The only E3 objects changed are the specified texts of the selected blocks
+and each block symbol's own saberParam1 attribute (when blank). Any OLD
+Device Function label (text type 14) attached to a selected block is HIDDEN
+only, to prevent two labels overlaying in the second row. Its underlying
+property value remains unchanged. No Excel, no pins, no dimensions. Test on a saved E3 project copy before production.
+
+Use --dry-run to inspect without changing E3; --saber-type N to specify your
+project-specific linked text type. Other observed type overrides remain.
 """
 from __future__ import annotations
 import argparse
@@ -47,14 +50,16 @@ from pathlib import Path
 # Formatting rules (same schematic drawing units as your other E3 scripts)
 LOCATION_TYPE = 15
 # These types were observed directly in your four E3 CABBLOCKs.
-FUNCTION_TYPE = 14                  # Higher-level assignment / Function
+# The attribute's displayed text type is project-specific, NOT E3 system type 14.
+SABER_ATTRIBUTE_NAME = 'saberParam1'
+SABER_TYPE = None                     # auto-resolve from text-type metadata
 EQUIPMENT_TYPE = 1000              # Equipment identification, per selected sample
 DEVICE_DESIGNATION_TYPE = 212      # SCP#1, CTU#1 on your CABBLOCKs
 # Do NOT use type 1010 for Function: it is combined location+designation.
 UNSAFE_COMBINED_TYPE = 1010
-HEADER_ORDER = ('location', 'function', 'equipment', 'designation')
+HEADER_ORDER = ('location', 'saber', 'equipment', 'designation')
 FIELD_LABELS = {
-    'location': 'Location', 'function': 'Device Function',
+    'location': 'Location', 'saber': 'Saber Parameter 1',
     'equipment': 'Equipment Identification', 'designation': 'Device Designation',
 }
 TEXT_HEIGHT = 0.25
@@ -68,7 +73,7 @@ POSITION_TOLERANCE = 0.02
 COM_MISSING = -2147352572
 BLOCK_LOCATION_TOLERANCE = 0.10
 LOG_STREAM = None
-# No JSON mapping is used; prior mapping (1010/1000) was wrong for Function.
+# No cached JSON mapping is used: it could target a different E3 project.
 
 def log(message=""):
     line = str(message)
@@ -240,7 +245,7 @@ def wait_for_block_selection(preview=False):
         root.attributes('-topmost', True)
         frame = ttk.Frame(root, padding=20)
         frame.pack(fill='both', expand=True)
-        ttk.Label(frame, text='Block Header Formatter',
+        ttk.Label(frame, text='Block Header Formatter (Saber Parameter 1)',
                   font=('Segoe UI', 13, 'bold')).pack(anchor='w', pady=(0, 12))
         ttk.Label(frame, text=(
             '1. In E3, select ONE OR MORE CABBLOCK borders.\n'
@@ -253,7 +258,7 @@ def wait_for_block_selection(preview=False):
                   justify='left', font=('Segoe UI', 10)).pack(anchor='w')
         ttk.Separator(frame, orient='horizontal').pack(fill='x', pady=14)
         mode = ('PREVIEW ONLY - no E3 changes will be made.' if preview else
-                'On Enter: stack Location / Device Function / Equipment ID /\n'
+                'On Enter: stack Location / Saber Parameter 1 / Equipment ID /\n'
                 'Device Designation; bold, black, centered, 0.25 height.')
         ttk.Label(frame, text=mode, justify='left').pack(anchor='w', pady=(0, 12))
         buttons = ttk.Frame(frame)
@@ -448,7 +453,7 @@ def popup(message, error=False):
         root.withdraw()
         root.attributes('-topmost', True)
         (messagebox.showerror if error else messagebox.showinfo)(
-            'E3 Block Header Formatter', str(message), parent=root
+            'E3 Block Header Formatter (Saber Parameter 1)', str(message), parent=root
         )
         root.destroy()
     except Exception:
@@ -458,7 +463,7 @@ def popup(message, error=False):
 def choose_log_path():
     for folder in (Path(__file__).resolve().parent, Path(tempfile.gettempdir())):
         try:
-            result = folder / 'E3_Block_Header_Formatter_Log.txt'
+            result = folder / 'E3_Saber_Header_Formatter_Log.txt'
             with open(result, 'a', encoding='utf-8'):
                 pass
             return result
@@ -568,33 +573,136 @@ def inspect_block_texts(prj, blocks):
     return all_texts
 
 
-def determine_mapping(all_texts, override_function=None, override_equipment=None,
-                      override_designation=None):
-    """Use E3 types observed in the user's real CABBLOCK logs.
+def _is_saber_label(value):
+    """True for saberParam1 / Saber Parameter 1, NOT saberParam10 etc."""
+    import re
+    phrase = str(value or '')
+    return bool(re.search(r'\bsaber\s*(?:parameter|param)\s*[_-]?\s*1\b',
+                          phrase, re.I))
 
-    Intentionally IGNORE the JSON mapping saved by the previous version;
-    its Device Function=1010 was wrong (1010 is combined text).
-    Never prompt the user to choose a type by visual similarity alone.
+
+def project_saber_text_types(prj):
+    """Best-effort READ-ONLY lookup of E3 text-type definition metadata.
+
+    GetTextTypes is available in E3 2022+, but its output VARIANT format differs
+    among COM versions. Only unambiguous type-number/attribute-name pairs are
+    accepted. Never infer from a blank text value or a nearby type number.
     """
+    try:
+        method = getattr(prj, 'GetTextTypes')
+    except Exception:
+        log('  E3 job.GetTextTypes is not available on this installation.')
+        return set()
+    results = []
+    for args in ((None,), (), ({},)):
+        try:
+            result = method(*args)
+            results.append(result)
+            log(f'  job.GetTextTypes{args}: returned {type(result).__name__}')
+            if result is not None:
+                break
+        except Exception as exc:
+            log(f'  job.GetTextTypes{args}: {str(exc)[:130]}')
+    candidates = set()
+
+    def accept(number, descriptor):
+        try:
+            n = int(number)
+        except (TypeError, ValueError):
+            return
+        if n > 0 and _is_saber_label(descriptor):
+            candidates.add(n)
+
+    def visit(value, depth=0):
+        if depth > 6:
+            return
+        if isinstance(value, dict):
+            # Normal dictionary may be (type number -> text type definition),
+            # (text type label -> number), or a structured definition.
+            for k, v in value.items():
+                accept(k, v)
+                accept(v, k)
+            if _is_saber_label(repr(value)):
+                for id_field in ('type', 'Type', 'type_id', 'typeId', 'id', 'number'):
+                    if id_field in value:
+                        accept(value[id_field], repr(value))
+            for k, v in value.items():
+                visit(v, depth+1)
+        elif isinstance(value, (tuple, list)):
+            if len(value) == 2:
+                accept(value[0], value[1])
+                accept(value[1], value[0])
+            for item in value:
+                visit(item, depth+1)
+        elif isinstance(value, str):
+            if value.strip().startswith(('{', '[')):
+                try:
+                    import ast
+                    visit(ast.literal_eval(value), depth+1)
+                except (ValueError, SyntaxError, MemoryError, RecursionError):
+                    pass
+    for result in results:
+        visit(result)
+    if candidates:
+        log(f'  E3 text-type definitions identify Saber Parameter 1 as {sorted(candidates)}')
+    return candidates
+
+
+def determine_mapping(prj, all_texts, override_saber=None,
+                      override_equipment=None, override_designation=None):
+    """Resolve ONLY a confirmed ``saberParam1``-linked node.
+
+    System Device Function / Higher Level Assignment type 14 must NEVER be used.
+    """
+    prohibited = {14, 15, 1000, 212, 1010}
+    if override_saber is not None:
+        saber_type = int(override_saber)
+        log(f'  Saber Parameter 1 type explicitly specified: {saber_type}')
+    else:
+        candidates = set()
+        for attached in all_texts.values():
+            for typ, rows in attached.items():
+                if any(_is_saber_label(e.get('hint', '')) for e in rows):
+                    candidates.add(int(typ))
+        candidates |= project_saber_text_types(prj)
+        # Retain only types actually attached to EACH selected CABBLOCK.
+        candidates = {t for t in candidates
+                      if all(t in text_types for text_types in all_texts.values())}
+        if len(candidates) == 1:
+            saber_type = next(iter(candidates))
+        else:
+            available = {
+                block_id: [(typ, [(e['id'], e['value'][:35]) for e in rows])
+                           for typ, rows in sorted(group.items())]
+                for block_id, group in all_texts.items()
+            }
+            raise RuntimeError(
+                'Could not uniquely identify the attribute-linked Saber Parameter 1 '
+                f'text type in the selected CABBLOCKs. Candidates={sorted(candidates)}.\n'
+                f'Available attached types: {available}\n'
+                'Check E3 Database Editor > Format > Text Types and find the type '
+                'with assigned attribute saberParam1 (Saber Parameter 1). '
+                'Ensure its text node is attached to each CABBLOCK, then run '
+                'this script with --saber-type NUMBER. '
+                'No E3 changes were made.'
+            )
+    if saber_type in prohibited or saber_type <= 0:
+        raise RuntimeError(
+            f'Saber type {saber_type} is a protected header/combined type or '
+            'invalid (14 is Device Function, 1010 is combined text). '
+            'Refusing to edit it; NO CHANGES MADE.'
+        )
     mapping = {
         'location': LOCATION_TYPE,
-        'function': int(override_function) if override_function is not None else FUNCTION_TYPE,
+        'saber': saber_type,
         'equipment': int(override_equipment) if override_equipment is not None else EQUIPMENT_TYPE,
-        'designation': (int(override_designation) if override_designation is not None
-                        else DEVICE_DESIGNATION_TYPE),
+        'designation': int(override_designation) if override_designation is not None else DEVICE_DESIGNATION_TYPE,
     }
     if len(set(mapping.values())) != 4:
-        raise RuntimeError('Header text-type mapping contains duplicates. '
-                           'No E3 changes made.')
-    if mapping['function'] == UNSAFE_COMBINED_TYPE:
-        raise RuntimeError('Type 1010 is the combined Location/Designation text '
-                           'in this E3 project, NOT Device Function. Refusing '
-                           'to edit it. No changes made.')
-    log('E3 HEADER TEXT TYPE MAPPING (observed from your CABBLOCK logs): ' + ', '.join(
-        f"{FIELD_LABELS[k]}={mapping[k]}" for k in HEADER_ORDER))
-    log('NOTE: Function type 14 is E3 Higher Level Assignment. Filling XXX can '
-        'change that linked E3 property for the corresponding device/view.')
-    # Catch a different project/text-template before any E3 changes.
+        raise RuntimeError(f'Header text type mappings overlap: {mapping}. NO CHANGES MADE.')
+    log('E3 HEADER TEXT TYPE MAPPING: ' + ', '.join(
+        f'{FIELD_LABELS[k]}={mapping[k]}' for k in HEADER_ORDER))
+    log('PROTECTION: Device Function VALUE (type 14) and combined text 1010 are never changed; old type-14 DISPLAY is hidden.')
     for block_id, entries in all_texts.items():
         missing = [(FIELD_LABELS[field], typ) for field, typ in mapping.items()
                    if typ not in entries]
@@ -602,11 +710,55 @@ def determine_mapping(all_texts, override_function=None, override_equipment=None
             available = [(typ, [item['value'][:28] for item in group])
                          for typ, group in sorted(entries.items())]
             raise RuntimeError(
-                f'CABBLOCK {block_id}: required text types missing: {missing}. '
-                f'Found types/values: {available}. NO CHANGES MADE. '
-                'Use --designation-type or another explicit override only '
-                'after inspecting the actual text types in E3.')
+                f'CABBLOCK {block_id}: required property-linked text types missing: '
+                f'{missing}. Found types/values: {available}. NO CHANGES MADE. '
+                'The Saber Parameter 1 text node must be added to the CABBLOCK '
+                'symbol/template in E3 if missing; do not reuse text type 14.'
+            )
     return mapping
+
+
+def get_symbol_saber_value(sym):
+    """Read a single SYMBOL instance's Saber attribute (never its device)."""
+    try:
+        value = sym.GetAttributeValue(SABER_ATTRIBUTE_NAME)
+    except Exception as exc:
+        raise RuntimeError(
+            f'Cannot read symbol attribute {SABER_ATTRIBUTE_NAME!r}: {exc}. '
+            'No E3 changes made. This COM version may use a different '
+            'attribute method or the attribute may be missing.'
+        ) from exc
+    if value is None:
+        return ''
+    if isinstance(value, (tuple, list)):
+        # Do not guess a string from ambiguous COM output.
+        if len(value) == 1 and isinstance(value[0], str):
+            value = value[0]
+        else:
+            raise RuntimeError(f'Unexpected GetAttributeValue return {value!r} '
+                               '(no changes made).')
+    return str(value).strip()
+
+
+def preflight_saber_attributes(prj, plan):
+    """Check instance-level Saber access for EVERY block before any writes."""
+    sym = prj.CreateSymbolObject()
+    for item in plan:
+        if item['field'] != 'saber':
+            continue
+        if not select_id(sym, item['block']['id']):
+            raise RuntimeError(f"Selected block {item['block']['id']} disappeared.")
+        value = get_symbol_saber_value(sym)
+        if not hasattr(sym, 'SetAttributeValue'):
+            raise RuntimeError('E3 Symbol.SetAttributeValue is missing. '
+                               'NO CHANGES MADE.')
+        item['before_attribute_value'] = value
+        # Only fill XXX when BOTH the linked text and symbol attribute are blank.
+        item['set_xxx'] = not (value or item['before_value'].strip())
+        log(f"  BLOCK {item['block']['id']}: symbol saberParam1={value!r}; "
+            f"linked text={item['before_value']!r}; "
+            f"{'SET XXX' if item['set_xxx'] else 'PRESERVE VALUE'}")
+    return plan
 
 
 def build_plan(blocks, all_texts, mapping):
@@ -660,18 +812,39 @@ def preflight_positions(prj, plan):
             abs(item['before']['x'] - item['x']) > POSITION_TOLERANCE or
             abs(item['before']['y'] - item['y']) > POSITION_TOLERANCE
         )
-        if item['field'] == 'function' and not item['before_value'].strip():
-            item['set_xxx'] = True
-        else:
-            item['set_xxx'] = False
+        item['set_xxx'] = False  # overwritten for Saber by attribute preflight
         log(f"  BLOCK {item['block']['id']} | {FIELD_LABELS[item['field']]} "
             f"type={item['type']} text_id={item['id']} "
             f"{item['before_value'][:70]!r} "
             f"({item['before']['x']:.3f},{item['before']['y']:.3f}) => "
             f"({item['x']:.3f},{item['y']:.3f}) | "
             f"{'MOVE' if item['move_needed'] else 'IN PLACE'}"
-            + (' | SET FUNCTION=XXX' if item['set_xxx'] else ''))
+            + (' | SET SABER=XXX' if item['set_xxx'] else ''))
     return plan
+
+
+def old_function_nodes_to_hide(blocks, all_texts, plan):
+    """Hide ONLY existing Device Function display nodes on selected blocks.
+
+    The old formatter left these visible at the second header row. We do not
+    modify their text content, property value, type, position or formatting.
+    """
+    target_ids = {item['id'] for item in plan}
+    old_nodes = []
+    seen = set()
+    for block in blocks:
+        for record in all_texts[block['id']].get(14, []):
+            tid = record['id']
+            if tid in target_ids or tid in seen:
+                raise RuntimeError(
+                    f'Text {tid} appears in multiple selected blocks or overlaps '
+                    'a target header text; batch refused before changes.'
+                )
+            seen.add(tid)
+            old_nodes.append({'id': tid, 'block': block, 'value': record['value']})
+    log(f'  OLD DEVICE FUNCTION LABELS: {len(old_nodes)} will be hidden '
+        '(their values and E3 attributes are not changed).')
+    return old_nodes
 
 
 def _same_xy(txt, block, x, y):
@@ -725,31 +898,53 @@ def checked_style_write(txt, method, value, field):
         raise RuntimeError(f"Text {field}: {method}({value}) returned {result}.")
 
 
-def apply_plan(prj, plan):
-    """Execute after all selection, text nodes and positions pass preflight.
+def apply_plan(prj, plan, old_function_labels=None):
+    """Write the selected SYMBOL instance attribute and its linked text style.
 
-    A COM failure is NOT atomic; previous successful writes remain, and the
-    log says so. Users should test on a saved copy before bulk production use.
+    The Device Function text type 14 is explicitly never selected. A COM
+    failure can leave some changes in E3; the log reports partial success.
     """
     txt = prj.CreateTextObject()
+    sym = prj.CreateSymbolObject()
     completed = 0
-    updated_functions = 0
+    updated_saber = 0
     try:
         for item in plan:
             if not select_id(txt, item['id']):
                 raise RuntimeError(f"Text {item['id']} no longer available.")
             field = FIELD_LABELS[item['field']]
-            if item['set_xxx']:
-                checked_style_write(txt, 'SetText', 'XXX', field)
-                actual = str(optional_call(txt, 'GetText') or '').strip()
+            if item['field'] == 'saber' and item['set_xxx']:
+                if not select_id(sym, item['block']['id']):
+                    raise RuntimeError(f"Block {item['block']['id']} disappeared.")
+                try:
+                    result = sym.SetAttributeValue(SABER_ATTRIBUTE_NAME, 'XXX')
+                except Exception as exc:
+                    raise RuntimeError(
+                        f"Block {item['block']['id']}: failed to set its symbol "
+                        f"attribute {SABER_ATTRIBUTE_NAME}=XXX: {exc}"
+                    ) from exc
+                if isinstance(result, (int, float)) and result < 0:
+                    raise RuntimeError(f"Block {item['block']['id']}: symbol "
+                                       f'SetAttributeValue returned {result}.')
+                actual = get_symbol_saber_value(sym)
                 if actual != 'XXX':
-                    raise RuntimeError(f"Text {item['id']}: SetText('XXX') returned "
-                                       f"but readback was {actual!r}. "
-                                       'The text may be controlled by E3 Higher Level '
-                                       'Assignment; setting the linked property through '
-                                       'this text object may be unsupported. '
-                                       'Check this block before continuing.')
-                updated_functions += 1
+                    raise RuntimeError(
+                        f"Block {item['block']['id']}: symbol attribute readback "
+                        f"was {actual!r}, expected XXX. STOPPED to avoid "
+                        'modifying any other property.'
+                    )
+                # Do not call text.SetText here: that may write a linked DEVICE
+                # attribute rather than the selected symbol's per-view value.
+                linked_text = str(optional_call(txt, 'GetText') or '').strip()
+                if linked_text != 'XXX':
+                    raise RuntimeError(
+                        f"Block {item['block']['id']} text {item['id']}: "
+                        'the selected symbol attribute was set to XXX, but the '
+                        f'linked text still reads {linked_text!r}. '
+                        'This text type may not actually reference the SYMBOL '
+                        'saberParam1 property. STOPPED; inspect this block in E3.'
+                    )
+                updated_saber += 1
             checked_style_write(txt, 'SetVisibility', 1, field)
             checked_style_write(txt, 'SetStyle', BOLD_STYLE, field)
             checked_style_write(txt, 'SetColour', BLACK_COLOUR, field)
@@ -761,26 +956,35 @@ def apply_plan(prj, plan):
             log(f"  DONE block {item['block']['id']} | {field}: "
                 f"text {item['id']} black/bold/0.25/center/visible; "
                 f"{'moved' if item['move_needed'] else 'position unchanged'}"
-                + ('; XXX added' if item['set_xxx'] else ''))
+                + ('; symbol saberParam1=XXX' if item['set_xxx'] else ''))
+        # Hide only old *display text* for Device Function. Never SetText or
+        # SetAttributeValue on type 14, and never touch unselected blocks.
+        for old in (old_function_labels or []):
+            if not select_id(txt, old['id']):
+                raise RuntimeError(f"Old Function label {old['id']} disappeared.")
+            checked_style_write(txt, 'SetVisibility', 0, 'Old Device Function label')
+            log(f"  HID old Device Function display text {old['id']} on "
+                f"block {old['block']['id']} (value preserved: {old['value']!r})")
     except Exception:
-        log(f"PARTIAL FAILURE: {completed}/{len(plan)} text nodes completed; "
-            f"{updated_functions} Device Function values filled. "
+        log(f'PARTIAL FAILURE: {completed}/{len(plan)} text nodes completed; '
+            f'{updated_saber} symbol Saber Parameter 1 values filled. '
             'Earlier E3 writes may remain; inspect the drawing.')
         raise
-    return completed, updated_functions
+    return completed, updated_saber
 
 
-def run(preview=False, function_type=None, equipment_type=None,
+def run(preview=False, saber_type=None, equipment_type=None,
         designation_type=None):
     global LOG_STREAM
     path = choose_log_path()
     try:
         LOG_STREAM = open(path, 'a', encoding='utf-8')
         log('\n' + '=' * 80)
-        log('NEW HEADER BATCH: ' + datetime.now().astimezone().strftime('%Y-%m-%d %H:%M:%S'))
-        log('FORMAT: LOCATION > DEVICE FUNCTION > EQUIPMENT ID > DEVICE DESIGNATION')
-        log('Observed field types: LOCATION=15; FUNCTION=14; EQUIPMENT=1000; DESIGNATION=212')
-        log('Previous Function=1010 mapping was incorrect and is ignored.')
+        log('NEW SABER HEADER BATCH: ' + datetime.now().astimezone().strftime('%Y-%m-%d %H:%M:%S'))
+        log('FORMAT: LOCATION > SABER PARAMETER 1 > EQUIPMENT ID > DEVICE DESIGNATION')
+        log('KNOWN TYPES: LOCATION=15; EQUIPMENT=1000; DESIGNATION=212')
+        log('Saber Parameter 1: attribute saberParam1, linked text-type dynamically resolved')
+        log('NEVER MODIFY DEVICE FUNCTION (14) OR COMBINED TEXT (1010)')
         log('BOLD, BLACK (0), CENTER (2), HEIGHT 0.25, VISIBLE')
         log('Using current E3 GUI selection. No spreadsheet required.')
         log('=' * 80)
@@ -790,28 +994,34 @@ def run(preview=False, function_type=None, equipment_type=None,
         sht = prj.CreateSheetObject()
         blocks = get_selected_cabblocks(prj, sht, app)
         all_texts = inspect_block_texts(prj, blocks)
-        mapping = determine_mapping(all_texts, function_type, equipment_type,
+        mapping = determine_mapping(prj, all_texts, saber_type, equipment_type,
                                     designation_type)
         plan = build_plan(blocks, all_texts, mapping)
         preflight_positions(prj, plan)
+        preflight_saber_attributes(prj, plan)
+        old_function_labels = old_function_nodes_to_hide(blocks, all_texts, plan)
         changes = sum(p['move_needed'] for p in plan)
         blanks = sum(p['set_xxx'] for p in plan)
         log(f'BATCH READY: {len(blocks)} block(s); {len(plan)} linked text(s); '
-            f'{changes} reposition(s); {blanks} blank function(s) -> XXX.')
+            f'{changes} reposition(s); {blanks} blank per-block Saber parameters -> XXX; '
+            f'{len(old_function_labels)} old Function labels will be hidden.')
         if preview:
             log('DRY RUN: NO CHANGES MADE.')
             popup(f'{len(blocks)} selected block(s) validated.\n'
                   f'{len(plan)} text nodes; {changes} moves, {blanks} blank '
-                  f'Device Functions would become XXX.\n\n'
+                  'symbol Saber Parameter 1 values would become XXX.\n\n'
+                  f'{len(old_function_labels)} old Function labels would be hidden.\n'
                   f'No changes made.\nLog: {path}')
             return 0
-        completed, filled = apply_plan(prj, plan)
+        completed, filled = apply_plan(prj, plan, old_function_labels)
         log(f'SUCCESS: {len(blocks)} CABBLOCK(s), {completed} text nodes; '
-            f'{filled} Device Function placeholders set to XXX.')
+            f'{filled} per-symbol Saber Parameter 1 values set to XXX; '
+            f'{len(old_function_labels)} old Function displays hidden.')
         popup(f'Formatted {len(blocks)} selected block(s).\n'
-              'Location → Device Function → Equipment ID → Device Designation\n'
-              f'{completed} labels formatted; {filled} Device Function values '
-              f'filled with XXX.\n\nLog: {path}\n\nSave the E3 project.')
+              'Location → Saber Parameter 1 → Equipment ID → Device Designation\n'
+              f'{completed} labels formatted; {filled} per-symbol Saber Parameter 1 '
+              f'values filled with XXX; {len(old_function_labels)} old Function labels hidden.\n\n'
+              f'Log: {path}\n\nSave the E3 project.')
         return 0
     except Exception:
         log('ERROR: ' + traceback.format_exc())
@@ -827,8 +1037,8 @@ def main(argv=None):
         description='Select any number of E3 CABBLOCKs and press Enter to '
                     'format a 4-line header on each block.')
     parser.add_argument('--dry-run', action='store_true', help='Preview only.')
-    parser.add_argument('--function-type', type=int, default=None,
-                        help='Override observed Function/Higher Level Assignment type 14.')
+    parser.add_argument('--saber-type', type=int, default=None,
+                        help='Project-specific type ID linked to saberParam1 (after verifying in E3).')
     parser.add_argument('--equipment-type', type=int, default=None,
                         help='Override observed Equipment Identification type 1000.')
     parser.add_argument('--designation-type', type=int, default=None,
@@ -845,13 +1055,13 @@ def main(argv=None):
             return 0
         try:
             run(preview=args.dry_run,
-                function_type=args.function_type,
+                saber_type=args.saber_type,
                 equipment_type=args.equipment_type,
                 designation_type=args.designation_type)
         except Exception as exc:
             print('FAILED:', exc)
             popup(str(exc) + '\n\nThe instruction window will reopen.\n'
-                  'Log: E3_Block_Header_Formatter_Log.txt', error=True)
+                  'Log: E3_Saber_Header_Formatter_Log.txt', error=True)
 
 
 if __name__ == '__main__':
