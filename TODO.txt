@@ -9,10 +9,12 @@ HOW TO USE
      any change. Non-block objects in the selection are ignored.
   5. Connection signal numbers on those blocks move to the opposite INSIDE edge,
      become bold (SetStyle(1)) and E3 palette colour 4 (SetColour(4)).
+  6. After the result message closes, the instructions return so you can select
+     another batch. Use Close, the window X, or Esc when finished.
 
 There is no Excel file or manually entered page/connector number.
 Pressing Enter authorizes changes if the full batch preflight succeeds.
-Press Esc or Cancel to exit without changes.
+Press Esc, Close, or the window X to exit. Previously completed batches remain formatted.
 
 Optional read-only preview: python E3_Bulk_Selected_Block_Signal_Relocator.py --dry-run
 Optional type override:    python E3_Bulk_Selected_Block_Signal_Relocator.py --type 1007
@@ -28,6 +30,7 @@ import math
 import sys
 import traceback
 from collections import defaultdict, Counter
+from datetime import datetime
 from pathlib import Path
 import tempfile
 
@@ -653,7 +656,7 @@ def choose_log_path():
     for directory in locations:
         try:
             path = directory / 'E3_Bulk_Selected_Block_Relocator_Log.txt'
-            with open(path, 'w', encoding='utf-8'):
+            with open(path, 'a', encoding='utf-8'):
                 pass
             return path
         except OSError:
@@ -728,7 +731,7 @@ def wait_for_block_selection(preview=False):
         root.quit()
 
     try:
-        root.title('E3 - Select one or more blocks')
+        root.title('E3 - Select blocks (repeat until Close)')
         root.resizable(False, False)
         root.protocol('WM_DELETE_WINDOW', cancel)
         # Do not make the window modal or always-on-top: the user needs to
@@ -740,9 +743,11 @@ def wait_for_block_selection(preview=False):
                   font=('Segoe UI', 13, 'bold')).pack(anchor='w', pady=(0, 12))
         ttk.Label(frame, text=(
             '1. In E3, select ONE OR MORE CABBLOCK borders.\n'
-            '   Use Ctrl+click or E3 multi-select for several blocks.\n'
+            '   Clear any previous selection before choosing the next group.\n'
             '2. Press ENTER to format all selected blocks.\n'
-            '   (Enter in E3 or return here and press Enter.)'),
+            '   (Enter in E3 or return here and press Enter.)\n'
+            '3. After the result appears, this window opens again.\n'
+            '4. When finished, click Close or the window X.'),
                   justify='left', font=('Segoe UI', 10)).pack(anchor='w')
         ttk.Separator(frame, orient='horizontal').pack(fill='x', pady=14)
         mode = ('PREVIEW ONLY - no E3 changes will be made.' if preview else
@@ -753,7 +758,7 @@ def wait_for_block_selection(preview=False):
         buttons.pack(fill='x')
         go_btn = ttk.Button(buttons, text='Format selected blocks (Enter)', command=proceed)
         go_btn.pack(side='left')
-        ttk.Button(buttons, text='Cancel (Esc)', command=cancel).pack(side='right')
+        ttk.Button(buttons, text='Close (Esc)', command=cancel).pack(side='right')
         root.bind('<Return>', proceed)
         root.bind('<KP_Enter>', proceed)
         root.bind('<Escape>', cancel)
@@ -1055,8 +1060,9 @@ def run(preview=False, apply=False, type_override=None):
     global LOG_STREAM
     log_path = choose_log_path()
     try:
-        LOG_STREAM = open(log_path, 'w', encoding='utf-8')
-        log('=' * 74)
+        LOG_STREAM = open(log_path, 'a', encoding='utf-8')
+        log('\n' + '=' * 74)
+        log('NEW RUN: ' + datetime.now().astimezone().strftime('%Y-%m-%d %H:%M:%S %Z'))
         log(f'E3 BULK SELECTED-BLOCK SIGNAL RELOCATOR + BOLD + COLOUR {SIGNAL_COLOUR}')
         log('No Excel, page, device or connector input. SELECTED CABBLOCKS ONLY.')
         log('EVERY block/pin/text is checked BEFORE ANY changes are applied.')
@@ -1184,19 +1190,31 @@ def main(argv=None):
     args = parser.parse_args(argv)
     if args.apply and args.dry_run:
         parser.error('--apply and --dry-run cannot be combined')
-    try:
-        if not wait_for_block_selection(preview=args.dry_run):
-            log('CANCELLED in selection instructions: E3 was not modified.')
+    # Run repeated batches in one Python process. Each batch snapshots the
+    # CURRENT E3 selection after Enter, so blocks can change between runs.
+    # Never reuse the previous batch's selected symbol IDs or text plan.
+    while True:
+        try:
+            accepted = wait_for_block_selection(preview=args.dry_run)
+        except Exception as exc:
+            # If Tk itself cannot open, retrying would make an endless error loop.
+            print('COULD NOT OPEN INSTRUCTIONS:', exc)
+            return 1
+        if not accepted:
+            log('CLOSED from instructions. No additional E3 changes.')
             return 0
-        # Enter authorizes the entire batch. Every selected block is preflighted
-        # before changes; no duplicate Yes/No popup.
-        return run(preview=args.dry_run, apply=True,
-                   type_override=args.type_override)
-    except Exception as exc:
-        print('FAILED:', exc)
-        popup(f'{exc}\n\nSee E3_Bulk_Selected_Block_Relocator_Log.txt '
-              'beside this script (or in the system temp directory).', error=True)
-        return 1
+        try:
+            # Enter authorizes this batch. Every selected block is preflighted
+            # before changes; no duplicate Yes/No popup.
+            run(preview=args.dry_run, apply=True,
+                type_override=args.type_override)
+        except Exception as exc:
+            print('FAILED:', exc)
+            popup(f'{exc}\n\nSee E3_Bulk_Selected_Block_Relocator_Log.txt '
+                  'beside this script (or in the system temp directory).\n\n'
+                  'The instructions will reopen so you can retry or Close.', error=True)
+        # For success, preview, no candidates, and recoverable failures alike,
+        # return to the same instruction prompt after the result popup closes.
 
 
 if __name__ == '__main__':
