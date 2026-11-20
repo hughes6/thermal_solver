@@ -1,7 +1,7 @@
-"""E3.series - connection signal text relocator (same Pin Arranger Excel file).
+"""E3.series - connection signal relocator + bold formatter (final).
 
 This is a SEPARATE, text-only tool. It does NOT move pins, symbols, connections,
-change signal values, or alter the formatting from the earlier pin formatter.
+change signal values, or alter local signal / device designation formatting.
 
 Research from Zuken's E3 reference documentation:
     7    = TTYP_SIGNAL (Signal name)
@@ -20,8 +20,12 @@ Behavior:
   * Put each signal on the OPPOSITE interior edge of its physical block,
     at that pin's current Y. A LEFT pin's text -> right edge (right aligned),
     RIGHT pin's text -> left edge (left aligned).
-  * Preserve the text's content, height, font, boldness, color and visibility;
-    only change position and alignment. Already-moved texts are skipped.
+  * Set the connection signal numbers to bold via the same SetStyle(1)
+    method used in the working Pin Formatter. Leave text content, height,
+    font, color and visibility unchanged.
+  * Already-moved labels are ALSO bolded on repeat runs (no movement needed),
+    including separate sheet texts that can be uniquely matched at their
+    exact destination position.
   * Does not assume all pins live on the same CABBLOCK.
   * Can be run as a preview or with explicit user confirmation to apply.
   * A separate printed-label alias (e.g. SCP-J38 in Excel / J38 in E3) is
@@ -30,11 +34,11 @@ Behavior:
   * Only the pins explicitly listed in Excel are selected, not other pins.
 
 Usage:
-    python E3_Connection_Signal_Relocator.py --dry-run         # browse workbook, log only
-    python E3_Connection_Signal_Relocator.py                   # browse, then confirm
-    python E3_Connection_Signal_Relocator.py --apply pins.xlsm
-    python E3_Connection_Signal_Relocator.py --type 7 --dry-run pins.xlsm
-    python E3_Connection_Signal_Relocator.py --label J38 --dry-run pins.xlsm
+    python E3_Connection_Signal_Relocator_Final.py --dry-run         # browse workbook, log only
+    python E3_Connection_Signal_Relocator_Final.py                   # browse, then confirm
+    python E3_Connection_Signal_Relocator_Final.py --apply pins.xlsm
+    python E3_Connection_Signal_Relocator_Final.py --type 7 --dry-run pins.xlsm
+    python E3_Connection_Signal_Relocator_Final.py --label J38 --dry-run pins.xlsm
 
 Requires Windows, pywin32, openpyxl and a running E3.series project.
 The COM text location method may vary by E3 release; a version-specific failure
@@ -57,6 +61,7 @@ SIGNAL_NAME_TYPE = 617
 PIN_NUMBER_TYPE = 203
 DEVICE_DESIGNATION_TYPE = 12
 AUTO_SIGNAL_TYPES = (1007, 7)
+BOLD_STYLE = 1  # Same E3 text.SetStyle(1) as the working Pin Formatter
 TEXT_TYPE_DESCRIPTIONS = {
     7: 'Signal name', 12: 'Device designation', 203: 'Pin number (project)',
     410: 'Wire number (user-defined)', 617: 'Local signal name (project)',
@@ -830,6 +835,51 @@ def associate_signals(prj, plan, signal_texts):
     return resolved
 
 
+def recover_already_placed_sheet_texts(prj, plan, signal_texts, associated):
+    """Recognize prior-run sheet texts at the EXACT finished edge position.
+
+    After a successful relocation, an independent sheet text can be too far
+    from its original pin for the ordinary nearby-pin matching method. Such
+    labels must still be made bold on later runs. This recovery never moves
+    an unassigned label: it accepts only an exact, unambiguous match to the
+    intended destination for a selected Excel pin, on that same pin row.
+    """
+    matched_ids = {item['id'] for item in associated}
+    destinations = defaultdict(list)
+    for p in plan:
+        b = p['block']
+        dest_x = b['right'] - EDGE_MARGIN if p['side'] == 'LEFT' else b['left'] + EDGE_MARGIN
+        destinations[(b['sheet_id'], b['id'])].append((p, dest_x, p['location']['y']))
+    txt = prj.CreateTextObject()
+    recovered = []
+    for item in signal_texts:
+        if item['id'] in matched_ids or item['attached_pin_candidates']:
+            continue
+        if not select_id(txt, item['id']):
+            continue
+        matches = []
+        for group in destinations.values():
+            block = group[0][0]['block']
+            loc = read_text_xy(txt, block)
+            if loc is None or not within_block_xy(loc, block, tol=BLOCK_LOCATION_TOLERANCE):
+                continue
+            for p, x, y in group:
+                if abs(loc['x'] - x) <= .02 and abs(loc['y'] - y) <= .04:
+                    matches.append((p, loc))
+        if len(matches) == 1:
+            p, loc = matches[0]
+            recovered.append({**item, 'pin': p, 'location': loc,
+                              'source': 'already-placed sheet-level'} )
+            log(f'  RECOVERED already placed sheet text {item["id"]} '
+                f'for {p["connector"]}:{p["pin_name"]}; bold only')
+        elif len(matches) > 1:
+            log(f'  SKIPPED already placed text {item["id"]}: multiple '
+                'selected pin destinations at the same coordinates')
+    log(f'ALREADY-PLACED RECOVERY: {len(recovered)} sheet-level text(s) '
+        'uniquely matched for bold formatting without any movement.')
+    return associated + recovered
+
+
 def plan_relocations(associated, type_override=None):
     by_type = Counter(x['type'] for x in associated)
     if type_override is not None:
@@ -938,15 +988,15 @@ def file_dialog():
     return result
 
 
-def confirm_apply(move_count, log_path):
+def confirm_apply(move_count, bold_count, log_path):
     try:
         import tkinter as tk
         from tkinter import messagebox
         root = tk.Tk(); root.withdraw(); root.attributes('-topmost', True)
         result = messagebox.askyesno('E3 Connection Signal Relocator',
-            f'The preflight found {move_count} connection text(s) to move.\n\n'
-            'Each moves to the OPPOSITE interior CABBLOCK edge on its pin row.\n'
-            'No pin symbols or connection signal names are changed.\n\n'
+            f'The preflight found {bold_count} connection text(s) to make BOLD.\n'
+            f'Of these, {move_count} also need moving to the opposite edge.\n\n'
+            'No pin symbols or signal values are changed.\n\n'
             f'Log: {log_path}\n\nApply now?', parent=root)
         root.destroy()
         return result
@@ -979,7 +1029,7 @@ def run(excel_path, preview=False, apply=False, type_override=None, label_overri
         LOG_STREAM=None
     try:
         log('='*75)
-        log('E3 CONNECTION SIGNAL RELOCATOR v2 - SPLIT BLOCK / LABEL FIX')
+        log('E3 CONNECTION SIGNAL RELOCATOR + BOLD - FINAL')
         log(f'Excel: {path}')
         log('No changes until full connector/pin/text preflight succeeds.')
         log('='*75)
@@ -1005,6 +1055,7 @@ def run(excel_path, preview=False, apply=False, type_override=None, label_overri
             f'{len({p["block"]["id"] for p in pin_plan})} physical CABBLOCK(s).')
         signals=collect_signal_texts(prj,sht,pin_plan,type_override)
         associated=associate_signals(prj,pin_plan,signals)
+        associated=recover_already_placed_sheet_texts(prj,pin_plan,signals,associated)
         moves=plan_relocations(associated,type_override)
         log('\nPROPOSED TEXT RELOCATIONS:')
         for m in moves[:200]:
@@ -1014,41 +1065,64 @@ def run(excel_path, preview=False, apply=False, type_override=None, label_overri
                 f'block {p["block"]["id"]}, {p["side"]} pin | '
                 f'({loc["x"]:.3f},{loc["y"]:.3f}) -> '
                 f'({m["x"]:.3f},{m["y"]:.3f}) | '
-                f'{"ALREADY THERE" if m["already"] else "MOVE"} | source={m["source"]}')
+                f'{"ALREADY THERE" if m["already"] else "MOVE"} + BOLD | source={m["source"]}')
         if len(moves)>200:
             log(f'  ... {len(moves)-200} further planned texts not printed')
         to_move=[m for m in moves if not m['already']]
         log(f'\nSUMMARY: {len(signals)} candidate texts; {len(associated)} assigned; '
-            f'{len(to_move)} need movement, {len(moves)-len(to_move)} already placed.')
-        if not to_move:
-            popup('No unambiguous signal text relocations identified. '
+            f'{len(to_move)} need movement, {len(moves)-len(to_move)} already placed; '
+            f'{len(moves)} selected texts to bold.')
+        if not moves:
+            popup('No unambiguous connection signal text identified. '
                   'Review the log for E3 text types and candidate examples.\n\n'
                   f'{log_path}')
             return 0
         if preview:
             log('PREVIEW mode, E3 was not altered.')
-            popup(f'Preview complete. {len(to_move)} relocations proposed.\n\n'
+            popup(f'Preview complete: {len(to_move)} moves and '
+                  f'{len(moves)} bold-format updates proposed.\n\n'
                   f'Review {log_path}\n\nNo changes made.')
             return 0
-        if not apply and not confirm_apply(len(to_move),log_path):
+        if not apply and not confirm_apply(len(to_move),len(moves),log_path):
             log('Cancelled by user. E3 was not altered.')
             return 0
-        log('\nAPPLYING TEXT POSITION + ALIGNMENT ONLY')
+        log('\nAPPLYING CONNECTION TEXT POSITION + BOLD STYLE')
         text_obj=prj.CreateTextObject()
-        completed=0
+        moved_count=0
+        bold_count=0
         try:
-            for m in to_move:
-                strategy=relocate_one_text(text_obj,m)
-                completed+=1
-                log(f'  MOVED {completed}/{len(to_move)}: text {m["id"]} '
+            for m in moves:
+                if not m['already']:
+                    strategy=relocate_one_text(text_obj,m)
+                    moved_count+=1
+                    log(f'  MOVED {moved_count}/{len(to_move)}: text {m["id"]} '
+                        f'{m["pin"]["connector"]}:{m["pin"]["pin_name"]} '
+                        f'via SetSchemaLocation({strategy})')
+                # Always format, even when already on the correct edge.
+                # Re-select the specific text object to avoid changing an E3
+                # object that COM may have selected during relocation.
+                if not select_id(text_obj, m['id']):
+                    raise RuntimeError(f'Text {m["id"]} disappeared before bold formatting.')
+                try:
+                    text_obj.SetStyle(BOLD_STYLE)
+                except Exception as exc:
+                    raise RuntimeError(
+                        f'Text {m["id"]}: E3 SetStyle({BOLD_STYLE}) failed; '
+                        f'text may have moved but was NOT confirmed bold. '
+                        f'Stop and inspect this text. Original error: {exc}') from exc
+                bold_count+=1
+                log(f'  BOLD {bold_count}/{len(moves)}: text {m["id"]} '
                     f'{m["pin"]["connector"]}:{m["pin"]["pin_name"]} '
-                    f'via SetSchemaLocation({strategy})')
+                    f'({"already positioned" if m["already"] else "relocated"})')
         except Exception:
-            log(f'PARTIAL OPERATION: {completed} text(s) already moved in E3. '
+            log(f'PARTIAL OPERATION: {moved_count} text(s) moved and '
+                f'{bold_count} text(s) bolded in E3. '
                 'Stop and inspect the schematic; see traceback below.')
             raise
-        log(f'SUCCESS: relocated {completed} text labels. Save E3 project.')
-        popup(f'Relocated {completed} connection signal labels.\n\n'
+        log(f'SUCCESS: moved {moved_count} labels; bolded {bold_count} '
+            'connection signal labels. Save E3 project.')
+        popup(f'Connection signal labels: {moved_count} moved, '
+              f'{bold_count} bolded.\n\n'
               'No pins, connections, signal values or local signal text were changed.\n'
               f'Log: {log_path}\n\nSave E3 project.')
         return 0
@@ -1062,7 +1136,7 @@ def run(excel_path, preview=False, apply=False, type_override=None, label_overri
 
 
 def main(argv=None):
-    parser=argparse.ArgumentParser(description='Move E3 connection signal text to the opposite side of each CABBLOCK')
+    parser=argparse.ArgumentParser(description='Move connection signal numbers to opposite CABBLOCK edge and set them bold')
     parser.add_argument('excel', nargs='?', help='Same Pin Arranger Excel .xlsm/.xlsx; picker if omitted')
     parser.add_argument('--dry-run', action='store_true', help='Detect type/position and preview with no E3 changes')
     parser.add_argument('--apply', action='store_true', help='Apply after preflight, without GUI confirmation')
