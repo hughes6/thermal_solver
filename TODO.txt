@@ -1,34 +1,39 @@
-"""E3.series - spreadsheet-driven, formatting-only connector pin repair.
+"""E3.series - connection signal text relocator (same Pin Arranger Excel file).
 
-Reads the SAME Excel layout as the existing Pin Arranger:
-    B2 = duplicate-pin check (PASS)
-    C4 = optional owning device name, e.g. PNL2
-    C5 = connector count
-    J2 = optional schematic page/sheet
-    Connector #n: left column I+4*n, right column J+4*n (n starts at 0)
-                  pin row count at right-column row 5
-                  connector designation at right-column row 6
-                  pin names in row 8 onward
-    J1 (pin pitch) is intentionally ignored: NO pins are moved.
+This is a SEPARATE, text-only tool. It does NOT move pins, symbols, connections,
+change signal values, or alter the formatting from the earlier pin formatter.
 
-For each Excel connector, the script finds matching E3 pin symbols across ALL
-its physical CABBLOCKs, including a split-off lower block. The TOP pin of
-EACH side of EACH physical block shows device designation text type 12,
-bold, height 0.20; every other pin on that same side hides type 12.
-Local signal names (type 617) are made visible, black, bold, height 0.15,
-and aligned by the ACTUAL E3 block side. Pin numbers (type 203) are made
-visible and bold, matching the earlier arranger's formatter.
+Research from Zuken's E3 reference documentation:
+    7    = TTYP_SIGNAL (Signal name)
+    1007 = TTYP_CONNECTION_SIGNAL (Connection signal)
+    617  = Local signal name (from your working project script; NOT moved)
+    203  = Your pin number label (NOT moved)
+    12   = Device designation (NOT moved)
+    410  = User-defined wire number (NOT moved by automatic targeting)
+The actual overlapping text may be project-specific. The preview prints all
+available attached text types and the detected candidate text content.
 
-No symbol placement, resizing, removal, rebuilding, or pin-order changes.
-
-Requires: Windows, Python, pywin32, openpyxl, running E3.series project.
-For visible equipment identification, the E3 display property
-"Equipment Identification" must be enabled in E3.
+Behavior:
+  * Find connectors and all their physical CABBLOCKs using the same Excel cells.
+  * Look at pin-attached texts plus independently placed sheet-level texts.
+  * Match a text to its actual pin with proximity/ownership safeguards.
+  * Put each signal on the OPPOSITE interior edge of its physical block,
+    at that pin's current Y. A LEFT pin's text -> right edge (right aligned),
+    RIGHT pin's text -> left edge (left aligned).
+  * Preserve the text's content, height, font, boldness, color and visibility;
+    only change position and alignment. Already-moved texts are skipped.
+  * Does not assume all pins live on the same CABBLOCK.
+  * Can be run as a preview or with explicit user confirmation to apply.
 
 Usage:
-    python E3_Split_Block_Pin_Formatter.py              # choose Excel with dialog
-    python E3_Split_Block_Pin_Formatter.py pins.xlsm    # format immediately
-    python E3_Split_Block_Pin_Formatter.py --dry-run pins.xlsm
+    python E3_Connection_Signal_Relocator.py --dry-run         # browse workbook, log only
+    python E3_Connection_Signal_Relocator.py                   # browse, then confirm
+    python E3_Connection_Signal_Relocator.py --apply pins.xlsm
+    python E3_Connection_Signal_Relocator.py --type 7 --dry-run pins.xlsm
+
+Requires Windows, pywin32, openpyxl and a running E3.series project.
+The COM text location method may vary by E3 release; a version-specific failure
+is logged and stops rather than guessing a text coordinate.
 """
 
 from __future__ import annotations
@@ -38,33 +43,32 @@ import math
 import os
 import sys
 import traceback
-from collections import defaultdict
+from collections import defaultdict, Counter
 from pathlib import Path
 
-try:
-    from openpyxl import load_workbook
-except ImportError:
-    raise SystemExit("Missing openpyxl. Install with: pip install openpyxl pywin32")
+from openpyxl import load_workbook
 
-# Import win32com only when connecting so --help / offline tests work.
-
-# ------------------------ Formatting settings ----------------------------
 SIGNAL_NAME_TYPE = 617
 PIN_NUMBER_TYPE = 203
 DEVICE_DESIGNATION_TYPE = 12
-BOLD_STYLE = 1                 # Same Zuken SetStyle(1) used in Pin Arranger
-SIGNAL_NAME_HEIGHT = 0.15       # Same as the original formatter
-TOP_DESIGNATION_HEIGHT = 0.20
-BOLD_PIN_NUMBERS = True         # Preserve the old formatter's pin-number bolding
-SIGNAL_BLACK = True             # Preserve black signal labels
-SIGNAL_ALIGNMENT_BY_SIDE = True # LEFT -> 1; RIGHT -> 3, as in Pin Arranger
-MAX_PIN_EDGE_OFFSET = 0.65     # Max allowed pin origin distance from block edge
+AUTO_SIGNAL_TYPES = (1007, 7)
+TEXT_TYPE_DESCRIPTIONS = {
+    7: 'Signal name', 12: 'Device designation', 203: 'Pin number (project)',
+    410: 'Wire number (user-defined)', 617: 'Local signal name (project)',
+    1007: 'Connection signal',
+}
+
+# These two settings define the destination. Positive margin -> INSIDE block.
+EDGE_MARGIN = 0.16
+# Sheet-level connection labels need to be near a pin before they are moved.
+MAX_SHEET_TEXT_Y_DISTANCE = 0.16
+MAX_SHEET_TEXT_X_DISTANCE = 1.15
+POSITION_VERIFICATION_TOLERANCE = 0.015
 BLOCK_LOCATION_TOLERANCE = 0.10
+MAX_PIN_EDGE_OFFSET = 0.65
 TOP_Y_TOLERANCE = 1e-4
 COM_MISSING = -2147352572
-
 LOG_STREAM = None
-
 
 def log(message=""):
     line = str(message)
@@ -498,176 +502,470 @@ def make_plan(pins, connectors):
                                            p["block"]["id"], p["side"], p["row"]))
 
 
-def apply_plan(prj, plan):
-    """Set only font/visibility/alignment/colour; never move symbols or pins."""
-    text = prj.CreateTextObject()
-    completed = 0
+
+# ---------------------- Text discovery and positioning -------------------
+
+def _raw_text_location_results(txt):
+    """Try read-only COM methods, retaining original tuples for diagnostics."""
+    attempts = (
+        ('GetSchemaLocation', (None, None, None, None, None)),
+        ('GetSchemaLocation', (None, None, None)),
+        ('GetSchemaLocation', (None, None)),
+        ('GetPosition', (None, None)),
+        ('GetPosition', ()),
+    )
+    found = []
+    for method, args in attempts:
+        try:
+            result = getattr(txt, method)(*args)
+        except Exception:
+            continue
+        if isinstance(result, (tuple, list)):
+            found.append((method, result))
+    return found
+
+
+def _candidate_text_positions(raw, sheet_id, block):
+    """Interpret COM output while preventing a status/sheet ID from being X."""
+    nums = []
+    for v in raw:
+        try:
+            nums.append(float(v))
+        except (TypeError, ValueError):
+            nums.append(None)
+    candidates = []
+    # COM can return (sheet_id,x,y,...), (status,sheet_id,x,y,...),
+    # (status,x,y), or (x,y). Favor explicit sheet patterns.
+    if len(nums) >= 3 and nums[0] is not None and int(nums[0]) == sheet_id:
+        candidates.append((nums[1], nums[2], 0))
+    if len(nums) >= 4 and nums[1] is not None and int(nums[1]) == sheet_id:
+        candidates.append((nums[2], nums[3], 0))
+    if len(nums) >= 3 and nums[0] in (1, 0, -1):
+        candidates.append((nums[1], nums[2], 1))
+    if len(nums) >= 2:
+        candidates.append((nums[0], nums[1], 2))
+    for index in range(1, max(1, len(nums)-1)):
+        if index + 1 < len(nums):
+            candidates.append((nums[index], nums[index+1], 3))
+    result = []
+    for x, y, preference in candidates:
+        if x is None or y is None or not (math.isfinite(x) and math.isfinite(y)):
+            continue
+        if (block['left'] - .30 <= x <= block['right'] + .30 and
+                block['bottom'] - .30 <= y <= block['top'] + .30):
+            result.append((preference, x, y))
+    result.sort(key=lambda row: row[0])
+    return [(x, y) for _, x, y in result]
+
+
+def read_text_xy(txt, block):
+    """Return a local text position and the actual original COM getter output.
+
+    Returns None when the position cannot be identified unambiguously. A text
+    may report its position relative to a symbol in some E3 configurations;
+    this is not guessed into sheet coordinates.
+    """
+    raw_results = _raw_text_location_results(txt)
+    for method, raw in raw_results:
+        candidates = _candidate_text_positions(raw, block['sheet_id'], block)
+        if candidates:
+            return {'x': candidates[0][0], 'y': candidates[0][1],
+                    'method': method, 'raw': repr(raw)[:160]}
+    return None
+
+
+def collect_signal_texts(prj, sht, plan, type_override=None):
+    """Get candidate text IDs both from pins and all sheet text objects."""
+    pin_by_text = {}
+    pin_type_stats = Counter()
     for p in plan:
-        label = f"{p['connector']} pin {p['pin_name']} (symbol {p['symbol_id']})"
-        type_ids = p["texts"]
-        # GetTextIds identified these exact text objects during preflight.
-        # Rebind each before use, so COM's current selection cannot drift.
-        for text_id in type_ids.get(DEVICE_DESIGNATION_TYPE, []):
-            if not select_id(text, text_id):
-                raise RuntimeError(f"{label}: cannot select type-12 text ID {text_id}")
-            if p["top"]:
-                text.SetVisibility(1)
-                text.SetStyle(BOLD_STYLE)
-                text.SetHeight(TOP_DESIGNATION_HEIGHT)
-            else:
-                text.SetVisibility(0)
-        for text_id in type_ids.get(SIGNAL_NAME_TYPE, []):
-            if not select_id(text, text_id):
-                raise RuntimeError(f"{label}: cannot select type-617 text ID {text_id}")
-            text.SetVisibility(1)
-            text.SetStyle(BOLD_STYLE)
-            text.SetHeight(SIGNAL_NAME_HEIGHT)
-            if SIGNAL_BLACK:
-                text.SetColour(0)
-            if SIGNAL_ALIGNMENT_BY_SIDE:
-                text.SetAlignment(1 if p["side"] == "LEFT" else 3)
-        if BOLD_PIN_NUMBERS:
-            for text_id in type_ids.get(PIN_NUMBER_TYPE, []):
-                if not select_id(text, text_id):
-                    raise RuntimeError(f"{label}: cannot select type-203 text ID {text_id}")
-                text.SetVisibility(1)
-                text.SetStyle(BOLD_STYLE)
-        completed += 1
-        log(f"  FORMATTED {label} | block {p['block']['id']} "
-            f"| {p['side']} row {p['row'] + 1} | "
-            f"designation {'ON, 0.20 BOLD' if p['top'] else 'OFF'} "
-            f"| signal labels {len(type_ids.get(SIGNAL_NAME_TYPE, []))}")
-    return completed
+        for typ, ids in p['texts'].items():
+            pin_type_stats[int(typ)] += len(ids)
+            for tid in ids:
+                if tid not in pin_by_text:
+                    pin_by_text[tid] = []
+                pin_by_text[tid].append(p)
+    log('\nTEXT TYPES ON RESOLVED PIN SYMBOLS:')
+    for typ, count in pin_type_stats.most_common():
+        log(f'  type {typ:5} | {count:5} texts | {TEXT_TYPE_DESCRIPTIONS.get(typ,"project-defined/other")}')
+
+    sheet_ids = {p['block']['sheet_id'] for p in plan}
+    candidates = set(pin_by_text)
+    sheet_text_counts = Counter()
+    # IMPORTANT: E3 sheet.GetTextIds does NOT necessarily return texts embedded
+    # in placed symbols (such as connection attribute template symbols). Also
+    # walk the placed symbols physically inside the candidate CABBLOCKs.
+    sym = prj.CreateSymbolObject()
+    blocks_by_sheet = defaultdict(dict)
+    for p in plan:
+        block = p['block']
+        blocks_by_sheet[block['sheet_id']][block['id']] = block
+    for sid in sorted(sheet_ids):
+        if not select_id(sht, sid):
+            raise RuntimeError(f'Cannot select sheet {sid} to scan text.')
+        raw_ids = get_ids(sht.GetTextIds)
+        log(f'Sheet {sid}: GetTextIds returned {len(raw_ids)} sheet-owned text IDs')
+        candidates.update(raw_ids)
+        scanned_symbols = 0
+        selected_symbols = 0
+        embedded_text_count = 0
+        for sym_id in set(scan_sheet_symbols(prj, sht, sid)):
+            scanned_symbols += 1
+            if not select_id(sym, sym_id):
+                continue
+            loc = get_symbol_location(sym)
+            if loc is None:
+                continue
+            if not any(inside_block(loc, b) for b in blocks_by_sheet[sid].values()):
+                continue
+            selected_symbols += 1
+            ids = get_ids(sym.GetTextIds)
+            embedded_text_count += len(ids)
+            candidates.update(ids)
+        log(f'  Symbols on sheet: scanned {scanned_symbols}, '
+            f'inside target blocks {selected_symbols}, '
+            f'embedded text IDs found {embedded_text_count}')
+    # Default include both types for inspection; do not move other text types.
+    eligible_types = ({type_override} if type_override is not None
+                      else set(AUTO_SIGNAL_TYPES))
+    text = prj.CreateTextObject()
+    records = []
+    type_samples = defaultdict(list)
+    for text_id in sorted(candidates):
+        if not select_id(text, text_id):
+            continue
+        try:
+            typ = int(text.GetType())
+        except Exception:
+            continue
+        sheet_text_counts[typ] += 1
+        if typ not in eligible_types:
+            if len(type_samples[typ]) < 4:
+                type_samples[typ].append(str(optional_call(text,'GetText') or '')[:90])
+            continue
+        val = str(optional_call(text, 'GetText') or '').strip()
+        if not val:
+            continue
+        linked = pin_by_text.get(text_id, [])
+        records.append({'id': text_id, 'type': typ, 'value': val,
+                        'attached_pin_candidates': linked})
+    log('\nALL TEXT TYPES SCANNED (including sheet-level texts):')
+    for typ, count in sheet_text_counts.most_common(25):
+        sample = type_samples.get(typ, [])
+        log(f'  type {typ:5} | count {count:5} | {TEXT_TYPE_DESCRIPTIONS.get(typ, "other")}'
+            f' | examples {sample[:2]}')
+    log(f'Signal candidates identified: {len(records)} for types {sorted(eligible_types)}')
+    return records
+
+
+def within_block_xy(point, block, tol=0.25):
+    return (block['left']-tol <= point['x'] <= block['right']+tol and
+            block['bottom']-tol <= point['y'] <= block['top']+tol)
+
+
+def associate_signals(prj, plan, signal_texts):
+    """Find the one pin responsible for each signal text; never guess ties."""
+    by_block = defaultdict(list)
+    for p in plan:
+        by_block[(p['block']['sheet_id'], p['block']['id'])].append(p)
+    txt = prj.CreateTextObject()
+    resolved = []
+    unassigned = []
+    for item in signal_texts:
+        if not select_id(txt, item['id']):
+            continue
+        attached = item['attached_pin_candidates']
+        if len(attached) > 1:
+            unassigned.append((item, 'text belongs to multiple selected pin symbols'))
+            continue
+        if len(attached) == 1:
+            p = attached[0]
+            loc = read_text_xy(txt, p['block'])
+            if loc is None:
+                unassigned.append((item, 'pin-attached text position cannot be read safely'))
+                continue
+            resolved.append({**item, 'pin': p, 'location': loc, 'source': 'pin-attached'})
+            continue
+        # Sheet-level connection label. Strictly require one unique nearest pin
+        # and that it currently appears near the pin's originating block side.
+        matches = []
+        for (sheet_id, block_id), block_pins in by_block.items():
+            block = block_pins[0]['block']
+            loc = read_text_xy(txt, block)
+            if loc is None or not within_block_xy(loc, block):
+                continue
+            for p in block_pins:
+                dy = abs(loc['y'] - p['location']['y'])
+                dx = abs(loc['x'] - p['location']['x'])
+                if dy <= MAX_SHEET_TEXT_Y_DISTANCE and dx <= MAX_SHEET_TEXT_X_DISTANCE:
+                    matches.append((dy * 3 + dx, p, loc))
+        matches.sort(key=lambda t: t[0])
+        if not matches:
+            unassigned.append((item, 'not near a uniquely resolved connector pin'))
+        elif len(matches) > 1 and abs(matches[0][0] - matches[1][0]) < .06:
+            unassigned.append((item, 'two near-equal physical pins, ambiguous'))
+        else:
+            _, p, loc = matches[0]
+            resolved.append({**item, 'pin': p, 'location': loc,
+                             'source': 'sheet-level proximity'})
+    for item, reason in unassigned[:35]:
+        log(f'  SKIPPED text {item["id"]}, type {item["type"]}, '
+            f'value {item["value"][:60]!r}: {reason}')
+    if len(unassigned) > 35:
+        log(f'  ... {len(unassigned) - 35} further unmatched signal text(s)')
+    log(f'ASSOCIATION: {len(resolved)} candidates assigned to a unique pin; '
+        f'{len(unassigned)} unmatched (unmatched text is NEVER moved)')
+    return resolved
+
+
+def plan_relocations(associated, type_override=None):
+    by_type = Counter(x['type'] for x in associated)
+    if type_override is not None:
+        selected_types = {type_override}
+    elif by_type[1007] and by_type[7]:
+        # Both can be valid in different E3 settings. Never modify both
+        # automatically; user can select --type 1007 or --type 7.
+        log('AMBIGUOUS AUTO-DETECT: types 1007 and 7 are both present. '
+            'Specify --type 1007 or --type 7 to permit movement.')
+        selected_types = set()
+    elif by_type[1007]:
+        selected_types = {1007}
+    elif by_type[7]:
+        selected_types = {7}
+    else:
+        selected_types = set()
+    log(f'Eligible text types to move: {sorted(selected_types) or "NONE (inspect log)"}')
+    moves = []
+    for record in associated:
+        if record['type'] not in selected_types:
+            continue
+        p = record['pin']
+        b = p['block']
+        if b['right'] - b['left'] <= EDGE_MARGIN * 2:
+            raise RuntimeError(f'Block {b["id"]}: too narrow for margin {EDGE_MARGIN}.')
+        side = p['side']
+        dest_x = b['right'] - EDGE_MARGIN if side == 'LEFT' else b['left'] + EDGE_MARGIN
+        # Keep the Y position of the associated physical pin. The aim is an
+        # adjacent label across the interior of the SAME CABBLOCK.
+        dest_y = p['location']['y']
+        align = 3 if side == 'LEFT' else 1
+        loc = record['location']
+        already = (abs(loc['x'] - dest_x) < .02 and
+                   abs(loc['y'] - dest_y) < .02)
+        moves.append({**record, 'x': dest_x, 'y': dest_y,
+                      'alignment': align, 'already': already})
+    return moves
+
+
+def relocate_one_text(txt, move):
+    """Set text location with COM only; verify and stop if unsupported.
+
+    The COM signature varies by version. First prefer a two-coordinate text
+    SetSchemaLocation(x,y), then a sheet-qualified version. A write is NOT
+    considered successful unless a fresh getter confirms the new position.
+    If a write has moved a text incorrectly, try a same-signature rollback.
+    """
+    if not select_id(txt, move['id']):
+        raise RuntimeError(f"Text {move['id']} vanished before placement")
+    before = move['location']
+    original_x, original_y = before['x'], before['y']
+    b = move['pin']['block']
+    method = getattr(txt, 'SetSchemaLocation', None)
+    if method is None:
+        raise RuntimeError('This E3 e3Text interface does not provide SetSchemaLocation. '
+                           'No connection text was moved by this call.')
+    attempts = [
+        ('x,y', (move['x'], move['y']), (original_x, original_y)),
+        ('sheet,x,y', (b['sheet_id'], move['x'], move['y']),
+         (b['sheet_id'], original_x, original_y)),
+    ]
+    errors = []
+    for kind, args, rollback_args in attempts:
+        try:
+            ret = method(*args)
+        except Exception as exc:
+            errors.append(f'{kind}: {str(exc)[:170]}')
+            continue
+        current = read_text_xy(txt, b)
+        if (current is not None and
+                abs(current['x'] - move['x']) <= POSITION_VERIFICATION_TOLERANCE and
+                abs(current['y'] - move['y']) <= POSITION_VERIFICATION_TOLERANCE):
+            # Now and only now adjust alignment for interior edge placement.
+            try:
+                txt.SetAlignment(move['alignment'])
+            except Exception as exc:
+                log(f'  WARNING: text {move["id"]} moved, but alignment not updated: {exc}')
+            return kind
+        # The call returned, but may have moved somewhere else, or done nothing.
+        # Attempt rollback; stop rather than testing another signature blindly.
+        try:
+            method(*rollback_args)
+        except Exception as err:
+            raise RuntimeError(
+                f'Text {move["id"]} position update was NOT verified and rollback failed. '
+                f'CHECK THIS TEXT IN E3. Signature={kind}; error={err}; '
+                f'current={current}; return={ret!r}') from err
+        restored = read_text_xy(txt, b)
+        raise RuntimeError(
+            f'Text {move["id"]}: E3 accepted SetSchemaLocation({kind}) but the new '
+            f'position could not be verified. Attempted rollback to original. '
+            f'Current={restored}, requested=({move["x"]}, {move["y"]}), return={ret!r}. '
+            'STOPPED to avoid moving unrelated text.')
+    raise RuntimeError(f'Text {move["id"]}: SetSchemaLocation unsupported by this COM build. '
+                       f'Attempted {errors}. NO change made to this text.')
 
 
 def file_dialog():
     import tkinter as tk
     from tkinter import filedialog
-    root = tk.Tk()
-    root.withdraw()
-    root.attributes("-topmost", True)
-    path = filedialog.askopenfilename(
-        title="Select the SAME Pin Arranger Excel workbook",
-        filetypes=[("Excel macro workbook", "*.xlsm"),
-                   ("Excel workbook", "*.xlsx"), ("All files", "*.*")],
-    )
+    root = tk.Tk(); root.withdraw(); root.attributes('-topmost', True)
+    result = filedialog.askopenfilename(
+        title='Select Pin Arranger Excel spreadsheet',
+        filetypes=[('Excel workbooks', '*.xlsm *.xlsx'), ('All files', '*.*')])
     root.destroy()
-    return path
+    return result
 
 
-def message_box(title, message, error=False):
+def confirm_apply(move_count, log_path):
     try:
         import tkinter as tk
         from tkinter import messagebox
-        root = tk.Tk()
-        root.withdraw()
-        root.attributes("-topmost", True)
-        if error:
-            messagebox.showerror(title, message, parent=root)
-        else:
-            messagebox.showinfo(title, message, parent=root)
+        root = tk.Tk(); root.withdraw(); root.attributes('-topmost', True)
+        result = messagebox.askyesno('E3 Connection Signal Relocator',
+            f'The preflight found {move_count} connection text(s) to move.\n\n'
+            'Each moves to the OPPOSITE interior CABBLOCK edge on its pin row.\n'
+            'No pin symbols or connection signal names are changed.\n\n'
+            f'Log: {log_path}\n\nApply now?', parent=root)
+        root.destroy()
+        return result
+    except Exception:
+        log('GUI confirmation was unavailable; no changes performed. Use --apply.')
+        return False
+
+
+def popup(message, error=False):
+    try:
+        import tkinter as tk
+        from tkinter import messagebox
+        root=tk.Tk(); root.withdraw(); root.attributes('-topmost', True)
+        fn=messagebox.showerror if error else messagebox.showinfo
+        fn('E3 Signal Text Relocator', message, parent=root)
         root.destroy()
     except Exception:
         pass
 
 
-def run(excel_path, dry_run=False):
+def run(excel_path, preview=False, apply=False, type_override=None):
     global LOG_STREAM
-    excel_path = Path(excel_path).resolve()
-    if not excel_path.is_file():
-        raise FileNotFoundError(f"Excel file does not exist: {excel_path}")
-    log_path = excel_path.with_name("E3_Pin_Formatter_Log.txt")
+    path=Path(excel_path).resolve()
+    if not path.is_file():
+        raise FileNotFoundError(f'Excel file not found: {path}')
+    log_path=path.with_name('E3_Connection_Signal_Relocator_Log.txt')
     try:
-        LOG_STREAM = open(log_path, "w", encoding="utf-8")
+        LOG_STREAM=open(log_path,'w',encoding='utf-8')
     except OSError:
-        log_path = None
-        LOG_STREAM = None
+        LOG_STREAM=None
     try:
-        log("=" * 72)
-        log("E3 SPLIT-BLOCK PIN FORMATTER - FORMATTING ONLY, NO MOVEMENT")
-        log(f"Workbook: {excel_path}")
-        log("=" * 72)
-        owner, page, connectors = read_excel(excel_path)
-        log(f"Excel C4 device: {owner or '<any>'}")
-        log(f"Excel J2 page: {page or '<any>'}")
-        log(f"Excel connectors: {[c['name'] for c in connectors]}")
-        log("Enable E3 View Properties > Equipment Identification before running if "
-            "designation labels are not available/visible.")
-        log("Excel side/row order is NOT used to move pins or select 'top'.")
-        log("'Top' is determined by the highest placed pin on each physical block side.")
-        try:
-            import win32com.client as win32
-        except ImportError as exc:
-            raise RuntimeError("pywin32 is required. Install: pip install pywin32") from exc
-        app = prj = dev = sht = None
-        try:
-            app = win32.gencache.EnsureDispatch("CT.Application")
-            prj = app.CreateJobObject()
-            dev = prj.CreateDeviceObject()
-            sht = prj.CreateSheetObject()
-            log("Connected to E3.series; all targeting is read-only until preflight passes.")
-            sheets = read_sheet(prj, sht)
-            blocks = find_cabblocks(prj, dev, owner, page, sheets)
-            log(f"Found {len(blocks)} placed CABBLOCK(s) within C4/J2 restrictions.")
-            pins = discover_pins(prj, sht, blocks, connectors)
-            plan = make_plan(pins, connectors)
-            log("\nPREFLIGHT PASSED. Target per physical CABBLOCK side:")
-            by_side = defaultdict(list)
-            for p in plan:
-                by_side[(p["connector"], p["block"]["id"], p["side"])].append(p)
-            for (connector, block_id, side), group in sorted(by_side.items()):
-                top_pin = next(p for p in group if p["top"])
-                log(f"  {connector} | block {block_id} | {side}: "
-                    f"{len(group)} pins, top = {top_pin['pin_name']} "
-                    f"at Y={top_pin['location']['y']:.3f}")
-            log(f"Total symbols to format: {len(plan)}")
-            if dry_run:
-                log("DRY RUN: no changes were made to E3.")
-            else:
-                log("\nAPPLYING FORMATTING (no delete/move/resize operations)")
-                try:
-                    app.PutMessage("\nStarting split-block pin text formatter")
-                except Exception:
-                    pass
-                completed = apply_plan(prj, plan)
-                log(f"SUCCESS: formatted {completed} pin symbols. Save the project in E3.")
-            summary = (f"{'Preview complete (no changes).' if dry_run else 'Pin formatting complete.'}\n\n"
-                       f"{len(plan)} pins, {len(by_side)} physical block sides, "
-                       f"{len(connectors)} connector(s).\n"
-                       f"No pins were moved or recreated.\n\n"
-                       "Ensure E3's 'Equipment Identification' display property "
-                       "is enabled so device designations appear.\n"
-                       "Save your E3 drawing.\n\n"
-                       f"Log: {log_path or 'console only'}")
-            message_box("E3 Pin Formatter", summary)
+        log('='*75)
+        log('E3 CONNECTION SIGNAL RELOCATOR - PIN ARRANGER EXCEL COMPATIBLE')
+        log(f'Excel: {path}')
+        log('No change is made before all pin/block resolution succeeds.')
+        log('='*75)
+        owner,page,connectors=read_excel(path)
+        log(f'Filters: C4 owner={owner!r}; J2 sheet={page!r}; '
+            f'{len(connectors)} connector(s)')
+        import win32com.client as win32
+        app=win32.gencache.EnsureDispatch('CT.Application')
+        prj=app.CreateJobObject()
+        dev=prj.CreateDeviceObject()
+        sht=prj.CreateSheetObject()
+        sheets=read_sheet(prj,sht)
+        blocks=find_cabblocks(prj,dev,owner,page,sheets)
+        pins=discover_pins(prj,sht,blocks,connectors)
+        pin_plan=make_plan(pins,connectors)
+        log(f'Found {len(pin_plan)} pins on '
+            f'{len({p["block"]["id"] for p in pin_plan})} physical CABBLOCK(s).')
+        signals=collect_signal_texts(prj,sht,pin_plan,type_override)
+        associated=associate_signals(prj,pin_plan,signals)
+        moves=plan_relocations(associated,type_override)
+        log('\nPROPOSED TEXT RELOCATIONS:')
+        for m in moves[:200]:
+            p=m['pin']; loc=m['location']
+            log(f'  text {m["id"]} type {m["type"]} {m["value"][:50]!r} | '
+                f'{p["connector"]}:{p["pin_name"]} | '
+                f'block {p["block"]["id"]}, {p["side"]} pin | '
+                f'({loc["x"]:.3f},{loc["y"]:.3f}) -> '
+                f'({m["x"]:.3f},{m["y"]:.3f}) | '
+                f'{"ALREADY THERE" if m["already"] else "MOVE"} | source={m["source"]}')
+        if len(moves)>200:
+            log(f'  ... {len(moves)-200} further planned texts not printed')
+        to_move=[m for m in moves if not m['already']]
+        log(f'\nSUMMARY: {len(signals)} candidate texts; {len(associated)} assigned; '
+            f'{len(to_move)} need movement, {len(moves)-len(to_move)} already placed.')
+        if not to_move:
+            popup('No unambiguous signal text relocations identified. '
+                  'Review the log for E3 text types and candidate examples.\n\n'
+                  f'{log_path}')
             return 0
-        finally:
-            sht = dev = prj = app = None
+        if preview:
+            log('PREVIEW mode, E3 was not altered.')
+            popup(f'Preview complete. {len(to_move)} relocations proposed.\n\n'
+                  f'Review {log_path}\n\nNo changes made.')
+            return 0
+        if not apply and not confirm_apply(len(to_move),log_path):
+            log('Cancelled by user. E3 was not altered.')
+            return 0
+        log('\nAPPLYING TEXT POSITION + ALIGNMENT ONLY')
+        text_obj=prj.CreateTextObject()
+        completed=0
+        try:
+            for m in to_move:
+                strategy=relocate_one_text(text_obj,m)
+                completed+=1
+                log(f'  MOVED {completed}/{len(to_move)}: text {m["id"]} '
+                    f'{m["pin"]["connector"]}:{m["pin"]["pin_name"]} '
+                    f'via SetSchemaLocation({strategy})')
+        except Exception:
+            log(f'PARTIAL OPERATION: {completed} text(s) already moved in E3. '
+                'Stop and inspect the schematic; see traceback below.')
+            raise
+        log(f'SUCCESS: relocated {completed} text labels. Save E3 project.')
+        popup(f'Relocated {completed} connection signal labels.\n\n'
+              'No pins, connections, signal values or local signal text were changed.\n'
+              f'Log: {log_path}\n\nSave E3 project.')
+        return 0
     except Exception:
-        log("\nERROR: " + traceback.format_exc())
+        log('ERROR: '+traceback.format_exc())
         raise
     finally:
         if LOG_STREAM is not None:
             LOG_STREAM.close()
-        LOG_STREAM = None
+        LOG_STREAM=None
 
 
 def main(argv=None):
-    parser = argparse.ArgumentParser(description="Format pins across split E3 CABBLOCKs, without moving pins")
-    parser.add_argument("excel", nargs="?", help="Pin Arranger .xlsm / .xlsx (file picker if omitted)")
-    parser.add_argument("--dry-run", action="store_true", help="Resolve and preview all pin targets; do not write to E3")
-    args = parser.parse_args(argv)
-    path = args.excel or file_dialog()
+    parser=argparse.ArgumentParser(description='Move E3 connection signal text to the opposite side of each CABBLOCK')
+    parser.add_argument('excel', nargs='?', help='Same Pin Arranger Excel .xlsm/.xlsx; picker if omitted')
+    parser.add_argument('--dry-run', action='store_true', help='Detect type/position and preview with no E3 changes')
+    parser.add_argument('--apply', action='store_true', help='Apply after preflight, without GUI confirmation')
+    parser.add_argument('--type', type=int, dest='type_override', metavar='N',
+                        help='Use a specific E3 GetType() for connection signal text, e.g. 1007 or 7')
+    args=parser.parse_args(argv)
+    if args.apply and args.dry_run:
+        parser.error('--apply and --dry-run cannot be combined')
+    path=args.excel or file_dialog()
     if not path:
-        log("No Excel workbook selected.")
+        print('No spreadsheet selected.')
         return 1
     try:
-        return run(path, dry_run=args.dry_run)
+        return run(path, preview=args.dry_run,apply=args.apply,
+                   type_override=args.type_override)
     except Exception as exc:
-        log(f"FAILED: {exc}")
-        message_box("E3 Pin Formatter - Error", str(exc) + "\n\nSee E3_Pin_Formatter_Log.txt next to the workbook.", error=True)
+        print('FAILED:',exc)
+        popup(f'{exc}\n\nSee E3_Connection_Signal_Relocator_Log.txt '
+              'beside the workbook for details.',error=True)
         return 1
 
 
-if __name__ == "__main__":
+if __name__=='__main__':
     sys.exit(main())
