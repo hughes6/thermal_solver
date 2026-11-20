@@ -1,48 +1,38 @@
-"""E3.series - connection signal relocator + bold + colour 4, NO SPREADSHEET.
+"""E3.series - SELECTED CABBLOCK connection signal relocator.
 
-Prompts for three pieces of information, replacing the Pin Arranger Excel file:
-    * Page / sheet number (example: 12)
-    * Main device designation (example: SCP)
-    * Connector number (example: J38; 38 also means J38)
+HOW TO USE
+  1. Open the desired sheet in E3.series.
+  2. Click ONCE on the actual CABBLOCK border so that exactly one block is selected.
+  3. Run this script. Review the preview and click Yes to apply.
 
-The example above identifies connector SCP-J38, including E3 pins whose printed
-(type-12) connector designation is J38 or J38#1 / J38#2. The script scans
-ONLY the specified E3 sheet, ONLY CABBLOCKs owned by the specified E3 device,
-and ONLY physical pin symbols with a matching printed connector designation.
-All uniquely identified pins in that scope are included: no connector pin list.
-This supports a connector spread across multiple split CABBLOCKs.
+Only connection-signal text associated with pins physically inside THAT selected
+CABBLOCK is affected. No page/device/connector entry and no spreadsheet.
 
-* Finds type-1007 (connection signal) or type-7 (signal name) text.
-* Moves each clearly associated signal text to the opposite INNER block edge.
-* Sets every selected connection signal text bold via SetStyle(1) and
-  sets E3 palette colour 4 via SetColour(4), including already-moved text.
-* Never moves or recreates pin symbols, connection objects, other signal text,
-  or changes signal values.
-* Dry run: --dry-run. Normal run asks for approval after a full preview.
-* If both type 1007 and 7 are present, refuses to choose one implicitly;
-  use --type 1007 or --type 7 after examining the printed diagnostics.
-* Writes E3_Connection_Signal_Relocator_Log.txt beside the script (or to a
-  temporary folder if that location is unwritable).
+Changes on the selected block only:
+  * Move connection signal number to the opposite INNER edge of the block,
+    preserving the pin's row; do not move an already-relocated number.
+  * Make all assigned numbers bold (E3 SetStyle(1)).
+  * Set their E3 palette text colour to 4 (SetColour(4)).
 
-Usage:
-    python E3_Connection_Signal_Relocator_No_Excel.py
-    python E3_Connection_Signal_Relocator_No_Excel.py --dry-run
-    python E3_Connection_Signal_Relocator_No_Excel.py --page 12 --device SCP --connector J38
-    python E3_Connection_Signal_Relocator_No_Excel.py --page 12 --device SCP --connector 38 --apply
-    python E3_Connection_Signal_Relocator_No_Excel.py --type 1007
+Source code reuses the previously working no-Excel relocator's text discovery,
+preflight, position verification, alignment, and formatting methods. Dry-run:
+    python E3_Selected_Block_Signal_Relocator.py --dry-run
+To apply without the confirmation pop-up:
+    python E3_Selected_Block_Signal_Relocator.py --apply
+If both text types 7 and 1007 are present and relevant, use --type 7 or
+--type 1007 to explicitly choose a type after reviewing the diagnostic log.
 
-Requires Windows with pywin32 and an open E3.series project.
-No spreadsheet or openpyxl dependency is required.
-The script retains the location-verification safeguards of the working
-Excel-based relocator; always review the first run in your E3 installation.
+E3 COM selection getter names/signatures can vary by version. This script tries
+known selection getter forms, verifies the selected symbol is a real CABBLOCK,
+and stops without modifying the drawing if the selection cannot be resolved.
+It does NOT infer a selection from the active sheet or use the first CABBLOCK.
+
+Requires Windows, pywin32, and a running E3.series project.
 """
 
-
 from __future__ import annotations
-
 import argparse
 import math
-import os
 import sys
 import traceback
 from collections import defaultdict, Counter
@@ -53,17 +43,14 @@ SIGNAL_NAME_TYPE = 617
 PIN_NUMBER_TYPE = 203
 DEVICE_DESIGNATION_TYPE = 12
 AUTO_SIGNAL_TYPES = (1007, 7)
-BOLD_STYLE = 1  # Same E3 text.SetStyle(1) as the working Pin Formatter
-SIGNAL_COLOUR = 4  # E3 palette index (NOT an RGB value); E3 API spells it SetColour
+BOLD_STYLE = 1
+SIGNAL_COLOUR = 4
 TEXT_TYPE_DESCRIPTIONS = {
     7: 'Signal name', 12: 'Device designation', 203: 'Pin number (project)',
     410: 'Wire number (user-defined)', 617: 'Local signal name (project)',
     1007: 'Connection signal',
 }
-
-# These two settings define the destination. Positive margin -> INSIDE block.
 EDGE_MARGIN = 0.16
-# Sheet-level connection labels need to be near a pin before they are moved.
 MAX_SHEET_TEXT_Y_DISTANCE = 0.16
 MAX_SHEET_TEXT_X_DISTANCE = 1.15
 POSITION_VERIFICATION_TOLERANCE = 0.015
@@ -157,112 +144,6 @@ def optional_call(obj, name):
         return None
 
 
-def read_sheet(prj, sht):
-    rows = []
-    ids = get_ids(prj.GetAllSheetIds)
-    for sid in ids:
-        if not select_id(sht, sid):
-            continue
-        name = str(sht.GetName()).strip()
-        aliases = {name.casefold()}
-        for method in ("GetSheetNumber", "GetNumber"):
-            val = optional_call(sht, method)
-            if val is not None:
-                aliases.add(str(normalize_pin(val)).casefold())
-        rows.append({"id": sid, "name": name, "aliases": aliases})
-    if not rows:
-        raise RuntimeError("E3 returned no sheets in the open project.")
-    return rows
-
-
-def same_sheet_label(label, expected):
-    a, b = str(label).strip().casefold(), str(expected).strip().casefold()
-    if a == b:
-        return True
-    return a.isdecimal() and b.isdecimal() and int(a) == int(b)
-
-
-def build_connector_record(owner, connector_number):
-    """Turn the 3 user inputs into one STRICT connector-label scope.
-
-    Only the full owner-prefixed label and the shortened actual printed label
-    are accepted. Never accept a substring like J3 for J38.
-    """
-    owner = str(owner or '').strip()
-    connector_number = str(connector_number or '').strip()
-    if not owner or not connector_number:
-        raise ValueError('Device designation and connector number cannot be blank.')
-    # Project connector numbering convention: 38 means J38.
-    if connector_number.isdecimal():
-        connector_number = 'J' + connector_number
-    prefix = owner + '-'
-    if connector_number.casefold().startswith(prefix.casefold()):
-        short_name = connector_number[len(prefix):].strip()
-        if not short_name:
-            raise ValueError('Connector number is blank after the device prefix.')
-        name = owner + '-' + short_name
-    else:
-        short_name = connector_number
-        name = owner + '-' + connector_number
-    return {
-        'name': name,
-        'short_name': short_name,
-        'label_aliases': connector_label_aliases(name, owner),
-    }
-
-
-def ask_inputs(initial_page=None, initial_device=None, initial_connector=None):
-    """Ask ONLY for missing fields. GUI dialogs first; console fallback."""
-    fields = [
-        ('Page / sheet number', initial_page, '12'),
-        ('Device designation (E3 main device)', initial_device, 'SCP'),
-        ('Connector number', initial_connector, 'J38'),
-    ]
-    values = [value for _,value,_ in fields]
-    if all(value is not None and str(value).strip() for value in values):
-        return tuple(str(value).strip() for value in values)
-    try:
-        import tkinter as tk
-        from tkinter import simpledialog
-        root = tk.Tk()
-        root.withdraw()
-        root.attributes('-topmost', True)
-        root.update()
-        try:
-            for i, (name, existing, example) in enumerate(fields):
-                if existing is not None and str(existing).strip():
-                    values[i] = str(existing).strip()
-                    continue
-                answer = simpledialog.askstring(
-                    'E3 Connection Signal Relocator',
-                    f'{name}:\n(example: {example})',
-                    parent=root,
-                )
-                if answer is None:
-                    return None
-                answer = answer.strip()
-                if not answer:
-                    raise ValueError(f'{name} cannot be blank.')
-                values[i] = answer
-        finally:
-            root.destroy()
-    except (ImportError, tk.TclError) if 'tk' in locals() else (ImportError,):
-        for i, (name, existing, example) in enumerate(fields):
-            if existing is not None and str(existing).strip():
-                values[i] = str(existing).strip()
-                continue
-            try:
-                values[i] = input(f'{name} (example {example}): ').strip()
-            except EOFError as exc:
-                raise RuntimeError(
-                    'The interactive prompts were not available. Supply '
-                    '--page, --device, and --connector on the command line.'
-                ) from exc
-            if not values[i]:
-                raise ValueError(f'{name} cannot be blank.')
-    return tuple(values)
-
-
 def get_symbol_location(sym):
     try:
         raw = sym.GetSchemaLocation(None, None, None, None, None)
@@ -286,109 +167,11 @@ def get_symbol_area(sym):
         return None
 
 
-def read_device_views(dev, device_id):
-    if not select_id(dev, device_id):
-        return []
-    return get_ids(dev.GetViewIds)
-
-
-def read_device_symbols(dev, view_id):
-    if not select_id(dev, view_id):
-        return []
-    return get_ids(dev.GetSymbolIds, 0)
-
-
-def find_cabblocks(prj, dev, owner_name, requested_page, sheets):
-    allowed_pages = None
-    if requested_page:
-        eligible = [s for s in sheets if any(same_sheet_label(a, requested_page)
-                                            for a in s["aliases"])]
-        if len(eligible) != 1:
-            choices = ", ".join(s["name"] for s in sheets)
-            raise RuntimeError(f"Page {requested_page!r} matched {len(eligible)} E3 "
-                               f"sheets. Available sheets: {choices}")
-        allowed_pages = {eligible[0]["id"]}
-    device_ids = get_ids(prj.GetAllDeviceIds)
-    if owner_name:
-        filtered = []
-        for did in device_ids:
-            if select_id(dev, did) and str(dev.GetName()).strip().casefold() == owner_name.casefold():
-                filtered.append(did)
-        if not filtered:
-            raise RuntimeError(f"Device {owner_name!r} not found by E3 GetName().")
-        device_ids = filtered
-    blocks = {}
-    sym = prj.CreateSymbolObject()
-    for did in device_ids:
-        for view_id in read_device_views(dev, did):
-            if not select_id(dev, view_id):
-                continue
-            try:
-                view_number = int(dev.GetViewNumber())
-            except Exception:
-                view_number = None
-            for sid in read_device_symbols(dev, view_id):
-                if sid in blocks or not select_id(sym, sid):
-                    continue
-                try:
-                    kind = str(sym.GetSymbolTypeName() or "")
-                except Exception:
-                    continue
-                if "CABBLOCK" not in kind.upper():
-                    continue
-                loc, area = get_symbol_location(sym), get_symbol_area(sym)
-                if not loc or not area:
-                    continue
-                if allowed_pages is not None and loc["sheet_id"] not in allowed_pages:
-                    continue
-                blocks[sid] = {
-                    "id": sid, "owner": did, "view_id": view_id,
-                    "view_number": view_number,
-                    "sheet_id": loc["sheet_id"], "kind": kind,
-                    **area,
-                }
-    if not blocks:
-        raise RuntimeError("No placed CABBLOCKs matched the entered device/page filters.")
-    return list(blocks.values())
-
-
 def inside_block(loc, block):
     tol = BLOCK_LOCATION_TOLERANCE
     return (loc is not None and loc["sheet_id"] == block["sheet_id"]
             and block["left"] - tol <= loc["x"] <= block["right"] + tol
             and block["bottom"] - tol <= loc["y"] <= block["top"] + tol)
-
-
-def match_designation(actual, requested):
-    """Printed designation and optional E3 view suffix (e.g. J38#2)."""
-    if not actual or not requested:
-        return False
-    a, b = str(actual).strip().casefold(), str(requested).strip().casefold()
-    return (a == b or
-            (a.startswith(b + '#') and a[len(b)+1:].isdecimal()))
-
-
-def connector_label_aliases(name, owner=None, explicit_label=None):
-    """Use only an owner-qualified Excel prefix, never a fuzzy substring.
-
-    In the SCP drawings, the user may enter 'SCP-J38' but type-12 printed
-    connector text can be just 'J38' or 'J38#1'. The shortened alias is
-    accepted ONLY when the supplied device identifies the same owner, because
-    blindly dropping a prefix could target another connector.
-    """
-    names = [str(explicit_label or name).strip()]
-    if not explicit_label and owner:
-        prefix = str(owner).strip() + '-'
-        if names[0].casefold().startswith(prefix.casefold()):
-            stripped = names[0][len(prefix):].strip()
-            if stripped:
-                names.append(stripped)
-    return tuple(dict.fromkeys(n.casefold() for n in names if n))
-
-
-def matches_connector_label(actual, connector):
-    return any(match_designation(actual, alias)
-               for alias in connector['label_aliases'])
 
 
 def scan_sheet_symbols(prj, sht, sheet_id):
@@ -494,87 +277,6 @@ def dump_nearby_text_types(prj, sht, blocks, max_samples=25):
             'Check that the blocks really contain the desired placed pins.')
 
 
-def discover_pins(prj, sht, blocks, connectors):
-    """Identify every matching physical connector pin on the selected page.
-
-    Unlike the Excel version, no pin list is supplied. Matching is constrained
-    by the E3 block's owner, the E3 sheet, the exact connector designation,
-    AND the presence of the known pin-number text type (203).
-    """
-    blocks_by_sheet = defaultdict(list)
-    for b in blocks:
-        blocks_by_sheet[b['sheet_id']].append(b)
-    identified = []
-    sample_label_counts = Counter()
-    sampled_named = []
-    detected = Counter()
-    for sheet_id, sheet_blocks in blocks_by_sheet.items():
-        ids = scan_sheet_symbols(prj, sht, sheet_id)
-        log(f'Scanning E3 sheet {sheet_id}: {len(ids)} symbols, '
-            f'{len(sheet_blocks)} candidate CABBLOCK(s)')
-        for b in sheet_blocks:
-            log(f'  BLOCK {b["id"]} | owner device {b["owner"]} | '
-                f'X=[{b["left"]:.3f},{b["right"]:.3f}] '
-                f'Y=[{b["bottom"]:.3f},{b["top"]:.3f}]')
-        excluded = {b['id'] for b in sheet_blocks}
-        for symbol_id in set(ids):
-            detected['sheet symbols'] += 1
-            if symbol_id in excluded:
-                continue
-            identity = read_pin_identity(prj, symbol_id)
-            if identity is None:
-                detected['no type-203 pin number (or unreadable symbol)'] += 1
-                continue
-            detected['symbols containing type-203 pin number'] += 1
-            block_hits = [b for b in sheet_blocks if inside_block(identity['location'], b)]
-            if not block_hits:
-                detected['pin-number symbols outside selected CABBLOCKs'] += 1
-                continue
-            detected['pin-number symbols inside selected CABBLOCKs'] += 1
-            for label in identity['designations']:
-                sample_label_counts[label] += 1
-            matched = any(matches_connector_label(label, conn)
-                          for conn in connectors for label in identity['designations'])
-            if matched and len(sampled_named) < 60:
-                sampled_named.append(identity)
-            if len(block_hits) > 1:
-                # DANGER: multiple possible destinations. Stop if target.
-                if matched:
-                    raise RuntimeError(
-                        f'Connector pin {identity["pin_name"]} symbol {symbol_id} '
-                        f'overlaps CABBLOCKs {[b["id"] for b in block_hits]}. '
-                        'Ambiguous destination: no signal text changed.')
-                continue
-            if matched:
-                identity['block'] = block_hits[0]
-                identified.append(identity)
-                detected['symbols matching target connector'] += 1
-            else:
-                detected['pin-number symbol in block but connector label differs'] += 1
-    log('\nPIN-LOOKUP DIAGNOSTICS (read-only):')
-    for key, count in detected.items():
-        log(f'  {key}: {count}')
-    for conn in connectors:
-        log(f'  Connector {conn["name"]!r}: accepted type-12 labels '
-            f'{list(conn["label_aliases"])} (all physical pins, no Excel list)')
-    log(f'  Actual printed device designations in candidate blocks: '
-        f'{sample_label_counts.most_common(35)}')
-    if sampled_named:
-        log('  MATCHED PHYSICAL PIN SYMBOLS:')
-        for p in sampled_named:
-            loc = p['location']
-            log(f'    pin {p["pin_name"]!r} | symbol {p["symbol_id"]} '
-                f'| type={p["kind"]!r} | labels={p["designations"]!r} '
-                f'| sheet={loc["sheet_id"]} X={loc["x"]:.3f} Y={loc["y"]:.3f}')
-    if not identified:
-        dump_nearby_text_types(prj, sht, blocks)
-        raise RuntimeError(
-            'No physical pin with a matching type-12 connector label was found '
-            'inside the selected device CABBLOCKs on that page. Check the '
-            'PIN-LOOKUP DIAGNOSTICS above. NO TEXTS MOVED.')
-    return identified
-
-
 def determine_side(pin):
     x = pin["location"]["x"]
     block = pin["block"]
@@ -588,59 +290,6 @@ def determine_side(pin):
         )
     return "LEFT" if ld < rd else "RIGHT"
 
-
-def make_plan(pins, connectors):
-    """Choose ALL uniquely identified physical pins of the named connector.
-
-    With no connector pin list to verify, prevent ambiguous duplicate pin numbers,
-    shared physical symbols, or misidentified pin edges from being modified.
-    """
-    planned = []
-    used_symbols = set()
-    for conn in connectors:
-        candidates = [p for p in pins if any(
-            matches_connector_label(label, conn)
-            for label in p['designations'])]
-        if not candidates:
-            raise RuntimeError(
-                f'Connector {conn["name"]}: no matching pins were found. '
-                'No connection text changed.')
-        by_name = defaultdict(list)
-        for p in candidates:
-            by_name[p['pin_name']].append(p)
-        duplicates = {
-            name: [(p['symbol_id'],p['block']['id'],p['designations']) for p in group]
-            for name, group in by_name.items() if len(group) != 1
-        }
-        if duplicates:
-            raise RuntimeError(
-                f'Connector {conn["name"]}: duplicate physical pin numbers '
-                f'across split blocks: {duplicates}. Without a connector pin list '
-                'these cannot be safely distinguished. NO TEXTS MOVED.')
-        chosen = list(by_name.values())
-        chosen = [group[0] for group in chosen]
-        by_side = defaultdict(list)
-        for p in chosen:
-            p['side'] = determine_side(p)
-            by_side[(p['block']['id'],p['side'])].append(p)
-        for (block_id,side),group in by_side.items():
-            group.sort(key=lambda p: (-p['location']['y'],p['pin_name']))
-            for row,p in enumerate(group):
-                if p['symbol_id'] in used_symbols:
-                    raise RuntimeError(f'Symbol {p["symbol_id"]} selected for multiple '
-                                       'connectors; no texts changed.')
-                used_symbols.add(p['symbol_id'])
-                planned.append({**p,'connector':conn['name'],'row':row})
-        log(f'  RESOLVED {conn["name"]}: {len(chosen)} unique E3 physical pins '
-            f'over {len({p["block"]["id"] for p in chosen})} CABBLOCK(s) '
-            f'(owners: {sorted({p["block"]["owner"] for p in chosen})}).')
-        log('  Pin numbers found: ' + ', '.join(sorted(by_name, key=lambda v: (
-            not str(v).isdigit(), int(v) if str(v).isdigit() else str(v)))))
-    return sorted(planned,key=lambda p:(p['connector'],p['block']['sheet_id'],
-                                       p['block']['id'],p['side'],p['row']))
-
-
-# ---------------------- Text discovery and positioning -------------------
 
 def _raw_text_location_results(txt):
     """Try read-only COM methods, retaining original tuples for diagnostics."""
@@ -1002,7 +651,7 @@ def choose_log_path():
     locations = [Path(__file__).resolve().parent, Path(tempfile.gettempdir())]
     for directory in locations:
         try:
-            path = directory / 'E3_Connection_Signal_Relocator_Log.txt'
+            path = directory / 'E3_Selected_Block_Signal_Relocator_Log.txt'
             with open(path, 'w', encoding='utf-8'):
                 pass
             return path
@@ -1040,165 +689,322 @@ def popup(message, error=False):
         pass
 
 
-def run(page, owner, connector_number, preview=False, apply=False, type_override=None):
+
+def selected_symbol_id_candidates(prj, sht, app):
+    """Read current E3 GUI selection, WITHOUT changing GUI selection.
+
+    Different COM versions expose selection at job, sheet or application level;
+    each getter may use an out parameter or return an array directly. We use
+    only explicit *Selected* getter names and never auto-pick from sheet IDs.
+    """
+    active_sheet_id = None
+    for method_name in ('GetActiveSheetId',):
+        try:
+            sheet_id = getattr(prj, method_name)()
+            if isinstance(sheet_id, (int, float)) and int(sheet_id) > 0:
+                active_sheet_id = int(sheet_id)
+                break
+        except Exception:
+            continue
+    if active_sheet_id is not None:
+        select_id(sht, active_sheet_id)
+    log(f'Active E3 sheet: {active_sheet_id if active_sheet_id else "not reported by COM"}')
+
+    # Explicitly symbol-only queries first, generic selected object IDs last.
+    # The fallback generic query is ALWAYS type-checked as a placed CABBLOCK.
+    probes = (
+        ('job', prj, 'GetSelectedSymbolIds'),
+        ('job', prj, 'GetSelectedSymbolsIds'),
+        ('job', prj, 'GetSelectedSymbolId'),
+        ('sheet', sht, 'GetSelectedSymbolIds'),
+        ('sheet', sht, 'GetSelectedSymbolsIds'),
+        ('sheet', sht, 'GetSelectedSymbolId'),
+        ('app', app, 'GetSelectedSymbolIds'),
+        ('job', prj, 'GetSelectedObjectIds'),
+        ('job', prj, 'GetSelectedIds'),
+        ('sheet', sht, 'GetSelectedObjectIds'),
+        ('sheet', sht, 'GetSelectedIds'),
+        ('app', app, 'GetSelectedObjectIds'),
+        ('app', app, 'GetSelectedIds'),
+    )
+    attempted = []
+    found = set()
+    for label, obj, method_name in probes:
+        try:
+            getter = getattr(obj, method_name)
+        except Exception:
+            continue
+        # Avoid evaluating an integer method return as the selected ID unless
+        # GetSelectedSymbolId explicitly returns one number. For array-style
+        # getters, require an array (or a count + array) in the result.
+        for args in ((None,), (), (None, 0), (0, None)):
+            try:
+                result = getter(*args)
+            except Exception as exc:
+                attempted.append(f'{label}.{method_name}{args}: {str(exc)[:75]}')
+                continue
+            if isinstance(result, (tuple, list)):
+                ids = parse_id_result(result)
+            elif method_name == 'GetSelectedSymbolId':
+                ids = parse_id_result(result)
+            else:
+                ids = []
+            attempted.append(f'{label}.{method_name}{args}: {ids}')
+            if ids:
+                found.update(ids)
+                break
+    log('GUI SELECTION READBACK:')
+    for item in attempted[:45]:
+        log(f'  {item}')
+    if len(attempted) > 45:
+        log(f'  ... {len(attempted)-45} additional getter attempts')
+    if not found:
+        raise RuntimeError(
+            'No selected symbol IDs were returned by this E3 COM build. '
+            'Select ONE CABBLOCK (click its border) before launching. '
+            'If it is already selected, send the GUI SELECTION READBACK log; '
+            'your E3 version may use another selection API. NO CHANGES MADE.'
+        )
+    return sorted(found)
+
+
+def get_one_selected_cabblock(prj, sht, app):
+    ids = selected_symbol_id_candidates(prj, sht, app)
+    sym = prj.CreateSymbolObject()
+    selected_symbols = []
+    blocks = []
+    for sid in ids:
+        if not select_id(sym, sid):
+            log(f'  Selected ID {sid}: not a valid E3 symbol ID')
+            continue
+        kind = str(optional_call(sym, 'GetSymbolTypeName') or '')
+        location, area = get_symbol_location(sym), get_symbol_area(sym)
+        if location is None:
+            log(f'  Selected ID {sid}: no valid placed-symbol location')
+            continue
+        selected_symbols.append((sid, kind))
+        log(f'  Selected symbol {sid}: {kind!r}, sheet {location["sheet_id"]}')
+        if 'CABBLOCK' not in kind.upper():
+            continue
+        if area is None:
+            raise RuntimeError(f'Selected CABBLOCK {sid}: unreadable placed area. No changes made.')
+        blocks.append({
+            'id': sid, 'sheet_id': location['sheet_id'], 'kind': kind,
+            'owner': '<selected block>', 'view_id': None, 'view_number': None,
+            **area,
+        })
+    if len(blocks) != 1:
+        raise RuntimeError(
+            f'Expected EXACTLY ONE selected CABBLOCK, found {len(blocks)} '
+            f'(other selected symbols: {selected_symbols}). '
+            'Click once on ONE CABBLOCK border in E3 and rerun. NO CHANGES MADE.'
+        )
+    if len(selected_symbols) > 1:
+        raise RuntimeError(
+            f'More than one E3 symbol is selected: {selected_symbols}. '
+            'Deselect other objects and select only the CABBLOCK. NO CHANGES MADE.'
+        )
+    block = blocks[0]
+    log(f'CONFIRMED SELECTED CABBLOCK {block["id"]} | {block["kind"]!r} | '
+        f'sheet {block["sheet_id"]} | X=[{block["left"]:.3f},{block["right"]:.3f}] '
+        f'Y=[{block["bottom"]:.3f},{block["top"]:.3f}]')
+    return block
+
+
+def get_pins_in_selected_block(prj, sht, block):
+    """All physical pin symbols in selected block; NO connector or Excel filter."""
+    ids = scan_sheet_symbols(prj, sht, block['sheet_id'])
+    log(f'Scanning ONLY sheet {block["sheet_id"]} for pins in selected block '
+        f'{block["id"]} ({len(ids)} placed symbols).')
+    selected = []
+    nearby_types = Counter()
+    other_blocks = []
+    local_symbol = prj.CreateSymbolObject()
+    for sid in set(ids):
+        if sid == block['id'] or not select_id(local_symbol, sid):
+            continue
+        kind = str(optional_call(local_symbol, 'GetSymbolTypeName') or '')
+        if 'CABBLOCK' not in kind.upper():
+            continue
+        area, loc = get_symbol_area(local_symbol), get_symbol_location(local_symbol)
+        if area is not None and loc is not None and loc['sheet_id'] == block['sheet_id']:
+            other_blocks.append({'id': sid, 'sheet_id': loc['sheet_id'], **area})
+    for sid in set(ids):
+        if sid == block['id']:
+            continue
+        pin = read_pin_identity(prj, sid)
+        if pin is None:
+            continue
+        if not inside_block(pin['location'], block):
+            continue
+        # If this pin also lies in a different CABBLOCK, its ownership is
+        # ambiguous. Refuse to risk changing another block's signal text.
+        overlap = [b['id'] for b in other_blocks if (
+            b['left'] - 0.015 <= pin['location']['x'] <= b['right'] + 0.015 and
+            b['bottom'] - 0.015 <= pin['location']['y'] <= b['top'] + 0.015)]
+        if overlap:
+            raise RuntimeError(
+                f'Selected block {block["id"]} pin symbol {sid} '
+                f'(pin {pin["pin_name"]}) also lies in CABBLOCK(s) {overlap}. '
+                'Cannot determine ownership safely. NO CHANGES MADE.')
+        selected.append({**pin, 'block': block})
+        nearby_types[pin['designation'] or '<no type-12 label>'] += 1
+    log(f'Physical pin symbols inside selected CABBLOCK: {len(selected)}')
+    log(f'Device designations on pins: {nearby_types.most_common(20)}')
+    for p in sorted(selected, key=lambda x: (-x['location']['y'], x['pin_name'])):
+        log(f'  PIN {p["pin_name"]!r} | symbol {p["symbol_id"]} | '
+            f'labels={p["designations"]!r} | '
+            f'X={p["location"]["x"]:.3f}, Y={p["location"]["y"]:.3f}')
+    if not selected:
+        dump_nearby_text_types(prj, sht, [block])
+        raise RuntimeError('Selected CABBLOCK has no physical pin symbols with text type 203. '
+                           'No changes made. Review the diagnostic log.')
+    return selected
+
+
+def make_selected_block_plan(pins):
+    """Plan only unique pins in ONE physical CABBLOCK, irrespective of owner."""
+    seen = {}
+    for p in pins:
+        key = (tuple(sorted(x.casefold() for x in p['designations'])), p['pin_name'])
+        if key in seen:
+            prev = seen[key]
+            raise RuntimeError(
+                f'Ambiguous duplicate pin {p["pin_name"]!r} in selected block: '
+                f'symbols {prev["symbol_id"]} and {p["symbol_id"]} have the same '
+                'device labels. Nothing modified.'
+            )
+        seen[key] = p
+    sides = defaultdict(list)
+    for p in pins:
+        p['side'] = determine_side(p)
+        p['connector'] = p['designation'] or '<unlabeled connector>'
+        sides[p['side']].append(p)
+    result = []
+    for side, group in sides.items():
+        group.sort(key=lambda p: (-p['location']['y'], p['pin_name']))
+        for row, p in enumerate(group):
+            result.append({**p, 'row': row})
+    log(f'PRE-FLIGHT: {len(result)} unique pins on selected block: '
+        f'LEFT={len(sides["LEFT"])}, RIGHT={len(sides["RIGHT"])}')
+    return sorted(result, key=lambda p: (p['side'], p['row']))
+
+
+
+def run(preview=False, apply=False, type_override=None):
     global LOG_STREAM
-    page = normalize_pin(page)
-    owner = normalize_pin(owner)
-    connector_number = normalize_pin(connector_number)
-    if not page or not owner or not connector_number:
-        raise ValueError('A page, device designation, and connector number are required.')
-    connectors = [build_connector_record(owner, connector_number)]
     log_path = choose_log_path()
     try:
-        LOG_STREAM = open(log_path,'w',encoding='utf-8')
-        log('='*75)
-        log(f'E3 CONNECTION SIGNAL RELOCATOR + BOLD + COLOUR {SIGNAL_COLOUR} - NO SPREADSHEET')
-        log('No changes until full connector/pin/text preflight succeeds.')
-        log('='*75)
-        log(f'Entered: page={page!r}, device={owner!r}, '
-            f'connector={connector_number!r}')
-        log(f'Resolved connector: {connectors[0]["name"]!r}, '
-            f'accepted printed labels: {list(connectors[0]["label_aliases"])}')
-        log('Pin selection: ALL matching physical pins on scoped page/device '
-            '(including split CABBLOCKs); no spreadsheet or pin list.')
+        LOG_STREAM = open(log_path, 'w', encoding='utf-8')
+        log('=' * 74)
+        log(f'E3 SELECTED-BLOCK SIGNAL RELOCATOR + BOLD + COLOUR {SIGNAL_COLOUR}')
+        log('No Excel or manual page/device/connector entry required.')
+        log('No changes until selected block, pin and text preflight succeeds.')
+        log('=' * 74)
         import win32com.client as win32
-        app=win32.gencache.EnsureDispatch('CT.Application')
-        prj=app.CreateJobObject()
-        dev=prj.CreateDeviceObject()
-        sht=prj.CreateSheetObject()
-        sheets=read_sheet(prj,sht)
-        blocks=find_cabblocks(prj,dev,owner,page,sheets)
-        pins=discover_pins(prj,sht,blocks,connectors)
-        pin_plan=make_plan(pins,connectors)
-        log(f'Found {len(pin_plan)} uniquely labeled pins on '
-            f'{len({p["block"]["id"] for p in pin_plan})} physical CABBLOCK(s).')
-        signals=collect_signal_texts(prj,sht,pin_plan,type_override)
-        associated=associate_signals(prj,pin_plan,signals)
-        associated=recover_already_placed_sheet_texts(prj,pin_plan,signals,associated)
-        moves=plan_relocations(associated,type_override)
-        log('\nPROPOSED TEXT RELOCATIONS:')
-        for m in moves[:200]:
-            p=m['pin']; loc=m['location']
-            log(f'  text {m["id"]} type {m["type"]} {m["value"][:50]!r} | '
-                f'{p["connector"]}:{p["pin_name"]} | '
-                f'block {p["block"]["id"]}, {p["side"]} pin | '
+        app = win32.gencache.EnsureDispatch('CT.Application')
+        prj = app.CreateJobObject()
+        sht = prj.CreateSheetObject()
+        block = get_one_selected_cabblock(prj, sht, app)
+        pins = get_pins_in_selected_block(prj, sht, block)
+        plan = make_selected_block_plan(pins)
+        signals = collect_signal_texts(prj, sht, plan, type_override)
+        associated = associate_signals(prj, plan, signals)
+        associated = recover_already_placed_sheet_texts(prj, plan, signals, associated)
+        moves = plan_relocations(associated, type_override)
+        log('\nPROPOSED CONNECTION SIGNAL FORMATTING:')
+        for m in moves[:250]:
+            p = m['pin']
+            loc = m['location']
+            log(f'  text {m["id"]} type {m["type"]} {m["value"][:55]!r} | '
+                f'pin {p["pin_name"]} on block {p["block"]["id"]} ({p["side"]}) | '
                 f'({loc["x"]:.3f},{loc["y"]:.3f}) -> '
                 f'({m["x"]:.3f},{m["y"]:.3f}) | '
-                f'{"ALREADY THERE" if m["already"] else "MOVE"} + BOLD + COLOUR {SIGNAL_COLOUR} | source={m["source"]}')
-        if len(moves)>200:
-            log(f'  ... {len(moves)-200} further planned texts not printed')
-        to_move=[m for m in moves if not m['already']]
-        log(f'\nSUMMARY: {len(signals)} candidate texts; {len(associated)} assigned; '
-            f'{len(to_move)} need movement, {len(moves)-len(to_move)} already placed; '
-            f'{len(moves)} selected texts to bold and colour {SIGNAL_COLOUR}.')
+                f'{"ALREADY POSITIONED" if m["already"] else "MOVE"} '
+                f'+ BOLD + COLOUR {SIGNAL_COLOUR}')
+        if len(moves) > 250:
+            log(f'  ... {len(moves)-250} more labels omitted from preview')
+        to_move = [m for m in moves if not m['already']]
+        log(f'\nSUMMARY: selected block {block["id"]}: {len(plan)} pins, '
+            f'{len(signals)} potential texts, {len(associated)} assigned, '
+            f'{len(to_move)} to relocate, {len(moves)} bold/colour updates.')
         if not moves:
-            popup('No unambiguous connection signal text identified. '
-                  'Review the log for E3 text types and candidate examples.\n\n'
-                  f'{log_path}')
+            popup(f'No unambiguous connection signal text identified on selected block '
+                  f'{block["id"]}.\n\nSee log:\n{log_path}')
             return 0
         if preview:
-            log('PREVIEW mode, E3 was not altered.')
-            popup(f'Preview complete for {connectors[0]["name"]}: '
-                  f'{len(pin_plan)} pins found, '
-                  f'{len(to_move)} moves and {len(moves)} bold/colour {SIGNAL_COLOUR} updates proposed.\n\n'
-                  f'Log: {log_path}\n\nNo changes made.')
+            log('PREVIEW ONLY: E3 was not modified.')
+            popup(f'Selected block {block["id"]}: {len(plan)} pins; '
+                  f'{len(to_move)} proposed moves, {len(moves)} bold/colour updates.\n'
+                  f'No changes made.\n\nLog: {log_path}')
             return 0
-        if not apply and not confirm_apply(len(to_move),len(moves),log_path):
-            log('Cancelled by user. E3 was not altered.')
+        if not apply and not confirm_apply(len(to_move), len(moves), log_path):
+            log('CANCELLED. E3 not modified.')
             return 0
-        log(f'\nAPPLYING CONNECTION TEXT POSITION + BOLD + COLOUR {SIGNAL_COLOUR}')
-        text_obj=prj.CreateTextObject()
-        moved_count=0
-        bold_count=0
-        colour_count=0
+        txt = prj.CreateTextObject()
+        moved = bolded = coloured = 0
         try:
             for m in moves:
                 if not m['already']:
-                    strategy=relocate_one_text(text_obj,m)
-                    moved_count+=1
-                    log(f'  MOVED {moved_count}/{len(to_move)}: text {m["id"]} '
-                        f'{m["pin"]["connector"]}:{m["pin"]["pin_name"]} '
-                        f'via SetSchemaLocation({strategy})')
-                if not select_id(text_obj, m['id']):
-                    raise RuntimeError(f'Text {m["id"]} disappeared before bold formatting.')
+                    how = relocate_one_text(txt, m)
+                    moved += 1
+                    log(f'  MOVED text {m["id"]} via {how}')
+                if not select_id(txt, m['id']):
+                    raise RuntimeError(f'Text {m["id"]} disappeared before formatting.')
                 try:
-                    text_obj.SetStyle(BOLD_STYLE)
+                    txt.SetStyle(BOLD_STYLE)
                 except Exception as exc:
-                    raise RuntimeError(
-                        f'Text {m["id"]}: E3 SetStyle({BOLD_STYLE}) failed; '
-                        f'text may have moved but was NOT confirmed bold. '
-                        f'Stop and inspect this text. Original error: {exc}') from exc
-                bold_count+=1
+                    raise RuntimeError(f'Text {m["id"]}: could not bold: {exc}') from exc
+                bolded += 1
                 try:
-                    # The installed E3 text API uses British spelling; this is
-                    # a palette index and should not be converted to RGB.
-                    text_obj.SetColour(SIGNAL_COLOUR)
+                    txt.SetColour(SIGNAL_COLOUR)
                 except Exception as exc:
-                    raise RuntimeError(
-                        f'Text {m["id"]}: E3 SetColour({SIGNAL_COLOUR}) failed; '
-                        f'text may have moved and been bolded but its colour is '
-                        f'NOT confirmed. Stop and inspect this text. '
-                        f'Original error: {exc}') from exc
-                colour_count+=1
-                log(f'  FORMATTED {colour_count}/{len(moves)}: text {m["id"]} '
-                    f'{m["pin"]["connector"]}:{m["pin"]["pin_name"]} '
-                    f'BOLD + COLOUR {SIGNAL_COLOUR} '
-                    f'({"already positioned" if m["already"] else "relocated"})')
+                    raise RuntimeError(f'Text {m["id"]}: could not set colour {SIGNAL_COLOUR}: {exc}') from exc
+                coloured += 1
+                log(f'  FORMATTED {m["id"]}: bold + colour {SIGNAL_COLOUR}')
         except Exception:
-            log(f'PARTIAL OPERATION: {moved_count} text(s) moved and '
-                f'{bold_count} bolded, {colour_count} colour-{SIGNAL_COLOUR} text(s) in E3. '
-                'Stop and inspect the schematic; see traceback below.')
+            log(f'PARTIAL FAILURE: {moved} moved; {bolded} bolded; '
+                f'{coloured} coloured. Inspect E3 before continuing.')
             raise
-        log(f'SUCCESS: moved {moved_count} labels; bolded {bold_count} and '
-            f'set colour {SIGNAL_COLOUR} on {colour_count} connection signal labels. Save E3 project.')
-        popup(f'Connector {connectors[0]["name"]}: '
-              f'{len(pin_plan)} pins; {moved_count} signal labels moved, '
-              f'{bold_count} bolded and {colour_count} set to colour {SIGNAL_COLOUR}.\n\n'
-              'No pins, connections, signal values or local signal text were changed.\n'
-              f'Log: {log_path}\n\nSave E3 project.')
+        log(f'SUCCESS: selected block {block["id"]}; {moved} moved, '
+            f'{bolded} bolded and {coloured} colour-{SIGNAL_COLOUR}. Save E3 project.')
+        popup(f'Block {block["id"]}: {len(plan)} pins. '
+              f'{moved} signal numbers relocated, {bolded} bolded, '
+              f'{coloured} set to colour {SIGNAL_COLOUR}.\n\n'
+              'No pin symbols or local signal names changed.\n'
+              f'Log: {log_path}\n\nSave your E3 project.')
         return 0
     except Exception:
-        log('ERROR: '+traceback.format_exc())
+        log('ERROR: ' + traceback.format_exc())
         raise
     finally:
         if LOG_STREAM is not None:
             LOG_STREAM.close()
-        LOG_STREAM=None
+        LOG_STREAM = None
 
 
 def main(argv=None):
     parser = argparse.ArgumentParser(
-        description='Move connection signal numbers to opposite CABBLOCK edge '
-                    f'and set bold + text colour {SIGNAL_COLOUR}, using E3 directly (no Excel).')
-    parser.add_argument('--page', metavar='PAGE',
-                        help='E3 sheet/page number, e.g. 12; prompted if omitted')
-    parser.add_argument('--device', metavar='DEVICE',
-                        help='E3 main device designation, e.g. SCP; prompted if omitted')
-    parser.add_argument('--connector', metavar='CONNECTOR',
-                        help='Connector number, e.g. J38 or 38; prompted if omitted')
-    parser.add_argument('--dry-run',action='store_true',
-                        help='Read-only preview: identify pins and signal text, with no E3 changes')
-    parser.add_argument('--apply',action='store_true',
-                        help='Apply after preflight without the confirmation popup')
-    parser.add_argument('--type',type=int,dest='type_override',metavar='N',
-                        help='Explicit connection signal text type when auto-detection is ambiguous, e.g. 1007 or 7')
+        description=f'Select one E3 CABBLOCK, then run: move and bold its '
+                    f'connection signal numbers, palette colour {SIGNAL_COLOUR}.')
+    parser.add_argument('--dry-run', action='store_true',
+                        help='Read-only preview; do not modify E3.')
+    parser.add_argument('--apply', action='store_true',
+                        help='Apply after preflight without confirmation dialog.')
+    parser.add_argument('--type', type=int, dest='type_override', metavar='N',
+                        help='Explicit connection signal text type; usually 1007 or 7.')
     args = parser.parse_args(argv)
     if args.apply and args.dry_run:
         parser.error('--apply and --dry-run cannot be combined')
     try:
-        inputs = ask_inputs(args.page, args.device, args.connector)
-        if inputs is None:
-            print('Cancelled: no changes made.')
-            return 0
-        page, owner, connector = inputs
-        return run(page, owner, connector, preview=args.dry_run,
-                   apply=args.apply, type_override=args.type_override)
+        return run(preview=args.dry_run, apply=args.apply,
+                   type_override=args.type_override)
     except Exception as exc:
-        print('FAILED:',exc)
-        popup(f'{exc}\n\nSee E3_Connection_Signal_Relocator_Log.txt '
-              'beside this script (or system temp folder) for details.',error=True)
+        print('FAILED:', exc)
+        popup(f'{exc}\n\nSee E3_Selected_Block_Signal_Relocator_Log.txt '
+              'beside this script (or in the system temp directory).', error=True)
         return 1
 
 
-if __name__=='__main__':
+if __name__ == '__main__':
     sys.exit(main())
