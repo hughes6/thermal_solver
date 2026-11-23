@@ -1,159 +1,1621 @@
-2026-11-23T14:41:10 === Start CABLE-BLOCK-PIN-SPACING-V10-OPPOSITE-DIRECT-REFRESH-20261123 ===
-2026-11-23T14:41:10 BUILD CABLE-BLOCK-PIN-SPACING-V10-OPPOSITE-DIRECT-REFRESH-20261123
-2026-11-23T14:41:10 LOG C:\Users\conner.hughes\\Documents\Python\Block Pin Spacer\main.log
-2026-11-23T14:41:10 WARNING: pin deletion/recreation may not be undoable. OPEN A SAVED COPY.
-2026-11-23T14:41:10 Safety: all pins re-read after EACH automatic replacement. Opposite edge is mandatory.
-2026-11-23T14:41:25 Selection: {'symbols': [147533, 147507, 147481, 147453, 147425, 147399, 147373, 147240, 147144], 'pins': [], 'blocks': []} (official e3series wrapper)
-2026-11-23T14:41:25 SOURCE: 147240@(10.300,24.900), 147533@(10.300,24.500), 147507@(10.300,23.900), 147481@(10.300,23.700), 147453@(10.300,23.500), 147425@(10.300,23.300), 147399@(10.300,23.100), 147373@(10.300,22.900), 147144@(10.300,22.700)
-2026-11-23T14:41:25 MEASURED MEDIAN PITCH = 0.2000
-2026-11-23T14:41:25 SELECTED CABLE GAP PATTERN: 0.4000, 0.6000, 0.2000, 0.2000, 0.2000, 0.2000, 0.2000, 0.2000
-2026-11-23T14:41:25 When target pin count matches the selection, EXACT gaps are copied (NOT median pitch).
-2026-11-23T14:41:33 Selection: {'symbols': [14200], 'pins': [], 'blocks': [137350]} (official e3series wrapper)
-2026-11-23T14:41:33 BLOCK AREA via GetPlacedArea(): L=6.800 B=19.700 R=8.400 T=26.200
-2026-11-23T14:41:33 BLOCK 14200 / device 137350: 9 pin symbols; outline=(6.799999999999999, 19.699999999999996, 8.399999999999999, 26.200000000000003)
-2026-11-23T14:41:33 PIN IDS: 146409(146406)@6.800,24.000, 141679(141668)@6.800,23.800, 141690(141665)@6.800,23.600, 141689(141645)@6.800,23.400, 141670(141626)@6.800,23.200, 141660(141672)@6.800,23.000, 145851(145850)@6.800,22.800, 141663(141631)@6.800,22.600, 145693(145690)@6.800,22.400
-2026-11-23T14:41:33 OPPOSITE EDGE MANDATORY: old=LEFT x=6.8000 -> new=RIGHT x=8.4000; no staging/peeling.
-2026-11-23T14:41:33 CANONICAL VIEW VERIFIED: symbol 146409 <- logical pin 147428, owner 137417, view 147277, name='1'
-2026-11-23T14:41:33 CANONICAL VIEW VERIFIED: symbol 141679 <- logical pin 147411, owner 137417, view 147276, name='2'
-2026-11-23T14:41:33 CANONICAL VIEW VERIFIED: symbol 141690 <- logical pin 147408, owner 137417, view 147273, name='3'
-2026-11-23T14:41:33 CANONICAL VIEW VERIFIED: symbol 141689 <- logical pin 147402, owner 137417, view 147270, name='4'
-2026-11-23T14:41:33 CANONICAL VIEW VERIFIED: symbol 141670 <- logical pin 147378, owner 137417, view 147266, name='5'
-2026-11-23T14:41:33 CANONICAL VIEW VERIFIED: symbol 141660 <- logical pin 147377, owner 137417, view 147255, name='6'
-2026-11-23T14:41:33 CANONICAL VIEW VERIFIED: symbol 141663 <- logical pin 147352, owner 137417, view 147241, name='8'
-2026-11-23T14:41:33 CANONICAL VIEW VERIFIED: symbol 145693 <- logical pin 147351, owner 137417, view 147223, name='9'
-2026-11-23T14:41:33 LOGICAL PIN LOOKUP: 8/9 verified, 11 devices, 53 logical pins, 27 logical pins with GetViewIds; roots=[137350, 147279]; unresolved symbols=[145851]; sample errors=[]
-2026-11-23T14:41:33 UNRESOLVED: symbol=145851, symbol.GetPinIds=145850, Pin.GetViewIds=[], Pin.GetName='7'; the symbol pin ID is NOT accepted as a placeable pin-view ID.
-2026-11-23T14:41:33 ERROR: Could not validate the logical pin -> view -> placed symbol relationship for 1 block pin(s) [145851]. No pins were deleted. If these pins were formatted previously, keep the previous main_recovery.json file in this script folder. Send the PREVIOUS-PIN-MAP and UNRESOLVED lines.
-2026-11-23T14:41:33 Traceback (most recent call last):
-  File "C:\Users\conner.hughes\\Documents\Python\Block Pin Spacer\main.py", line 1543, in preview
-    _preflight(job,plan)  # Fail before displaying APPLY button, no E3 edits.
-    ~~~~~~~~~~^^^^^^^^^^
-  File "C:\Users\conner.hughes\\Documents\Python\Block Pin Spacer\main.py", line 1061, in _preflight
+"""E3.series automatic Cable -> CABBLOCK opposite-edge pin spacing (V11).
+
+Select 2 or more cable pin symbols; select CABBLOCK; Preview; APPLY AUTOMATICALLY.
+Adapts the existing Block Pin Arranger mechanism: symbol.Delete() followed by
+CreateSymbolObject().PlacePinView(viewID,sheet,symbol,version,x,y,rotation,scale,1).
+This DELETES AND RECREATES placed pin-view symbols, changing their symbol IDs.
+Inspect a saved project COPY before using it in production.
+
+Safety: logical Pin.GetViewIds must identify every pin before deletion. Use the
+matching connector family CONNECTOR_PIN graphic from the working Block Pin
+Arranger, not end-cap variants. E3's returned placed symbol and pin-view mapping
+are inspected separately. If placement returns a positive symbol ID but does
+not verify, STOP with diagnostics: NEVER try a second placement/restore blindly.
+Uncertain/out-of-block moves abort, never resize the CABBLOCK.
+"""
+from __future__ import annotations
+import gc
+import inspect
+import json
+import math
+import os
+from pathlib import Path
+import statistics
+import subprocess
+import sys
+import tkinter as tk
+from tkinter import ttk, messagebox
+import traceback
+import time
+from datetime import datetime
+
+VERSION = 'CABLE-BLOCK-PIN-SPACING-V11-EDGE-AWARE-COLLISIONS-20261123'
+MISSING = -2147352572
+EDGE_ALLOWANCE = 0.65   # maximum distance, drawing units, from block edge
+POINT_TOL = 0.015      # position readback tolerance in E3 drawing units
+PIN_X_CLEARANCE = 0.06 # Two pins overlap only when BOTH X and Y overlap
+LOGFILE = Path(__file__).with_suffix('.log')
+IDENTITY_FILE = LOGFILE.with_name(LOGFILE.stem + '_pin_identity.json')
+RECOVERY_FILE = LOGFILE.with_name(LOGFILE.stem + '_recovery.json')
+
+
+def log(text):
+    with LOGFILE.open('a', encoding='utf-8') as f:
+        f.write(f'{datetime.now().isoformat(timespec="seconds")} {text}\n')
+
+
+def ids_from_return(raw):
+    """Never treat an E3 count/status integer as an object ID."""
+    if raw is None:
+        return []
+    if isinstance(raw, (tuple, list)):
+        if len(raw) >= 2 and isinstance(raw[0], int) and not isinstance(raw[1], (int, float)):
+            raw = raw[1:]
+        else:
+            # E3 can return (count, id_1, id_2, ...) or (count, single_id)
+            # instead of (count, [ids]). Discard the count, not actual IDs.
+            if (len(raw) >= 3 and isinstance(raw[0], int) and raw[0] == len(raw)-1
+                    and all(isinstance(v, int) for v in raw[1:])):
+                raw = raw[1:]
+            elif len(raw) == 2 and isinstance(raw[0], int) and isinstance(raw[1], int):
+                count, object_id = raw
+                if count == 1 and object_id > 0 and object_id != MISSING:
+                    return [object_id]
+                # Direct (id1, id2) only when neither looks like an E3 count.
+                if count > 100 and object_id > 100:
+                    return list(dict.fromkeys((count, object_id)))
+                return []
+        values = []
+        for v in raw:
+            if isinstance(v, (tuple, list)):
+                values.extend(v)
+            else:
+                values.append(v)
+        return list(dict.fromkeys(int(v) for v in values
+                   if isinstance(v, (int, float)) and int(v) > 0 and int(v) != MISSING))
+    return []
+
+
+def get_ids(obj, method):
+    fn = getattr(obj, method, None)
+    if fn is None:
+        return []
+    for args in ((None,), (), ([],)):
+        try:
+            result = fn(*args)
+            values = ids_from_return(result)
+            if values:
+                return values
+            # If the argument was an out-array, it may have been populated.
+            if args and isinstance(args[0], list):
+                values = ids_from_return([args[0]])
+                if values:
+                    return values
+        except Exception:
+            pass
+    # Pywin32-only output array fallback.
+    try:
+        import pythoncom
+        import win32com.client as w
+        for flags, seed in ((pythoncom.VT_BYREF | pythoncom.VT_VARIANT, None),
+                            (pythoncom.VT_BYREF | pythoncom.VT_ARRAY | pythoncom.VT_I4, [])):
+            try:
+                arg = w.VARIANT(flags, seed)
+                result = fn(arg)
+                values = ids_from_return(result) or ids_from_return([arg.value])
+                if values:
+                    return values
+            except Exception:
+                continue
+    except ImportError:
+        pass
+    return []
+
+
+def com_method_names(obj):
+    names = set(n for n in dir(obj) if not n.startswith('_'))
+    try:
+        info = obj._oleobj_.GetTypeInfo()
+        attr = info.GetTypeAttr()
+        for i in range(attr.cFuncs):
+            desc = info.GetFuncDesc(i)
+            name_list = info.GetNames(desc.memid)
+            if name_list:
+                names.add(str(name_list[0]))
+    except Exception:
+        pass
+    return sorted(names)
+
+
+def optional(obj, method, *args):
+    try:
+        return getattr(obj, method)(*args)
+    except Exception:
+        return None
+
+
+def open_e3():
+    try:
+        import e3series
+        app = e3series.Application()
+        job = app.CreateJobObject()
+        if job.GetId():
+            return app, job, 'official e3series wrapper'
+    except Exception as exc:
+        log(f'e3series wrapper unavailable: {exc}')
+    import win32com.client
+    app = win32com.client.Dispatch('CT.Application')
+    job = app.CreateJobObject()
+    if not job.GetId():
+        raise RuntimeError('No active E3 project.')
+    return app, job, 'pywin32'
+
+
+def obj(job, category, oid):
+    maker = {'symbol': 'CreateSymbolObject', 'pin': 'CreatePinObject',
+             'device': 'CreateDeviceObject'}[category]
+    result = getattr(job, maker)()
+    result.SetId(int(oid))
+    return result
+
+
+def symbol_location(sym):
+    # Confirmed in the user's existing working CABBLOCK header formatter:
+    # e3Symbol.GetSchemaLocation(None,None,None,None,None) -> (sheet,x,y,...).
+    attempts = ((None, None, None, None, None), (), (None, None, None))
+    for args in attempts:
+        r = optional(sym, 'GetSchemaLocation', *args)
+        if not isinstance(r, (tuple, list)) or len(r) < 3:
+            continue
+        try:
+            sheet, x, y = int(r[0]), float(r[1]), float(r[2])
+            if sheet > 0 and all(math.isfinite(v) for v in (x, y)):
+                return (sheet, x, y)
+        except (ValueError, TypeError):
+            continue
+    return None
+
+
+def pin_location(pin):
+    # Some versions give individual PIN coordinates even for multi-pin symbols.
+    # This is only used as a READ of source pins; do not move logical pins.
+    for args in ((None, None, None, None, None), (), (None, None, None)):
+        r = optional(pin, 'GetSchemaLocation', *args)
+        if isinstance(r, (tuple, list)) and len(r) >= 3:
+            try:
+                v = (int(r[0]), float(r[1]), float(r[2]))
+                if v[0] > 0 and math.isfinite(v[1]) and math.isfinite(v[2]):
+                    return v
+            except (ValueError, TypeError):
+                pass
+    return None
+
+
+def symbol_area(sym):
+    """Read block rectangle, supporting both verified E3 COM arities.
+
+    The working CABBLOCK Header Formatter calls GetPlacedArea with THREE
+    out arguments; old Block Pin Arranger calls it with FOUR. V5 only
+    tried four, which can incorrectly return None for some installations.
+    """
+    for args in ((None, None, None), (None, None, None, None), (),
+                 (None, None, None, None, None)):
+        r = optional(sym, 'GetPlacedArea', *args)
+        if isinstance(r, (tuple, list)) and len(r) >= 5:
+            try:
+                success = int(r[0]); l,b,rt,top = map(float,r[1:5])
+                if success > 0 and all(map(math.isfinite,(l,b,rt,top))) and rt>l and top>b:
+                    log(f'BLOCK AREA via GetPlacedArea{args}: L={l:.3f} B={b:.3f} R={rt:.3f} T={top:.3f}')
+                    return (l,b,rt,top)
+            except (TypeError,ValueError,OverflowError):
+                pass
+    log('BLOCK AREA: GetPlacedArea did not return valid bounds with 3, 4, 0, or 5 arguments.')
+    return None
+
+
+def selected(job):
+    return {'symbols': get_ids(job, 'GetSelectedSymbolIds'),
+            'pins': get_ids(job, 'GetSelectedPinIds'),
+            'blocks': get_ids(job, 'GetSelectedBlockIds')}
+
+
+
+def selected_pin_points(job, sel, target_sheet=None):
+    """Read *explicitly selected* single-pin symbols or pin locations.
+
+    This is a source-only fallback. Its coordinates are measured, never moved.
+    Selecting two or more cable pins is a reliable alternative when E3 does
+    not expose a parent cable -> placed pin relationship.
+    """
+    points = []
+    seen_pids = set()
+    seen_sids = set()
+
+    # First, accept selected pin IDs with real schematic coordinates.
+    for pid in sel['pins']:
+        try:
+            pin = obj(job, 'pin', pid)
+            loc = pin_location(pin)
+            if not loc or (target_sheet is not None and loc[0] != target_sheet):
+                continue
+            sid = optional(pin, 'GetSymbolId')
+            if not isinstance(sid, int) or sid <= 0:
+                sid = None
+            points.append({'sid': sid, 'pid': pid, 'sheet': loc[0],
+                           'x': loc[1], 'y': loc[2], 'moveable': False})
+            seen_pids.add(pid)
+            if sid:
+                seen_sids.add(sid)
+        except Exception as exc:
+            log(f'SOURCE selection pin {pid}: cannot read: {exc}')
+
+    for sid in sel['symbols']:
+        if sid in seen_sids:
+            continue
+        try:
+            sym = obj(job, 'symbol', sid)
+            loc = symbol_location(sym)
+            if not loc or (target_sheet is not None and loc[0] != target_sheet):
+                continue
+            # A CABBLOCK or a multi-pin graphic is not an individual marker.
+            if is_block(sym):
+                log(f'SOURCE selection {sid}: CABBLOCK body is not a cable pin')
+                continue
+            pids = get_ids(sym, 'GetPinIds')
+            if len(pids) > 1:
+                log(f'SOURCE selection {sid}: multi-pin symbol ({len(pids)} pins); not one selected pin')
+                continue
+            pid = pids[0] if pids else None
+            if pid and pid in seen_pids:
+                continue
+            points.append({'sid': sid, 'pid': pid, 'sheet': loc[0],
+                           'x': loc[1], 'y': loc[2], 'moveable': False})
+            seen_sids.add(sid)
+            if pid:
+                seen_pids.add(pid)
+        except Exception as exc:
+            log(f'SOURCE selection symbol {sid}: cannot read: {exc}')
+
+    # For a selected pin with no schema location, follow its single placed
+    # symbol. This is READ ONLY; we do not use this in destination writes.
+    for pid in sel['pins']:
+        if pid in seen_pids:
+            continue
+        try:
+            pin = obj(job, 'pin', pid)
+            sids = get_ids(pin, 'GetSymbolIds')
+            direct = optional(pin, 'GetSymbolId')
+            if isinstance(direct, int) and direct > 0:
+                sids = list(dict.fromkeys([direct] + sids))
+            if len(sids) != 1 or sids[0] in seen_sids:
+                continue
+            sym = obj(job, 'symbol', sids[0])
+            loc = symbol_location(sym)
+            if not loc or (target_sheet is not None and loc[0] != target_sheet):
+                continue
+            pids = get_ids(sym, 'GetPinIds')
+            if len(pids) != 1 or pids[0] != pid:
+                continue
+            points.append({'sid': sids[0], 'pid': pid, 'sheet': loc[0],
+                           'x': loc[1], 'y': loc[2], 'moveable': False})
+            seen_pids.add(pid)
+            seen_sids.add(sids[0])
+        except Exception as exc:
+            log(f'SOURCE selected pin {pid} symbol lookup: {exc}')
+
+    # Deduplicate pins from pin and symbol selectors; also avoid interpreting
+    # two identifiers for the same physical point as two cable pins.
+    unique=[]
+    for pt in sorted(points, key=lambda z: (-z['y'], z['x'])):
+        if all(pt['sheet'] != other['sheet'] or
+               math.hypot(pt['x']-other['x'], pt['y']-other['y']) > POINT_TOL
+               for other in unique):
+            unique.append(pt)
+    return unique
+
+
+def manual_source_from_points(points):
+    if len(points) < 2:
+        raise ValueError('Select at least TWO individual cable pins on the SAME edge in E3.')
+    sheets = {p['sheet'] for p in points}
+    if len(sheets) != 1:
+        raise ValueError('Selected cable pins are on different E3 sheets.')
+    # Manual mode is specifically for a vertical row on one cable side.
+    span=max(p['x'] for p in points)-min(p['x'] for p in points)
+    if span > max(POINT_TOL * 4, 0.10):
+        raise ValueError(f'Selected pins have different X positions (spread {span:.3f}). '
+                         'Ctrl-select pins from ONE vertical side of the cable.')
+    ordered=sorted(points,key=lambda x:-x['y'])
+    if any(abs(ordered[i]['y']-ordered[i+1]['y']) <= POINT_TOL
+           for i in range(len(ordered)-1)):
+        raise ValueError('Two selected cable pins have overlapping Y coordinates.')
+    return {'sid': None, 'did': None, 'sheet': ordered[0]['sheet'],
+            'x': statistics.mean(p['x'] for p in ordered),
+            'y': statistics.mean(p['y'] for p in ordered),
+            'area': None, 'block': False, 'points': ordered,
+            'manual_side_only': True}
+
+def selection_symbol(job, sel):
+    sids = sel['symbols']
+    if len(sids) == 1:
+        return sids[0]
+    if not sids and len(sel['pins']) == 1:
+        p = obj(job, 'pin', sel['pins'][0])
+        sid = optional(p, 'GetSymbolId')
+        if isinstance(sid, int) and sid > 0:
+            return sid
+        sids = get_ids(p, 'GetSymbolIds')
+        if len(sids) == 1:
+            return sids[0]
+    raise ValueError('Select exactly ONE placed E3 symbol or individual pin, then press the button.')
+
+
+def is_block(sym):
+    flag = optional(sym, 'IsBlock')
+    typ = optional(sym, 'GetSymbolType')
+    hints = ' '.join(str(optional(sym, name) or '') for name in
+                     ('GetName', 'GetSymbolTypeName', 'GetSymbolName')).upper()
+    return flag in (True, 1) or typ == 4 or 'CABBLOCK' in hints
+
+
+def source_or_block(job, sid, sel):
+    s = obj(job, 'symbol', sid)
+    loc = symbol_location(s)
+    if not loc:
+        raise RuntimeError(f'Symbol {sid}: E3 did not return its sheet/X/Y.')
+    area = symbol_area(s)
+    did = optional(s, 'GetDeviceId') or optional(s, 'GetOwnerDeviceId')
+    # In E3 a CABBLOCK is often a device, not a standalone Block object.
+    if not (isinstance(did, int) and did > 0) and len(sel['blocks']) == 1:
+        did = sel['blocks'][0]
+    return {'sid': sid, 'did': did if isinstance(did, int) and did > 0 else None,
+            'sheet': loc[0], 'x': loc[1], 'y': loc[2], 'area': area,
+            'block': is_block(s)}
+
+
+def gather_markers(job, parent):
+    """View-scoped connector pin markers; never scan the entire sheet.
+
+    Only connector symbols owned by the selected parent device/block are used.
+    If multiple placed block views share one device, accept the symbols near
+    this placed view only. A connector GROUP is never a movable single pin.
+    """
+    root = obj(job, 'symbol', parent['sid'])
+    owner = obj(job, 'device', parent['did']) if parent['did'] else None
+    connector_ids = set()
+    for thing in (root, owner):
+        if thing is None: continue
+        for name in ('GetConnectorIds', 'GetBlockConnectorIds'):
+            connector_ids.update(get_ids(thing, name))
+
+    symbols = set()
+    pin_candidates = set()
+    for thing in (root, owner):
+        if thing is None: continue
+        pin_candidates.update(get_ids(thing, 'GetPinIds'))
+    for cid in connector_ids:
+        try:
+            c = obj(job, 'device', cid)
+            symbols.update(get_ids(c, 'GetSymbolIds'))
+            pin_candidates.update(get_ids(c, 'GetPinIds'))
+        except Exception as exc:
+            log(f'Connector device {cid} cannot be read: {exc}')
+    for pid in pin_candidates:
+        try:
+            p = obj(job, 'pin', pid)
+            symbols.update(get_ids(p, 'GetSymbolIds'))
+            psid = optional(p, 'GetSymbolId')
+            if isinstance(psid, int) and psid > 0:
+                symbols.add(psid)
+        except Exception:
+            pass
+    # A cable may itself be represented as a set of pin symbols, not a block.
+    if owner and not symbols:
+        symbols.update(get_ids(owner, 'GetSymbolIds'))
+    symbols.discard(parent['sid'])
+    a = parent['area']
+    out = []
+    for sid in sorted(symbols):
+        try:
+            s = obj(job, 'symbol', sid)
+            loc = symbol_location(s)
+            if not loc or loc[0] != parent['sheet']:
+                continue
+            _, x, y = loc
+            if a:
+                if not (a[0]-EDGE_ALLOWANCE <= x <= a[2]+EDGE_ALLOWANCE and
+                        a[1]-EDGE_ALLOWANCE <= y <= a[3]+EDGE_ALLOWANCE):
+                    continue
+            else:
+                # Without a source outline, do not gather distant device views.
+                if math.hypot(x-parent['x'], y-parent['y']) > 8:
+                    continue
+            pids = get_ids(s, 'GetPinIds')
+            if len(pids) == 0:
+                # This could be a multi-pin graphic symbol; it is not safe to
+                # use unless a unique connected pin identifies it.
+                linked = []
+                for pid in pin_candidates:
+                    try:
+                        pp = obj(job, 'pin', pid)
+                        sid_from_pin = optional(pp, 'GetSymbolId')
+                        if sid_from_pin == sid or sid in get_ids(pp, 'GetSymbolIds'):
+                            linked.append(pid)
+                    except Exception:
+                        pass
+                pids = list(dict.fromkeys(linked))
+            if len(pids) != 1:
+                log(f'SKIP candidate symbol {sid}: {len(pids)} pins (not a single-pin symbol)')
+                continue
+            out.append({'sid': sid, 'pid': pids[0], 'x': x, 'y': y,
+                        'sheet': loc[0], 'moveable': True})
+        except Exception as exc:
+            log(f'SKIP linked symbol {sid}: {exc}')
+    # If the selected source symbol has internal pins (one symbol housing
+    # several actual nodes), try reading individual E3 pin coordinates.
+    if not out:
+        for pid in sorted(pin_candidates):
+            try:
+                p = obj(job, 'pin', pid)
+                loc = pin_location(p)
+                if loc and loc[0] == parent['sheet']:
+                    out.append({'sid': None, 'pid': pid, 'x': loc[1],
+                                'y': loc[2], 'sheet': loc[0], 'moveable': False})
+            except Exception:
+                pass
+    return sorted(out, key=lambda x: (-x['y'], x['x'], x['pid']))
+
+
+def side_of_pin(parent, points, pin):
+    a = parent['area']
+    if a:
+        middle = (a[0] + a[2])/2
+    elif len(points) >= 2:
+        middle = (min(p['x'] for p in points) + max(p['x'] for p in points))/2
+        if abs(min(p['x'] for p in points) - max(p['x'] for p in points)) < POINT_TOL:
+            raise ValueError('Unable to distinguish left and right side of cable pins.')
+    else:
+        raise ValueError('Need a source outline or pins on both sides to determine side.')
+    return 'left' if pin['x'] < middle else 'right', middle
+
+
+def pick_edge(points, side, mid, area=None):
+    p = [v for v in points if (v['x'] < mid if side == 'left' else v['x'] >= mid)]
+    if area:
+        edge = area[0] if side == 'left' else area[2]
+        p = [v for v in p if abs(v['x'] - edge) <= EDGE_ALLOWANCE]
+    # Multiple pins at identical Y positions are ambiguous even if ordered.
+    ys = [v['y'] for v in p]
+    if any(abs(ys[i] - ys[j]) <= POINT_TOL for i in range(len(ys)) for j in range(i+1, len(ys))):
+        raise ValueError(f'{side} edge has multiple pins at the same Y position. Cannot determine pin order safely.')
+    return sorted(p, key=lambda v: -v['y'])
+
+
+
+# V3 pin-first pipeline ---------------------------------------------------
+
+def reference_from_selection(job, sel):
+    """Only selected individual cable pins. Never needs a cable body."""
+    pins = selected_pin_points(job, sel)
+    if not 1 <= len(pins) <= 200:
+        raise ValueError('Select one cable pin, or Ctrl-select two or more cable pins on the SAME side. Then click Capture cable pins.')
+    sheet = pins[0]['sheet']
+    if any(p['sheet'] != sheet for p in pins):
+        raise ValueError('Cable pins are on different sheets.')
+    if len(pins)>1:
+        spread=max(p['x'] for p in pins)-min(p['x'] for p in pins)
+        if spread>max(POINT_TOL*4, .10):
+            raise ValueError(f'Selected cable pins span {spread:.3f} in X. Select pins from ONE vertical edge.')
+    return {'sid':None, 'did':None, 'sheet':sheet,
+            'x':statistics.mean(p['x'] for p in pins),
+            'y':statistics.mean(p['y'] for p in pins),
+            'area':None, 'block':False, 'points':sorted(pins,key=lambda p:-p['y']),
+            'manual_side_only':True}
+
+
+
+def try_linked_source_neighbor(job, sel, source):
+    """Read-only: infer a second point only from the same E3 owner device.
+
+    Never scan unrelated nearby sheet pins: a coincident X is not proof
+    of membership in the selected cable/connector.
+    """
+    if len(source['points']) != 1:
+        return source
+    selected_point = source['points'][0]
+    sid = selected_point.get('sid')
+    pid = selected_point.get('pid')
+    owners=[]
+    for kind, ident in (('symbol',sid),('pin',pid)):
+        if not isinstance(ident,int) or ident<=0:continue
+        try:
+            thing=obj(job,kind,ident)
+        except Exception:continue
+        for meth in ('GetDeviceId','GetOwnerDeviceId','GetConnectorId'):
+            did=optional(thing,meth)
+            if isinstance(did,int) and did>0 and did not in owners:
+                owners.append(did)
+    if len(owners)!=1 or sid is None:
+        return source
+    parent={'sid':sid,'did':owners[0],'sheet':source['sheet'],
+            'x':selected_point['x'],'y':selected_point['y'],'area':None}
+    try:
+        detected=gather_markers(job,parent)
+    except Exception as exc:
+        log(f'SINGLE PIN neighbor discovery: {exc}')
+        return source
+    row=[p for p in detected if p['sheet']==source['sheet']
+         and abs(p['x']-selected_point['x'])<=.10
+         and POINT_TOL<abs(p['y']-selected_point['y'])<=4.0]
+    row.sort(key=lambda p:abs(p['y']-selected_point['y']))
+    if not row:return source
+    nearest_distance=abs(row[0]['y']-selected_point['y'])
+    # If two equally-close candidates are present and have inconsistent pitch,
+    # do not infer an arbitrary reference pin.
+    equal=[p for p in row if abs(abs(p['y']-selected_point['y'])-nearest_distance)<=POINT_TOL]
+    if len(equal)>2:return source
+    source=dict(source)
+    source['points']=sorted([selected_point,row[0]],key=lambda p:-p['y'])
+    source['x']=statistics.mean(p['x'] for p in source['points'])
+    log(f'SINGLE PIN owner {owners[0]}: inferred pitch {nearest_distance:.4f} from linked symbol {row[0]["sid"]}')
+    return source
+
+
+def pitch_from_source(source, typed_pitch=None):
+    pts=source['points']
+    if len(pts)>=2:
+        gaps=[pts[i]['y']-pts[i+1]['y'] for i in range(len(pts)-1)]
+        if any(g<=POINT_TOL for g in gaps):
+            raise ValueError('Selected reference pins have overlapping vertical coordinates.')
+        return statistics.median(gaps), 'measured from selected pins'
+    if typed_pitch is None or str(typed_pitch).strip()=='' :
+        raise ValueError('Only ONE cable pin was selected. E3 returned no other source pin to measure. Enter the cable pin pitch, or Ctrl-select TWO cable pins and recapture.')
+    try: pitch=float(str(typed_pitch).strip())
+    except (TypeError,ValueError):
+        raise ValueError('Cable pin pitch must be a positive number in E3 drawing units.')
+    if not math.isfinite(pitch) or pitch<=POINT_TOL:
+        raise ValueError('Cable pin pitch must be a positive number greater than 0.015.')
+    return pitch, 'manually entered (one reference pin)'
+
+
+def target_edge_pin_groups(dst):
+    """Use existing single-pin marker locations instead of GetPlacedArea.
+
+    With an outline, use it only to help classify edge; no outline is required.
+    If the target only exposes one column of pins, treat it as that one column
+    rather than inventing a second edge.
+    """
+    pins=dst['points']
+    if not pins: raise ValueError('No individual pin symbols detected on this block.')
+    xs=[p['x'] for p in pins]
+    lo,hi=min(xs),max(xs)
+    if hi-lo<=max(.10,POINT_TOL*4):
+        group=sorted(pins,key=lambda p:-p['y'])
+        return {'left':group,'right':group}, 'one-column'
+    if dst['area']:
+        mid=(dst['area'][0]+dst['area'][2])/2
+    else:
+        mid=(lo+hi)/2
+    left=sorted((p for p in pins if p['x']<mid),key=lambda p:-p['y'])
+    right=sorted((p for p in pins if p['x']>=mid),key=lambda p:-p['y'])
+    # No artificial fallbacks between two genuinely different columns.
+    return {'left':left,'right':right}, 'two-column'
+
+
+def detect_target_side(src, dst, mode):
+    if mode in ('left','right'):return mode
+    # The side of the block nearest the selected cable pin, not an assumed
+    # cable-body orientation. This remains stable with a missing block outline.
+    cx=statistics.mean(p['x'] for p in dst['points'])
+    return 'left' if src['x']<cx else 'right'
+
+
+def make_plan_v3(src,dst,edge='auto',manual_pitch=''):
+    if not dst.get('block'):
+        raise ValueError('Target must be a CABBLOCK/block symbol.')
+    if src['sheet']!=dst['sheet']:
+        raise ValueError('Source cable pins and destination block are on different E3 sheets.')
+    # No pitch entry: either two selected points or E3 verified linked source pins.
+    pitch,how=pitch_from_source(src,None)
+    groups,structure=target_edge_pin_groups(dst)
+    area=dst.get('area')
+    # ALWAYS cross the block: the opposite edge is vacant, so no staging/peeling.
+    # Do not infer an edge without measured geometry or on a two-column block.
+    if not area:
+        raise ValueError('Opposite-side placement requires readable GetPlacedArea() block bounds. No positions guessed.')
+    if structure != 'one-column':
+        raise ValueError('Pins already occupy two distinct block columns. Automatic opposite-side transfer would collide; no changes made.')
+    targets=groups['left']  # one-column: same list as groups['right']
+    l,b,r,t=area
+    width=r-l
+    old_col=statistics.median(p['x'] for p in targets)
+    dl,dr=abs(old_col-l),abs(old_col-r)
+    old_side='left' if dl < dr else 'right'
+    side='right' if old_side=='left' else 'left'
+    inset=min(dl,dr)
+    if width <= max(.1,POINT_TOL*4) or inset > width/3:
+        raise ValueError('Existing block pin column is not reliably at an outside edge; cannot determine opposite edge.')
+    new_x=(l+inset) if side=='left' else (r-inset)
+    relocated=abs(new_x-old_col)>POINT_TOL
+    if not relocated:
+        raise ValueError('Opposite edge is indistinguishable from current edge; refusing to format.')
+    log(f'OPPOSITE EDGE MANDATORY: old={old_side.upper()} x={old_col:.4f} '
+        f'-> new={side.upper()} x={new_x:.4f}; no staging/peeling.')
+    if len(targets)<2:
+        raise ValueError(f'Block {side.upper()} side exposes only {len(targets)} pin(s).')
+    if any(not p['moveable'] or p['sid'] is None for p in targets):
+        raise ValueError('Target pins are not independent placed symbols.')
+    if len({p['sid'] for p in targets})!=len(targets):
+        raise ValueError('Duplicate block pin symbol IDs.')
+    if any(abs(targets[i]['y']-targets[i+1]['y'])<=POINT_TOL for i in range(len(targets)-1)):
+        raise ValueError('Overlapping block pin heights cannot be safely reordered.')
+    source=src['points']
+    if len(source)==len(targets) and len(source)>=2:
+        offsets=[source[0]['y']-p['y'] for p in source]
+        policy='copy exact selected cable gap pattern'
+    else:
+        offsets=[pitch*i for i in range(len(targets))]
+        policy='uniform measured pitch'
+    top=targets[0]['y']
+    # Keep the original block outline and pin inset unchanged.
+    result=[]
+    for pin,offset in zip(targets,offsets):
+        ny=top-offset
+        nx=new_x
+        if area and not (area[1]-.03 <= ny <= area[3]+.03):
+            raise ValueError(f'Pin {pin["sid"]} proposed Y={ny:.3f} lies outside block '
+                             f'[{area[1]:.3f}, {area[3]:.3f}]. Cannot fit {len(targets)} '
+                             f'pins at pitch {pitch:.3f} without enlarging the block.')
+        result.append({'sid':pin['sid'],'pid':pin['pid'],'sheet':pin['sheet'],
+                       'x':nx,'old_x':pin['x'],'old_y':pin['y'],'new_y':ny,
+                       'new_rotation': ('0' if side=='left' else '/1')})
+    if any(abs(result[i]['new_y']-result[i+1]['new_y'])<=POINT_TOL for i in range(len(result)-1)):
+        raise ValueError('Proposed target pins overlap.')
+    # Never reposition onto OTHER block pins (those not in selected row).
+    other=[p for p in dst['points'] if p['sid'] not in {t['sid'] for t in targets}]
+    for item in result:
+        for p in other:
+            if abs(p['x']-item['x'])<.06 and abs(p['y']-item['new_y'])<.06:
+                raise ValueError(f'Planned pin {item["sid"]} overlaps another block pin {p["sid"]}.')
+    return {'source':src,'target':dst,'target_side':side,'structure':structure,
+            'original_side':old_side,'target_count':len(targets),'source_count':len(source),'pitch':pitch,
+            'pitch_how':how,'mode':policy,'changes':result,'relocated':relocated,
+            'outline_verified':bool(area)}
+
+
+
+# ----- Automatic pin-view replacement, adapted from Block Pin Arranger -----
+PLACEMENT_VERSION='1'  # Original Block Pin Arranger passes the version as a string
+PRESERVE_TEXT_SIZE=1
+MOVE_TOL=0.02
+
+
+def _read_rotation_scale(symbol):
+    rotation=optional(symbol,'GetRotation')
+    scaling=optional(symbol,'GetScaling')
+    if not isinstance(rotation,str) or not rotation:
+        raise RuntimeError('Pin rotation is unknown; cannot safely recreate this pin view.')
+    try: scaling=float(scaling)
+    except Exception: raise RuntimeError('Pin scaling is unknown; cannot safely recreate this pin view.')
+    if not math.isfinite(scaling) or scaling<=0: raise RuntimeError('Invalid pin scaling.')
+    return rotation,scaling
+
+
+def _pin_view_to_live_symbol(job, view_id):
+    """Verified Block Pin Arranger pattern: SetId(pin_view_id) returns live symbol ID."""
+    sym=job.CreateSymbolObject()
+    try: live=int(sym.SetId(int(view_id)))
+    except Exception: return None
+    return (live,sym) if live>0 else None
+
+
+def _binding_snapshots(job, plan, expected, missing):
+    """Read-only recovery of pin-view provenance for a PREVIOUS successful run.
+
+    After E3 PlacePinView, Symbol.GetPinIds often exposes a *different* local
+    pin ID, and SetId(original logical view) can return no placed symbol even
+    though GetViewIds still contains the correct stable view. The previous
+    script's main_recovery.json holds those original logical IDs/view IDs.
+
+    Do not use this shortcut merely because pin numbers match: require the same
+    selected block, complete unique pin set, the previous result's exact XY,
+    the physical placed-pin name AND text203, original symbol family, and the
+    logical owner->pin->view relationships. No file means no fallback.
+    """
+    missing=set(map(int,missing))
+    if not missing:
+        return {}
+    if not all(x in expected for x in missing):
+        raise RuntimeError('Internal pin binding mismatch; no deletion.')
+    sheet=int(plan['target']['sheet'])
+    block=int(plan['target']['sid'])
+    device=plan['target'].get('did')
+    all_points=plan['target']['points']
+    for filename in (IDENTITY_FILE, RECOVERY_FILE):
+        if not filename.is_file():
+            continue
+        try:
+            state=json.loads(filename.read_text(encoding='utf-8'))
+            if (int(state.get('sheet', -1))!=sheet or
+                int(state.get('block_symbol', -1))!=block or
+                (device is not None and int(state.get('block_device', -1))!=int(device))):
+                log(f'PREVIOUS-PIN-MAP SKIP {filename.name}: different block/sheet')
+                continue
+            # New state files include project id, old V8 recovery files do not.
+            project_id=optional(job, 'GetId')
+            if (state.get('project_id') is not None and project_id is not None and
+                    int(state['project_id'])!=int(project_id)):
+                log(f'PREVIOUS-PIN-MAP SKIP {filename.name}: different project id')
+                continue
+            saved=state.get('pins') or []
+            if len(saved)!=len(all_points) or len(saved)<2:
+                log(f'PREVIOUS-PIN-MAP SKIP {filename.name}: pin count mismatch')
+                continue
+            by_name={}
+            for r in saved:
+                n=str(r.get('pin_name','')).strip()
+                if not n or n in by_name:
+                    raise ValueError('missing/duplicate pin number in stored map')
+                by_name[n]=r
+            # Permit a previous failed E3 operation to have mirrored the whole
+            # column automatically. This behavior is shown in the user's V9
+            # log: one PlacePinView caused EVERY other pin to change X.
+            # Accept only if *all* live pins form one valid outside-edge column
+            # and each pin retains its exact original or planned Y.
+            area=plan['target'].get('area')
+            opposite_row=False
+            if area:
+                saved_xs=[float(r.get('target_x',r.get('original_x',float('nan')))) for r in saved]
+                live_xs=[float(p['x']) for p in all_points]
+                width=area[2]-area[0]
+                if width>0.1 and max(live_xs)-min(live_xs)<=MOVE_TOL and max(saved_xs)-min(saved_xs)<=MOVE_TOL:
+                    oldx=statistics.median(saved_xs)
+                    newx=statistics.median(live_xs)
+                    same_edge=abs(oldx-newx)<=MOVE_TOL
+                    mirror_edge=((abs(oldx-area[0])<=.10 and abs(newx-area[2])<=.10) or
+                                 (abs(oldx-area[2])<=.10 and abs(newx-area[0])<=.10))
+                    opposite_row=(not same_edge and mirror_edge)
+                    if opposite_row:
+                        log(f'PREVIOUS-PIN-MAP: complete E3-reflowed row on opposite edge '
+                            f'({oldx:.3f} -> {newx:.3f}); validating names and Y coordinates.')
+            current={}
+            for p in all_points:
+                sym=obj(job,'symbol',p['sid'])
+                loc=symbol_location(sym)
+                if (not loc or loc[0]!=sheet or
+                    abs(loc[1]-p['x'])>MOVE_TOL or abs(loc[2]-p['y'])>MOVE_TOL):
+                    raise ValueError(f'selected symbol {p["sid"]} moved during inspection')
+                pin_ids=get_ids(sym,'GetPinIds')
+                if len(pin_ids)!=1 or int(pin_ids[0])!=int(p['pid']):
+                    raise ValueError(f'symbol {p["sid"]} is not a single placed pin')
+                physical=str(optional(obj(job,'pin',pin_ids[0]),'GetName') or '').strip()
+                label=_read_returned_pin_name(job,p['sid'])
+                if not label or physical!=label or label not in by_name or label in current:
+                    raise ValueError(f'pin name disagreement/duplicate for symbol {p["sid"]}: '
+                                     f'physical={physical!r}, text203={label!r}')
+                r=by_name[label]
+                stored_x=r.get('target_x')
+                stored_y=r.get('target_y')
+                if not isinstance(stored_x,(int,float)) or not isinstance(stored_y,(int,float)):
+                    raise ValueError(f'no previous target location for pin {label}')
+                # A previous successful apply should leave the symbol exactly
+                # where that prior run planned to put it; don't guess if edited.
+                ys=[stored_y]
+                if r.get('original_y') is not None:
+                    ys.append(r['original_y'])
+                if ((abs(loc[1]-float(stored_x))>MOVE_TOL and not opposite_row) or
+                    not any(abs(loc[2]-float(yy))<=MOVE_TOL for yy in ys)):
+                    raise ValueError(f'pin {label} no longer at previous mapped location/mirrored row')
+                old_family=str(r.get('original_symbol_type','')).split('¶')[0]
+                current_family=str(optional(sym,'GetSymbolTypeName') or '').split('¶')[0]
+                if not old_family or old_family!=current_family:
+                    raise ValueError(f'pin {label} symbol family changed')
+                current[label]=p
+            if set(by_name)!=set(current):
+                raise ValueError('pin set in saved map differs from selected block')
+            recovered={}
+            for name,p in current.items():
+                sid=int(p['sid'])
+                if sid not in missing:
+                    continue
+                r=by_name[name]
+                logical_id=int(r.get('logical_pin',0))
+                owner_id=int(r.get('logical_owner',0))
+                view_id=int(r.get('view',0))
+                if min(logical_id,owner_id,view_id)<=0:
+                    raise ValueError(f'pin {name} missing original logical/view IDs')
+                logical=obj(job,'pin',logical_id)
+                if str(optional(logical,'GetName') or '').strip()!=name:
+                    raise ValueError(f'logical pin name changed for pin {name}')
+                if view_id not in get_ids(logical,'GetViewIds'):
+                    raise ValueError(f'original view {view_id} no longer belongs to pin {name}')
+                if logical_id not in get_ids(obj(job,'device',owner_id),'GetPinIds'):
+                    raise ValueError(f'original logical pin owner changed for pin {name}')
+                alias=_pin_view_to_live_symbol(job,view_id)
+                if alias and alias[0]!=sid:
+                    raise ValueError(f'view {view_id} now resolves to another LIVE symbol '
+                                     f'{alias[0]} (wanted {sid}); refusing rebind')
+                recovered[sid]={'view_id':view_id,'logical_pin_id':logical_id,
+                                'logical_owner_id':owner_id,'pin_name':name,
+                                'resolution':'prior-verified-snapshot'}
+            if set(recovered)==missing:
+                log(f'PREVIOUS-PIN-MAP VERIFIED: {len(recovered)}/{len(missing)} '
+                    f'previously recreated pins matched {filename.name}; '
+                    'exact block/XY, physical pin, text203, logical owner and view checked.')
+                return recovered
+            log(f'PREVIOUS-PIN-MAP SKIP {filename.name}: incomplete result')
+        except Exception as exc:
+            log(f'PREVIOUS-PIN-MAP SKIP {filename.name}: {exc}')
+    return {}
+
+
+def _canonical_pin_view_bindings(job, plan):
+    """Read-only reverse lookup copied from the WORKING Block Pin Arranger.
+
+    IMPORTANT: Symbol.GetPinIds() may identify an associated pin but is NOT
+    proof that the ID may be supplied to PlacePinView. Require a real logical
+    e3Pin.GetViewIds() relationship AND exact selected symbol identity.
+    """
+    expected = {int(p['sid']): p for p in plan['changes']}
+    linked = {}
+    roots = []
+    owner_id = plan['target'].get('did')
+    if owner_id:
+        roots.append(int(owner_id))
+    block = obj(job, 'symbol', plan['target']['sid'])
+    for member in (block, obj(job, 'device', owner_id) if owner_id else None):
+        if member is None:
+            continue
+        for method in ('GetConnectorIds', 'GetBlockConnectorIds'):
+            roots.extend(get_ids(member, method))
+    roots = list(dict.fromkeys(roots))
+    all_ids = get_ids(job, 'GetAllDeviceIds')
+    # Same parent-first / entire-project fallback as original Block Pin Arranger.
+    candidates = roots + [did for did in all_ids if did not in roots]
+    if not candidates:
+        raise RuntimeError('Cannot enumerate E3 devices to prove logical pin / pin-view ownership. '
+                           'No symbols were deleted.')
+    checked_pins = 0
+    with_views = 0
+    checked_devices = 0
+    debug = []
+    for did in candidates:
+        if len(linked) == len(expected):
+            break
+        try:
+            device = obj(job, 'device', did)
+            logical_pins = get_ids(device, 'GetPinIds')
+        except Exception as exc:
+            if did in roots: debug.append(f'device {did}: {exc}')
+            continue
+        checked_devices += 1
+        for logical_id in logical_pins:
+            checked_pins += 1
+            try:
+                logical = obj(job, 'pin', logical_id)
+                view_ids = get_ids(logical, 'GetViewIds')
+                if not view_ids:
+                    continue
+                with_views += 1
+                pin_name = optional(logical, 'GetName')
+                for vid in view_ids:
+                    live = _pin_view_to_live_symbol(job, vid)
+                    if not live:
+                        continue
+                    sid, sym = live
+                    p = expected.get(int(sid))
+                    if p is None:
+                        continue
+                    loc = symbol_location(sym)
+                    if (not loc or loc[0] != p['sheet'] or
+                            abs(loc[1] - p['old_x']) > MOVE_TOL or
+                            abs(loc[2] - p['old_y']) > MOVE_TOL):
+                        continue
+                    binding = {'view_id':int(vid), 'logical_pin_id':int(logical_id),
+                               'logical_owner_id':int(did), 'pin_name':str(pin_name),
+                               'resolution':'live-view'}
+                    if sid in linked and linked[sid] != binding:
+                        raise RuntimeError(f'MULTIPLE logical pin views match symbol {sid}: '
+                                           f'{linked[sid]}, {binding}. NO DELETION.')
+                    linked[sid] = binding
+                    log('CANONICAL VIEW VERIFIED: symbol '+str(sid)+
+                        f' <- logical pin {logical_id}, owner {did}, view {vid}, name={pin_name!r}')
+            except RuntimeError:
+                raise
+            except Exception as exc:
+                if len(debug) < 20:
+                    debug.append(f'logical pin {logical_id}: {exc}')
+    missing = sorted(set(expected) - set(linked))
+    log(f'LOGICAL PIN LOOKUP: {len(linked)}/{len(expected)} verified, '
+        f'{checked_devices} devices, {checked_pins} logical pins, '
+        f'{with_views} logical pins with GetViewIds; roots={roots}; '
+        f'unresolved symbols={missing}; sample errors={debug[:5]}')
+    if missing:
+        recovered=_binding_snapshots(job,plan,expected,missing)
+        if recovered:
+            linked.update(recovered)
+            missing=sorted(set(expected)-set(linked))
+    if missing:
+        for sid in missing[:12]:
+            p=expected[sid]
+            try:
+                pin=obj(job,'pin',p['pid'])
+                vid=get_ids(pin,'GetViewIds')
+                name=optional(pin,'GetName')
+                log(f'UNRESOLVED: symbol={sid}, symbol.GetPinIds={p["pid"]}, '
+                    f'Pin.GetViewIds={vid}, Pin.GetName={name!r}; '
+                    'the symbol pin ID is NOT accepted as a placeable pin-view ID.')
+            except Exception as exc:
+                log(f'UNRESOLVED {sid}: unable to inspect symbol pin: {exc}')
+        raise RuntimeError(f'Could not validate the logical pin -> view -> placed symbol relationship '
+                           f'for {len(missing)} block pin(s) {missing[:9]}. '
+                           'No pins were deleted. If these pins were formatted previously, keep the '
+                           'previous main_recovery.json file in this script folder. Send the PREVIOUS-PIN-MAP and UNRESOLVED lines.')
+    if len({b['view_id'] for b in linked.values()}) != len(expected):
+        raise RuntimeError('Multiple pin symbols map to the same true view ID; no deletion.')
+    return linked
+
+
+def _resolve_view_for_symbol(job, p, binding):
+    """Resolve via verified logical e3Pin.GetViewIds, not Symbol.GetPinIds."""
+    sym=obj(job,'symbol',p['sid'])
+    actual=symbol_location(sym)
+    if not actual or actual[0]!=p['sheet'] or abs(actual[1]-p['old_x'])>MOVE_TOL or abs(actual[2]-p['old_y'])>MOVE_TOL:
+        raise RuntimeError(f'Pin symbol {p["sid"]} moved since capture. Re-capture the block.')
+    pin=obj(job,'pin',binding['logical_pin_id'])
+    if binding['view_id'] not in get_ids(pin,'GetViewIds'):
+        raise RuntimeError(f'Pin view {binding["view_id"]} is no longer attached to logical pin '
+                           f'{binding["logical_pin_id"]}. No deletion.')
+    resolved=_pin_view_to_live_symbol(job,binding['view_id'])
+    if binding.get('resolution')=='prior-verified-snapshot':
+        # E3's placed symbol can be new while the stable original logical
+        # pin-view alias is a ghost. The saved map proves the current physical
+        # symbol belongs to this exact block/pin at its previous target XY.
+        if resolved and resolved[0]!=int(p['sid']):
+            raise RuntimeError(f'Saved view {binding["view_id"]} maps to a DIFFERENT '
+                               'live symbol; no deletion.')
+        physical=str(optional(obj(job,'pin',p['pid']),'GetName') or '').strip()
+        label=_read_returned_pin_name(job,int(p['sid']))
+        if label!=binding['pin_name'] or physical!=binding['pin_name']:
+            raise RuntimeError(f'Previously recreated pin {p["sid"]} label is inconsistent; '
+                               'no deletion.')
+        log(f'RECAPTURE VERIFIED: pin {physical!r} symbol {p["sid"]} '
+            f'using persistent view {binding["view_id"]}.')
+    elif not resolved or resolved[0]!=int(p['sid']):
+        raise RuntimeError(f'View {binding["view_id"]} no longer maps to exact selected '
+                           f'symbol {p["sid"]}. No deletion.')
+    rotation,scaling=_read_rotation_scale(sym)
+    characteristic=optional(sym,'GetCharacteristic')
+    kind=optional(sym,'GetSymbolTypeName')
+    if not isinstance(kind,str) or not kind.strip():
+        raise RuntimeError(f'Symbol {p["sid"]}: no pin symbol type; nothing deleted.')
+    if characteristic and str(characteristic).upper() not in {
+            'END_TOP','END_BOTTOM','SPLIT_BOTTOM','END_SPLIT','CONNECTOR_PIN','SPLIT_TOP'}:
+        raise RuntimeError(f'Pin {p["sid"]}: unsupported pin characteristic {characteristic!r}.')
+    return dict(p, view_id=binding['view_id'], logical_pin_id=binding['logical_pin_id'],
+                logical_owner_id=binding['logical_owner_id'],pin_name=binding['pin_name'],
+                rotation=rotation,original_rotation=rotation,scale=scaling,
+                kind=kind.strip(),characteristic=characteristic,
+                resolution=binding.get('resolution','live-view'),
+                current_symbol=int(p['sid']),current_x=float(p['old_x']),current_y=float(p['old_y']))
+
+
+def _symbol_family_for_placement(job, records):
+    """Exactly mirror the working Block Pin Arranger's compatible pin symbol.
+
+    The V7 attempt passed END_TOP / END_BOTTOM as the *placement* symbol names,
+    even when moving the pins to the other side. The working arranger instead
+    uses a generic connector-pin graphic of the same symbol family and allows
+    E3 to build its appropriate end-cap appearance dynamically.
+    """
+    kinds={r['kind'] for r in records}
+    roots={k.rsplit('¶',1)[0] if '¶' in k else k for k in kinds}
+    if len(roots)!=1:
+        raise RuntimeError('Mixed pin symbol families; NO deletion: '+repr(sorted(kinds)))
+    root=next(iter(roots))
+    candidates=[root+'¶CONNECTOR_PIN', root+'¶END_SPLIT']
+    selected=None
+    for name in candidates:
+        probe=job.CreateSymbolObject()
+        try:
+            loaded=probe.Load(name,int(PLACEMENT_VERSION))
+        except Exception as exc:
+            log(f'PLACEMENT SYMBOL LOAD {name!r} rejected: {exc}')
+            continue
+        if loaded:
+            selected=name
+            break
+    if not selected:
+        raise RuntimeError('No loadable *shared* compatible pin symbol for '
+                           +repr(root)+'; no deletion. Tried '+repr(candidates))
+    log(f'PLACEMENT SYMBOL: using ONE common type {selected!r} for all {len(records)} '
+        f'pin views; original types were {sorted(kinds)!r}.')
+    for rec in records:
+        rec['place_symbol']=selected
+        log(f'PIN PLACEMENT TYPE: pin {rec["pin_name"]} view {rec["view_id"]} '
+            f'original {rec["kind"]!r}, using {selected!r}, '
+            f'original rotation={rec["rotation"]!r}, target rotation={rec["new_rotation"]!r}, '
+            f'original XY=({rec["old_x"]:.3f},{rec["old_y"]:.3f}), '
+            f'target XY=({rec["x"]:.3f},{rec["new_y"]:.3f})')
+    return selected
+
+
+def _within_block_y(plan):
+    area=plan['target'].get('area')
+    if not area:
+        log('PREFLIGHT: E3 block outline unavailable; using pin positions only. '
+            'Automatic PlacePinView may reject out-of-bounds positions.')
+        return
+    bottom,top=area[1],area[3]
+    for p in plan['changes']:
+        if not bottom-.025<=p['new_y']<=top+.025:
+            raise RuntimeError(f'Pin target Y={p["new_y"]:.3f} is outside block height '
+                               f'[{bottom:.3f}, {top:.3f}]. Block resizing is disabled.')
+
+
+def _preflight(job,plan):
+    if len(plan['changes'])<2: raise RuntimeError('No target pin row.')
+    _within_block_y(plan)
+    points={x['sid']:x for x in plan['target']['points']}
+    if set(p['sid'] for p in plan['changes']) - set(points):
+        raise RuntimeError('The preview target list differs from currently captured pin symbols.')
     logical_bindings=_canonical_pin_view_bindings(job,plan)
-  File "C:\Users\conner.hughes\\Documents\Python\Block Pin Spacer\main.py", line 949, in _canonical_pin_view_bindings
-    raise RuntimeError(f'Could not validate the logical pin -> view -> placed symbol relationship '
-    ...<2 lines>...
-                       'previous main_recovery.json file in this script folder. Send the PREVIOUS-PIN-MAP and UNRESOLVED lines.')
-RuntimeError: Could not validate the logical pin -> view -> placed symbol relationship for 1 block pin(s) [145851]. No pins were deleted. If these pins were formatted previously, keep the previous main_recovery.json file in this script folder. Send the PREVIOUS-PIN-MAP and UNRESOLVED lines.
+    unique=set();records=[]
+    for p in plan['changes']:
+        if p['sid'] in unique:raise RuntimeError('Duplicate live pin symbol ID.')
+        unique.add(p['sid'])
+        s=obj(job,'symbol',p['sid'])
+        loc=symbol_location(s)
+        if not loc or loc[0]!=p['sheet'] or abs(loc[1]-p['old_x'])>MOVE_TOL or abs(loc[2]-p['old_y'])>MOVE_TOL:
+            raise RuntimeError(f'Pin {p["sid"]} moved since preview. Capture block again.')
+        records.append(_resolve_view_for_symbol(job,dict(p,pid=points[p['sid']]['pid'],y=p['old_y']),logical_bindings[p['sid']]))
+    if len({r['view_id'] for r in records})!=len(records):
+        raise RuntimeError('Two placed symbols resolve to the same pin-view ID. No changes.')
+    _symbol_family_for_placement(job,records)
+    log(f'PREFLIGHT PASSED: {len(records)} pin views linked through logical GetViewIds, '
+        f'all ORIGINAL placement symbols loadable; pitch={plan["pitch"]:.4f}; '
+        f'facing-edge relocation={plan["relocated"]}.')
+    return records
 
-2026-11-23T14:41:43 OPPOSITE EDGE MANDATORY: old=LEFT x=6.8000 -> new=RIGHT x=8.4000; no staging/peeling.
-2026-11-23T14:41:43 CANONICAL VIEW VERIFIED: symbol 146409 <- logical pin 147428, owner 137417, view 147277, name='1'
-2026-11-23T14:41:43 CANONICAL VIEW VERIFIED: symbol 141679 <- logical pin 147411, owner 137417, view 147276, name='2'
-2026-11-23T14:41:43 CANONICAL VIEW VERIFIED: symbol 141690 <- logical pin 147408, owner 137417, view 147273, name='3'
-2026-11-23T14:41:43 CANONICAL VIEW VERIFIED: symbol 141689 <- logical pin 147402, owner 137417, view 147270, name='4'
-2026-11-23T14:41:43 CANONICAL VIEW VERIFIED: symbol 141670 <- logical pin 147378, owner 137417, view 147266, name='5'
-2026-11-23T14:41:43 CANONICAL VIEW VERIFIED: symbol 141660 <- logical pin 147377, owner 137417, view 147255, name='6'
-2026-11-23T14:41:43 CANONICAL VIEW VERIFIED: symbol 141663 <- logical pin 147352, owner 137417, view 147241, name='8'
-2026-11-23T14:41:43 CANONICAL VIEW VERIFIED: symbol 145693 <- logical pin 147351, owner 137417, view 147223, name='9'
-2026-11-23T14:41:43 LOGICAL PIN LOOKUP: 8/9 verified, 11 devices, 53 logical pins, 27 logical pins with GetViewIds; roots=[137350, 147279]; unresolved symbols=[145851]; sample errors=[]
-2026-11-23T14:41:43 UNRESOLVED: symbol=145851, symbol.GetPinIds=145850, Pin.GetViewIds=[], Pin.GetName='7'; the symbol pin ID is NOT accepted as a placeable pin-view ID.
-2026-11-23T14:41:43 ERROR: Could not validate the logical pin -> view -> placed symbol relationship for 1 block pin(s) [145851]. No pins were deleted. If these pins were formatted previously, keep the previous main_recovery.json file in this script folder. Send the PREVIOUS-PIN-MAP and UNRESOLVED lines.
-2026-11-23T14:41:43 Traceback (most recent call last):
-  File "C:\Users\conner.hughes\\Documents\Python\Block Pin Spacer\main.py", line 1543, in preview
-    _preflight(job,plan)  # Fail before displaying APPLY button, no E3 edits.
-    ~~~~~~~~~~^^^^^^^^^^
-  File "C:\Users\conner.hughes\\Documents\Python\Block Pin Spacer\main.py", line 1061, in _preflight
-    logical_bindings=_canonical_pin_view_bindings(job,plan)
-  File "C:\Users\conner.hughes\\Documents\Python\Block Pin Spacer\main.py", line 949, in _canonical_pin_view_bindings
-    raise RuntimeError(f'Could not validate the logical pin -> view -> placed symbol relationship '
-    ...<2 lines>...
-                       'previous main_recovery.json file in this script folder. Send the PREVIOUS-PIN-MAP and UNRESOLVED lines.')
-RuntimeError: Could not validate the logical pin -> view -> placed symbol relationship for 1 block pin(s) [145851]. No pins were deleted. If these pins were formatted previously, keep the previous main_recovery.json file in this script folder. Send the PREVIOUS-PIN-MAP and UNRESOLVED lines.
 
-2026-11-23T14:41:57 Selection: {'symbols': [14200], 'pins': [], 'blocks': [137350]} (official e3series wrapper)
-2026-11-23T14:41:57 BLOCK AREA via GetPlacedArea(): L=6.800 B=19.700 R=8.400 T=26.200
-2026-11-23T14:41:57 BLOCK 14200 / device 137350: 9 pin symbols; outline=(6.799999999999999, 19.699999999999996, 8.399999999999999, 26.200000000000003)
-2026-11-23T14:41:57 PIN IDS: 146409(146406)@8.400,24.000, 141679(141668)@8.400,23.800, 141690(141665)@8.400,23.600, 141689(141645)@8.400,23.400, 141670(141626)@8.400,23.200, 141660(141672)@8.400,23.000, 145615(146918)@8.400,22.800, 141663(141631)@8.400,22.600, 145611(146740)@8.400,22.400
-2026-11-23T14:41:57 OPPOSITE EDGE MANDATORY: old=RIGHT x=8.4000 -> new=LEFT x=6.8000; no staging/peeling.
-2026-11-23T14:41:57 CANONICAL VIEW VERIFIED: symbol 146409 <- logical pin 147428, owner 137417, view 147277, name='1'
-2026-11-23T14:41:57 CANONICAL VIEW VERIFIED: symbol 141679 <- logical pin 147411, owner 137417, view 147276, name='2'
-2026-11-23T14:41:57 CANONICAL VIEW VERIFIED: symbol 141690 <- logical pin 147408, owner 137417, view 147273, name='3'
-2026-11-23T14:41:57 CANONICAL VIEW VERIFIED: symbol 141689 <- logical pin 147402, owner 137417, view 147270, name='4'
-2026-11-23T14:41:57 CANONICAL VIEW VERIFIED: symbol 141670 <- logical pin 147378, owner 137417, view 147266, name='5'
-2026-11-23T14:41:57 CANONICAL VIEW VERIFIED: symbol 141660 <- logical pin 147377, owner 137417, view 147255, name='6'
-2026-11-23T14:41:57 CANONICAL VIEW VERIFIED: symbol 145615 <- logical pin 147353, owner 137417, view 147248, name='7'
-2026-11-23T14:41:57 CANONICAL VIEW VERIFIED: symbol 141663 <- logical pin 147352, owner 137417, view 147241, name='8'
-2026-11-23T14:41:57 CANONICAL VIEW VERIFIED: symbol 145611 <- logical pin 147351, owner 137417, view 147223, name='9'
-2026-11-23T14:41:57 LOGICAL PIN LOOKUP: 9/9 verified, 11 devices, 53 logical pins, 27 logical pins with GetViewIds; roots=[137350, 147279]; unresolved symbols=[]; sample errors=[]
-2026-11-23T14:41:57 PLACEMENT SYMBOL: using ONE common type 'MilBlockSymbolReceptacleIInt¶CONNECTOR_PIN' for all 9 pin views; original types were ['MilBlockSymbolReceptacleIInt¶CONNECTOR_PIN', 'MilBlockSymbolReceptacleIInt¶END_BOTTOM', 'MilBlockSymbolReceptacleIInt¶END_TOP'].
-2026-11-23T14:41:57 PIN PLACEMENT TYPE: pin 1 view 147277 original 'MilBlockSymbolReceptacleIInt¶END_TOP', using 'MilBlockSymbolReceptacleIInt¶CONNECTOR_PIN', original rotation='0.000000', target rotation='0', original XY=(8.400,24.000), target XY=(6.800,24.000)
-2026-11-23T14:41:57 PIN PLACEMENT TYPE: pin 2 view 147276 original 'MilBlockSymbolReceptacleIInt¶CONNECTOR_PIN', using 'MilBlockSymbolReceptacleIInt¶CONNECTOR_PIN', original rotation='0.000000', target rotation='0', original XY=(8.400,23.800), target XY=(6.800,23.600)
-2026-11-23T14:41:57 PIN PLACEMENT TYPE: pin 3 view 147273 original 'MilBlockSymbolReceptacleIInt¶CONNECTOR_PIN', using 'MilBlockSymbolReceptacleIInt¶CONNECTOR_PIN', original rotation='0.000000', target rotation='0', original XY=(8.400,23.600), target XY=(6.800,23.000)
-2026-11-23T14:41:57 PIN PLACEMENT TYPE: pin 4 view 147270 original 'MilBlockSymbolReceptacleIInt¶CONNECTOR_PIN', using 'MilBlockSymbolReceptacleIInt¶CONNECTOR_PIN', original rotation='0.000000', target rotation='0', original XY=(8.400,23.400), target XY=(6.800,22.800)
-2026-11-23T14:41:57 PIN PLACEMENT TYPE: pin 5 view 147266 original 'MilBlockSymbolReceptacleIInt¶CONNECTOR_PIN', using 'MilBlockSymbolReceptacleIInt¶CONNECTOR_PIN', original rotation='0.000000', target rotation='0', original XY=(8.400,23.200), target XY=(6.800,22.600)
-2026-11-23T14:41:57 PIN PLACEMENT TYPE: pin 6 view 147255 original 'MilBlockSymbolReceptacleIInt¶CONNECTOR_PIN', using 'MilBlockSymbolReceptacleIInt¶CONNECTOR_PIN', original rotation='0.000000', target rotation='0', original XY=(8.400,23.000), target XY=(6.800,22.400)
-2026-11-23T14:41:57 PIN PLACEMENT TYPE: pin 7 view 147248 original 'MilBlockSymbolReceptacleIInt¶CONNECTOR_PIN', using 'MilBlockSymbolReceptacleIInt¶CONNECTOR_PIN', original rotation='0.000000', target rotation='0', original XY=(8.400,22.800), target XY=(6.800,22.200)
-2026-11-23T14:41:57 PIN PLACEMENT TYPE: pin 8 view 147241 original 'MilBlockSymbolReceptacleIInt¶CONNECTOR_PIN', using 'MilBlockSymbolReceptacleIInt¶CONNECTOR_PIN', original rotation='0.000000', target rotation='0', original XY=(8.400,22.600), target XY=(6.800,22.000)
-2026-11-23T14:41:57 PIN PLACEMENT TYPE: pin 9 view 147223 original 'MilBlockSymbolReceptacleIInt¶END_BOTTOM', using 'MilBlockSymbolReceptacleIInt¶CONNECTOR_PIN', original rotation='0.000000', target rotation='0', original XY=(8.400,22.400), target XY=(6.800,21.800)
-2026-11-23T14:41:57 PREFLIGHT PASSED: 9 pin views linked through logical GetViewIds, all ORIGINAL placement symbols loadable; pitch=0.2000; facing-edge relocation=True.
-2026-11-23T14:41:57 --- AUTOMATIC PIN REPLACEMENT PREVIEW ---
-2026-11-23T14:41:57 CABLE PITCH 0.2000, measured from selected pins; BLOCK 14200, 9 pins; edge=right -> left (OPPOSITE); copy exact selected cable gap pattern
-2026-11-23T14:41:57   symbol 146409: (8.400,24.000) -> (6.800,24.000)
-2026-11-23T14:41:57   symbol 141679: (8.400,23.800) -> (6.800,23.600)
-2026-11-23T14:41:57   symbol 141690: (8.400,23.600) -> (6.800,23.000)
-2026-11-23T14:41:57   symbol 141689: (8.400,23.400) -> (6.800,22.800)
-2026-11-23T14:41:57   symbol 141670: (8.400,23.200) -> (6.800,22.600)
-2026-11-23T14:41:57   symbol 141660: (8.400,23.000) -> (6.800,22.400)
-2026-11-23T14:41:57   symbol 145615: (8.400,22.800) -> (6.800,22.200)
-2026-11-23T14:41:57   symbol 141663: (8.400,22.600) -> (6.800,22.000)
-2026-11-23T14:41:57   symbol 145611: (8.400,22.400) -> (6.800,21.800)
-2026-11-23T14:41:57 Block outline unchanged. Pins AUTOMATICALLY transfer from RIGHT to LEFT; NO staging or peel clicks.
-2026-11-23T14:41:57 Replacement uses Block Pin Arranger common connector-pin graphic and LEFT=0 / RIGHT=/1 orientation.
-2026-11-23T14:41:57 EXACT CABLE GAPS copied: 0.4000, 0.6000, 0.2000, 0.2000, 0.2000, 0.2000, 0.2000, 0.2000
-2026-11-23T14:42:02 CANONICAL VIEW VERIFIED: symbol 146409 <- logical pin 147428, owner 137417, view 147277, name='1'
-2026-11-23T14:42:02 CANONICAL VIEW VERIFIED: symbol 141679 <- logical pin 147411, owner 137417, view 147276, name='2'
-2026-11-23T14:42:02 CANONICAL VIEW VERIFIED: symbol 141690 <- logical pin 147408, owner 137417, view 147273, name='3'
-2026-11-23T14:42:02 CANONICAL VIEW VERIFIED: symbol 141689 <- logical pin 147402, owner 137417, view 147270, name='4'
-2026-11-23T14:42:02 CANONICAL VIEW VERIFIED: symbol 141670 <- logical pin 147378, owner 137417, view 147266, name='5'
-2026-11-23T14:42:02 CANONICAL VIEW VERIFIED: symbol 141660 <- logical pin 147377, owner 137417, view 147255, name='6'
-2026-11-23T14:42:02 CANONICAL VIEW VERIFIED: symbol 145615 <- logical pin 147353, owner 137417, view 147248, name='7'
-2026-11-23T14:42:02 CANONICAL VIEW VERIFIED: symbol 141663 <- logical pin 147352, owner 137417, view 147241, name='8'
-2026-11-23T14:42:02 CANONICAL VIEW VERIFIED: symbol 145611 <- logical pin 147351, owner 137417, view 147223, name='9'
-2026-11-23T14:42:02 LOGICAL PIN LOOKUP: 9/9 verified, 11 devices, 53 logical pins, 27 logical pins with GetViewIds; roots=[137350, 147279]; unresolved symbols=[]; sample errors=[]
-2026-11-23T14:42:02 PLACEMENT SYMBOL: using ONE common type 'MilBlockSymbolReceptacleIInt¶CONNECTOR_PIN' for all 9 pin views; original types were ['MilBlockSymbolReceptacleIInt¶CONNECTOR_PIN', 'MilBlockSymbolReceptacleIInt¶END_BOTTOM', 'MilBlockSymbolReceptacleIInt¶END_TOP'].
-2026-11-23T14:42:02 PIN PLACEMENT TYPE: pin 1 view 147277 original 'MilBlockSymbolReceptacleIInt¶END_TOP', using 'MilBlockSymbolReceptacleIInt¶CONNECTOR_PIN', original rotation='0.000000', target rotation='0', original XY=(8.400,24.000), target XY=(6.800,24.000)
-2026-11-23T14:42:02 PIN PLACEMENT TYPE: pin 2 view 147276 original 'MilBlockSymbolReceptacleIInt¶CONNECTOR_PIN', using 'MilBlockSymbolReceptacleIInt¶CONNECTOR_PIN', original rotation='0.000000', target rotation='0', original XY=(8.400,23.800), target XY=(6.800,23.600)
-2026-11-23T14:42:02 PIN PLACEMENT TYPE: pin 3 view 147273 original 'MilBlockSymbolReceptacleIInt¶CONNECTOR_PIN', using 'MilBlockSymbolReceptacleIInt¶CONNECTOR_PIN', original rotation='0.000000', target rotation='0', original XY=(8.400,23.600), target XY=(6.800,23.000)
-2026-11-23T14:42:02 PIN PLACEMENT TYPE: pin 4 view 147270 original 'MilBlockSymbolReceptacleIInt¶CONNECTOR_PIN', using 'MilBlockSymbolReceptacleIInt¶CONNECTOR_PIN', original rotation='0.000000', target rotation='0', original XY=(8.400,23.400), target XY=(6.800,22.800)
-2026-11-23T14:42:02 PIN PLACEMENT TYPE: pin 5 view 147266 original 'MilBlockSymbolReceptacleIInt¶CONNECTOR_PIN', using 'MilBlockSymbolReceptacleIInt¶CONNECTOR_PIN', original rotation='0.000000', target rotation='0', original XY=(8.400,23.200), target XY=(6.800,22.600)
-2026-11-23T14:42:02 PIN PLACEMENT TYPE: pin 6 view 147255 original 'MilBlockSymbolReceptacleIInt¶CONNECTOR_PIN', using 'MilBlockSymbolReceptacleIInt¶CONNECTOR_PIN', original rotation='0.000000', target rotation='0', original XY=(8.400,23.000), target XY=(6.800,22.400)
-2026-11-23T14:42:02 PIN PLACEMENT TYPE: pin 7 view 147248 original 'MilBlockSymbolReceptacleIInt¶CONNECTOR_PIN', using 'MilBlockSymbolReceptacleIInt¶CONNECTOR_PIN', original rotation='0.000000', target rotation='0', original XY=(8.400,22.800), target XY=(6.800,22.200)
-2026-11-23T14:42:02 PIN PLACEMENT TYPE: pin 8 view 147241 original 'MilBlockSymbolReceptacleIInt¶CONNECTOR_PIN', using 'MilBlockSymbolReceptacleIInt¶CONNECTOR_PIN', original rotation='0.000000', target rotation='0', original XY=(8.400,22.600), target XY=(6.800,22.000)
-2026-11-23T14:42:02 PIN PLACEMENT TYPE: pin 9 view 147223 original 'MilBlockSymbolReceptacleIInt¶END_BOTTOM', using 'MilBlockSymbolReceptacleIInt¶CONNECTOR_PIN', original rotation='0.000000', target rotation='0', original XY=(8.400,22.400), target XY=(6.800,21.800)
-2026-11-23T14:42:02 PREFLIGHT PASSED: 9 pin views linked through logical GetViewIds, all ORIGINAL placement symbols loadable; pitch=0.2000; facing-edge relocation=True.
-2026-11-23T14:42:02 RECOVERY SNAPSHOT saved BEFORE changes: C:\Users\conner.hughes\\Documents\Python\Block Pin Spacer\main_recovery.json
-2026-11-23T14:42:02 AUTO DIRECT TRANSFER view=147277 pin=1 current_symbol=146409: (8.400,24.000) -> (6.800,24.000)
-2026-11-23T14:42:02 PLACEPINVIEW RETURN view=147277 pin='1' symbol='MilBlockSymbolReceptacleIInt¶CONNECTOR_PIN', rotation='0', coordinate=(6.80000,24.00000), returned=146224
-2026-11-23T14:42:03 PLACE VERIFY view=147277 iteration=1 logical_link=True expected=(204828,6.80000,24.00000) returned={'source': 'placement-return', 'requested_id': 146224, 'sid': 146224, 'location': (204828, 6.799999999999999, 24.0), 'rotation': 'y', 'symbol_type': 'MilBlockSymbolReceptacleIInt¶END_SPLIT', 'characteristic': 'END_SPLIT'} resolved_view=None
-2026-11-23T14:42:03 RETURNED PIN IDENTITY: symbol 146224 text203='1' expected='1'; view alias currently=None.
-2026-11-23T14:42:03 PLACE VERIFIED via returned symbol + pin number: view 147277, symbol 146224, name='1'
-2026-11-23T14:42:03   VERIFIED new symbol 146224; refreshing ALL pins before next operation.
-2026-11-23T14:42:03 E3 LIVE REFRESH pin=2 141679@(8.400,23.800) -> 146537@(8.400,23.800)
-2026-11-23T14:42:03 E3 LIVE REFRESH pin=9 145611@(8.400,22.400) -> 147300@(8.400,22.400)
-2026-11-23T14:42:03 AUTO DIRECT TRANSFER view=147276 pin=2 current_symbol=146537: (8.400,23.800) -> (6.800,23.600)
-2026-11-23T14:42:03 PLACEPINVIEW RETURN view=147276 pin='2' symbol='MilBlockSymbolReceptacleIInt¶CONNECTOR_PIN', rotation='0', coordinate=(6.80000,23.60000), returned=145541
-2026-11-23T14:42:03 PLACE VERIFY view=147276 iteration=1 logical_link=True expected=(204828,6.80000,23.60000) returned={'source': 'placement-return', 'requested_id': 145541, 'sid': 145541, 'location': (204828, 6.799999999999999, 23.6), 'rotation': 'y', 'symbol_type': 'MilBlockSymbolReceptacleIInt¶SPLIT_BOTTOM', 'characteristic': 'SPLIT_BOTTOM'} resolved_view=None
-2026-11-23T14:42:03 RETURNED PIN IDENTITY: symbol 145541 text203='2' expected='2'; view alias currently=None.
-2026-11-23T14:42:03 PLACE VERIFIED via returned symbol + pin number: view 147276, symbol 145541, name='2'
-2026-11-23T14:42:03   VERIFIED new symbol 145541; refreshing ALL pins before next operation.
-2026-11-23T14:42:03 AUTO FORMAT STOPPED after 2 confirmed replacements: E3 placed two pins at the same height. Stop and reload saved copy.. No automatic rollback attempted. Reload the saved E3 project copy if any physical pin is missing or misplaced. DO NOT SAVE an uncertain result.
-2026-11-23T14:42:03 ERROR: E3 placed two pins at the same height. Stop and reload saved copy.. No blind rollback was attempted because E3 may have regenerated other pins. Reopen saved project copy to recover if formatting is incomplete.
-2026-11-23T14:42:03 Traceback (most recent call last):
-  File "C:\Users\conner.hughes\\Documents\Python\Block Pin Spacer\main.py", line 1414, in _run_auto
-    _refresh_live_records(job,plan,records)
-    ~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^
-  File "C:\Users\conner.hughes\\Documents\Python\Block Pin Spacer\main.py", line 1321, in _refresh_live_records
-    raise PinPlacementUncertain('E3 placed two pins at the same height. Stop and reload saved copy.')
-PinPlacementUncertain: E3 placed two pins at the same height. Stop and reload saved copy.
+class PinPlacementUncertain(RuntimeError):
+    """E3 returned a positive placed-symbol ID, but identity/location unclear.
 
-The above exception was the direct cause of the following exception:
+    Do not delete that new symbol or call PlacePinView a second time. It might
+    be placed correctly but not yet indexed through pin-view SetId.
+    """
 
-Traceback (most recent call last):
-  File "C:\Users\conner.hughes\\Documents\Python\Block Pin Spacer\main.py", line 1572, in apply
-    count=_run_auto(job,self.plan,self.write)
-  File "C:\Users\conner.hughes\\Documents\Python\Block Pin Spacer\main.py", line 1448, in _run_auto
-    raise RuntimeError(f'{primary_exc}. No blind rollback was attempted because '
-                       'E3 may have regenerated other pins. Reopen saved project copy '
-                       'to recover if formatting is incomplete.') from primary_exc
-RuntimeError: E3 placed two pins at the same height. Stop and reload saved copy.. No blind rollback was attempted because E3 may have regenerated other pins. Reopen saved project copy to recover if formatting is incomplete.
 
+def _probe_live_pin(job, candidate_id, source):
+    """Read placement state without modifying E3; never trust bare SetId alone."""
+    if not candidate_id:
+        return None
+    sym=job.CreateSymbolObject()
+    try:
+        sid=int(sym.SetId(int(candidate_id)))
+    except Exception as exc:
+        return {'source':source,'requested_id':candidate_id,'error':repr(exc)}
+    if sid<=0:
+        return {'source':source,'requested_id':candidate_id,'error':'not live'}
+    return {'source':source,'requested_id':int(candidate_id),'sid':sid,
+            'location':symbol_location(sym),'rotation':optional(sym,'GetRotation'),
+            'symbol_type':optional(sym,'GetSymbolTypeName'),
+            'characteristic':optional(sym,'GetCharacteristic')}
+
+
+def _read_returned_pin_name(job, sid):
+    """Block Pin Arranger validates placed pin numbers from text type 203."""
+    s=job.CreateSymbolObject()
+    try:
+        if int(s.SetId(int(sid)))<=0: return None
+    except Exception:
+        return None
+    for tid in get_ids(s,'GetTextIds'):
+        txt=job.CreateTextObject()
+        try:
+            if int(txt.SetId(int(tid)))<=0: continue
+            if int(txt.GetType())==203:
+                return str(txt.GetText()).strip()
+        except Exception:
+            continue
+    return None
+
+
+def _same_pin_name(a,b):
+    if a is None or b is None: return False
+    a=str(a).strip();b=str(b).strip()
+    return bool(a) and a==b
+
+
+def _verify_pin(job,rec,x,y,returned_sid):
+    """Check logical ownership plus E3 returned-ID and pin-view identity.
+
+    Unlike V7, do not require the pin-view alias to immediately resolve to the
+    new symbol. E3 may update the alias after PlacePinView returns. Accept only
+    when it resolves to a live symbol AT the requested coordinates. A return
+    ID by itself is never proof of placement success.
+    """
+    observations=[]
+    for attempt in range(8):
+        logical=obj(job,'pin',rec['logical_pin_id'])
+        linked=rec['view_id'] in get_ids(logical,'GetViewIds')
+        view=_pin_view_to_live_symbol(job,rec['view_id'])
+        view_sid=view[0] if view else None
+        view_state=_probe_live_pin(job,view_sid,'pin-view')
+        returned_state=_probe_live_pin(job,returned_sid,'placement-return')
+        observations=[view_state,returned_state]
+        log(f'PLACE VERIFY view={rec["view_id"]} iteration={attempt+1} '
+            f'logical_link={linked} expected=({rec["sheet"]},{x:.5f},{y:.5f}) '
+            f'returned={returned_state!r} resolved_view={view_state!r}')
+        if linked and view_state and view_state.get('location'):
+            sheet,vx,vy=view_state['location']
+            if (sheet==rec['sheet'] and abs(vx-x)<=MOVE_TOL and
+                    abs(vy-y)<=MOVE_TOL):
+                log(f'PLACE VERIFIED: view {rec["view_id"]} mapped to symbol '
+                    f'{view_state["sid"]} at target; original E3 return={returned_sid}.')
+                return view_state['sid']
+        # The WORKING Block Pin Arranger also verifies a newly placed symbol
+        # via its returned ID plus pin-number text type 203. Do that when
+        # E3's pin-view -> symbol lookup is temporarily stale.
+        if linked and returned_state and returned_state.get('location'):
+            sheet,rx,ry=returned_state['location']
+            if (sheet==rec['sheet'] and abs(rx-x)<=MOVE_TOL and
+                    abs(ry-y)<=MOVE_TOL):
+                pname=_read_returned_pin_name(job,returned_sid)
+                log(f'RETURNED PIN IDENTITY: symbol {returned_sid} text203={pname!r} '
+                    f'expected={rec["pin_name"]!r}; view alias currently={view_sid}.')
+                if _same_pin_name(pname,rec['pin_name']):
+                    log(f'PLACE VERIFIED via returned symbol + pin number: '
+                        f'view {rec["view_id"]}, symbol {returned_sid}, name={pname!r}')
+                    return returned_sid
+        if attempt<7: time.sleep(0.15)
+    raise PinPlacementUncertain(
+        f'PlacePinView returned a positive symbol ID {returned_sid} for view '
+        f'{rec["view_id"]}, but the logical view does not yet resolve to '
+        f'target ({x:.3f},{y:.3f}). E3 observations={observations!r}. '
+        'STOPPED WITHOUT ANOTHER DELETE OR RESTORE. Inspect pins on the sheet '
+        'or reload the saved project copy. Do not save an uncertain result.')
+
+
+def _place_view(job,rec,x,y):
+    placement=job.CreateSymbolObject()
+    result=placement.PlacePinView(int(rec['view_id']),int(rec['sheet']),
+       rec['place_symbol'],PLACEMENT_VERSION,float(x),float(y),
+       rec['rotation'],float(rec['scale']),PRESERVE_TEXT_SIZE)
+    try: sid=int(result)
+    except Exception:sid=0
+    log(f'PLACEPINVIEW RETURN view={rec["view_id"]} pin={rec["pin_name"]!r} '
+        f'symbol={rec["place_symbol"]!r}, rotation={rec["rotation"]!r}, '
+        f'coordinate=({x:.5f},{y:.5f}), returned={result!r}')
+    if sid<=0:
+        raise RuntimeError(f'PlacePinView returned {result!r} for view {rec["view_id"]} '
+                           f'at ({x:.3f},{y:.3f}); no new symbol ID was reported.')
+    time.sleep(0.15)
+    return _verify_pin(job,rec,x,y,sid)
+
+
+def _delete_live(job,rec,live_sid):
+    s=job.CreateSymbolObject()
+    if not s.SetId(int(live_sid)):
+        raise RuntimeError(f'Cannot reopen placed symbol {live_sid} for pin view {rec["view_id"]}.')
+    loc=symbol_location(s)
+    if not loc or loc[0]!=rec['sheet'] or abs(loc[1]-rec['current_x'])>MOVE_TOL or abs(loc[2]-rec['current_y'])>MOVE_TOL:
+        raise RuntimeError(f'Pin view {rec["view_id"]} changed location unexpectedly. No deletion.')
+    result=s.Delete()
+    time.sleep(0.1)
+    if _pin_view_to_live_symbol(job,rec['view_id']) is not None:
+        raise RuntimeError(f'Delete did not leave pin view {rec["view_id"]} unplaced (returned {result!r}).')
+
+
+def _move_view(job,rec,new_x,new_y,new_rotation=None):
+    """Fully automatic Delete->PlacePinView with immediate restore on failure."""
+    # E3 often does NOT update view->live alias after PlacePinView. Use the
+    # captured live symbol ID, verified again at its known sheet and XY.
+    live_sid=int(rec['current_symbol'])
+    s=job.CreateSymbolObject()
+    if int(s.SetId(live_sid))!=live_sid:
+        raise RuntimeError(f'Placed symbol {live_sid} no longer exists; stopped.')
+    alias=_pin_view_to_live_symbol(job,rec['view_id'])
+    if alias and alias[0]!=live_sid:
+        raise RuntimeError(f'Logical view {rec["view_id"]} now belongs to '
+                           f'another live symbol {alias[0]}; stopped.')
+    physical=str(optional(obj(job,'pin',get_ids(s,'GetPinIds')[0]),'GetName') or '').strip() \
+        if len(get_ids(s,'GetPinIds'))==1 else ''
+    label=_read_returned_pin_name(job,live_sid)
+    if rec.get('resolution')=='prior-verified-snapshot' and (
+            physical!=rec['pin_name'] or label!=rec['pin_name']):
+        raise RuntimeError(f'Pin {live_sid} identity changed since capture; stopped.')
+    if rec['view_id'] not in get_ids(obj(job,'pin',rec['logical_pin_id']),'GetViewIds'):
+        raise RuntimeError(f'Logical view {rec["view_id"]} no longer linked; stopped.')
+    loc=symbol_location(s)
+    if not loc or loc[0]!=rec['sheet'] or abs(loc[1]-rec['current_x'])>MOVE_TOL or abs(loc[2]-rec['current_y'])>MOVE_TOL:
+        raise RuntimeError(f'Pin view {rec["view_id"]} is no longer at expected coordinate. Stopped.')
+    old_x,old_y=rec['current_x'],rec['current_y']
+    old_rotation=rec['rotation']
+    if new_rotation is not None:
+        rec['rotation']=new_rotation
+    _delete_live(job,rec,live_sid)
+    try:
+        new_id=_place_view(job,rec,new_x,new_y)
+        rec['current_symbol']=new_id
+        rec['current_x'],rec['current_y']=new_x,new_y
+        return new_id
+    except PinPlacementUncertain as exc:
+        log(f'REPLACE UNCERTAIN (no restoration attempt): view {rec["view_id"]} '+str(exc))
+        raise
+    except Exception as exc:
+        log(f'REPLACE FAILED view {rec["view_id"]} destination=({new_x:.3f},{new_y:.3f}): {exc}')
+        # If E3 partially placed the pin at the requested coordinate, delete it first.
+        if _pin_view_to_live_symbol(job,rec['view_id']) is not None:
+            current=_pin_view_to_live_symbol(job,rec['view_id'])
+            loc2=symbol_location(current[1]); sid2=current[0]
+            if loc2 and loc2[0]==rec['sheet'] and abs(loc2[1]-new_x)<=MOVE_TOL and abs(loc2[2]-new_y)<=MOVE_TOL:
+                rec['current_x'],rec['current_y']=new_x,new_y
+                _delete_live(job,rec,sid2)
+            else:
+                raise RuntimeError(f'CRITICAL: pin view {rec["view_id"]} was placed at unknown location {loc2}; '
+                                   'cannot restore automatically. Recover from saved project copy.') from exc
+        try:
+            rec['rotation']=old_rotation
+            restored=_place_view(job,rec,old_x,old_y)
+            rec['current_symbol']=restored
+            rec['current_x'],rec['current_y']=old_x,old_y
+            log(f'RESTORED original pin view {rec["view_id"]} at ({old_x:.3f},{old_y:.3f}).')
+        except Exception as rollback_exc:
+            raise RuntimeError(f'CRITICAL: failed to place view {rec["view_id"]} AND failed to restore it. '
+                               f'Placement error={exc}, restore error={rollback_exc}. '
+                               'Reload saved E3 project copy before retrying.') from rollback_exc
+        raise RuntimeError(f'Automatic placement rejected for view {rec["view_id"]}: {exc}. '
+                           'The pin was restored to its original location.') from exc
+
+
+def _refresh_live_records(job,plan,records):
+    """Re-enumerate placed E3 pin symbols after *each* replacement.
+
+    E3 can regenerate/flip other pin symbols while one view is recreated.
+    Never reuse stale IDs, and never trust pin-name text by itself: prove the
+    physical pin name, label text type 203, symbol family, and retained logical
+    owner/pin/view association for every record in the selected CABBLOCK.
+    This function is READ-ONLY and may refuse an ambiguous E3 result.
+    """
+    latest=gather_markers(job,plan['target'])
+    if len(latest)!=len(records):
+        raise PinPlacementUncertain(
+            f'E3 changed visible block pin count to {len(latest)} (expected {len(records)}). '
+            'No further delete or automatic rollback; reopen saved project copy.')
+    ref={str(r['pin_name']).strip():r for r in records}
+    if len(ref)!=len(records):
+        raise PinPlacementUncertain('Nonunique logical pin names. Stopping without another deletion.')
+    sheet=int(plan['target']['sheet'])
+    area=plan['target']['area']
+    live={}
+    for p in latest:
+        sid=int(p['sid'])
+        pinids=get_ids(obj(job,'symbol',sid),'GetPinIds')
+        if len(pinids)!=1:
+            raise PinPlacementUncertain(f'Pin symbol {sid} does not have exactly one physical pin.')
+        phys=str(optional(obj(job,'pin',pinids[0]),'GetName') or '').strip()
+        label=_read_returned_pin_name(job,sid)
+        if not phys or label!=phys or phys not in ref or phys in live:
+            raise PinPlacementUncertain(f'Pin {sid} cannot be uniquely verified: physical={phys!r} text203={label!r}.')
+        r=ref[phys]
+        s=obj(job,'symbol',sid)
+        kind=str(optional(s,'GetSymbolTypeName') or '')
+        family=kind.split('¶')[0]
+        original_family=r['kind'].split('¶')[0]
+        if family!=original_family or p['sheet']!=sheet:
+            raise PinPlacementUncertain(f'Pin {phys} changed symbol family or sheet after E3 reflow.')
+        if (r['view_id'] not in get_ids(obj(job,'pin',r['logical_pin_id']),'GetViewIds') or
+            r['logical_pin_id'] not in get_ids(obj(job,'device',r['logical_owner_id']),'GetPinIds')):
+            raise PinPlacementUncertain(f'Pin {phys} lost original logical owner/view relationship.')
+        if (not area[0]-.10 <= p['x'] <= area[2]+.10 or
+            not area[1]-.10 <= p['y'] <= area[3]+.10):
+            raise PinPlacementUncertain(f'Pin {phys} is outside selected block bounds after reflow.')
+        leftx=area[0];rightx=area[2]
+        if min(abs(p['x']-leftx),abs(p['x']-rightx))>max(.10,POINT_TOL*4):
+            raise PinPlacementUncertain(f'Pin {phys} is not on a verified block edge.')
+        live[phys]=(sid,float(p['x']),float(p['y']))
+    if set(live)!=set(ref):
+        raise PinPlacementUncertain('Block pin identity set changed during automatic placement.')
+    # During a direct RIGHT->LEFT or LEFT->RIGHT transfer, unmoved pins remain
+    # on the original edge. The target Y may legitimately match a pin on the
+    # OTHER edge (e.g. pin 2 at LEFT y=23.600 and pin 3 at RIGHT y=23.600).
+    # The V10 Y-only guard incorrectly aborted a valid replacement here.
+    # Refuse only truly overlapping pins: BOTH their X and Y must be close.
+    names=list(live)
+    crossing=[]
+    for i in range(len(names)):
+        for j in range(i+1,len(names)):
+            a,b=names[i],names[j]
+            sa,xa,ya=live[a];sb,xb,yb=live[b]
+            if abs(ya-yb)>POINT_TOL:
+                continue
+            if abs(xa-xb)<=PIN_X_CLEARANCE:
+                raise PinPlacementUncertain(
+                    'REAL pin collision on same block edge: '
+                    f'pin {a} symbol {sa}@({xa:.3f},{ya:.3f}) and '
+                    f'pin {b} symbol {sb}@({xb:.3f},{yb:.3f}). '
+                    'Stop without further deletion; reopen saved project copy.')
+            crossing.append((a,b,round(ya,4)))
+    if crossing:
+        log('TRANSIENT CROSS-EDGE Y MATCHES ALLOWED (no XY collision): '
+            +', '.join(f'pin {a} / pin {b} at Y={y:.4f}'
+                      for a,b,y in crossing[:12]))
+    for name,r in ref.items():
+        sid,x,y=live[name]
+        was=(r['current_symbol'],r['current_x'],r['current_y'])
+        now=(sid,x,y)
+        if sid!=was[0] or abs(x-was[1])>MOVE_TOL or abs(y-was[2])>MOVE_TOL:
+            log(f'E3 LIVE REFRESH pin={name} {was[0]}@({was[1]:.3f},{was[2]:.3f}) '
+                f'-> {sid}@({x:.3f},{y:.3f})')
+        r['current_symbol'],r['current_x'],r['current_y']=now
+        r['resolution']='refreshed-verified'
+    return records
+
+
+def _available_move_order(records,completed):
+    """Move without placing on another current/unchanged pin.
+
+    For expansion downwards the bottom pin is moved first; shrinking moves
+    normally start at the top. If none is free, use opposite edge staging
+    only when E3 supplies a valid block outline (see _run_auto).
+    """
+    pending=[r for r in records if r['view_id'] not in completed and
+             math.hypot(r['x']-r['current_x'],r['new_y']-r['current_y'])>POINT_TOL]
+    free=[]
+    for r in pending:
+        if all(q['view_id']==r['view_id'] or abs(q['current_x']-r['x'])>PIN_X_CLEARANCE or
+               abs(q['current_y']-r['new_y'])>MOVE_TOL
+               for q in records):
+            free.append(r)
+    # Empty opposite edge = direct top-to-bottom, like Block Pin Arranger.
+    # Once E3 moves/reflows the row, use collision-free spacing moves.
+    return sorted(free,key=lambda r:(
+        0 if abs(r['x']-r['current_x'])>MOVE_TOL else 1,
+        -r['old_y'] if abs(r['x']-r['current_x'])>MOVE_TOL else -abs(r['new_y']-r['current_y'])))
+
+
+def _write_confirmed_identity(job,plan,records):
+    """Persist only a COMPLETE success; old recovery files remain usable."""
+    state={
+      'build':VERSION, 'created':datetime.now().isoformat(timespec='seconds'),
+      'project_id':optional(job,'GetId'),
+      'sheet':plan['target']['sheet'],'block_symbol':plan['target']['sid'],
+      'block_device':plan['target']['did'],
+      'status':'verified-complete',
+      'pins':[{'symbol':r['current_symbol'], 'logical_pin':r['logical_pin_id'],
+               'logical_owner':r['logical_owner_id'],'view':r['view_id'],
+               'pin_name':r['pin_name'],'sheet':r['sheet'],
+               'target_x':r['current_x'],'target_y':r['current_y'],
+               'original_symbol_type':r['kind']}
+              for r in records]
+    }
+    temp=IDENTITY_FILE.with_suffix(IDENTITY_FILE.suffix+'.tmp')
+    temp.write_text(json.dumps(state,indent=2),encoding='utf-8')
+    os.replace(str(temp),str(IDENTITY_FILE))
+    log(f'PERSISTENT PIN MAP updated after successful apply: {IDENTITY_FILE}')
+
+
+def _run_auto(job,plan,log_line):
+    records=_preflight(job,plan)
+    if not any(math.hypot(r['old_x']-r['x'],r['old_y']-r['new_y'])>MOVE_TOL for r in records):
+        log_line('Already aligned; no pins need replacement.')
+        return 0
+    # Prepare a complete recovery snapshot before touching E3.
+    original={r['view_id']:(r['old_x'],r['old_y'],r['original_rotation']) for r in records}
+    if len(original)!=len(records):raise RuntimeError('Duplicate view IDs. No changes made.')
+    # Write recovery data BEFORE the first destructive operation. This is
+    # reference data only, NOT a guarantee that E3 can restore a failed view.
+    recovery_path=RECOVERY_FILE
+    snapshot={
+        'build':VERSION, 'created':datetime.now().isoformat(timespec='seconds'),
+        'sheet':plan['target']['sheet'], 'block_symbol':plan['target']['sid'],
+        'block_device':plan['target']['did'],
+        'notice':'Reopen your saved E3 project if any pin cannot be replaced.',
+        'pins':[{'symbol':r['sid'], 'logical_pin':r['logical_pin_id'],
+                 'logical_owner':r['logical_owner_id'], 'view':r['view_id'],
+                 'pin_name':r['pin_name'], 'sheet':r['sheet'],
+                 'original_x':r['old_x'], 'original_y':r['old_y'],
+                 'target_x':r['x'], 'target_y':r['new_y'],
+                 'original_rotation':r['original_rotation'],
+                 'target_rotation':r['new_rotation'],
+                 'original_symbol_type':r['kind'], 'scale':r['scale']} for r in records]
+    }
+    try:
+        temp=recovery_path.with_name(recovery_path.name+'.tmp')
+        temp.write_text(json.dumps(snapshot,indent=2),encoding='utf-8')
+        os.replace(str(temp),str(recovery_path))
+    except Exception as exc:
+        raise RuntimeError(f'Could not save recovery snapshot; NO PINS DELETED: {exc}')
+    log_line(f'RECOVERY SNAPSHOT saved BEFORE changes: {recovery_path}')
+    moved=[]; completed=set(); passes=0
+    try:
+        while True:
+            # The symbol IDs and even other pin coordinates can change when E3
+            # recreates a single pin. Re-read the complete verified row FIRST.
+            _refresh_live_records(job,plan,records)
+            remaining=[r for r in records if
+                       math.hypot(r['current_x']-r['x'],r['current_y']-r['new_y'])>MOVE_TOL]
+            if not remaining:break
+            passes+=1
+            if passes>len(records)*3:
+                raise PinPlacementUncertain('E3 pin row continues to reflow; stopped after bounded attempts.')
+            candidates=_available_move_order(records,set())
+            if not candidates:
+                raise PinPlacementUncertain('No collision-free direct opposite-side move with refreshed E3 positions.')
+            r=candidates[0]
+            log_line(f'AUTO DIRECT TRANSFER view={r["view_id"]} pin={r["pin_name"]} '
+                     f'current_symbol={r["current_symbol"]}: '
+                     f'({r["current_x"]:.3f},{r["current_y"]:.3f}) -> '
+                     f'({r["x"]:.3f},{r["new_y"]:.3f})')
+            new_sid=_move_view(job,r,r['x'],r['new_y'],r.get('new_rotation'))
+            moved.append(r)
+            log_line(f'  VERIFIED new symbol {new_sid}; refreshing ALL pins before next operation.')
+        # One more complete physical/logical check before persisting identity.
+        _refresh_live_records(job,plan,records)
+        log_line(f'ALL {len(records)} pins now verified at opposite edge with requested gaps; '
+                 f'{len(moved)} explicit PlacePinView operations. No peeling/staging.')
+        try:
+            _write_confirmed_identity(job,plan,records)
+        except Exception as exc:
+            log_line(f'WARNING: formatted pins verified, but could not write future pin map: {exc}')
+        return len(moved)
+    except Exception as primary_exc:
+        # Block Pin Arranger shows that E3 recreating one endpoint may rewrite
+        # other placed symbol IDs/positions. Never blindly roll back stale IDs:
+        # that can create duplicates and remove unrelated pins.
+        log_line(f'AUTO FORMAT STOPPED after {len(moved)} confirmed replacements: {primary_exc}. '
+                 'No automatic rollback attempted. Reload the saved E3 project copy '
+                 'if any physical pin is missing or misplaced. DO NOT SAVE an uncertain result.')
+        raise RuntimeError(f'{primary_exc}. No blind rollback was attempted because '
+                           'E3 may have regenerated other pins. Reopen saved project copy '
+                           'to recover if formatting is incomplete.') from primary_exc
+
+
+class App:
+    def __init__(self):
+        self.root=tk.Tk()
+        self.root.title('E3 • Auto Cable Pin Spacing → CABBLOCK [V11 Opposite Edge]')
+        self.root.geometry('840x620+320+80')
+        self.root.attributes('-topmost',True)
+        self.src=None;self.dst=None;self.plan=None
+        self.edge=tk.StringVar(value='auto')
+        self.pitch=tk.StringVar(value='')
+        self.status=tk.StringVar(value='Ctrl-select TWO OR MORE cable pins on one side, then click 1.')
+        f=ttk.Frame(self.root,padding=13);f.pack(fill='both',expand=True)
+        ttk.Label(f,text='Automatically match cable pin spacing to CABBLOCK',
+                  font=('Segoe UI',13,'bold')).pack(anchor='w')
+        ttk.Label(f,text='Select 2+ cable pins; select block; automatically transfer block pins to OPPOSITE edge.',
+                  wraplength=810).pack(anchor='w',pady=(6,10))
+        row=ttk.Frame(f);row.pack(fill='x',pady=(0,8))
+        ttk.Button(row,text='1. CAPTURE CABLE PINS',command=self.capture_pins).pack(side='left',padx=(0,10))
+        ttk.Button(row,text='2. CAPTURE BLOCK',command=self.capture_block).pack(side='left',padx=(0,10))
+        ttk.Button(row,text='Refresh Preview',command=self.preview).pack(side='left')
+        ttk.Label(f,text='Pin placement: always the OPPOSITE block edge (no peeling/staging).',
+                  foreground='#186b3a').pack(anchor='w',pady=(2,8))
+        self.output=tk.Text(f,height=22,width=100,wrap='none',font=('Consolas',9))
+        self.output.pack(fill='both',expand=True)
+        ttk.Label(f,textvariable=self.status,wraplength=805).pack(anchor='w',pady=(9,6))
+        actions=ttk.Frame(f);actions.pack(fill='x')
+        self.auto_button=ttk.Button(actions,text='3. AUTO FORMAT — DELETE & REPLACE PIN VIEWS',
+                                    command=self.apply,state='disabled')
+        self.auto_button.pack(side='left')
+        ttk.Button(actions,text='Reset',command=self.reset).pack(side='left',padx=8)
+        ttk.Button(actions,text='Close',command=self.root.destroy).pack(side='right')
+        self.write('BUILD '+VERSION)
+        self.write('LOG '+str(LOGFILE))
+        self.write('WARNING: pin deletion/recreation may not be undoable. OPEN A SAVED COPY.')
+        self.write('Safety: all pins re-read after EACH automatic replacement; 2D edge-aware collision checks.')
+    def write(self,value):
+        self.output.insert('end',str(value)+'\n');self.output.see('end')
+        self.root.update_idletasks()
+        log(str(value))
+    def error(self,exc):
+        self.write('ERROR: '+str(exc));log(traceback.format_exc())
+        self.status.set(str(exc))
+        messagebox.showerror('E3 automatic pin spacing',str(exc),parent=self.root)
+    def clear_plan(self):
+        self.plan=None
+        self.auto_button.configure(state='disabled')
+    def read_selection(self):
+        app,job,backend=open_e3();sel=selected(job)
+        self.write(f'Selection: {sel} ({backend})')
+        return app,job,sel
+    def capture_pins(self):
+        try:
+            app,job,sel=self.read_selection()
+            src=reference_from_selection(job,sel)
+            src=try_linked_source_neighbor(job,sel,src)
+            self.src=src;self.dst=None;self.clear_plan()
+            self.write('SOURCE: '+', '.join(f'{p["sid"]}@({p["x"]:.3f},{p["y"]:.3f})' for p in src['points']))
+            if len(src['points'])<2:
+                raise ValueError('Only one cable pin was detected and no neighbor was identified. Select TWO OR MORE cable pins; no manual pitch is required.')
+            pitch,_=pitch_from_source(src)
+            self.write(f'MEASURED MEDIAN PITCH = {pitch:.4f}')
+            if len(src['points']) > 2:
+                gaps=[src['points'][i]['y']-src['points'][i+1]['y'] for i in range(len(src['points'])-1)]
+                self.write('SELECTED CABLE GAP PATTERN: '+', '.join(f'{v:.4f}' for v in gaps))
+                self.write('When target pin count matches the selection, EXACT gaps are copied (NOT median pitch).')
+            self.status.set('Select your CABBLOCK in E3, then click 2.')
+        except Exception as exc:self.error(exc)
+        finally:gc.collect()
+    def capture_block(self):
+        try:
+            if not self.src:raise ValueError('Capture cable pins first.')
+            app,job,sel=self.read_selection()
+            sid=selection_symbol(job,sel)
+            b=source_or_block(job,sid,sel)
+            if not b['block']:raise RuntimeError(f'Symbol {sid} is not a CABBLOCK.')
+            b['points']=gather_markers(job,b)
+            if len(b['points'])<2:raise RuntimeError('At least two independent block pin symbols are required.')
+            if any(p['sid']==sid for p in self.src['points']):
+                raise RuntimeError('Source pin cannot be the selected block.')
+            self.dst=b;self.clear_plan()
+            self.write(f'BLOCK {sid} / device {b["did"]}: {len(b["points"])} pin symbols; outline={b["area"]}')
+            self.write('PIN IDS: '+', '.join(f'{p["sid"]}({p["pid"]})@{p["x"]:.3f},{p["y"]:.3f}' for p in b['points']))
+            self.status.set('Checking pin-view associations and preparing automatic format...')
+            self.preview()  # No extra user click needed: capture block -> ready to apply.
+        except Exception as exc:self.error(exc)
+        finally:gc.collect()
+    def preview(self):
+        try:
+            if not self.src or not self.dst:raise RuntimeError('Capture cable pins and block first.')
+            plan=make_plan_v3(self.src,self.dst,self.edge.get(),self.pitch.get())
+            app,job,backend=open_e3()
+            _preflight(job,plan)  # Fail before displaying APPLY button, no E3 edits.
+            self.plan=plan
+            self.write('--- AUTOMATIC PIN REPLACEMENT PREVIEW ---')
+            self.write(f'CABLE PITCH {plan["pitch"]:.4f}, {plan["pitch_how"]}; '
+                       f'BLOCK {plan["target"]["sid"]}, {plan["target_count"]} pins; '
+                       f'edge={plan["original_side"]} -> {plan["target_side"]} (OPPOSITE); {plan["mode"]}')
+            for p in plan['changes']:
+                self.write(f'  symbol {p["sid"]}: ({p["old_x"]:.3f},{p["old_y"]:.3f}) -> '
+                           f'({p["x"]:.3f},{p["new_y"]:.3f})')
+            self.write(f'Block outline unchanged. Pins AUTOMATICALLY transfer from {plan["original_side"].upper()} to {plan["target_side"].upper()}; NO staging or peel clicks.')
+            self.write('Replacement uses Block Pin Arranger common connector-pin graphic and LEFT=0 / RIGHT=/1 orientation.')
+            if plan['mode'].startswith('copy exact'):
+                self.write('EXACT CABLE GAPS copied: '+', '.join(f'{plan["changes"][i]["new_y"]-plan["changes"][i+1]["new_y"]:.4f}' for i in range(len(plan['changes'])-1)))
+            if not plan['outline_verified']:
+                self.write('WARNING: E3 provided no outline; actual PlacePinView may reject Y outside block.')
+            self.auto_button.configure(state='normal')
+            self.status.set('Ready: 3. AUTO FORMAT. Save project copy before applying.')
+        except Exception as exc:self.clear_plan();self.error(exc)
+    def apply(self):
+        if not self.plan:return
+        if not messagebox.askyesno('Replace CABBLOCK pin views automatically?',
+               'This will DELETE and RECREATE placed pin-view symbols at the new spacing, '
+               'using verified logical pin views and a shared connector-pin graphic.\n\n'
+               'E3 symbol IDs will change. The block will not be resized.\nPins go to the opposite edge.\n'
+               'Work on a SAVED PROJECT COPY.\n\nProceed with all pin replacements?',
+               parent=self.root):return
+        self.auto_button.configure(state='disabled')
+        try:
+            app,job,backend=open_e3()
+            count=_run_auto(job,self.plan,self.write)
+            self.write(f'AUTO APPLY SUCCESS: {count} pin(s) replaced and verified.')
+            self.status.set(f'Complete: {count} direct pin placements. All pins on opposite edge; verify and save.')
+            self.clear_plan()
+        except Exception as exc:
+            self.clear_plan();self.error(exc)
+        finally:gc.collect()
+    def reset(self):
+        self.src=None;self.dst=None;self.pitch.set('');self.edge.set('auto')
+        self.clear_plan()
+        self.status.set('Select two or more cable pin symbols, then click 1.')
+        self.write('RESET — ready for new cable pin capture.')
+
+
+def main():
+    if '--worker' not in sys.argv:
+        flags=getattr(subprocess,'DETACHED_PROCESS',0)|getattr(subprocess,'CREATE_NEW_PROCESS_GROUP',0)
+        try:
+            subprocess.Popen([sys.executable,str(Path(__file__).resolve()),'--worker'],
+                cwd=str(Path(__file__).resolve().parent),creationflags=flags,
+                stdin=subprocess.DEVNULL,stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL,close_fds=True)
+            return
+        except Exception:
+            log('DETACHED GUI LAUNCH FAILED: '+traceback.format_exc());raise
+    log(f'=== Start {VERSION} ===')
+    app=App();app.root.mainloop()
+
+if __name__=='__main__':main()
