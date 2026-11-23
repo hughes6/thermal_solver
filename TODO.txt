@@ -1,4 +1,4 @@
-"""E3.series automatic Cable -> CABBLOCK opposite-edge pin spacing (V11).
+"""E3.series automatic Cable -> CABBLOCK opposite-edge pin spacing + pin text formatting (V12).
 
 Select 2 or more cable pin symbols; select CABBLOCK; Preview; APPLY AUTOMATICALLY.
 Adapts the existing Block Pin Arranger mechanism: symbol.Delete() followed by
@@ -28,8 +28,9 @@ from tkinter import ttk, messagebox
 import traceback
 import time
 from datetime import datetime
+from collections import deque
 
-VERSION = 'CABLE-BLOCK-PIN-SPACING-V11-EDGE-AWARE-COLLISIONS-20261123'
+VERSION = 'CABLE-BLOCK-PIN-SPACING-V13-COMPACT-GUI-20261123'
 MISSING = -2147352572
 EDGE_ALLOWANCE = 0.65   # maximum distance, drawing units, from block edge
 POINT_TOL = 0.015      # position readback tolerance in E3 drawing units
@@ -1472,73 +1473,499 @@ def _run_auto(job,plan,log_line):
                            'to recover if formatting is incomplete.') from primary_exc
 
 
+
+# -------------------------------------------------------------------------
+# AFTER-PLACEMENT PIN TEXT FORMATTING
+# Mirrors the existing Block Pin Arranger's apply_text_tweaks function.
+# The placement routine above is NOT modified.  Formatting runs in a NEW
+# Python/E3 COM process, after all pin movement has been verified.
+# -------------------------------------------------------------------------
+TEXT_MANIFEST = LOGFILE.with_name(LOGFILE.stem + '_text_manifest.json')
+TEXT_STATUS = LOGFILE.with_name(LOGFILE.stem + '_text_status.json')
+PIN_SIGNAL_TYPE = 617          # Local Signal Name
+PIN_DESIGNATION_TYPE = 12      # Device Designation on the connector pin
+PIN_NUMBER_TYPE = 203         # Physical pin number
+PIN_HIDE_TYPE = 5             # Unwanted pin text (original arranger)
+PIN_SIGNAL_HEIGHT = 0.15
+PIN_DESIGNATION_HEIGHT = 0.20
+PIN_BLACK = 0
+PIN_BOLD = 1
+PIN_HATCH = 58
+
+
+def _format_read_block(job, block_symbol, block_device, expected_sheet=None):
+    sel = {'symbols':[int(block_symbol)],'pins':[],
+           'blocks':[int(block_device)] if block_device else []}
+    block = source_or_block(job,int(block_symbol),sel)
+    if not block['block']:
+        raise RuntimeError(f'Format preflight: {block_symbol} is not a CABBLOCK.')
+    if expected_sheet is not None and int(block['sheet']) != int(expected_sheet):
+        raise RuntimeError('Format preflight: the CABBLOCK changed sheets.')
+    if not block['area']:
+        raise RuntimeError('Format preflight: CABBLOCK outline unavailable, cannot identify pin text edge.')
+    if block_device is not None and block['did'] is not None and int(block['did']) != int(block_device):
+        raise RuntimeError('Format preflight: the CABBLOCK device changed.')
+    # E3 may expose the device ID only through GetSelectedBlockIds.
+    if block_device is not None:
+        block['did']=int(block_device)
+    return block
+
+
+def _format_inventory(job, block):
+    """Read-only, view-scoped preflight: uniquely identify ALL physical pins."""
+    pts=gather_markers(job,block)
+    area=block['area']; left,right=area[0],area[2]
+    if len(pts)<2:
+        raise RuntimeError('Format preflight: not enough individual pin symbols found.')
+    seen_names=set(); seen_sids=set(); entries=[]
+    for p in pts:
+        sid=p['sid']
+        if not sid or sid in seen_sids or p['sheet']!=block['sheet']:
+            raise RuntimeError('Format preflight: ambiguous pin symbol IDs/sheets.')
+        seen_sids.add(sid)
+        sym=obj(job,'symbol',sid)
+        ids=get_ids(sym,'GetPinIds')
+        if len(ids)!=1:
+            raise RuntimeError(f'Format preflight: symbol {sid} does not have exactly one physical pin.')
+        physical=str(optional(obj(job,'pin',ids[0]),'GetName') or '').strip()
+        number=_read_returned_pin_name(job,sid)
+        if not physical or number!=physical or physical in seen_names:
+            raise RuntimeError(f'Format preflight: symbol {sid} pin name mismatch or duplicate: '
+                               f'physical={physical!r}, text203={number!r}.')
+        seen_names.add(physical)
+        dx_left=abs(p['x']-left);dx_right=abs(p['x']-right)
+        if min(dx_left,dx_right)>max(.10,POINT_TOL*4):
+            raise RuntimeError(f'Format preflight: pin {physical} is not on a block edge.')
+        if abs(dx_left-dx_right)<=POINT_TOL:
+            raise RuntimeError(f'Format preflight: pin {physical} edge is ambiguous.')
+        side='LEFT' if dx_left<dx_right else 'RIGHT'
+        kind=str(optional(sym,'GetSymbolTypeName') or '')
+        if not kind or '¶' not in kind:
+            raise RuntimeError(f'Format preflight: pin {physical} has unrecognized symbol family.')
+        tids=get_ids(sym,'GetTextIds')
+        types=[]
+        for tid in tids:
+            tt=job.CreateTextObject()
+            try:
+                if not int(tt.SetId(int(tid))):continue
+                typ=tt.GetType()
+                types.append(int(typ))
+            except Exception:
+                continue
+        if PIN_NUMBER_TYPE not in types:
+            raise RuntimeError(f'Format preflight: pin {physical} is missing text type 203.')
+        entries.append({'sid':int(sid),'pin_name':physical,'sheet':int(p['sheet']),
+                        'x':float(p['x']),'y':float(p['y']), 'side':side,
+                        'family':kind.split('¶')[0], 'types':sorted(set(types))})
+    if len(entries)!=len(pts):
+        raise RuntimeError('Format preflight: pin count changed while reading CABBLOCK.')
+    # Show device designation only at top of EACH populated edge.
+    for side in ('LEFT','RIGHT'):
+        on_edge=sorted((e for e in entries if e['side']==side),key=lambda e:-e['y'])
+        for idx,e in enumerate(on_edge):e['is_top']=idx==0
+    return entries
+
+
+def _make_text_manifest(job,block_symbol,block_device,log_line):
+    block=_format_read_block(job,block_symbol,block_device)
+    entries=_format_inventory(job,block)
+    manifest={'format_version':1,'build':VERSION,'created':datetime.now().isoformat(timespec='seconds'),
+              'project_id':optional(job,'GetId'), 'block_symbol':int(block['sid']),
+              'block_device':int(block['did']) if block['did'] else None,
+              'sheet':int(block['sheet']), 'area':list(block['area']), 'pins':entries}
+    temp=TEXT_MANIFEST.with_suffix(TEXT_MANIFEST.suffix+'.tmp')
+    temp.write_text(json.dumps(manifest,indent=2),encoding='utf-8')
+    os.replace(str(temp),str(TEXT_MANIFEST))
+    log_line(f'TEXT FORMAT PREFLIGHT: {len(entries)} pinned symbols in block {block_symbol}; '
+             + ', '.join(f'{e["pin_name"]}={e["side"]}{" TOP" if e["is_top"] else ""}' for e in entries))
+    return TEXT_MANIFEST
+
+
+def _validate_text_worker_targets(job,manifest):
+    if manifest.get('format_version')!=1:
+        raise RuntimeError('Unknown pin text formatting manifest version.')
+    job_id=optional(job,'GetId')
+    if manifest.get('project_id') is not None and str(job_id)!=str(manifest['project_id']):
+        raise RuntimeError('Text worker connected to the wrong E3 project.')
+    block=_format_read_block(job,manifest['block_symbol'],manifest.get('block_device'),manifest['sheet'])
+    if any(abs(float(a)-float(b))>.075 for a,b in zip(block['area'],manifest['area'])):
+        raise RuntimeError('Text worker: CABBLOCK outline changed since pin movement.')
+    current=_format_inventory(job,block)
+    old={p['pin_name']:p for p in manifest['pins']}
+    if len(old)!=len(manifest['pins']) or len(current)!=len(old):
+        raise RuntimeError('Text worker: pin count/identities changed before formatting.')
+    for p in current:
+        x=old.get(p['pin_name'])
+        if (x is None or p['sheet']!=x['sheet'] or p['side']!=x['side'] or
+            p['family']!=x['family'] or p['is_top']!=x['is_top'] or
+            abs(p['x']-x['x'])>POINT_TOL or abs(p['y']-x['y'])>POINT_TOL):
+            raise RuntimeError(f'Text worker: pin {p["pin_name"]} changed location, side or identity; no styling.')
+    return current
+
+
+def _try_text_set(tid,txt,method,val,failures):
+    try:
+        getattr(txt,method)(val)
+        return True
+    except Exception as exc:
+        failures.append(f'text {tid} {method}({val!r}): {exc}')
+        return False
+
+
+def _style_pin_texts(job,pin,log_line):
+    """Exactly the original arranger's type rules, plus black for other labels."""
+    sid=int(pin['sid']);sym=obj(job,'symbol',sid)
+    side=pin['side'];top=pin['is_top']
+    alignment=1 if side=='LEFT' else 3
+    failures=[];counts={5:0,12:0,617:0,203:0}
+    try:
+        sym.SetBlockHatchColour(PIN_HATCH)
+    except Exception as exc:
+        failures.append(f'symbol {sid} hatch colour {PIN_HATCH}: {exc}')
+    tids=get_ids(sym,'GetTextIds')
+    for tid in tids:
+        txt=job.CreateTextObject()
+        try:
+            if not int(txt.SetId(int(tid))):continue
+            typ=int(txt.GetType())
+        except Exception as exc:
+            failures.append(f'text {tid} read: {exc}')
+            continue
+        if typ==PIN_HIDE_TYPE:
+            props=(('SetVisibility',0),)
+        elif typ==PIN_DESIGNATION_TYPE:
+            props=(('SetVisibility',1 if top else 0),)
+            if top:
+                props+=(('SetColour',PIN_BLACK),('SetStyle',PIN_BOLD),
+                        ('SetHeight',PIN_DESIGNATION_HEIGHT))
+        elif typ==PIN_SIGNAL_TYPE:
+            props=(('SetVisibility',1),('SetColour',PIN_BLACK),
+                   ('SetAlignment',alignment),('SetStyle',PIN_BOLD),
+                   ('SetHeight',PIN_SIGNAL_HEIGHT))
+        elif typ==PIN_NUMBER_TYPE:
+            props=(('SetVisibility',1),('SetColour',PIN_BLACK),('SetStyle',PIN_BOLD))
+        else:
+            continue  # do NOT touch unrelated property text
+        counts[typ]+=1
+        for method,val in props:
+            _try_text_set(tid,txt,method,val,failures)
+    log_line(f'TEXT FORMAT PIN {pin["pin_name"]} symbol={sid} side={side} '
+             f'top={top} signal_alignment={alignment} '
+             f'local_signal={counts[617]} device_designation={counts[12]} '
+             f'pin_number={counts[203]} hidden_type5={counts[5]} '
+             f'failed_settings={len(failures)}')
+    for error in failures:log_line('  TEXT WARNING: '+error)
+    if counts[PIN_SIGNAL_TYPE]==0: log_line(f'  TEXT NOTE: pin {pin["pin_name"]} has no type-617 local signal text to style.')
+    if top and counts[PIN_DESIGNATION_TYPE]==0:
+        log_line(f'  TEXT NOTE: top pin {pin["pin_name"]} has no type-12 device designation to display.')
+    return counts,failures
+
+
+def _format_worker(manifest_path):
+    """New E3 process: no pin Delete or PlacePinView calls are made here."""
+    manifest=json.loads(Path(manifest_path).read_text(encoding='utf-8'))
+    _,job,backend=open_e3()
+    log(f'TEXT WORKER connected ({backend}); validating CABBLOCK {manifest["block_symbol"]}.')
+    targets=_validate_text_worker_targets(job,manifest)  # READ-ONLY until ALL verified
+    total={5:0,12:0,617:0,203:0};fails=[]
+    for pin in targets:
+        counts,errors=_style_pin_texts(job,pin,log)
+        for typ,n in counts.items(): total[typ]+=n
+        fails.extend(errors)
+    summary={'pins':len(targets),'signal_texts':total[617],
+             'designation_texts':total[12],'pin_numbers':total[203],
+             'hidden_type5':total[5],'failed_settings':len(fails),'complete':not fails}
+    log('TEXT FORMAT RESULT '+json.dumps(summary))
+    return summary
+
+
+def _run_text_formatter_for_block(job,block_symbol,block_device,log_line):
+    """Safe, separate text-only phase; NEVER retry physical pin placement."""
+    mf=_make_text_manifest(job,block_symbol,block_device,log_line)
+    try:
+        TEXT_STATUS.unlink(missing_ok=True)
+    except Exception:pass
+    command=([sys.executable] if getattr(sys,'frozen',False)
+             else [sys.executable,str(Path(__file__).resolve())]) + ['--text-worker',str(mf)]
+    flags=getattr(subprocess,'CREATE_NO_WINDOW',0)
+    result=subprocess.run(command,cwd=str(Path(__file__).resolve().parent),
+                          stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL,
+                          creationflags=flags,timeout=180,check=False)
+    if not TEXT_STATUS.exists():
+        raise RuntimeError(f'Text formatting process exited {result.returncode} without a status file. '
+                           'Pins were NOT moved again. See '+str(LOGFILE))
+    status=json.loads(TEXT_STATUS.read_text(encoding='utf-8'))
+    if result.returncode or not status.get('complete'):
+        raise RuntimeError('Text formatting encountered a problem (pin placement remains complete): '
+                           +str(status.get('error') or f'{status.get("failed_settings",0)} text setting(s) failed.'))
+    log_line(f'TEXT FORMATTING COMPLETE: {status["pins"]} pins, '
+             f'{status["signal_texts"]} local signal texts, '
+             f'{status["designation_texts"]} device designation texts, '
+             f'{status["pin_numbers"]} pin number texts.')
+    return status
+
+
+
 class App:
+    """Small action-oriented window. Diagnostics are logged, not shown by default."""
+    BG='#0d1420'
+    SURFACE='#192535'
+    CARD='#1c2b3d'
+    OUTLINE='#304056'
+    TEXT='#f0f5fc'
+    MUTED='#a9b8cc'
+    TEAL='#40d4ba'
+    BLUE='#4fa9ff'
+    WHITE='#ffffff'
+    WARNING='#f7c36c'
+
     def __init__(self):
         self.root=tk.Tk()
-        self.root.title('E3 • Auto Cable Pin Spacing → CABBLOCK [V11 Opposite Edge]')
-        self.root.geometry('840x620+320+80')
-        self.root.attributes('-topmost',True)
-        self.src=None;self.dst=None;self.plan=None
+        self.root.title('E3  |  Cable Pin Spacer')
+        self.root.geometry('710x565+320+100')
+        self.root.minsize(670,565)
+        self.root.configure(bg=self.BG)
+        self.root.attributes('-topmost', True)
+        self.src=None
+        self.dst=None
+        self.plan=None
         self.edge=tk.StringVar(value='auto')
         self.pitch=tk.StringVar(value='')
-        self.status=tk.StringVar(value='Ctrl-select TWO OR MORE cable pins on one side, then click 1.')
-        f=ttk.Frame(self.root,padding=13);f.pack(fill='both',expand=True)
-        ttk.Label(f,text='Automatically match cable pin spacing to CABBLOCK',
-                  font=('Segoe UI',13,'bold')).pack(anchor='w')
-        ttk.Label(f,text='Select 2+ cable pins; select block; automatically transfer block pins to OPPOSITE edge.',
-                  wraplength=810).pack(anchor='w',pady=(6,10))
-        row=ttk.Frame(f);row.pack(fill='x',pady=(0,8))
-        ttk.Button(row,text='1. CAPTURE CABLE PINS',command=self.capture_pins).pack(side='left',padx=(0,10))
-        ttk.Button(row,text='2. CAPTURE BLOCK',command=self.capture_block).pack(side='left',padx=(0,10))
-        ttk.Button(row,text='Refresh Preview',command=self.preview).pack(side='left')
-        ttk.Label(f,text='Pin placement: always the OPPOSITE block edge (no peeling/staging).',
-                  foreground='#186b3a').pack(anchor='w',pady=(2,8))
-        self.output=tk.Text(f,height=22,width=100,wrap='none',font=('Consolas',9))
-        self.output.pack(fill='both',expand=True)
-        ttk.Label(f,textvariable=self.status,wraplength=805).pack(anchor='w',pady=(9,6))
-        actions=ttk.Frame(f);actions.pack(fill='x')
-        self.auto_button=ttk.Button(actions,text='3. AUTO FORMAT — DELETE & REPLACE PIN VIEWS',
-                                    command=self.apply,state='disabled')
-        self.auto_button.pack(side='left')
-        ttk.Button(actions,text='Reset',command=self.reset).pack(side='left',padx=8)
-        ttk.Button(actions,text='Close',command=self.root.destroy).pack(side='right')
+        self.status=tk.StringVar(value='Select two or more cable pins in E3 to get started.')
+        self.source_info=tk.StringVar(value='No cable pins captured')
+        self.block_info=tk.StringVar(value='No CABBLOCK captured')
+        self.plan_title=tk.StringVar(value='Waiting for selections')
+        self.plan_details=tk.StringVar(value='The block will be formatted automatically after both captures.')
+        self.detail_lines=deque(maxlen=700)
+        self.details_window=None
+        self.details_text=None
+        self._build_ui()
         self.write('BUILD '+VERSION)
         self.write('LOG '+str(LOGFILE))
-        self.write('WARNING: pin deletion/recreation may not be undoable. OPEN A SAVED COPY.')
-        self.write('Safety: all pins re-read after EACH automatic replacement; 2D edge-aware collision checks.')
+        self.write('WARNING: pin deletion/recreation may not be undoable. OPEN A SAVED PROJECT COPY.')
+        self.write('Safety: pins are re-read after each replacement; full diagnostics saved only to the log.')
+        self.write('Formatting rules: signal 617, designation 12, number 203, hatch 58.')
+        self.write('Text-only action never deletes or moves pin symbols.')
+
+    def _button(self,parent,text,command,kind='secondary',width=None):
+        palettes={
+            'primary':(self.TEAL,'#10251f','#61e5ce'),
+            'blue':(self.BLUE,'#0c1f36','#79bbff'),
+            'secondary':('#253850',self.TEXT,'#344c67'),
+            'quiet':(self.SURFACE,self.MUTED,'#253850'),
+        }
+        bg,fg,hover=palettes[kind]
+        # Primary foreground is intentionally a very dark hue for contrast.
+        btn=tk.Button(parent,text=text,command=command,bg=bg,fg=fg,
+                      activebackground=hover,activeforeground=fg,
+                      disabledforeground='#728296',relief='flat',bd=0,
+                      padx=15,pady=9,font=('Segoe UI',10,'bold'),
+                      cursor='hand2',highlightthickness=0,takefocus=True)
+        if width:
+            btn.configure(width=width)
+        def enter(_):
+            if str(btn.cget('state'))=='normal':btn.configure(bg=hover)
+        def leave(_):
+            btn.configure(bg=bg)
+        btn.bind('<Enter>',enter)
+        btn.bind('<Leave>',leave)
+        return btn
+
+    def _card(self,parent):
+        rim=tk.Frame(parent,bg=self.OUTLINE,padx=1,pady=1)
+        inside=tk.Frame(rim,bg=self.CARD,padx=16,pady=12)
+        inside.pack(fill='both',expand=True)
+        return rim,inside
+
+    def _step(self,parent,step,title,info,action,command):
+        rim,card=self._card(parent)
+        rim.pack(fill='x',pady=(0,9))
+        bubble=tk.Label(card,text=str(step),font=('Segoe UI',10,'bold'),
+                        fg=self.TEAL,bg=self.SURFACE,width=3,height=2)
+        bubble.pack(side='left',padx=(0,12))
+        button=self._button(card,action,command,'secondary')
+        button.pack(side='right',padx=(12,0))
+        text_frame=tk.Frame(card,bg=self.CARD)
+        text_frame.pack(side='left',fill='x',expand=True)
+        tk.Label(text_frame,text=title,font=('Segoe UI',11,'bold'),fg=self.TEXT,
+                 bg=self.CARD,anchor='w').pack(fill='x')
+        tk.Label(text_frame,textvariable=info,font=('Segoe UI',9),fg=self.MUTED,
+                 bg=self.CARD,anchor='w',justify='left').pack(fill='x',pady=(3,0))
+        return button
+
+    def _build_ui(self):
+        outer=tk.Frame(self.root,bg=self.BG,padx=22,pady=18)
+        outer.pack(fill='both',expand=True)
+        header=tk.Frame(outer,bg=self.BG)
+        header.pack(fill='x',pady=(0,16))
+        brand=tk.Label(header,text='E3',fg=self.BG,bg=self.TEAL,
+                       font=('Segoe UI',11,'bold'),width=4,height=2)
+        brand.pack(side='left',padx=(0,12))
+        headlines=tk.Frame(header,bg=self.BG)
+        headlines.pack(side='left',fill='x',expand=True)
+        tk.Label(headlines,text='Cable Pin Spacer',font=('Segoe UI',17,'bold'),
+                 bg=self.BG,fg=self.TEXT,anchor='w').pack(fill='x')
+        tk.Label(headlines,text='Match spacing, transfer sides, and format pin labels.',
+                 font=('Segoe UI',9),bg=self.BG,fg=self.MUTED,anchor='w').pack(fill='x')
+        self._step(outer,1,'Cable pins',self.source_info,
+                   'Capture pins',self.capture_pins)
+        self.block_button=self._step(outer,2,'Target CABBLOCK',self.block_info,
+                   'Capture block',self.capture_block)
+        self.block_button.configure(state='disabled')
+        rim,card=self._card(outer)
+        rim.pack(fill='x',pady=(1,10))
+        tk.Label(card,text='READY TO APPLY',font=('Segoe UI',9,'bold'),
+                 fg=self.TEAL,bg=self.CARD,anchor='w').pack(fill='x')
+        tk.Label(card,textvariable=self.plan_title,font=('Segoe UI',12,'bold'),
+                 fg=self.TEXT,bg=self.CARD,anchor='w').pack(fill='x',pady=(7,4))
+        tk.Label(card,textvariable=self.plan_details,font=('Segoe UI',9),
+                 fg=self.MUTED,bg=self.CARD,anchor='w',justify='left',
+                 wraplength=600).pack(fill='x')
+        self.auto_button=self._button(outer,'3   AUTO SPACE + FORMAT',self.apply,'primary')
+        self.auto_button.pack(fill='x',pady=(0,9))
+        self._set_auto_enabled(False)
+        tools=tk.Frame(outer,bg=self.BG)
+        tools.pack(fill='x',pady=(0,11))
+        self._button(tools,'Format text only',self.format_selected_text_only,'secondary').pack(side='left')
+        self._button(tools,'Reset',self.reset,'quiet').pack(side='right')
+        status=tk.Frame(outer,bg=self.SURFACE,padx=12,pady=10)
+        status.pack(fill='x',pady=(0,8))
+        tk.Label(status,text='STATUS',font=('Segoe UI',8,'bold'),fg=self.TEAL,
+                 bg=self.SURFACE).pack(side='left',padx=(0,12))
+        tk.Label(status,textvariable=self.status,font=('Segoe UI',9),fg=self.TEXT,
+                 bg=self.SURFACE,justify='left',anchor='w',
+                 wraplength=545).pack(side='left',fill='x',expand=True)
+        footer=tk.Frame(outer,bg=self.BG)
+        footer.pack(fill='x')
+        tk.Label(footer,text='Use a saved project copy: E3 recreates symbol IDs.',
+                 fg=self.MUTED,bg=self.BG,font=('Segoe UI',8)).pack(side='left')
+        self._button(footer,'Details / log',self.open_details,'quiet').pack(side='right')
+
+    def open_details(self):
+        """On-demand diagnostic window. The main workspace never fills with logs."""
+        if self.details_window is not None:
+            try:
+                if self.details_window.winfo_exists():
+                    self.details_window.lift()
+                    self.details_window.focus_force()
+                    return
+            except tk.TclError:
+                pass
+        dialog=tk.Toplevel(self.root)
+        dialog.title('E3 Cable Pin Spacer  |  Activity & diagnostics')
+        dialog.geometry('780x440+365+150')
+        dialog.configure(bg=self.BG)
+        dialog.attributes('-topmost', True)
+        self.details_window=dialog
+        body=tk.Frame(dialog,bg=self.BG,padx=15,pady=15)
+        body.pack(fill='both',expand=True)
+        tk.Label(body,text='Detailed activity',font=('Segoe UI',13,'bold'),
+                 fg=self.TEXT,bg=self.BG,anchor='w').pack(fill='x',pady=(0,7))
+        tk.Label(body,text='Full diagnostics continue to be saved in main.log, even while this window is closed.',
+                 font=('Segoe UI',9),fg=self.MUTED,bg=self.BG,anchor='w').pack(fill='x',pady=(0,8))
+        area=tk.Frame(body,bg=self.SURFACE)
+        area.pack(fill='both',expand=True)
+        sb=tk.Scrollbar(area,orient='vertical')
+        sb.pack(side='right',fill='y')
+        box=tk.Text(area,wrap='word',font=('Consolas',9),bg=self.SURFACE,fg=self.TEXT,
+                    insertbackground=self.TEXT,relief='flat',padx=10,pady=10,
+                    yscrollcommand=sb.set)
+        box.pack(side='left',fill='both',expand=True)
+        sb.configure(command=box.yview)
+        self.details_text=box
+        box.insert('end','\n'.join(self.detail_lines)+'\n')
+        box.see('end');box.configure(state='disabled')
+        bottom=tk.Frame(body,bg=self.BG)
+        bottom.pack(fill='x',pady=(10,0))
+        self._button(bottom,'Open main.log',self.open_log_file,'secondary').pack(side='left')
+        self._button(bottom,'Close',dialog.destroy,'quiet').pack(side='right')
+        def closing():
+            self.details_text=None
+            self.details_window=None
+            dialog.destroy()
+        dialog.protocol('WM_DELETE_WINDOW',closing)
+
+    def open_log_file(self):
+        if not LOGFILE.exists():
+            messagebox.showinfo('E3 activity log','No log file has been created yet.',parent=self.root)
+            return
+        try:
+            if sys.platform=='win32':os.startfile(str(LOGFILE))
+            elif sys.platform=='darwin':subprocess.Popen(['open',str(LOGFILE)])
+            else:subprocess.Popen(['xdg-open',str(LOGFILE)])
+        except Exception as exc:
+            self.error(exc)
+
     def write(self,value):
-        self.output.insert('end',str(value)+'\n');self.output.see('end')
+        line=str(value)
+        self.detail_lines.append(line)
+        log(line)
+        if self.details_text is not None:
+            try:
+                if self.details_text.winfo_exists():
+                    self.details_text.configure(state='normal')
+                    self.details_text.insert('end',line+'\n')
+                    self.details_text.see('end')
+                    self.details_text.configure(state='disabled')
+            except tk.TclError:
+                self.details_text=None
+        # The event-loop stays responsive during the long E3 mutation process.
         self.root.update_idletasks()
-        log(str(value))
+
     def error(self,exc):
-        self.write('ERROR: '+str(exc));log(traceback.format_exc())
-        self.status.set(str(exc))
-        messagebox.showerror('E3 automatic pin spacing',str(exc),parent=self.root)
+        self.write('ERROR: '+str(exc))
+        log(traceback.format_exc())
+        self.status.set('Error: '+str(exc))
+        if self.plan is None:
+            self.plan_title.set('Action needs attention')
+            self.plan_details.set('See Details / log for more information.')
+        messagebox.showerror('E3 Cable Pin Spacer',str(exc),parent=self.root)
+
+    def _set_auto_enabled(self,enabled):
+        if enabled:
+            self.auto_button.configure(state='normal',bg=self.TEAL,fg='#10251f')
+        else:
+            self.auto_button.configure(state='disabled',bg='#253850',fg=self.MUTED)
+
     def clear_plan(self):
         self.plan=None
-        self.auto_button.configure(state='disabled')
+        self._set_auto_enabled(False)
+
     def read_selection(self):
-        app,job,backend=open_e3();sel=selected(job)
+        app,job,backend=open_e3()
+        sel=selected(job)
         self.write(f'Selection: {sel} ({backend})')
         return app,job,sel
+
     def capture_pins(self):
         try:
             app,job,sel=self.read_selection()
             src=reference_from_selection(job,sel)
             src=try_linked_source_neighbor(job,sel,src)
-            self.src=src;self.dst=None;self.clear_plan()
+            self.src=src
+            self.dst=None
+            self.clear_plan()
+            self.block_info.set('No CABBLOCK captured')
+            self.plan_title.set('Waiting for target CABBLOCK')
+            self.plan_details.set('Select the block you want to space, then capture it.')
             self.write('SOURCE: '+', '.join(f'{p["sid"]}@({p["x"]:.3f},{p["y"]:.3f})' for p in src['points']))
             if len(src['points'])<2:
-                raise ValueError('Only one cable pin was detected and no neighbor was identified. Select TWO OR MORE cable pins; no manual pitch is required.')
+                raise ValueError('Only one cable pin detected. Ctrl-select two or more pins on the same cable edge.')
             pitch,_=pitch_from_source(src)
             self.write(f'MEASURED MEDIAN PITCH = {pitch:.4f}')
-            if len(src['points']) > 2:
-                gaps=[src['points'][i]['y']-src['points'][i+1]['y'] for i in range(len(src['points'])-1)]
+            count=len(src['points'])
+            self.source_info.set(f'{count} pins  ·  {pitch:.3f} median pitch')
+            self.block_button.configure(state='normal')
+            if count>2:
+                gaps=[src['points'][i]['y']-src['points'][i+1]['y'] for i in range(count-1)]
                 self.write('SELECTED CABLE GAP PATTERN: '+', '.join(f'{v:.4f}' for v in gaps))
                 self.write('When target pin count matches the selection, EXACT gaps are copied (NOT median pitch).')
-            self.status.set('Select your CABBLOCK in E3, then click 2.')
-        except Exception as exc:self.error(exc)
-        finally:gc.collect()
+            self.status.set('Cable captured. Select your CABBLOCK in E3, then Capture block.')
+        except Exception as exc:
+            self.error(exc)
+        finally:
+            gc.collect()
+
     def capture_block(self):
         try:
             if not self.src:raise ValueError('Capture cable pins first.')
@@ -1547,22 +1974,27 @@ class App:
             b=source_or_block(job,sid,sel)
             if not b['block']:raise RuntimeError(f'Symbol {sid} is not a CABBLOCK.')
             b['points']=gather_markers(job,b)
-            if len(b['points'])<2:raise RuntimeError('At least two independent block pin symbols are required.')
+            if len(b['points'])<2:raise RuntimeError('At least two block pin symbols are required.')
             if any(p['sid']==sid for p in self.src['points']):
-                raise RuntimeError('Source pin cannot be the selected block.')
-            self.dst=b;self.clear_plan()
+                raise RuntimeError('Source pin cannot be the target block.')
+            self.dst=b
+            self.clear_plan()
+            self.block_info.set(f'Block {sid}  ·  {len(b["points"])} pins')
             self.write(f'BLOCK {sid} / device {b["did"]}: {len(b["points"])} pin symbols; outline={b["area"]}')
             self.write('PIN IDS: '+', '.join(f'{p["sid"]}({p["pid"]})@{p["x"]:.3f},{p["y"]:.3f}' for p in b['points']))
-            self.status.set('Checking pin-view associations and preparing automatic format...')
-            self.preview()  # No extra user click needed: capture block -> ready to apply.
-        except Exception as exc:self.error(exc)
-        finally:gc.collect()
+            self.status.set('Checking pin views and preparing the automatic transfer...')
+            self.preview()
+        except Exception as exc:
+            self.error(exc)
+        finally:
+            gc.collect()
+
     def preview(self):
         try:
             if not self.src or not self.dst:raise RuntimeError('Capture cable pins and block first.')
             plan=make_plan_v3(self.src,self.dst,self.edge.get(),self.pitch.get())
             app,job,backend=open_e3()
-            _preflight(job,plan)  # Fail before displaying APPLY button, no E3 edits.
+            _preflight(job,plan)
             self.plan=plan
             self.write('--- AUTOMATIC PIN REPLACEMENT PREVIEW ---')
             self.write(f'CABLE PITCH {plan["pitch"]:.4f}, {plan["pitch_how"]}; '
@@ -1577,35 +2009,95 @@ class App:
                 self.write('EXACT CABLE GAPS copied: '+', '.join(f'{plan["changes"][i]["new_y"]-plan["changes"][i+1]["new_y"]:.4f}' for i in range(len(plan['changes'])-1)))
             if not plan['outline_verified']:
                 self.write('WARNING: E3 provided no outline; actual PlacePinView may reject Y outside block.')
-            self.auto_button.configure(state='normal')
-            self.status.set('Ready: 3. AUTO FORMAT. Save project copy before applying.')
-        except Exception as exc:self.clear_plan();self.error(exc)
+            arrow=f'{plan["original_side"].upper()}  →  {plan["target_side"].upper()}'
+            self.plan_title.set(f'{plan["target_count"]} block pins   ·   {arrow}')
+            self.plan_details.set('Exact selected cable gaps' if plan['mode'].startswith('copy exact')
+                                  else f'Uniform spacing: {plan["pitch"]:.3f}')
+            self._set_auto_enabled(True)
+            self.status.set('Ready. Automatic transfer and text formatting are prepared.')
+        except Exception as exc:
+            self.clear_plan()
+            self.error(exc)
+
     def apply(self):
         if not self.plan:return
-        if not messagebox.askyesno('Replace CABBLOCK pin views automatically?',
-               'This will DELETE and RECREATE placed pin-view symbols at the new spacing, '
-               'using verified logical pin views and a shared connector-pin graphic.\n\n'
-               'E3 symbol IDs will change. The block will not be resized.\nPins go to the opposite edge.\n'
-               'Work on a SAVED PROJECT COPY.\n\nProceed with all pin replacements?',
+        if not messagebox.askyesno('Apply automatic pin formatting?',
+               'Recreate block pin views on the OPPOSITE edge with the selected cable spacing, '
+               'then format their texts.\n\nSymbol IDs will change. Use a saved project copy.\n\nProceed?',
                parent=self.root):return
-        self.auto_button.configure(state='disabled')
+        self._set_auto_enabled(False)
+        self.status.set('Automatically replacing and verifying pin views...')
+        self.root.update_idletasks()
         try:
             app,job,backend=open_e3()
             count=_run_auto(job,self.plan,self.write)
             self.write(f'AUTO APPLY SUCCESS: {count} pin(s) replaced and verified.')
-            self.status.set(f'Complete: {count} direct pin placements. All pins on opposite edge; verify and save.')
-            self.clear_plan()
+            self.clear_plan()  # Do not retry Delete+PlacePinView after text-format failure.
+            self.status.set('Pin placement complete. Formatting pin texts...')
+            try:
+                summary=_run_text_formatter_for_block(job,self.dst['sid'],self.dst['did'],self.write)
+                self.status.set(f'Complete! {count} moved; {summary["pins"]} pins formatted.')
+                self.plan_title.set('Spacing and text formatting complete')
+                self.plan_details.set(f'{count} pin views replaced  ·  {summary["pins"]} pin labels formatted')
+            except Exception as text_exc:
+                self.write(f'TEXT FORMATTING WARNING (pins already placed successfully): {text_exc}')
+                self.plan_title.set('Pin placement complete')
+                self.plan_details.set('Text formatting needs attention. Select the block and use Format text only.')
+                self.status.set('Placement succeeded, text formatting incomplete. See Details.')
+                messagebox.showwarning('Text formatting incomplete',
+                                       str(text_exc)+'\n\nPin movement was NOT repeated. '
+                                       'Select this CABBLOCK and use Format text only.',
+                                       parent=self.root)
         except Exception as exc:
-            self.clear_plan();self.error(exc)
-        finally:gc.collect()
+            self.clear_plan()
+            self.error(exc)
+        finally:
+            gc.collect()
+
+    def format_selected_text_only(self):
+        """Formats existing pin text; never deletes/repositions pin symbols."""
+        try:
+            app,job,sel=self.read_selection()
+            sid=selection_symbol(job,sel)
+            b=source_or_block(job,sid,sel)
+            if not b['block']:
+                raise RuntimeError(f'Symbol {sid} is not a CABBLOCK.')
+            self.status.set('Formatting selected pin texts without moving pins...')
+            summary=_run_text_formatter_for_block(job,sid,b['did'],self.write)
+            self.status.set(f'Formatted pin texts on {summary["pins"]} pins. No pin movement.')
+            self.plan_title.set('Text formatting complete')
+            self.plan_details.set(f'Block {sid}  ·  {summary["pins"]} pin labels formatted  ·  no pins moved')
+        except Exception as exc:
+            self.error(exc)
+        finally:
+            gc.collect()
+
     def reset(self):
-        self.src=None;self.dst=None;self.pitch.set('');self.edge.set('auto')
+        self.src=None
+        self.dst=None
+        self.pitch.set('')
+        self.edge.set('auto')
         self.clear_plan()
-        self.status.set('Select two or more cable pin symbols, then click 1.')
+        self.block_button.configure(state='disabled')
+        self.source_info.set('No cable pins captured')
+        self.block_info.set('No CABBLOCK captured')
+        self.plan_title.set('Waiting for selections')
+        self.plan_details.set('The block will be formatted automatically after both captures.')
+        self.status.set('Select two or more cable pins in E3 to get started.')
         self.write('RESET — ready for new cable pin capture.')
 
-
 def main():
+    if '--text-worker' in sys.argv:
+        # Fresh E3 COM connection in a dedicated process, as in working Block Pin Arranger.
+        try:
+            index=sys.argv.index('--text-worker')
+            status=_format_worker(sys.argv[index+1])
+            TEXT_STATUS.write_text(json.dumps(status,indent=2),encoding='utf-8')
+            sys.exit(0 if status.get('complete') else 2)
+        except Exception as exc:
+            log('TEXT WORKER FAILED: '+traceback.format_exc())
+            TEXT_STATUS.write_text(json.dumps({'complete':False,'error':str(exc)},indent=2),encoding='utf-8')
+            sys.exit(2)
     if '--worker' not in sys.argv:
         flags=getattr(subprocess,'DETACHED_PROCESS',0)|getattr(subprocess,'CREATE_NEW_PROCESS_GROUP',0)
         try:
