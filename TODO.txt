@@ -1,7 +1,8 @@
-"""E3.series: copy cable-side pin spacing to one side of a CABBLOCK.
+v"""E3.series: copy cable-side pin spacing to one side of a CABBLOCK.
 
 Workflow: choose cable symbol -> choose one of its pins (left/right) -> choose
-CABBLOCK -> preview -> apply. Uses existing placed connector-pin symbols; it
+CABBLOCK -> preview -> apply. E3 versions with inaccessible cable-pin
+relationships can instead use Ctrl-selected 2+ single cable pins on one side. Uses existing placed connector-pin symbols; it
 never edits logical pin names, device/connector assignments, or block geometry.
 
 IMPORTANT: E3 COM differs by installation. This script deliberately REFUSES
@@ -25,7 +26,7 @@ from tkinter import ttk, messagebox
 import traceback
 from datetime import datetime
 
-VERSION = 'CABLE-BLOCK-PIN-SPACING-V1-20261123'
+VERSION = 'CABLE-BLOCK-PIN-SPACING-V2-SELECTION-20261123'
 MISSING = -2147352572
 EDGE_ALLOWANCE = 0.65   # maximum distance, drawing units, from block edge
 POINT_TOL = 0.015      # position readback tolerance in E3 drawing units
@@ -45,8 +46,18 @@ def ids_from_return(raw):
         if len(raw) >= 2 and isinstance(raw[0], int) and not isinstance(raw[1], (int, float)):
             raw = raw[1:]
         else:
-            # An (object-count, [ids]) result sometimes has additional metadata.
-            if len(raw) == 2 and isinstance(raw[0], int) and isinstance(raw[1], int):
+            # E3 can return (count, id_1, id_2, ...) or (count, single_id)
+            # instead of (count, [ids]). Discard the count, not actual IDs.
+            if (len(raw) >= 3 and isinstance(raw[0], int) and raw[0] == len(raw)-1
+                    and all(isinstance(v, int) for v in raw[1:])):
+                raw = raw[1:]
+            elif len(raw) == 2 and isinstance(raw[0], int) and isinstance(raw[1], int):
+                count, object_id = raw
+                if count == 1 and object_id > 0 and object_id != MISSING:
+                    return [object_id]
+                # Direct (id1, id2) only when neither looks like an E3 count.
+                if count > 100 and object_id > 100:
+                    return list(dict.fromkeys((count, object_id)))
                 return []
         values = []
         for v in raw:
@@ -191,6 +202,122 @@ def selected(job):
             'pins': get_ids(job, 'GetSelectedPinIds'),
             'blocks': get_ids(job, 'GetSelectedBlockIds')}
 
+
+
+def selected_pin_points(job, sel, target_sheet=None):
+    """Read *explicitly selected* single-pin symbols or pin locations.
+
+    This is a source-only fallback. Its coordinates are measured, never moved.
+    Selecting two or more cable pins is a reliable alternative when E3 does
+    not expose a parent cable -> placed pin relationship.
+    """
+    points = []
+    seen_pids = set()
+    seen_sids = set()
+
+    # First, accept selected pin IDs with real schematic coordinates.
+    for pid in sel['pins']:
+        try:
+            pin = obj(job, 'pin', pid)
+            loc = pin_location(pin)
+            if not loc or (target_sheet is not None and loc[0] != target_sheet):
+                continue
+            sid = optional(pin, 'GetSymbolId')
+            if not isinstance(sid, int) or sid <= 0:
+                sid = None
+            points.append({'sid': sid, 'pid': pid, 'sheet': loc[0],
+                           'x': loc[1], 'y': loc[2], 'moveable': False})
+            seen_pids.add(pid)
+            if sid:
+                seen_sids.add(sid)
+        except Exception as exc:
+            log(f'SOURCE selection pin {pid}: cannot read: {exc}')
+
+    for sid in sel['symbols']:
+        if sid in seen_sids:
+            continue
+        try:
+            sym = obj(job, 'symbol', sid)
+            loc = symbol_location(sym)
+            if not loc or (target_sheet is not None and loc[0] != target_sheet):
+                continue
+            # A CABBLOCK or a multi-pin graphic is not an individual marker.
+            if is_block(sym):
+                log(f'SOURCE selection {sid}: CABBLOCK body is not a cable pin')
+                continue
+            pids = get_ids(sym, 'GetPinIds')
+            if len(pids) > 1:
+                log(f'SOURCE selection {sid}: multi-pin symbol ({len(pids)} pins); not one selected pin')
+                continue
+            pid = pids[0] if pids else None
+            if pid and pid in seen_pids:
+                continue
+            points.append({'sid': sid, 'pid': pid, 'sheet': loc[0],
+                           'x': loc[1], 'y': loc[2], 'moveable': False})
+            seen_sids.add(sid)
+            if pid:
+                seen_pids.add(pid)
+        except Exception as exc:
+            log(f'SOURCE selection symbol {sid}: cannot read: {exc}')
+
+    # For a selected pin with no schema location, follow its single placed
+    # symbol. This is READ ONLY; we do not use this in destination writes.
+    for pid in sel['pins']:
+        if pid in seen_pids:
+            continue
+        try:
+            pin = obj(job, 'pin', pid)
+            sids = get_ids(pin, 'GetSymbolIds')
+            direct = optional(pin, 'GetSymbolId')
+            if isinstance(direct, int) and direct > 0:
+                sids = list(dict.fromkeys([direct] + sids))
+            if len(sids) != 1 or sids[0] in seen_sids:
+                continue
+            sym = obj(job, 'symbol', sids[0])
+            loc = symbol_location(sym)
+            if not loc or (target_sheet is not None and loc[0] != target_sheet):
+                continue
+            pids = get_ids(sym, 'GetPinIds')
+            if len(pids) != 1 or pids[0] != pid:
+                continue
+            points.append({'sid': sids[0], 'pid': pid, 'sheet': loc[0],
+                           'x': loc[1], 'y': loc[2], 'moveable': False})
+            seen_pids.add(pid)
+            seen_sids.add(sids[0])
+        except Exception as exc:
+            log(f'SOURCE selected pin {pid} symbol lookup: {exc}')
+
+    # Deduplicate pins from pin and symbol selectors; also avoid interpreting
+    # two identifiers for the same physical point as two cable pins.
+    unique=[]
+    for pt in sorted(points, key=lambda z: (-z['y'], z['x'])):
+        if all(pt['sheet'] != other['sheet'] or
+               math.hypot(pt['x']-other['x'], pt['y']-other['y']) > POINT_TOL
+               for other in unique):
+            unique.append(pt)
+    return unique
+
+
+def manual_source_from_points(points):
+    if len(points) < 2:
+        raise ValueError('Select at least TWO individual cable pins on the SAME edge in E3.')
+    sheets = {p['sheet'] for p in points}
+    if len(sheets) != 1:
+        raise ValueError('Selected cable pins are on different E3 sheets.')
+    # Manual mode is specifically for a vertical row on one cable side.
+    span=max(p['x'] for p in points)-min(p['x'] for p in points)
+    if span > max(POINT_TOL * 4, 0.10):
+        raise ValueError(f'Selected pins have different X positions (spread {span:.3f}). '
+                         'Ctrl-select pins from ONE vertical side of the cable.')
+    ordered=sorted(points,key=lambda x:-x['y'])
+    if any(abs(ordered[i]['y']-ordered[i+1]['y']) <= POINT_TOL
+           for i in range(len(ordered)-1)):
+        raise ValueError('Two selected cable pins have overlapping Y coordinates.')
+    return {'sid': None, 'did': None, 'sheet': ordered[0]['sheet'],
+            'x': statistics.mean(p['x'] for p in ordered),
+            'y': statistics.mean(p['y'] for p in ordered),
+            'area': None, 'block': False, 'points': ordered,
+            'manual_side_only': True}
 
 def selection_symbol(job, sel):
     sids = sel['symbols']
@@ -359,7 +486,11 @@ def make_plan(src, dst, src_side, target_side):
         raise ValueError('No view-scoped target pin symbols were identified.')
     smid = (src['area'][0]+src['area'][2])/2 if src['area'] else (min(p['x'] for p in src['points'])+max(p['x'] for p in src['points']))/2
     dmid = (dst['area'][0]+dst['area'][2])/2
-    source_pins = pick_edge(src['points'], src_side, smid, src['area'])
+    # In manual mode the user explicitly Ctrl-selected just one cable edge.
+    # The source may have no body outline or opposite-edge points at all.
+    source_pins = (sorted(src['points'], key=lambda v: -v['y'])
+                   if src.get('manual_side_only') else
+                   pick_edge(src['points'], src_side, smid, src['area']))
     targets = pick_edge(dst['points'], target_side, dmid, dst['area'])
     if len(source_pins) < 2:
         raise ValueError('Need at least TWO cable pins on the selected edge.')
@@ -466,13 +597,14 @@ class App:
         self.root=tk.Tk()
         self.root.title('E3 • Cable → CABBLOCK Pin Spacing')
         self.root.attributes('-topmost',True)
-        self.root.geometry('775x605+350+85')
+        self.root.geometry('830x660+350+85')
         self.src=None
         self.src_side=None
         self.clicked=None
         self.dst=None
         self.plan=None
         self.target_side=tk.StringVar(value='opposite')
+        self.manual_source_side=tk.StringVar(value='')
         self.status=tk.StringVar(value='Select the CABLE body/symbol in E3, then click 1.')
         f=ttk.Frame(self.root,padding=14)
         f.pack(fill='both',expand=True)
@@ -483,6 +615,11 @@ class App:
         ttk.Button(buttons,text='1. Capture CABLE',command=self.capture_cable).pack(side='left',padx=(0,7))
         ttk.Button(buttons,text='2. Capture cable SIDE PIN',command=self.capture_side).pack(side='left',padx=(0,7))
         ttk.Button(buttons,text='3. Capture BLOCK',command=self.capture_block).pack(side='left')
+        manual=ttk.Frame(f)
+        manual.pack(fill='x',pady=(8,0))
+        ttk.Label(manual,text='For manual cable-pin selection, choose cable side:').pack(side='left')
+        ttk.Radiobutton(manual,text='Left',variable=self.manual_source_side,value='left').pack(side='left',padx=(8,2))
+        ttk.Radiobutton(manual,text='Right',variable=self.manual_source_side,value='right').pack(side='left',padx=(6,2))
         r=ttk.Frame(f)
         r.pack(fill='x',pady=(12,9))
         ttk.Label(r,text='Target side:').pack(side='left')
@@ -491,7 +628,13 @@ class App:
         ttk.Button(r,text='4. PREVIEW',command=self.preview).pack(side='right')
         self.output=tk.Text(f,height=23,width=90,wrap='none',font=('Consolas',9))
         self.output.pack(fill='both',expand=True)
-        self.output.insert('end','Reads actual placed E3 connector pins.\nNo names, signals, IDs, connections, or block dimensions are changed.\n\n')
+        self.output.insert('end',
+            'NORMAL: select cable BODY -> button 1; select ONE cable pin -> button 2; '
+            'select CABBLOCK -> button 3.\n'
+            'FALLBACK: select TWO or more cable pins from one edge -> button 1; '
+            'choose Left/Right above -> button 2.\n'
+            'Also supports cable BODY -> button 1; Ctrl-select 2+ cable pins -> button 2.\n'
+            'No names, signals, IDs, connections, or block dimensions are changed.\n\n')
         ttk.Label(f,textvariable=self.status,foreground='#334c67',wraplength=745).pack(anchor='w',pady=(8,7))
         rr=ttk.Frame(f)
         rr.pack(fill='x')
@@ -522,8 +665,9 @@ class App:
     def reset(self):
         self.src=self.dst=self.clicked=None
         self.src_side=None
+        self.manual_source_side.set('')
         self.clear_plan()
-        self.status.set('Select a CABLE symbol in E3 and capture it.')
+        self.status.set('Select a CABLE body OR 2+ individual cable pins, then click 1.')
         self.write('--- Cleared; ready for a new cable ---')
 
     def read_selection(self):
@@ -535,35 +679,119 @@ class App:
     def capture_cable(self):
         try:
             app,job,sel=self.read_selection()
+            selected_points=selected_pin_points(job,sel)
+            if len(selected_points) >= 2:
+                # Explicitly selected 2+ pins: no cable-device relationship
+                # lookup is required. This also fixes unlinked cable symbols.
+                manual=manual_source_from_points(selected_points)
+                self.src=manual
+                self.clicked=self.dst=None
+                self.src_side=None
+                self.clear_plan()
+                self.write(f'MANUAL CABLE PIN SELECTION: {len(manual["points"])} pins, '
+                           f'sheet {manual["sheet"]}; X spread '
+                           f'{max(p["x"] for p in manual["points"])-min(p["x"] for p in manual["points"]):.3f}')
+                self.status.set('Cable pins captured. Choose Left/Right above, then click 2; '
+                                'NO need to change selection in E3.')
+                return
             sid=selection_symbol(job,sel)
             parent=source_or_block(job,sid,sel)
             parent['points']=gather_markers(job,parent)
-            if len(parent['points'])<2:
-                raise RuntimeError(f'Cable symbol {sid}: found {len(parent["points"])} single-pin positions. Need at least 2. Check log for linked connector discovery.')
+            parent['manual_side_only']=False
             self.src=parent
             self.clicked=self.dst=None
             self.src_side=None
             self.clear_plan()
-            self.write(f'CABLE {sid} / device {parent["did"]}: {len(parent["points"])} positioned pins, sheet {parent["sheet"]}, bounds={parent["area"]}')
-            self.status.set('Now select ONE cable pin on the left or right in E3, then click 2.')
+            self.write(f'CABLE {sid} / device {parent["did"]}: '
+                       f'{len(parent["points"])} auto-detected pins, sheet {parent["sheet"]}, '
+                       f'bounds={parent["area"]}')
+            if len(parent['points']) >= 2:
+                self.status.set('Now select ONE cable pin on the left or right and click 2. '
+                                'If one pin is not reported, Ctrl-select 2+ pins on one edge and click 2.')
+            else:
+                self.status.set('Cable captured, but E3 did not report 2 linked pins. '
+                                'Ctrl-select TWO OR MORE cable pins on ONE edge in E3, '
+                                'choose Left/Right above, then click 2.')
+                self.write('FALLBACK REQUIRED: E3 cannot expose the cable-side row from this symbol. '
+                           'Select 2+ individual cable-pin SYMBOLS, then click button 2.')
         except Exception as exc:self.error(exc)
         finally:gc.collect()
 
     def capture_side(self):
         try:
-            if not self.src:raise ValueError('Capture the cable first (button 1).')
+            if not self.src:
+                raise ValueError('First click button 1 with the cable BODY or 2+ cable pins selected.')
+            # In direct selection mode, step 1 already captured the full
+            # source row. Step 2 simply records which physical cable edge it is.
+            if self.src.get('manual_side_only'):
+                side=self.manual_source_side.get()
+                if side not in ('left','right'):
+                    raise ValueError('For a manually selected cable-pin row, '
+                                     'choose LEFT or RIGHT in the new option above.')
+                self.src_side=side
+                self.clear_plan()
+                self.write(f'CABLE SIDE: {side.upper()} / manually selected '
+                           f'{len(self.src["points"])} cable-side pins.')
+                self.status.set('Now select ONE CABBLOCK in E3 and click 3.')
+                return
+
             app,job,sel=self.read_selection()
-            candidate_sids=set(sel['symbols']); candidate_pids=set(sel['pins'])
+            selected_points=selected_pin_points(job,sel,target_sheet=self.src['sheet'])
+            candidate_sids=set(sel['symbols'])
+            candidate_pids=set(sel['pins'])
             matches=[p for p in self.src['points'] if
-                     (p['sid'] in candidate_sids if p['sid'] is not None else False) or p['pid'] in candidate_pids]
-            if len(matches)!=1:
-                raise ValueError('Click one INDIVIDUAL pin on the captured cable. Selection must match one of its linked pin symbols. '+
-                                 f'Got {len(matches)} matching pins out of {len(self.src["points"])}.')
-            self.clicked=matches[0]
-            self.src_side,_=side_of_pin(self.src,self.src['points'],self.clicked)
-            self.clear_plan()
-            self.write(f'CABLE SIDE: {self.src_side.upper()} / clicked pin {self.clicked["pid"]}, Y={self.clicked["y"]:.3f}')
-            self.status.set('Now select ONE CABBLOCK in E3 and click 3.')
+                     ((p['sid'] in candidate_sids if p['sid'] is not None else False)
+                     or p['pid'] in candidate_pids)]
+
+            if len(matches)==1 and len(self.src['points'])>=2:
+                self.clicked=matches[0]
+                try:
+                    side,_=side_of_pin(self.src,self.src['points'],self.clicked)
+                except ValueError:
+                    side=self.manual_source_side.get()
+                if side not in ('left','right'):
+                    raise ValueError('Cable pin detected but its side is ambiguous. '
+                                     'Choose LEFT or RIGHT above and click 2 again.')
+                self.src_side=side
+                self.clear_plan()
+                self.write(f'CABLE SIDE: {side.upper()} / clicked pin '
+                           f'{self.clicked["pid"]}, Y={self.clicked["y"]:.3f}; '
+                           f'{len(self.src["points"])} linked pins available')
+                self.status.set('Now select ONE CABBLOCK in E3 and click 3.')
+                return
+
+            # Multiple selected individual pin symbols on one edge are a
+            # valid spacing reference even if E3 fails to link a cable body.
+            if len(selected_points)>=2:
+                manual=manual_source_from_points(selected_points)
+                side=None
+                if self.src['area']:
+                    mid=(self.src['area'][0]+self.src['area'][2])/2
+                    inferred={('left' if p['x']<mid else 'right') for p in manual['points']}
+                    if len(inferred)==1:
+                        side=next(iter(inferred))
+                if side is None:
+                    side=self.manual_source_side.get()
+                if side not in ('left','right'):
+                    raise ValueError('Captured pin spacing, but the cable side cannot be inferred. '
+                                     'Choose LEFT or RIGHT above, then click 2 again.')
+                self.src['points']=manual['points']
+                self.src['manual_side_only']=True
+                self.src_side=side
+                self.clear_plan()
+                self.write(f'CABLE SIDE: {side.upper()}; '
+                           f'manually measured {len(manual["points"])} selected cable pins.')
+                self.status.set('Now select ONE CABBLOCK in E3 and click 3.')
+                return
+
+            if len(selected_points)==1:
+                self.write(f'Only one physical pin position was returned: '
+                           f'X={selected_points[0]["x"]:.3f}, Y={selected_points[0]["y"]:.3f}.')
+            raise ValueError('E3 did not identify one of the automatically linked cable pins. '
+                             f'Matched {len(matches)} linked pins, identified '
+                             f'{len(selected_points)} individually selected positions. '
+                             'Ctrl-select TWO OR MORE separate cable pin SYMBOLS on the SAME edge, '
+                             'then click button 2. Step 1 has been preserved.')
         except Exception as exc:self.error(exc)
         finally:gc.collect()
 
