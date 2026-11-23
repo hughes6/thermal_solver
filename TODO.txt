@@ -53,7 +53,7 @@ TEXT_TYPE_DESCRIPTIONS = {
 EDGE_MARGIN = 0.16
 # Cable labels are centered at the wire, normally 0.50 schematic units beyond
 # the edge. This is an editable estimate; the script does not inspect E3's wire.
-DEFAULT_CABLE_OFFSET = 0.50
+DEFAULT_CABLE_OFFSET = 0.60
 MIN_CABLE_OFFSET = 0.05
 MAX_CABLE_OFFSET = 3.00
 PLACEMENT_MODES = ('center', 'opposite', 'cable')
@@ -854,13 +854,58 @@ def wait_for_block_selection(preview=False, default_mode='opposite', default_off
     finished=False
     result=None
     white='#FFFFFF'; pale='#EAF4FF'; blue='#2381CF'
-    dark='#203B55'; muted='#627E99'; border='#D4E3F4'
+    dark='#203B55'; muted='#627E99'; border='#D4E3F4'; selected='#B7D8F7'
     default_mode, default_offset = validate_signal_placement(default_mode, default_offset)
     mode=tk.StringVar(value=default_mode)
     offset=tk.StringVar(value=f'{default_offset:.2f}')
+    mode_cards = {}
+
+    def draw_card(canvas, placement, selected_now=False):
+        canvas.delete('all')
+        w = int(canvas['width']); h = int(canvas['height'])
+        bg = '#F7FBFF' if not selected_now else '#E7F3FF'
+        edge = selected if selected_now else border
+        canvas.create_rectangle(1, 1, w-1, h-1, outline=edge, fill=bg, width=2 if selected_now else 1)
+        left, top, right, bottom = 18, 16, 74, 58
+        canvas.create_rectangle(left, top, right, bottom, outline=blue, fill='#EEF7FF', width=2)
+        # show a connector pin and cable on the right side
+        py = 37
+        canvas.create_line(right, py, right+16, py, fill=blue, width=2)
+        canvas.create_oval(right-2, py-2, right+2, py+2, fill=blue, outline=blue)
+        # faint guide rows
+        for y in (24, 37, 50):
+            canvas.create_line(left+6, y, right-6, y, fill='#DCEBFA', dash=(2, 2))
+        if placement == 'center':
+            canvas.create_round_rectangle = None
+            canvas.create_rectangle(38, 31, 54, 43, outline='', fill=blue)
+            canvas.create_text(46, 37, text='SIG', fill='white', font=('Segoe UI', 7, 'bold'))
+        elif placement == 'opposite':
+            canvas.create_rectangle(left+4, 31, left+24, 43, outline='', fill=blue)
+            canvas.create_text(left+14, 37, text='SIG', fill='white', font=('Segoe UI', 7, 'bold'))
+        else:
+            canvas.create_rectangle(right+22, 31, right+42, 43, outline='', fill=blue)
+            canvas.create_text(right+32, 37, text='SIG', fill='white', font=('Segoe UI', 7, 'bold'))
+            canvas.create_text(right+31, 15, text='0.60"', fill=muted, font=('Segoe UI', 7))
+        canvas.create_text(46, 69, text={'center':'Center','opposite':'Opposite edge','cable':'Cable line'}[placement], fill=dark, font=('Segoe UI', 8, 'bold'))
+
+    def select_mode(value):
+        mode.set(value)
+        update_offset_state()
+        refresh_cards()
+
+    def refresh_cards(*_):
+        current = mode.get()
+        for value, pack in mode_cards.items():
+            selected_now = (value == current)
+            pack['frame'].configure(bg=selected if selected_now else border)
+            pack['inner'].configure(bg='#F7FBFF' if not selected_now else '#E7F3FF')
+            pack['title'].configure(bg=pack['inner']['bg'])
+            pack['desc'].configure(bg=pack['inner']['bg'])
+            draw_card(pack['canvas'], value, selected_now)
 
     def update_offset_state(*_):
         entry.configure(state='normal' if mode.get()=='cable' else 'disabled')
+        offset_note.configure(text=f'in  (default {DEFAULT_CABLE_OFFSET:.2f})')
     def proceed(event=None):
         nonlocal result, finished
         if finished:return
@@ -880,47 +925,59 @@ def wait_for_block_selection(preview=False, default_mode='opposite', default_off
     try:
         root.title('E3 | Signal Mover')
         root.configure(bg=white)
-        root.geometry('416x280')
+        root.geometry('520x414')
         root.resizable(False,False)
         root.protocol('WM_DELETE_WINDOW',cancel)
         root.attributes('-topmost',True)
-        head=tk.Frame(root,bg=pale,height=54)
+        head=tk.Frame(root,bg=pale,height=58)
         head.pack(fill='x');head.pack_propagate(False)
         tk.Label(head,text='Signal Mover',bg=pale,fg=dark,
                  font=('Segoe UI',12,'bold')).pack(anchor='w',padx=14,pady=(8,0))
-        tk.Label(head,text='Choose where connection labels go',bg=pale,fg=muted,
+        tk.Label(head,text='Select blocks in E3, then choose where the signal labels should go.',bg=pale,fg=muted,
                  font=('Segoe UI',8)).pack(anchor='w',padx=14)
         body=tk.Frame(root,bg=white)
-        body.pack(fill='both',expand=True,padx=15,pady=(10,0))
+        body.pack(fill='both',expand=True,padx=14,pady=(10,0))
         tk.Label(body,text='1  Select one or more blocks in E3',bg=white,fg=dark,
                  font=('Segoe UI',9,'bold')).pack(anchor='w',pady=(0,8))
-        tk.Label(body,text='2  Signal position',bg=white,fg=dark,
-                 font=('Segoe UI',9,'bold')).pack(anchor='w')
-        for val, label in (
-                ('center','Center of block'),
-                ('opposite','Opposite edge (inside block)'),
-                ('cable','Cable line (outside the pin edge)')):
-            tk.Radiobutton(body,text=label,value=val,variable=mode,
-                           command=update_offset_state,bg=white,fg=dark,
-                           activebackground=white,selectcolor=pale,
-                           font=('Segoe UI',9),anchor='w',bd=0,
-                           highlightthickness=0).pack(anchor='w',pady=(1,0))
+        tk.Label(body,text='2  Pick a label placement',bg=white,fg=dark,
+                 font=('Segoe UI',9,'bold')).pack(anchor='w',pady=(0,7))
+        cards = tk.Frame(body, bg=white)
+        cards.pack(fill='x')
+        options = [
+            ('center', 'Center of block', 'Place each label on its pin row in the middle of the block.'),
+            ('opposite', 'Opposite edge', 'Place the label just inside the opposite edge of the block.'),
+            ('cable', 'Cable line', 'Place the label outside the block on the corresponding cable line.'),
+        ]
+        for idx, (value, title, desc) in enumerate(options):
+            frame = tk.Frame(cards, bg=border, bd=0, highlightthickness=0)
+            frame.grid(row=0, column=idx, sticky='nsew', padx=(0 if idx == 0 else 8, 0))
+            cards.grid_columnconfigure(idx, weight=1)
+            inner = tk.Frame(frame, bg='#F7FBFF')
+            inner.pack(fill='both', expand=True, padx=1, pady=1)
+            canvas = tk.Canvas(inner, width=108, height=84, bg=inner['bg'], highlightthickness=0)
+            canvas.pack(padx=8, pady=(8,3))
+            title_lbl = tk.Label(inner, text=title, bg=inner['bg'], fg=dark, font=('Segoe UI', 9, 'bold'))
+            title_lbl.pack(anchor='w', padx=8)
+            desc_lbl = tk.Label(inner, text=desc, bg=inner['bg'], fg=muted, justify='left', wraplength=136, font=('Segoe UI', 8))
+            desc_lbl.pack(anchor='w', padx=8, pady=(2,8))
+            for widget in (frame, inner, canvas, title_lbl, desc_lbl):
+                widget.bind('<Button-1>', lambda _e, v=value: select_mode(v))
+            mode_cards[value] = {'frame': frame, 'inner': inner, 'canvas': canvas, 'title': title_lbl, 'desc': desc_lbl}
         offset_row=tk.Frame(body,bg=white)
-        offset_row.pack(fill='x',pady=(4,1))
-        tk.Label(offset_row,text='Cable offset:',bg=white,fg=muted,
-                 font=('Segoe UI',9)).pack(side='left',padx=(18,8))
+        offset_row.pack(fill='x',pady=(10,2))
+        tk.Label(offset_row,text='Cable line offset:',bg=white,fg=muted,
+                 font=('Segoe UI',9)).pack(side='left')
         entry=tk.Entry(offset_row,textvariable=offset,width=6,justify='center',
                        font=('Segoe UI',9),fg=dark,bg='#F5FAFF',relief='solid',bd=1,
                        disabledbackground='#F1F4F8',disabledforeground=muted)
-        entry.pack(side='left')
-        tk.Label(offset_row,text='in  (default 0.50)',bg=white,fg=muted,
-                 font=('Segoe UI',8)).pack(side='left',padx=7)
-        update_offset_state()
-        hint='Preview only — E3 will not be changed.' if preview else 'Keeps each label on its pin row; formats bold + blue.'
+        entry.pack(side='left', padx=(8, 6))
+        offset_note = tk.Label(offset_row,text='',bg=white,fg=muted,font=('Segoe UI',8))
+        offset_note.pack(side='left')
+        hint='Preview only — E3 will not be changed.' if preview else 'Labels stay on their pin row and are formatted bold + blue.'
         tk.Label(body,text=hint,bg=white,fg=muted,
-                 font=('Segoe UI',8)).pack(anchor='w',pady=(5,0))
+                 font=('Segoe UI',8)).pack(anchor='w',pady=(6,0))
         buttons=tk.Frame(root,bg=white)
-        buttons.pack(fill='x',padx=14,pady=(7,12))
+        buttons.pack(fill='x',padx=14,pady=(10,12))
         go=tk.Button(buttons,text='Move signals',command=proceed,
                      font=('Segoe UI',9,'bold'),width=16,bg=blue,fg=white,
                      activebackground='#1466B2',activeforeground=white,
@@ -929,10 +986,11 @@ def wait_for_block_selection(preview=False, default_mode='opposite', default_off
         tk.Button(buttons,text='Close',command=cancel,width=9,
                   bg=pale,fg=dark,font=('Segoe UI',9),borderwidth=0,
                   relief='flat',pady=6,cursor='hand2').pack(side='right')
+        update_offset_state(); refresh_cards()
         root.bind('<Return>',proceed);root.bind('<KP_Enter>',proceed)
         root.bind('<Escape>',cancel)
         root.update_idletasks()
-        root.geometry(f'416x280+{max(0,root.winfo_screenwidth()-456)}+80')
+        root.geometry(f'520x414+{max(0,root.winfo_screenwidth()-560)}+80')
         go.focus_set()
         # Preserve passive read-only Enter detection when E3 has focus.
         try:
@@ -1383,7 +1441,7 @@ def main(argv=None):
     parser.add_argument('--mode', choices=PLACEMENT_MODES, default=None,
                         help='Signal position: center, opposite, or cable line.')
     parser.add_argument('--cable-offset', type=float, default=None,
-                        help='Outside cable-line offset, in schematic inches (default 0.50).')
+                        help='Outside cable-line offset, in schematic inches (default 0.60).')
     args = parser.parse_args(argv)
     if args.apply and args.dry_run:
         parser.error('--apply and --dry-run cannot be combined')
