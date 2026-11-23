@@ -1,4 +1,4 @@
-"""E3.series CABBLOCK header formatter V9.
+"""E3.series CABBLOCK header formatter V10.
 
 Select any number of CABBLOCKs in E3, press Enter; the always-on-top
 window returns after each batch until you click Close/X or press Esc.
@@ -7,19 +7,17 @@ Header: Location > Saber Parameter 1 > Equipment Identification > Device Designa
 All visible, bold, colour 0 (black), center alignment 2, height 0.25.
 Existing Function (type 14) values and combined text (1010) are not edited.
 
-IMPORTANT RE E3'S GENERIC ATTRIBUTE TEXT:
-In your E3 project, Insert > Attribute Text can create text nodes whose
-Text.GetType() is 1000, regardless of the underlying attribute's text-type
-number (e.g. 5002 for Saber Parameter 1). Thus two different fields can both
-appear as type 1000. This script supports that case ONLY if one of the two
-1000 nodes uniquely matches the selected block's saberParam1 attribute value,
-and the other does not. It asks you to confirm that identification before
-writing. It does NOT prove the node's attribute binding from value alone.
+This version uses the working block-maker approach:
+Symbol.GetAttributeIds -> Attribute.GetName -> Attribute.GetTextIds.
+Attribute.DisplayAttribute() creates the missing *bound display text*.
+The older block-maker used the misspelled name "Equipment Identifacation".
+Generic text type 1000 is NOT enough to distinguish Equipment from Saber.
+Both are resolved by their actual parent attributes wherever exposed.
 
-If the Saber text is still missing, the script stops with actionable details;
-no endless recheck loop. Equipment Identification MUST be present.
-An existing symbol-level saberParam1 attribute can be set to XXX using the
-Prepare button. Missing bound text nodes must be added through E3's GUI.
+Complete Headers can fill a blank saberParam1 with XXX, display its linked
+label (and a missing Equipment label), then arrange and format the four rows.
+Never inserts unbound/free-standing text or edits Function/combined values.
+Test on a saved E3 project copy. The installed E3 COM API is not testable here.
 
 Test first on a saved copy of your E3 project.
 """
@@ -34,11 +32,11 @@ from collections import defaultdict
 from datetime import datetime
 from pathlib import Path
 
-BUILD_ID = 'SABER-HEADER-V9-GENERIC-1000-2026-11-23'
+BUILD_ID = 'SABER-HEADER-V10-ATTRIBUTE-DISPLAY-2026-11-23'
 LOCATION_TYPE = 15
 SABER_ATTRIBUTE_NAME = 'saberParam1'
 SABER_TYPE = 5002        # type specified by user, may display as generic 1000
-EQUIPMENT_TYPE = 1000   # generic E3 attribute text
+EQUIPMENT_TYPE = 1000   # generic attribute text, verify owner via attr.GetTextIds
 DEVICE_DESIGNATION_TYPE = 212
 UNSAFE_COMBINED_TYPE = 1010
 HEADER_ORDER = ('location', 'saber', 'equipment', 'designation')
@@ -208,14 +206,13 @@ def wait_for_block_selection(preview=False):
         '1. Select one or more CABBLOCKs in E3.\n'
         '2. Press ENTER / Complete Headers. Blank Saber attributes\n'
         '   will be filled with XXX on the selected SYMBOL instances.\n'
-        '3. If a label is missing, insert it in E3 and retry.\n'
-        '   Newly inserted attribute text can appear as type 1000.\n'
-        '4. Equipment ID is required (add it with your other script).\n'
+        '3. Complete Headers displays missing bound Saber attribute text.\n'
+        '4. Equipment ID is found using its original attribute name.\n'
         '5. Repeat for other blocks; Close / X / Esc to exit.'),
         justify='left').pack(anchor='w')
     ttk.Separator(frame,orient='horizontal').pack(fill='x',pady=12)
     status=('PREVIEW ONLY — neither button will change E3.' if preview else
-            'Types 15 / 5002 or generic 1000 / 1000 / 212; black/bold/center 0.25.')
+            'Attribute-linked Saber & Equipment; black/bold/center 0.25.')
     ttk.Label(frame,text=status).pack(anchor='w',pady=(0,10))
     row=ttk.Frame(frame)
     row.pack(fill='x')
@@ -470,7 +467,7 @@ def get_text_xy(text, block):
     if not options:
         raise RuntimeError(f"Block {block['id']}: cannot read absolute schematic "
                            f"text position. GetSchemaLocation returned: {raw_preview[:3]}. "
-                           'No E3 changes made.')
+                           'No text formatting applied; attribute display changes may already exist.')
     options.sort(key=lambda item: item[0])
     best_priority = options[0][0]
     distinct = {(round(x, 4), round(y, 4)) for p, x, y in options if p == best_priority}
@@ -485,10 +482,18 @@ def inspect_block_texts(prj, blocks):
     all_texts = {}
     sym = prj.CreateSymbolObject()
     txt = prj.CreateTextObject()
+    attr = prj.CreateAttributeObject()
     for block in blocks:
         if not select_id(sym, block['id']):
             raise RuntimeError(f"Selected block {block['id']} disappeared.")
         ids = get_ids(sym.GetTextIds)
+        # In the original working Equipment script, attr.GetTextIds(None) was
+        # the *reliable* lookup; it can expose texts that a bare type scan misses.
+        extra = []
+        for aid in get_ids(sym.GetAttributeIds):
+            if select_id(attr, aid):
+                extra.extend(get_ids(attr.GetTextIds))
+        ids = list(dict.fromkeys(ids + extra))
         entries = defaultdict(list)
         for tid in ids:
             if not select_id(txt, tid):
@@ -516,6 +521,152 @@ def available_method(obj, name):
         return callable(getattr(obj, name))
     except Exception:
         return False
+
+
+def normalize_attribute_name(value):
+    """Compare names ignoring punctuation/spacing, NOT typo correction."""
+    return ''.join(ch.lower() for ch in str(value or '') if ch.isalnum())
+
+
+# The old CABBLOCK maker actually spells this `Identifacation`.
+EQUIPMENT_NAMES = {
+    'equipmentidentifacation', 'equipmentidentification',
+    'equipmentid', 'equipmentidentifier', 'additionalpartid',
+    'additionalpart', 'additionalpartnumber',
+}
+SABER_NAMES = {'saberparam1', 'saberparameter1'}
+
+
+def read_block_attribute_links(prj, blocks):
+    """Get the authoritative Attribute->Text ID bindings used by block_maker.
+
+    A text's type 1000 is generic; the *parent Attribute.GetName()* tells
+    us whether it is Equipment or Saber. All operations here are read-only.
+    """
+    sym = prj.CreateSymbolObject()
+    attr = prj.CreateAttributeObject()
+    result = {}
+    for block in blocks:
+        bid = block['id']
+        if not select_id(sym, bid):
+            raise RuntimeError(f'CABBLOCK {bid} unavailable during attribute scan.')
+        found = {'saber': [], 'equipment': [], 'other': []}
+        for aid in get_ids(sym.GetAttributeIds):
+            if not select_id(attr, aid):
+                continue
+            name = str(optional_call(attr, 'GetName') or '').strip()
+            normalized = normalize_attribute_name(name)
+            tids = get_ids(attr.GetTextIds)
+            record = {'id': aid, 'name': name, 'text_ids': tids}
+            if normalized in SABER_NAMES:
+                role = 'saber'
+            elif normalized in EQUIPMENT_NAMES:
+                role = 'equipment'
+            else:
+                role = 'other'
+            found[role].append(record)
+            log(f'  BLOCK {bid} ATTRIBUTE {aid}: name={name!r} '
+                f'role={role}, linked display text IDs={tids}')
+        result[bid] = found
+    return result
+
+
+def _one_attribute(block_id, links, role):
+    """Never silently choose between duplicate attribute owners."""
+    choices = links[block_id][role]
+    if len(choices) > 1:
+        raise RuntimeError(
+            f'CABBLOCK {block_id}: {len(choices)} {role} attributes: '
+            f'{[(x["id"], x["name"]) for x in choices]}. '
+            'Resolve duplicates in E3 before writing anything.')
+    return choices[0] if choices else None
+
+
+def ensure_header_attribute_displays(prj, blocks):
+    """Materialize *bound* texts using the working DisplayAttribute method.
+
+    The real old script did:
+      aid = sym.AddAttributeValue('Equipment Identifacation', value)
+      attr.SetId(aid)
+      attr.DisplayAttribute()
+      attr.GetTextIds(None)
+    We use the existing attributes where possible, and never add/free-type an
+    unrelated text object or overwrite existing nonblank data.
+    """
+    sym = prj.CreateSymbolObject()
+    attr = prj.CreateAttributeObject()
+    linked = read_block_attribute_links(prj, blocks)
+    for block in blocks:
+        bid = block['id']
+        if not select_id(sym, bid):
+            raise RuntimeError(f'CABBLOCK {bid} disappeared before attribute display.')
+        original_value = get_symbol_saber_value(sym, allow_missing=True)
+        if original_value is None:
+            # A missing symbol attribute is not the same as blank: we can add
+            # it, but must confirm its actual E3 Attribute object afterward.
+            original_value = ''
+        if not original_value:
+            set_symbol_saber_xxx(sym, bid)
+        saber = _one_attribute(bid, linked, 'saber')
+        if saber is None:
+            # Setting a property can return a value without creating an
+            # attribute on this *placed symbol*. The working script creates
+            # its attribute through AddAttributeValue and gets its ID.
+            if not select_id(sym, bid):
+                raise RuntimeError(f'CABBLOCK {bid} disappeared.')
+            try:
+                added = sym.AddAttributeValue(SABER_ATTRIBUTE_NAME,
+                    get_symbol_saber_value(sym) or 'XXX')
+                log(f'  BLOCK {bid}: AddAttributeValue({SABER_ATTRIBUTE_NAME!r}) returned {added!r}')
+            except Exception as exc:
+                log(f'  BLOCK {bid}: AddAttributeValue unavailable/failed: {exc}')
+            linked = read_block_attribute_links(prj, blocks)
+            saber = _one_attribute(bid, linked, 'saber')
+        if saber is None:
+            raise RuntimeError(
+                f'CABBLOCK {bid}: no actual symbol Attribute object named '
+                f'{SABER_ATTRIBUTE_NAME!r} or "Saber Parameter 1" found. '
+                'GetAttributeValue alone does not produce visible text. '
+                'Check whether Saber Parameter 1 is defined for SYMBOLS in '
+                'your E3 project and check the ATTRIBUTE log. Changes made '
+                'so far may include setting blank saberParam1 to XXX.')
+
+        # Requery each owner immediately before displaying. Never trust an
+        # old COM object reference after selecting another symbol/attribute.
+        for role in ('saber', 'equipment'):
+            item = _one_attribute(bid, linked, role)
+            if item is None:
+                if role == 'equipment':
+                    log(f'  BLOCK {bid}: no named Equipment attribute in symbol GetAttributeIds; '
+                        'resolver may use the single preexisting type-1000 text as a fallback.')
+                continue
+            if not select_id(attr, item['id']):
+                raise RuntimeError(f'CABBLOCK {bid}: {role} attribute {item["id"]} disappeared.')
+            before_ids = get_ids(attr.GetTextIds)
+            if before_ids:
+                log(f'  BLOCK {bid}: {role} already displayed via attribute {item["id"]}: {before_ids}')
+                continue
+            log(f'  BLOCK {bid}: {role} attribute {item["id"]} has no text; calling DisplayAttribute()')
+            try:
+                response = attr.DisplayAttribute()
+            except Exception as exc:
+                raise RuntimeError(
+                    f'CABBLOCK {bid}: could not display {role} attribute '
+                    f'{item["name"]!r}: {exc}') from exc
+            # A returned success code alone is not enough; the actual
+            # attribute's *linked text IDs* are the verification.
+            if not select_id(attr, item['id']):
+                raise RuntimeError(f'CABBLOCK {bid}: {role} attribute vanished after display.')
+            after_ids = get_ids(attr.GetTextIds)
+            log(f'  BLOCK {bid} {role}: DisplayAttribute returned {response!r}; '
+                f'attribute-linked texts now {after_ids}')
+            if not after_ids:
+                raise RuntimeError(
+                    f'CABBLOCK {bid}: DisplayAttribute() returned {response!r} '
+                    f'for {item["name"]!r}, but Attribute.GetTextIds returned no text. '
+                    'Check the attribute configuration/display rules in E3; '
+                    'no free text was substituted. Earlier edits may remain.')
+    return read_block_attribute_links(prj, blocks)
 
 
 def get_symbol_saber_value(sym, allow_missing=False):
@@ -789,105 +940,113 @@ def _required_single(block, types, type_number, label):
 
 def resolve_header_texts(prj, blocks, all_texts, saber_type=SABER_TYPE,
                          equipment_type=EQUIPMENT_TYPE,
-                         designation_type=DEVICE_DESIGNATION_TYPE):
-    """Resolve by actual attached IDs; never treat every 1000 as Equipment.
-
-    Mode A: one text of type 5002 = Saber, one of type 1000 = Equipment.
-    Mode B: no type 5002, exactly two type-1000 nodes, one uniquely matching
-    the selected block's nonblank saberParam1 property. Ask for user approval
-    before writing anything because the COM result doesn't expose the binding.
-    """
+                         designation_type=DEVICE_DESIGNATION_TYPE,
+                         attribute_links=None):
+    """Prefer proven Attribute.GetTextIds; use type/value only as fallback."""
     mapping = {'location': LOCATION_TYPE, 'saber': int(saber_type),
-               'equipment': int(equipment_type), 'designation': int(designation_type)}
+               'equipment': int(equipment_type),
+               'designation': int(designation_type)}
     if (min(mapping.values()) <= 0 or len(set(mapping.values())) != 4 or
             set(mapping.values()) & {14, 1010}):
-        raise RuntimeError(f"Protected/overlapping header mapping {mapping}")
+        raise RuntimeError(f'Protected/overlapping header mapping {mapping}')
+    if attribute_links is None:
+        attribute_links = read_block_attribute_links(prj, blocks)
     sym = prj.CreateSymbolObject()
-    plan = []
-    generic_matches = []
-    all_target_ids = set()
+    plan, uncertain = [], []
+    used = set()
     for block in blocks:
         bid = block['id']
         fields = all_texts[bid]
-        loc = _required_single(block, fields, mapping['location'], 'Location')
+        loc = _required_single(block, fields, LOCATION_TYPE, 'Location')
         des = _required_single(block, fields, mapping['designation'], 'Device Designation')
         if not select_id(sym, bid):
-            raise RuntimeError(f'CABBLOCK {bid} disappeared before field matching.')
-        saber_value = get_symbol_saber_value(sym).strip()
-        specific = fields.get(mapping['saber'], [])
+            raise RuntimeError(f'Block {bid} disappeared.')
+        saber_val = get_symbol_saber_value(sym) or ''
+        flat = {record['id']: record for entries in fields.values() for record in entries}
+        links = attribute_links[bid]
+        selected = {}
+        origins = {}
+        for role in ('saber', 'equipment'):
+            a = _one_attribute(bid, attribute_links, role)
+            if a is None:
+                continue
+            attached = list(dict.fromkeys(a['text_ids']))
+            if len(attached) > 1:
+                raise RuntimeError(f'CABBLOCK {bid}: {role} attribute {a["id"]} has '
+                                   f'{len(attached)} attached texts; resolve duplicates.')
+            if attached:
+                tid = attached[0]
+                if tid not in flat:
+                    raise RuntimeError(f'CABBLOCK {bid}: {role} display {tid} was not '
+                                       'found in this symbol/attribute text scan.')
+                selected[role] = flat[tid]
+                origins[role] = f'attribute {a["id"]} ({a["name"]})'
+        # Backwards-compatible mode: some old drawings expose a type-5002
+        # Saber text rather than an Attribute.GetTextIds mapping.
+        specific = [t for t in fields.get(mapping['saber'], [])
+                    if t['id'] not in {x['id'] for x in selected.values()}]
+        if 'saber' not in selected and len(specific) == 1:
+            selected['saber'] = specific[0]
+            origins['saber'] = 'explicit type-5002 text'
+        elif 'saber' not in selected and len(specific) > 1:
+            raise RuntimeError(f'CABBLOCK {bid}: multiple type-{mapping["saber"]} Saber texts.')
         generic = fields.get(mapping['equipment'], [])
-        if len(specific) == 1:
-            saber = specific[0]
-            if len(generic) != 1:
-                raise RuntimeError(
-                    f'CABBLOCK {bid}: explicit Saber type {mapping["saber"]} exists, '
-                    f'but Equipment attribute text type {mapping["equipment"]} '
-                    f'has {len(generic)} nodes, expected exactly one. '
-                    'NO CHANGES MADE.'
-                )
-            equip = generic[0]
-            source = 'explicit Saber text type'
-        elif len(specific) > 1:
+        reserved = {x['id'] for x in selected.values()}
+        if 'equipment' not in selected:
+            available = [t for t in generic if t['id'] not in reserved]
+            if len(available) == 1:
+                selected['equipment'] = available[0]
+                origins['equipment'] = 'unverified generic type-1000 fallback'
+                log(f'  BLOCK {bid}: Equipment fallback to existing generic text '
+                    f'{available[0]["id"]} with value {available[0]["value"]!r}')
+                uncertain.append({'block_id': bid, 'role': 'Equipment',
+                                  'text_id': available[0]['id'],
+                                  'value': available[0]['value']})
+        reserved = {x['id'] for x in selected.values()}
+        if 'saber' not in selected and saber_val:
+            available = [t for t in generic if t['id'] not in reserved and
+                         t['value'].strip() == saber_val.strip()]
+            if len(available) == 1:
+                selected['saber'] = available[0]
+                origins['saber'] = 'generic type-1000 VALUE match, unverified'
+                uncertain.append({'block_id': bid, 'role': 'Saber',
+                                  'text_id': available[0]['id'],
+                                  'value': available[0]['value']})
+        if 'saber' not in selected or 'equipment' not in selected:
             raise RuntimeError(
-                f'CABBLOCK {bid} contains {len(specific)} nodes of type '
-                f'{mapping["saber"]}; resolve duplicates before formatting.'
-            )
-        elif len(generic) == 2 and saber_value:
-            candidates = [t for t in generic if t['value'].strip() == saber_value]
-            other = [t for t in generic if t['value'].strip() != saber_value]
-            if len(candidates) != 1 or len(other) != 1:
-                raise RuntimeError(
-                    f'CABBLOCK {bid}: both attribute texts have ambiguous values '
-                    f'{[(t["id"], t["value"]) for t in generic]}; '
-                    f'saberParam1={saber_value!r}. Cannot identify the fields safely. '
-                    'NO CHANGES MADE.'
-                )
-            saber, equip = candidates[0], other[0]
-            source = 'generic type-1000 candidate / binding not proven'
-            generic_matches.append({
-                'block_id': bid, 'saber_id': saber['id'], 'saber_value': saber['value'],
-                'equipment_id': equip['id'], 'equipment_value': equip['value'],
-            })
-        else:
-            raise RuntimeError(
-                f'CABBLOCK {bid}: could not identify a separate Saber display and '
-                'Equipment Identification display. '
-                f'Found {len(specific)} type-{mapping["saber"]} texts, '
-                f'{len(generic)} type-{mapping["equipment"]} texts; '
-                f'symbol saberParam1={saber_value!r}. '
-                'If Saber text is missing: select ONE block, Insert > Attribute Text > '
-                'Saber Parameter 1, enable Bind to selected Cell, click the drawing '
-                'to place it, then rerun. Ensure Equipment Identification is '
-                'present too. E3 may create the new display as generic type 1000. '
-                'NO CHANGES MADE.'
-            )
-        log(f'  BLOCK {bid}: Location={loc["id"]} ({loc["value"]!r}); '
-            f'Saber={saber["id"]} ({saber["value"]!r}); '
-            f'Equipment={equip["id"]} ({equip["value"]!r}); '
-            f'Designation={des["id"]} ({des["value"]!r}); source={source}')
-        slots = {'location': loc, 'saber': saber, 'equipment': equip, 'designation': des}
-        block_height = float(block['top']) - float(block['bottom'])
+                f'CABBLOCK {bid}: missing a uniquely identifiable header label. '
+                f'Found types 5002={len(fields.get(mapping["saber"], []))}, '
+                f'1000={len(generic)}, symbol saberParam1={saber_val!r}. '
+                f'Attribute links: Saber={links["saber"]}, '
+                f'Equipment={links["equipment"]}. '
+                'Use the ATTRIBUTE diagnostics to check the actual registered '
+                'attribute names and DisplayAttribute/GetTextIds results.')
+        if selected['saber']['id'] == selected['equipment']['id']:
+            raise RuntimeError(f'CABBLOCK {bid}: Saber and Equipment identify the SAME text.')
+        log(f'  BLOCK {bid}: Location={loc["id"]}; '
+            f'Saber={selected["saber"]["id"]} ({origins["saber"]}); '
+            f'Equipment={selected["equipment"]["id"]} ({origins["equipment"]}); '
+            f'Designation={des["id"]}')
+        slots = {'location': loc, 'saber': selected['saber'],
+                 'equipment': selected['equipment'], 'designation': des}
+        height = float(block['top']) - float(block['bottom'])
         needed = TOP_INSET + 3 * TEXT_PITCH + BOTTOM_CLEARANCE
-        if block_height < needed:
-            raise RuntimeError(f'CABBLOCK {bid}: header needs {needed:.3f} height, '
-                               f'block has {block_height:.3f}. NO CHANGES MADE.')
-        center = (float(block['left']) + float(block['right'])) / 2
-        for index, field in enumerate(HEADER_ORDER):
-            node = slots[field]
-            if node['id'] in all_target_ids:
-                raise RuntimeError(f'Text {node["id"]} identified more than once. '
-                                   'NO CHANGES MADE.')
-            all_target_ids.add(node['id'])
-            plan.append({
-                'block': block, 'field': field, 'type': node['type'],
-                'id': node['id'], 'before_value': node['value'],
-                'x': center, 'y': float(block['top']) - TOP_INSET - index * TEXT_PITCH,
-            })
-    return plan, generic_matches
+        if height < needed:
+            raise RuntimeError(f'CABBLOCK {bid}: needs {needed:.3f} height; has {height:.3f}.')
+        cx = (float(block['left']) + float(block['right'])) / 2
+        for i, field in enumerate(HEADER_ORDER):
+            record = slots[field]
+            if record['id'] in used:
+                raise RuntimeError(f'Text {record["id"]} mapped twice. No formatting done.')
+            used.add(record['id'])
+            plan.append({'block': block, 'field': field, 'type': record['type'],
+                         'id': record['id'], 'before_value': record['value'],
+                         'x': cx, 'y': float(block['top']) - TOP_INSET - i * TEXT_PITCH})
+    return plan, uncertain
 
 
 def confirm_generic_1000_matches(matches):
-    """Explicit operator check prevents treating an arbitrary Equipment text as Saber."""
+    """Ask before using any generic text without a proven parent attribute."""
     if not matches:
         return True
     from tkinter import Tk, messagebox
@@ -895,25 +1054,18 @@ def confirm_generic_1000_matches(matches):
     root.withdraw()
     root.attributes('-topmost', True)
     lines = [
-        'E3 reports these TWO fields as the SAME generic text type 1000.',
-        'The script matched one text to the symbol Saber attribute by VALUE.',
-        'Matching text alone does not prove its property binding.',
+        'These generic type-1000 text nodes have no proven ATTRIBUTE link.',
+        'Inspect the actual E3 display BEFORE confirming formatting:',
         '',
     ]
     for m in matches:
-        lines.extend([
-            f'BLOCK {m["block_id"]}',
-            f'  Proposed Saber: text {m["saber_id"]}, value {m["saber_value"]!r}',
-            f'  Proposed Equipment: text {m["equipment_id"]}, value {m["equipment_value"]!r}',
-        ])
-    lines.extend([
-        '',
-        'Confirm in E3 that the proposed Saber text actually displays',
-        'Saber Parameter 1 (not a second Equipment Identification value).',
-        'YES = format these exact text IDs. NO = do not modify E3.',
-    ])
+        lines.append(f'BLOCK {m["block_id"]}: proposed {m["role"]} '
+                     f'text ID {m["text_id"]}, value {m["value"]!r}')
+    lines.extend(['', 'YES = format the proposed text IDs.',
+                  'NO = cancel without formatting (earlier attribute display '
+                  'operations may remain).'])
     try:
-        return bool(messagebox.askyesno('E3 — Confirm type-1000 attribute texts',
+        return bool(messagebox.askyesno('E3 — Confirm generic attribute texts',
                                         '\n'.join(lines), parent=root))
     finally:
         root.destroy()
@@ -933,6 +1085,7 @@ def run(action='complete', preview=False, saber_type=None,
         log('HEADER: LOCATION > SABER PARAMETER 1 > EQUIPMENT > DEVICE DESIGNATION')
         log('E3 attribute text can have generic display type 1000; 5002 is not guaranteed.')
         log('Equipment is REQUIRED. Types 14/1010 never have their values changed.')
+        log('Equipment attribute names include historic typo: Equipment Identifacation.')
         log('=' * 80)
         import win32com.client as win32
         app = win32.gencache.EnsureDispatch('CT.Application')
@@ -942,28 +1095,58 @@ def run(action='complete', preview=False, saber_type=None,
         all_texts = inspect_block_texts(prj, blocks)
         if inspect_api:
             inspect_creation_api(prj, blocks, all_texts)
+            read_block_attribute_links(prj, blocks)
             popup('Read-only API check complete.\nLog: ' + str(path))
             return 0
         if action == 'prepare':
             return prepare_selected_saber_attributes(prj, blocks, preview=preview)
+        # Check essential geometry/known header fields BEFORE creating display text.
+        for block in blocks:
+            _required_single(block, all_texts[block['id']], LOCATION_TYPE, 'Location')
+            _required_single(block, all_texts[block['id']],
+                             designation_type if designation_type is not None else
+                             DEVICE_DESIGNATION_TYPE, 'Device Designation')
+            needed = TOP_INSET + 3 * TEXT_PITCH + BOTTOM_CLEARANCE
+            if block['top'] - block['bottom'] < needed:
+                raise RuntimeError(f'CABBLOCK {block["id"]}: too short for header.')
+        if preview:
+            links = read_block_attribute_links(prj, blocks)
+            log('DRY RUN - ATTRIBUTE DISPLAY CHECK:')
+            for block in blocks:
+                bid = block['id']
+                for role in ('saber', 'equipment'):
+                    a = _one_attribute(bid, links, role)
+                    if a is None:
+                        log(f'  BLOCK {bid} {role}: no matching symbol attribute; '
+                            'needs creation/check before formatting.')
+                    elif not a['text_ids']:
+                        log(f'  BLOCK {bid} {role}: attribute {a["id"]} has no visible '
+                            'text; Complete would call DisplayAttribute().')
+                    else:
+                        log(f'  BLOCK {bid} {role}: linked texts {a["text_ids"]}')
+            log('DRY RUN: no E3 changes made; run without --dry-run to '
+                'create missing bound display texts and arrange the header.')
+            popup('Previewed selected attribute bindings. No E3 changes made.\n'
+                  f'Log: {path}\n'
+                  'Run without --dry-run to complete missing label creation.')
+            return 0
+        log('ENSURING ATTRIBUTE-LINKED DISPLAY TEXTS (using old block-maker method):')
+        ensure_header_attribute_displays(prj, blocks)
+        # DisplayAttribute creates brand-new text IDs; always rescan.
+        all_texts = inspect_block_texts(prj, blocks)
+        links = read_block_attribute_links(prj, blocks)
         plan, generic_matches = resolve_header_texts(
             prj, blocks, all_texts,
             saber_type if saber_type is not None else SABER_TYPE,
             equipment_type if equipment_type is not None else EQUIPMENT_TYPE,
             designation_type if designation_type is not None else DEVICE_DESIGNATION_TYPE,
+            attribute_links=links,
         )
         preflight_positions(prj, plan)
         preflight_saber_attributes(prj, plan)
         hidden = old_function_nodes_to_hide(blocks, all_texts, plan)
         log(f'BATCH READY: blocks={len(blocks)}, labels={len(plan)}, '
             f'generic-attribute candidates={len(generic_matches)}')
-        if preview:
-            log('DRY RUN: no modifications made; no generic confirmation required.')
-            popup('PREVIEW SUCCESS. No E3 changes made.\n'
-                  f'{len(blocks)} block(s), {len(plan)} labels.\n'
-                  f'Generic type-1000 identification needs approval: {len(generic_matches)}.\n'
-                  f'Log: {path}')
-            return 0
         if generic_matches:
             log('GENERIC TYPE-1000 FIELD IDENTIFICATION — OPERATOR CONFIRMATION REQUIRED:')
             for match in generic_matches:
@@ -1021,99 +1204,3 @@ def main(argv=None):
 
 if __name__ == '__main__':
     sys.exit(main())
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-================================================================================
-NEW SABER HEADER BATCH: 2026-11-23T07:50:14-07:00
-BUILD: SABER-HEADER-V9-GENERIC-1000-2026-11-23
-SOURCE FILE: C:\Users\conner.hughes\\Documents\Python\Block Pin Aranger\header_formatter.py
-ACTION: prepare; dry-run=False; inspect-api=False
-HEADER: LOCATION > SABER PARAMETER 1 > EQUIPMENT > DEVICE DESIGNATION
-E3 attribute text can have generic display type 1000; 5002 is not guaranteed.
-Equipment is REQUIRED. Types 14/1010 never have their values changed.
-================================================================================
-Active E3 sheet: 204828
-GUI SELECTION READBACK:
-  job.GetSelectedSymbolIds(None,): [147590]
-SELECTION: 1 selected CABBLOCK(s); 0 selected non-block symbol(s) ignored.
-  BLOCK 147590: sheet 204828 | 'CABBLOCK#0-3a-0-8d20' | X=[21.800,23.400] Y=[24.300,28.000]
-BLOCK 147590 (sheet 204828): 11 attached text IDs; 11 text types
-  TYPE 14    ID 147585     VALUE='' HINT=''
-  TYPE 15    ID 147584     VALUE='bxrxux' HINT=''
-  TYPE 205   ID 147589     VALUE='' HINT=''
-  TYPE 206   ID 147588     VALUE='' HINT=''
-  TYPE 212   ID 147580     VALUE='A1#1' HINT=''
-  TYPE 420   ID 147587     VALUE='' HINT=''
-  TYPE 606   ID 147582     VALUE='' HINT=''
-  TYPE 610   ID 147583     VALUE='' HINT=''
-  TYPE 625   ID 147581     VALUE='' HINT=''
-  TYPE 1000  ID 148781     VALUE='xxxxxxxxxxxxxxxx' HINT=''
-  TYPE 1010  ID 147586     VALUE='bxrxux A1#1' HINT=''
-  PREPARE BLOCK 147590 saberParam1: '' -> XXX
-  BLOCK 147590: SetAttributeValue(saberParam1, XXX) confirmed
-PREPARE COMPLETE: 1 blank symbol attributes set to XXX across 1 selected block(s).
-
-================================================================================
-NEW SABER HEADER BATCH: 2026-11-23T07:50:17-07:00
-BUILD: SABER-HEADER-V9-GENERIC-1000-2026-11-23
-SOURCE FILE: C:\Users\conner.hughes\\Documents\Python\Block Pin Aranger\header_formatter.py
-ACTION: complete; dry-run=False; inspect-api=False
-HEADER: LOCATION > SABER PARAMETER 1 > EQUIPMENT > DEVICE DESIGNATION
-E3 attribute text can have generic display type 1000; 5002 is not guaranteed.
-Equipment is REQUIRED. Types 14/1010 never have their values changed.
-================================================================================
-Active E3 sheet: 204828
-GUI SELECTION READBACK:
-  job.GetSelectedSymbolIds(None,): [147590]
-SELECTION: 1 selected CABBLOCK(s); 0 selected non-block symbol(s) ignored.
-  BLOCK 147590: sheet 204828 | 'CABBLOCK#0-3a-0-8d20' | X=[21.800,23.400] Y=[24.300,28.000]
-BLOCK 147590 (sheet 204828): 11 attached text IDs; 11 text types
-  TYPE 14    ID 147585     VALUE='' HINT=''
-  TYPE 15    ID 147584     VALUE='bxrxux' HINT=''
-  TYPE 205   ID 147589     VALUE='' HINT=''
-  TYPE 206   ID 147588     VALUE='' HINT=''
-  TYPE 212   ID 147580     VALUE='A1#1' HINT=''
-  TYPE 420   ID 147587     VALUE='' HINT=''
-  TYPE 606   ID 147582     VALUE='' HINT=''
-  TYPE 610   ID 147583     VALUE='' HINT=''
-  TYPE 625   ID 147581     VALUE='' HINT=''
-  TYPE 1000  ID 148781     VALUE='xxxxxxxxxxxxxxxx' HINT=''
-  TYPE 1010  ID 147586     VALUE='bxrxux A1#1' HINT=''
-ERROR: Traceback (most recent call last):
-  File "C:\Users\conner.hughes\\Documents\Python\Block Pin Aranger\header_formatter.py", line 949, in run
-    plan, generic_matches = resolve_header_texts(
-                            ~~~~~~~~~~~~~~~~~~~~^
-        prj, blocks, all_texts,
-        ^^^^^^^^^^^^^^^^^^^^^^^
-    ...<2 lines>...
-        designation_type if designation_type is not None else DEVICE_DESIGNATION_TYPE,
-        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-    )
-    ^
-  File "C:\Users\conner.hughes\\Documents\Python\Block Pin Aranger\header_formatter.py", line 852, in resolve_header_texts
-    raise RuntimeError(
-    ...<10 lines>...
-    )
-RuntimeError: CABBLOCK 147590: could not identify a separate Saber display and Equipment Identification display. Found 0 type-5002 texts, 1 type-1000 texts; symbol saberParam1='XXX'. If Saber text is missing: select ONE block, Insert > Attribute Text > Saber Parameter 1, enable Bind to selected Cell, click the drawing to place it, then rerun. Ensure Equipment Identification is present too. E3 may create the new display as generic type 1000. NO CHANGES MADE.
-
-
