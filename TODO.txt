@@ -30,7 +30,7 @@ import time
 from datetime import datetime
 from collections import deque
 
-VERSION = 'CABLE-BLOCK-PIN-SPACING-V13-COMPACT-GUI-20261123'
+VERSION = 'CABLE-BLOCK-PIN-SPACING-V15-ZUKEN-LIGHT-GUI-20261123'
 MISSING = -2147352572
 EDGE_ALLOWANCE = 0.65   # maximum distance, drawing units, from block edge
 POINT_TOL = 0.015      # position readback tolerance in E3 drawing units
@@ -1708,22 +1708,23 @@ def _run_text_formatter_for_block(job,block_symbol,block_device,log_line):
 
 class App:
     """Small action-oriented window. Diagnostics are logged, not shown by default."""
-    BG='#0d1420'
-    SURFACE='#192535'
-    CARD='#1c2b3d'
-    OUTLINE='#304056'
-    TEXT='#f0f5fc'
-    MUTED='#a9b8cc'
-    TEAL='#40d4ba'
-    BLUE='#4fa9ff'
+    # White/light-blue E3-style palette. Only visual styling changes from V14.
+    BG='#f2f7fc'
+    SURFACE='#e5f1fc'
+    CARD='#ffffff'
+    OUTLINE='#c9deef'
+    TEXT='#263d52'
+    MUTED='#58738a'
+    TEAL='#197fbb'       # existing accent variable; now E3 blue
+    BLUE='#1688cf'
     WHITE='#ffffff'
-    WARNING='#f7c36c'
+    WARNING='#b46b12'
 
     def __init__(self):
         self.root=tk.Tk()
         self.root.title('E3  |  Cable Pin Spacer')
-        self.root.geometry('710x565+320+100')
-        self.root.minsize(670,565)
+        self.root.geometry('560x430+320+100')
+        self.root.minsize(540,415)
         self.root.configure(bg=self.BG)
         self.root.attributes('-topmost', True)
         self.src=None
@@ -1740,6 +1741,11 @@ class App:
         self.details_window=None
         self.details_text=None
         self._build_ui()
+        # Respect display scaling: use the smallest size that fits all controls.
+        self.root.update_idletasks()
+        needed_h=self.root.winfo_reqheight()+4
+        if needed_h>430:
+            self.root.geometry(f'560x{needed_h}+320+100')
         self.write('BUILD '+VERSION)
         self.write('LOG '+str(LOGFILE))
         self.write('WARNING: pin deletion/recreation may not be undoable. OPEN A SAVED PROJECT COPY.')
@@ -1749,17 +1755,17 @@ class App:
 
     def _button(self,parent,text,command,kind='secondary',width=None):
         palettes={
-            'primary':(self.TEAL,'#10251f','#61e5ce'),
-            'blue':(self.BLUE,'#0c1f36','#79bbff'),
-            'secondary':('#253850',self.TEXT,'#344c67'),
-            'quiet':(self.SURFACE,self.MUTED,'#253850'),
+            'primary':(self.BLUE,self.WHITE,'#0873b3'),
+            'blue':(self.BLUE,self.WHITE,'#0873b3'),
+            'secondary':('#e0f0fc','#205d86','#cce6f8'),
+            'quiet':('#edf5fb',self.MUTED,'#dcebf7'),
         }
         bg,fg,hover=palettes[kind]
         # Primary foreground is intentionally a very dark hue for contrast.
         btn=tk.Button(parent,text=text,command=command,bg=bg,fg=fg,
                       activebackground=hover,activeforeground=fg,
-                      disabledforeground='#728296',relief='flat',bd=0,
-                      padx=15,pady=9,font=('Segoe UI',10,'bold'),
+                      disabledforeground='#8aa1b2',relief='flat',bd=0,
+                      padx=10,pady=5,font=('Segoe UI',9,'bold'),
                       cursor='hand2',highlightthickness=0,takefocus=True)
         if width:
             btn.configure(width=width)
@@ -1773,39 +1779,39 @@ class App:
 
     def _card(self,parent):
         rim=tk.Frame(parent,bg=self.OUTLINE,padx=1,pady=1)
-        inside=tk.Frame(rim,bg=self.CARD,padx=16,pady=12)
+        inside=tk.Frame(rim,bg=self.CARD,padx=12,pady=5)
         inside.pack(fill='both',expand=True)
         return rim,inside
 
     def _step(self,parent,step,title,info,action,command):
         rim,card=self._card(parent)
-        rim.pack(fill='x',pady=(0,9))
-        bubble=tk.Label(card,text=str(step),font=('Segoe UI',10,'bold'),
-                        fg=self.TEAL,bg=self.SURFACE,width=3,height=2)
-        bubble.pack(side='left',padx=(0,12))
+        rim.pack(fill='x',pady=(0,6))
+        bubble=tk.Label(card,text=str(step),font=('Segoe UI',9,'bold'),
+                        fg=self.TEAL,bg=self.SURFACE,width=2,height=1)
+        bubble.pack(side='left',padx=(0,9))
         button=self._button(card,action,command,'secondary')
-        button.pack(side='right',padx=(12,0))
+        button.pack(side='right',padx=(7,0))
         text_frame=tk.Frame(card,bg=self.CARD)
         text_frame.pack(side='left',fill='x',expand=True)
-        tk.Label(text_frame,text=title,font=('Segoe UI',11,'bold'),fg=self.TEXT,
+        tk.Label(text_frame,text=title,font=('Segoe UI',10,'bold'),fg=self.TEXT,
                  bg=self.CARD,anchor='w').pack(fill='x')
         tk.Label(text_frame,textvariable=info,font=('Segoe UI',9),fg=self.MUTED,
-                 bg=self.CARD,anchor='w',justify='left').pack(fill='x',pady=(3,0))
+                 bg=self.CARD,anchor='w',justify='left').pack(fill='x',pady=(1,0))
         return button
 
     def _build_ui(self):
-        outer=tk.Frame(self.root,bg=self.BG,padx=22,pady=18)
+        outer=tk.Frame(self.root,bg=self.BG,padx=14,pady=12)
         outer.pack(fill='both',expand=True)
         header=tk.Frame(outer,bg=self.BG)
-        header.pack(fill='x',pady=(0,16))
-        brand=tk.Label(header,text='E3',fg=self.BG,bg=self.TEAL,
-                       font=('Segoe UI',11,'bold'),width=4,height=2)
-        brand.pack(side='left',padx=(0,12))
+        header.pack(fill='x',pady=(0,9))
+        brand=tk.Label(header,text='E3',fg=self.WHITE,bg=self.TEAL,
+                       font=('Segoe UI',10,'bold'),width=3,height=2)
+        brand.pack(side='left',padx=(0,9))
         headlines=tk.Frame(header,bg=self.BG)
         headlines.pack(side='left',fill='x',expand=True)
-        tk.Label(headlines,text='Cable Pin Spacer',font=('Segoe UI',17,'bold'),
+        tk.Label(headlines,text='Cable Pin Spacer',font=('Segoe UI',15,'bold'),
                  bg=self.BG,fg=self.TEXT,anchor='w').pack(fill='x')
-        tk.Label(headlines,text='Match spacing, transfer sides, and format pin labels.',
+        tk.Label(headlines,text='Match spacing and format labels automatically.',
                  font=('Segoe UI',9),bg=self.BG,fg=self.MUTED,anchor='w').pack(fill='x')
         self._step(outer,1,'Cable pins',self.source_info,
                    'Capture pins',self.capture_pins)
@@ -1813,31 +1819,31 @@ class App:
                    'Capture block',self.capture_block)
         self.block_button.configure(state='disabled')
         rim,card=self._card(outer)
-        rim.pack(fill='x',pady=(1,10))
-        tk.Label(card,text='READY TO APPLY',font=('Segoe UI',9,'bold'),
+        rim.pack(fill='x',pady=(0,7))
+        tk.Label(card,text='TRANSFER PREVIEW',font=('Segoe UI',8,'bold'),
                  fg=self.TEAL,bg=self.CARD,anchor='w').pack(fill='x')
-        tk.Label(card,textvariable=self.plan_title,font=('Segoe UI',12,'bold'),
-                 fg=self.TEXT,bg=self.CARD,anchor='w').pack(fill='x',pady=(7,4))
+        tk.Label(card,textvariable=self.plan_title,font=('Segoe UI',11,'bold'),
+                 fg=self.TEXT,bg=self.CARD,anchor='w').pack(fill='x',pady=(3,2))
         tk.Label(card,textvariable=self.plan_details,font=('Segoe UI',9),
                  fg=self.MUTED,bg=self.CARD,anchor='w',justify='left',
-                 wraplength=600).pack(fill='x')
+                 wraplength=465).pack(fill='x')
         self.auto_button=self._button(outer,'3   AUTO SPACE + FORMAT',self.apply,'primary')
-        self.auto_button.pack(fill='x',pady=(0,9))
+        self.auto_button.pack(fill='x',pady=(0,7))
         self._set_auto_enabled(False)
         tools=tk.Frame(outer,bg=self.BG)
-        tools.pack(fill='x',pady=(0,11))
+        tools.pack(fill='x',pady=(0,7))
         self._button(tools,'Format text only',self.format_selected_text_only,'secondary').pack(side='left')
         self._button(tools,'Reset',self.reset,'quiet').pack(side='right')
-        status=tk.Frame(outer,bg=self.SURFACE,padx=12,pady=10)
-        status.pack(fill='x',pady=(0,8))
+        status=tk.Frame(outer,bg=self.SURFACE,padx=9,pady=7)
+        status.pack(fill='x',pady=(0,6))
         tk.Label(status,text='STATUS',font=('Segoe UI',8,'bold'),fg=self.TEAL,
-                 bg=self.SURFACE).pack(side='left',padx=(0,12))
+                 bg=self.SURFACE).pack(side='left',padx=(0,8))
         tk.Label(status,textvariable=self.status,font=('Segoe UI',9),fg=self.TEXT,
                  bg=self.SURFACE,justify='left',anchor='w',
-                 wraplength=545).pack(side='left',fill='x',expand=True)
+                 wraplength=415).pack(side='left',fill='x',expand=True)
         footer=tk.Frame(outer,bg=self.BG)
         footer.pack(fill='x')
-        tk.Label(footer,text='Use a saved project copy: E3 recreates symbol IDs.',
+        tk.Label(footer,text='Work on a saved E3 project copy.',
                  fg=self.MUTED,bg=self.BG,font=('Segoe UI',8)).pack(side='left')
         self._button(footer,'Details / log',self.open_details,'quiet').pack(side='right')
 
@@ -1853,11 +1859,11 @@ class App:
                 pass
         dialog=tk.Toplevel(self.root)
         dialog.title('E3 Cable Pin Spacer  |  Activity & diagnostics')
-        dialog.geometry('780x440+365+150')
+        dialog.geometry('665x365+365+150')
         dialog.configure(bg=self.BG)
         dialog.attributes('-topmost', True)
         self.details_window=dialog
-        body=tk.Frame(dialog,bg=self.BG,padx=15,pady=15)
+        body=tk.Frame(dialog,bg=self.BG,padx=12,pady=12)
         body.pack(fill='both',expand=True)
         tk.Label(body,text='Detailed activity',font=('Segoe UI',13,'bold'),
                  fg=self.TEXT,bg=self.BG,anchor='w').pack(fill='x',pady=(0,7))
@@ -1923,9 +1929,9 @@ class App:
 
     def _set_auto_enabled(self,enabled):
         if enabled:
-            self.auto_button.configure(state='normal',bg=self.TEAL,fg='#10251f')
+            self.auto_button.configure(state='normal',bg=self.BLUE,fg=self.WHITE)
         else:
-            self.auto_button.configure(state='disabled',bg='#253850',fg=self.MUTED)
+            self.auto_button.configure(state='disabled',bg='#dfebf4',fg='#7f95a5')
 
     def clear_plan(self):
         self.plan=None
