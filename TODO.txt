@@ -1,331 +1,1377 @@
-"""E3 Tools – self-contained, light-blue launcher for three Zuken E3 utilities.
+"""E3.series CABBLOCK header formatter V13.
 
-One Python file to distribute. The three ORIGINAL tools are stored as compressed
-source assets, extracted on demand to E3_Tools_Runtime beside this launcher.
-Each runs in its own process (one at a time), retaining Windows COM behavior,
-UI event loops, and pin-spacer text-worker subprocesses are preserved.
-No spreadsheet scripts included.
+Select any number of CABBLOCKs in E3, press Enter; the always-on-top
+window returns after each batch until you click Close/X or press Esc.
 
-Requirements: Windows + Python 3 + tkinter + the dependencies of the selected
-original E3 script, with E3.series running. Test formatting on a saved E3 copy.
-Run: python E3_TOOLS_MAIN_MENU_V3.py
-Optional smoke test: python E3_Tools_Mega_Launcher.py --self-test
+Header: Location > Saber Parameter 1 > Equipment ID OR Additional Part ID > Device Designation.
+All visible, bold, colour 0 (black), center alignment 2, height 0.25.
+Existing Function (type 14) values and combined text (1010) are not edited.
+
+This version uses the working block-maker approach:
+Symbol.GetAttributeIds -> Attribute.GetName -> Attribute.GetTextIds.
+Attribute.DisplayAttribute() is attempted but may return 0 without creating text.
+The older block-maker used the misspelled name "Equipment Identifacation".
+Generic text type 1000 is NOT enough to distinguish Equipment from Saber.
+Both are resolved by their actual parent attributes wherever exposed.
+
+Complete Headers fills blank saberParam1 with XXX and attempts to display it.
+If E3 refuses to create its bound text, formats the OTHER THREE rows while
+leaving the reserved Saber slot empty. After manually inserting bound Saber
+Attribute Text in E3, rerun Complete Headers to format all four rows.
+Never inserts unbound/free-standing text or edits Function/combined values.
+V13 defaults to keeping Device Location at its CURRENT schematic position,
+using it as the X/Y anchor for the rows below (0.36 spacing). Optionally choose
+Block top in the UI for the previous top-aligned layout. Do not automatically
+shift a low Device Location text upward: warn if the four rows cannot fit.
+Test on a saved E3 project copy. The installed E3 COM API is not testable here.
+
+Test first on a saved copy of your E3 project.
 """
 from __future__ import annotations
-import base64
-import hashlib
+import argparse
 import json
-import os
-from pathlib import Path
-import shutil
-import subprocess
+import math
 import sys
 import tempfile
-import tkinter as tk
-from tkinter import messagebox, filedialog
+import traceback
+from collections import defaultdict
 from datetime import datetime
-import zlib
+from pathlib import Path
 
-SUITE_VERSION = "E3-TOOLS-MEGA-V3-SIMPLE-PANELS-2026-11-23"
-COLOR = {
-    "page": "#FFFFFF", "panel": "#F1F7FF", "soft": "#E8F3FF",
-    "border": "#D4E3F4", "accent": "#2381CF", "accent_hover": "#1466B2",
-    "text": "#203B55", "muted": "#627E99", "green": "#267658",
+BUILD_ID = 'SABER-HEADER-V13-PART-ID-OR-EQUIPMENT-2026-11-23'
+LOCATION_TYPE = 15
+SABER_ATTRIBUTE_NAME = 'saberParam1'
+SABER_TYPE = 5002        # type specified by user, may display as generic 1000
+EQUIPMENT_TYPE = 1000   # generic attribute text, verify owner via attr.GetTextIds
+ADDITIONAL_PART_TYPE = 482  # E3 standard Additional Part ID text type
+DEVICE_DESIGNATION_TYPE = 212
+UNSAFE_COMBINED_TYPE = 1010
+HEADER_ORDER = ('location', 'saber', 'equipment', 'designation')
+FIELD_LABELS = {
+    'location': 'Location', 'saber': 'Saber Parameter 1',
+    'equipment': 'Equipment Identification / Additional Part ID', 'designation': 'Device Designation',
 }
-TOOLS = {'header': {'title': 'Block Header Formatter',
-            'folder': 'Header_Formatter',
-            'filename': 'header_formatter.py',
-            'description': 'Location, Saber, Equipment ID, Device Designation',
-            'sha256': '3848a8cf7e1b0ad87900d6a8b63d22a8a8bb9bbaba42c839a0494d6ba8d2dc98',
-            'payload': 'c-qZ<+fo}@w%|Kou@4n-QgR6yuw7LxN{+xF+nU0_0Io~Wgia!*Alr#jtxOqoI7G}x%)iY0e9C;utjoUVPD!|`C#Is?NU7Ynwbx$vwf5%bX75$INM>nLh=cui?~YCmei64xJW6I_oX_s!vV>2+?(DWVHqMhQ8I~fREW~7fcMZ?;v2Ij|bRv4MT4Fj&ibC`z&~8tZw~2_e`*=}o<&&*4pKjczlTm&zW=T1pO$rf@vHv6<-iqtEgn#FgGR?#ypNnCZ4!?+lEH9Fmzl(gPdM<`Amya~XjyTGPahc{5@m8G2IHl8g7T+b<=?*;W{d1m9?~+L=`Xl%^9jE&B!{lo^OyEzE-c0CWdt*P##MiV)ud}2juJdfv62m;p=QFV_8rNAo{L+Lc39b#61?{No-4;MBy}2#Lc6;|td!zS|7G*lQ5%1@dA&u537t=)Syl#rGaW)4~$CDBCe0QBrl94Erhf*|lws*FhBAz8;l9wVGrDZaLg<jmIh4`Ax3hZZIKwE_AeLnkwBV1?s@XOX+`~@d8oz8LqWM|`iaR-xce@M#xvYe&Y^D^m=3bFN8=<oRBF#xLa@B$_SF9R&})5ElwX7NHlXfy@P2{Get3X>G@Ox(o_xu*cC`?S2x;o)$W!~_UjVH=i`2!JU})t)x2X+&$fON(NfWEp&&;LJ8Fn-}xuZMHW)Bon~dA%l*AyS=@Q(>gx65XmH;-`t8a7bD(@d0O0BxG<jOcZ@FWjdyu@OHc>o%CoPyoCQuN1%M9Ad7OzU{0fa?wfsWd-zKx<E8^|L6tEMw=^($GW`K5r5wj5EG|LKDXgv8M3LJ_MbBACfe*gV<LIDZGLQWN-EK-0}e+)+nW;Esv&l!>l{03d-^9kcjOP)|hiIa<uy)$v~@vPSqv-}=snP$mGmc(Ca3vOwN$qbjsN2SOR(O~>VTkO+0yo)EW;tVD+fj4REcsOccP(mP<r~^MsX7h=t003sq(}R<e!ACemIIZ@^F@cUpDB!%)2rtL8B-tuTfQmvGJo0!93Vn`V>LbI)sJ#J%NsN+lJkJ=2Uy@{s?d9Rt)B$FJ9UXi=JL?@^h+=q~z{~)FVE<BlqqQ+Fuwe?*WqAJn@(<Xf;cZTYkl}}5y-qTqUybeds~<!$jfc>x*%l{L?1f+lO#mr2-XV^|oTdmTZ2h^fI|54fHO=QZ<>?j?5?B*#J{+31ILwIx#Pc$zIbx?9#ceu<X9CCe7e~OFPw(T|s3YLtiAcvZj0U<G#uMywjL3D76aZU*3E(9n17I2uj(;F&ALdiQ1w5y)J!MR15q>^6`6TvF`*^&t7dQfC3?x$EF+dW99gfqP+b#Bm3}S(kFk`egHa9mn=mZW1<2g`_WH1ov-87#eYk~f0QN@OOG`oQV2=J8O|54-<^%=l(t3DSC-2~6n7;#^HpT)!E8i+R!3ltss7!IPwl_)eyhb6x=g40%}K!nr_@;m=Jg>kd=TK#y6)7W_Txqoyx=pTx%h|c%l_0G0F_Vy3q58&t)aLE0O{>kyy{_(-ble4Ye?cE=?c6PRQUqu`0x5339r#)!B^JatE5B4uE&id~@U-SmY`=9Wa$RZ?>d`UKXv%S45<bU5WMFe6x1ct{H4G77sMO0eR89?(JNkx%%ZuI{9=l<y@I30Q(NKvsj^_r%DlKQ|gPRFpv_wX~Y&6r-Wc*w?K@7Ml8Z*bT<?|(RU*0{T~yYcz>eE)rK0Lb;Of80AX!|rTvFz5y+XYemPYebnu_NXPHfFBY?(eca3F!HFm@xI@K-8cde9i2l5j~fUW(@RH0N0lDoVMT_BTHMkM1#i_!75+5f)vA;MJw9z*^nSk>eC+i<e7u0!q1eEWPWu-JAL+@fA2u#dP6z$t^B%wQdVAyD$;HLVr@_HdZ~qJssYlNNUEUq-AN&G<JUaP|(83pC@#hzR91%b_4q#UipN?P~aEEaNHcn5@`@AJ5M?KTs_U;Dk$lz1|{Jeks0UmAb?!5l-)tlWnKkjajq&F}K>$HSzJ39FQ!=Cl_Kf#mZe3EQzz|jJtb<?;5*)6_Fx|^HL4uLcSLJn^g<xKt7r03IFIw>3YEAY2$UfgysW^?%)&^2oaNse$F?h^kqzqjvaAVX14;(M|A_sM26^cIcLXm0RSC&;q0^gojU@R0_w8984Vo4%5e;S4F|9$K$_6J$svpp#+3ec)2^xNH*FN3zvUi*Y)^`SBR^1AT;F1^|KNCYd#wl|c|(2p?|63xdxQko>d_AJb`rf0XU;9bi7ZC$v(cs)KYi0I2|IpR-mV(dY9i5x3r}s1S`I@Mt*k{ll$zHj5WcVhOTqoH>IHei!t6(MBS_7St}U>S5L>=Tnr#Gmzq%7A)Z9MwY1U5pMyVX%>DDmpfN}C%O;yU$EUawo7rvylwX2Gy#yNyF!iO{8Y{soys5}Cj!SwMgxK)G}T)OLsjR*-Q$EC@G<cF*zfUYf$+eWtAjI3zzw^ffsTN(8HfWYgG>`xJjfi=dHE97UxGlQ1glUdJT3V5a?2gQa}}7<TTld&tVq-j8(0jJDd;=D;z+&OEC;@H0sM+S2Btrai$Xud4r{k!qxuH_dPzTD$@75Njt}`eiez6=M1xmNyUH%6YSY}^K(wWm5*mqr>k5l_R@cIVw{aIHqeg1_Qb5swXbA%!4=5TS@&s|G@>Jg>C7kI3NGhmcpuWBU`Du=<N@2!#e4>F%vz7>ax`79?B|!TmbpvpNae~jXc-MP>a@GU6?k*oCLiM*NdxMUCO_O`o4d}<Hc4pc6ZIYDwDZ!`6L7<X2s8rel<dN|h6)`%DN*@B2FK1;fprr>d;CQ~UzR(y=y`S(4nIlwpOZJtCQ@2758GbZK(X8w_wF+&oqO}qkt*!0RA6T*5Y?y=mFp;ktlE|A`kii9J)yS{^(Gu_ve>GHE>I$Gbm!M3en62T;ouN*H(2+VXZV7>C9H$wG-kMH3fYE0JMr>0X;yGsgrcH`1>d6f~+DUt_x&%SN1%O=h`xwrx-Ro^!pg74Z-~51+*z^v<a6Ti=oaafeG%8!AUb2J*KCG}H`CAjut-HY5y>;g)AEJP=v3#$c=DfSPR2c`T;qf}r?jgtaHiTNk;WjX#cjbClj%)FKq!0xi{ecpP8}L0iY<!P`#o`WudrmsDlA7h|4FBt(2SVLOk@(){$taj0`+}dEz{y?(5kyN@*0aaW0;vpa*k*?|5PCp{3JCK6PYD0$*$zEhIL~&knooZQc=0TW*8<#W2I}W%A7B4hfa?u@w-zsct~+B62(y;BZVBKscz*8UX@els5(KW!o2$yC8Z%&Y8J!(u?$^y{Y*UtuO8`EMxp|$JWqt==VD!xyT20|IOk=amr|_wK{+<A=(or%Xn_>h0X|Z`x?Msfrah>8~lU;0EArtWI(qP#Y5-{rBez@VwlkyE(^_AG7Il!(^Uk~u)XWa<{;0p8;c&Dx(2{ON@h0_y)Pxhm9nF7ST0Z)^0wrEUeKsk!r693`p8|?<yZ8%QoB}VNOWV$mn)8Dap(im?Z<nwG~b%2bB+M-7AsCs#7OAU;rG9{|ONNrmj(W;&!k;zShXRJMfN;%#Xg2W7K2;>_u5gvUD30x+4@me|ABft=6RCcfaVL=wJBp#_b8j?$s1i*QdWEkJaX*mFf%IG)X<s*G06JK)QC5qot7N!AP6uZU}VR$)OP~#y$eUeW=)Pjj;h#gxc&|R{pP0Cr0=IBY1wS{&v#B3TRhl{vQZsV_MJ~R54G=Y6d*=bS0M_yl^<H;|-v@gCWRS_Pw%e2grMg$x9UxH1TY|s_&l{YA|-iAqy(;E;Z8rL`7=)3pypZ&s30zx0q#zyq|)$YUYn;+~SK`2Q76D^4i2_^bty<lwajR?I*cX@%f9%B#~<zz&7j7a8+I^4sPE9pN*45O$M4bhu~W*XjysN?PnH{{O)_y<il1fz49$K>YMSgP1vw;9jn{ub1Ew9+Xs?7?1T{G_-4{xv<hW^pt6ZuiwsI|uJ0UPV0n!VkA!y?gTpUb~y4V+9}mu=`{0Z-0YF(q0mMclf6F`u%RS!A$`N(U4HwHh7V)nvC$dl)$;_NTk*;IKM*QT8=T`yHv2l-}z(p4TdGXVS^4fzqAB0+R=Z`Q+#H&7>;0>5A&=M{q|{a*gNW7^aj86j}K3NgKf&<yX#ThQ7e?&C&f?nQu6M+M{`{RyK4a&BG6mxkn6tLHSf0JbbV={U#1&9M9n?(Z~&8-#y4>(5s}+K$4BvXk~Q$X7MeV}QO${Hjp1;18_{`klcS+OYVGW{B6J`|&6X=lstJy7y14C4o|PgC_fcyaj~==^ukr7q+xW4y-K?LEb^(b0{lA3t>d;4Hp`@>_`O%qAW#&IMTh<&25o;$YH}X1%saE!Z&O=kbV1pkx+HKTI9)OmO$h_yR`fsgWf7RH9T=fn-m%eB`{viI`<+Fqtp>#usc4WJLM`)_GTT(w0G`Sy;o0@S!dd`dB@XsDs0^?QdM*|E7F--y5la*AW`cBhDaM^krHne^LB%8`vcLKBi+n<9O(}AK}nYe`;@|~K+@3dZ9ihYLjZ%Kn9NNkPhmn4}A;~cQ~YO4`l<WuxO5n{k^z(69~k_WRoi$`e=45kE*EhoZ|u}12$HS%jbOOaP~9U9jPTFOG_>Tk`K549E&)UV{4x|yLDRQ_DoCrcL?kuZ}~4tAb|gz^@UaFP^7cUx`+%ETaMfCws2D`3KoLL`vX5}4d6%P3^n>7dj!yp1O}=->t%0$Bp|f>F|rkda7nhRkc$^nf6ugPSRjifw?ih)4(wOgX#T^=AmD(h3nFMSKjpRB?=n3vFMqoB;7V)e~Y7omY59o0_X$my-thxtQy<rnB@eo-L$6cb|^R+b%SyNT@K4cZ^VSP+li>HO%kskmO0e<}z;CC;jW9K<%;QouPTLtu<mpynkK+7$kW3uPZ9gqKp44p{T2r`1l%qxAXdkAKvW-X7b(P-+Bii^MrbUvz*u%A0B#^WN9+)M&m37B)-mPK%^K(+b!P^R3J(K_KtQX<#?m12GHdJZ$%gPH1bJxG?bwWQHxm7PN-?+P)WR^4(YU*g8*HkaUIS<)M9J_PFZ&<4TGn?4p=}{f+{!v(P>ROqb){Xr;|}5`uU9T?`_m#>=J{dqva;G!e+JEFQ)_29iH8=2Wr$b2{*IlG-@-Sq6-~VDd;UOz7&m+jxbhA!uOAN@dFSn`uRScjPpS;oF&PGw!hKbdi~>W^XdDawxiHijq~BW098y0pWlg78TsM_Ut|j%Ml}Om*vcpHgw?1KESV#>NSbI@Ej&`M8ltD&xF^0Oi!MLHS&y=;jehr6yA+C5EGENWlErxmfY2?}WV+Wm$iUFPvHh@p*!=hHho82$w~g=|&p-!6VyRmgDIT49d6qRiiwvldtpBPOE$+p)kh(g8ry|t4v_|>;WYwfS3lcWz@Io9-!<oyyawwXWa;Oxx3*cqdU!)+4eT6(v#;D}DmYj(?5Ft$z<D(j{wp$2kPp1j|RzH+$C&cD=aS9uiPi<An@$3+WrxaY|H60~IIm;K?d(8quGEz3mbTk-ZL=~Pr+xQbtr^fDZhI*7TlY`#>;d5VTJ4Q?V*1!08^7(>g13WCw?``J6hvdY;4$#l2eGnWUXWqs*tbgR!(y)Y*JIo|gF_~HNHObhoL;<0oK5|eRg|A4z6nbi8a0WEjE@<hi8l^KBDO<F~ZwWS{&gfvnRA8XA6fe#tkY1<((2~wbHlffojJ(>KqEt^#6J^MfUQuOPVNNzsmM0bPphQ)6APp#z5k=JqNdPsGp0TLaT;i9qx>Z(x+CHn>X4TnY8IDy4A!iI)i?wMF-IvwlU0t2isPg_bkkBvR;`4%8`(p*;Iy}py*QRNVf)PVmn;<*lu`)n)Op-b_aaiEoK-oEJ3Xpm8Ny(Yt!Fm{n0G;@NG0*ttoa3h{1g@pSrPN`RemgQUW^qxrWp5Z}H-<xv;*@TLeJv0I`$xa+|8Y){TwBB2WcUR-iUCW-l-vnA?z%05X7cNV+@=~}jR;O!gz?ybHi&%+@3jrnmJ(OIT|Dpg{>Xiqz#K{9v&LLjyk9)Gfj=LhIuTL9KLeQ)+SYa7UVq9p{nox;d9!A9HT~ASZN1mDee-0N)Ugv78{8E})G|uCASb0q1sP43kUdF}yRNI#CVJmOWB9!7f6eirBU|UF^cclE3bc|VXm-L8!1@6955;_vC6=&2aSuM)XdaU-bbbRGs5n`ojW!}?Q(Hy3$n2@{vI~r*{^uN6m|<uQY$G_L=6fN7uVg^6j3(JIYN82!kl_<eApiJ(72yFNw^g`AXSI;0P3Sy984j^js6ybuvj9g?_@lyK#?d38%2WH%+Tf>09ODV7HU_joPtD8Dk8iG?0+L>3kCy}_)I^fGaYB9&2><cco52V+T6eo)g7fDFDU!POUO3gW!3w?j!1R4>2BF}5OVuqLiDuY7^4<tV!}H!z?*P55;;grS_-_B;myXfW1StD=R%lK#y6n7ub7h8R7A|0#@VlBP%nu#jx(&)KuisP~wcBm+=)Sr2`puJwN28QuEfj%KkwInv3XjM2E_HP}0EmurLnE}4u@LtOrIR25Q0XMV&}AI`^*qf+Z4tRW1<ctx8;cDe(y%SA$#}xKP)Ni`VXgGnA7ds1X6a<8+b;Axfq!7oACiyoW+5>5{O(i?zsf^0B6$uy%`5?b|Fqv0$0y?8<Noo7-nsa+f7olA-W=a*L2_1upx(3tER+^AjIY_KU$44QNBc)dK%i5QoiejhlbN<B(whkaP5%U{@fP<i^_P7yn#DISuk#0MEkj}u!)!hRcmqjkkq@rG9io(r7`Hmh6uVFzVt*jpA$TyEi&P3qa>DoE6eeZS7W*ZjbX@S3dm<g~n`8tdSLa{~@Ek3Vn!$TWcxL}-A5b0<(<qh)B;%%iRAB;!%1EDz6D?Vw1ntF3R>KDtcP)I=qqXX!o?EQ-5ng-haLx<bkW<Pz(dS9+-pC_b73%*bWnl!R1}C(N<`QY|J;qpK>RUvSG*RS4x<qOdB96qFP`5w>r*1fQ1!ju;qLHpejhZXwt6UXmmPuk65D|*ZY6ZiN>{+YVRg^Vp*4Sw!>UtfzMjIWS`{zh)6z1ts@C0M68v7*<=o2FL5l~|15E(Lh1v*RUgP{=``*ik(?k@%ADhSMx(%;~Ln#ZMicm;3ZPQb7D$2A&9l(&L88b52gKm)$T_yBZvaK9`%@dK9R)I+Dc7cX%A=Gl|G3XLBen`Cnx{(XJ6Ge*ASlMEKc<GUO-=269hKN*S#C#rwgD4PBTVP}#S$|F~RjNoAQWoKvi>Z!tF*zdWNW1+3VN(UD4O`J|D9j)RP5`M@n(AFrOC*ryz8rSY-Z^3tT^1(;=L{@hGh(9-N8-eC~9flT<VFOGp24H5hLzJ%IeFs2xvxx^yXs+m2+Y*DWk+S$3uZW{OZP%BZ7+nS@jxA95zyzH=iT|P}h}fG~|2D(#{?`89y~I~I4z1IEHGXR0cNug>53VYW{@_L`=*%>u2s3VE#3lz2)ur@59G{%^4sEa`I{B`_IfFZIngNtEBEOUt7+NZMC7;fxDsQMI5<DgBnG1zu)&@b*iqXcWeo~2r+%bp)j=j~3m(pffbaR6IaPL1~8NNgsxEZWn+~)VR7Rslf4`i6~UO|UQ)00KvfQN%qM5B__)<iRcm3P&WInG_2^+uHrd$#7~+Ba^!-MNzNI4u@9+sy#;ClxcLV06w3N3|7mDI0?Urf&`g&9+R+ZlD7UXV{`-%ZAGEY?C;DHyx$GoSVz+salhjW4%O(4G1y=hS)$uY;cs{w9ALmJsIT7&Zii7E0xM91~?{@VU8)w-DqBpw|<INWw3<J`xZz~&WYwPOB1Lvh{!}>%2e@KjM5kgPk~v^0Cc22yb&n74$!VRxJ8>TEL6@Jzk0HsRF{+iTZ>LCPhp;?{|LSwCdF`;PD9Z~5?Sra1Xg3~<2h&?!^DOrXSunOUHL%vR-9v9N&++^WY-yXDm%^vFs)tjXzMM91Vu<=+yBVZNdr@b+ekWqBNYv5-E0Ec`f2;h(qstK4-1YXaKe(6-vy5C`N7BDr~Qlm0qim`&UAue{GJ%eH1MLB-{E#ji}NhWVzO^@vfzeNHvoNPKq!TJWx$eA@t^=rbe-Wyq_q^B*vBbAPE0@R8YgJdj)#PcfJ6zPH?&rH^5`lpU<0l((H*_Km~~HHRj!iYnx!vpV|3%?=uIsorByW{WWpJCU%b>l79`FV7+m!yWaVC(htR5jFZ`SR)cTCZdJv`Wm0^&A>E^RUS>j+~Uz3R}ZlPoEwm`YjHB{PGXXls*W!nR|Tm)ICSZX4_g0e;`P)TE@>8WwK-NsZ!^=EU_`PVVuGKATU!y)6A=p=Q(Df4Ab0f40qRN#+87L=87r9GDuA*lREHHE~pCO*@ktBgX}M=%8xf1ylHGWrF7-BG_*X06t(NJ5m)OU`{Qx{>%Ey+pHy8AA3(B;d85(it?Z#t+bHfeeW<Qe;n@y<$Duxe8~9jzMm4(um`SP;xO^i{WW7piE)`i^*aO0Qhqkre$&pWTXjZ73{9+g~dgypM}*A$>i8eO?Ik8Jgq|Sv?O?%L0fa9KN%$te(LCwjL8ZU4s0-OD5li-JGfR(&I()wz0ot>;wh3vl;9jek84=tu@`OSB^2QvYM`_(WbAI;bR=U{awjj39yX+-_llk8@D-3Xm}w_}YofKBy|OOA^gtR1wp-jG9#Q(Rd*!AbIx~1}X0Wql20Py}gIzU)SIcJL!2krNEkI-FW2d=tq}^w&b$4ZduUcv%x?`)qF_qFv^I2LhS^~})miw`~>G-~Z2ivT)u)k1Vm`ibjWM~ocxzxFD8bQMJ7ty74$&yc!T!6W|qxdGR8)U<LiYS0!=Hfr{_humb)%Z^&nUU|V$hTrm?@_J;IrvjY)%Zbszlg6vZ^B9~rqa=7T~smQ#3spxO3G_jg+uMo0A1Z8pO>9iXd7DEIohkJdnpW&?-k>IlF^=3R7Mr1Q9;P)WKix45^j|NMeU7m5ki+yhyK+(6Qq-Jp!QCy50cYzs4q#)L&_6sP)KS6cK9`LVg9nfFHJr)=Cr6S$GBC>3AD#~vYl3{fAm@He9N}pfsU90tHI5o%5=7TylPiT<W`bDD@y2DWyg!28f@TkZoz$&cv*0d(L>a+frpeTTDZ@4ubxasCYFMbIdM3)bW2Dxo2vqmtV=IZDIryWt!j!>21?PODpXXX4gE4ro$UrXArFVU`LwR@1GGrz6;x}T7Z69CH?;EVyhesS+QNWwFYF<)wz|2}NI%{@cMR1orXVIGwTjWyXqCG0k}WwWSypIjT1rWuRT;qG8;mv7v9TtVh_(8bU*<_xcmU<d>J7VkfdSl@GVwxWdH!WS-9x7&devlHAa7NPN@6Uo(ObratMC={GT4Pk;MG}Nm7!vGMtRG#%N{l>{LJhDuB3&1G($C8V8Ax~i}YXh?=8LQgPCf!xV8cO;d}1QdL7_NF=Ji3_E>|2NoRd!z}Xf=Co+YU!IcCVZBW7l@Jki3WQ`4F$VPK{#K)QgBGag~;V5g8=i^h=IU>q0P(3ICgiNDoYLq`TD;6E8dwSL`cQw2bm+;D!;`Wd1Vk*hSgl+N50t2K}nyD;M6k(t675_Y0!P<%pU0Mee(<9|zu9<vO+57Fo+)y@uUsZo<c08g#-n1M(fS@t(ZCO;be^~6XgF}uCZ|IVl#ioa93zAkOb5IRBUM9*+kk!KmTNMFRb~crCdxUp7Kfie*UvI(-?EJj5{Zzxe#+$$HAARn1A59E4x}dhn$?>s&d_lhu<l%?E(Q}twY4}Ti6n~A=3<=RdmUUUD*ajje<tA6FZZw}??8DR*(*h60<@jZ{C<z?H1}G+(JV)ef#R`~n_Or^OlPxNB3a|yvozG@699wZhWwDgz%HeH0L)SusC7IzZ?X;>GCjH=4E(N9bI0LPrL6&<CQ_VAr3(IP=R2&uKEwE;5!7(oX;TCHBkG54+5NjA(rTBC~z0_&ql=Vx!>Ux!y!MC|Kpo#ebc+#uf+I?PqQ@VJuNFNti)br*lfm5!&sEP*aX!M;(Nk1sDO3}ycb(T)P)CfU9`nXQ=9B>olM>g+j7Pj^Ff{(Jmyc^i~f}=@5O5#CiKXe=m;(b)OHF0HdF_&Y0AuY9)QoxPo3up~{Nj=S}%q>Ota3qnD0{~mNc&@;D$@w&yamh}q2P$jn%6uBve!GS&wx+0Ma{HfFi(c0hziyG&RYF;Xi-v@;$izilW8sPUM3WgYn$xK@x($jn?Z~FL969@_OHW>2wcIL`^nkpg^yTSKi#_g2mx(?>{>{OTf$$pcN&9b9RE<-G(BvdZGKh<>rHO8!FA->0iuJ`X&$|Znkbz5VJSH}deZm*~gG?Qz0_cgkeDPF;m7XVn*&+mi7}=a_Jn%+VV@2JrJbGB)ok4{)B12UpMwg9B4Cf`jaAi!L2%u&#Fw4ehU4K?Q#vGyr!0SHZzsQQCK+q75(|yE$pD0=mvlf(IuOyQ0W9h}9%0dz_=oNWr=hCJVDsVRd$<N>m+lna7g(z%`Kw)Sr*P1R;5P?cvni;h9@;*r>a7;P*D6vi|MFpAql`<)uM0@D}QjK@TAhk7p`RZy#-wU{~=!oq6Nk*lp9-jn*)T%+=sl;tOUN#;$Vx%SD1Mbr16|?&XGVpO{fk>V+cCs6Ac(JBfN0sB{7r^BwH*GgCLv~DN&#?v=3FlUoresoJsb|i*wGO<*jvC(h31%}(>G+5jR4Dv~)Ec>5w_OY0FH<k0v@I7YFqDjB8P;S0Gj+6YOgsYV=>BM=yCA!HBdRMz4^jY&ZyP!mdnW7U#U@FLo>pt<+rRqCH2uaIY_vq}+x3gkYok!h&R-kJa_S@m#GC{<pOEKRX$CSU32l_ngev8lQ6~9>)0szc8UL$TxTFr<b>*f1U--ObW>E*EV#Bmqy)vi_lrn1ta}v+sA9zZ@PxJeMjIivwfkJ3$cKZrOcYX&#pbF8HL9}Lms)9S3*N~sb@`{3vxKGG31GwY$mSW@r-taIlN)=8(#q{O%2tX&yk&|de8L?Q8-Yq0s0Ywz~Tjajt<wW{`dw6&-J83cnDcq@B;S`EVBqLq%+W{`OtAQz;YCeGI^9G5xToAali=J0hx%eWUc>P$6X2Lqt3mMAED|^A^_Z3Z(go<N&iptIuc1`x%8QpqOp<hH9FzTEd^bgz11;d)7@eRkL9j)UBAB~cF(i<v-A1;qlf2vp@{r&gf11UrSv8PjoVB;|~50HVHCe7oK76Q+rZ_JNcZz{H$@e+%;l0ybM^vC@s^7=14LhA*cyU0W}X(XAEq^v?}P|g_zWzo7#Lv+}z#6)h&Y^P8FyRBNuBbA{6a+D{9tW=PX=EFqY9mD}Ip`H#flUFO&)f<ZdbRaCz6(`8*&j0xI?&RnknO&eW?`93YREP#Z`fj9mjQ$e`mUk!AS&@rz%*pmD=cSM|uX>41nX9TkmdXDt;pAn?-RDao(mU9k6i64y-jY{J4vAu<VClS^A!o5D<#%jvI{Bpbc$QFc0RS*x7bRneiN4ANB*KoD8dcq-NK%g|hB0t;gs&)Lg4%M-Cl#ZTKu3vfA<UOAu#V<vcHwB4AR&N*z?g1iQH!fj)ba3)0DFO*);lg^YfXU#4sDy<WRzZ}r9nzTCsUHjdWv=4dixn^nIZcFIcr1iuQl0Cr=l5g=AaCnU&f6X9|zAcEWjE}qcsV*nx6DyOYFxRjO2YO)k#AmGtAm~uS-V{14ouh#a-Pab9YFKYBbm3;($xjd{UrHw_M$MCR1F8YlJz+PzOXS`$Gj7QB7A8NUT8v!_W+tBUs^cMc~$AKrtT<G2vxMwepEeNST{2C6ia;5l^cV4I>Z=CHq!3lNV%G#in%WPHG42{=YwBUt_GogBguPjsr>$Np|?-bIw=D2E}7{s>;0)ycF)iPVEH+0X^|83#zy&_aL>YNd|JFDg0XfzMQ5@EAIOA9N6{<)Kzrh$bfwo22`BPN;Gv)mCo}X<ys}PudeC&tJVRm@S7!Ufr0>tslHMdLDIc#7$V{s5sLXWu!s_?^o1Bf*j6b^snlJ}Xyq)^aweq;vc^(cQBl($XtUESX<NFl8G+K_S$|~%$#p`CEV@x@x}#(d-jUq0AI=h~tkLf`)+L1D8&lRLUttnf3!~@bhNAVhfVvl;^-DVp9=SHiePcGp%_l`XP7GEcg>p@W>*^wvV*4u$CAFDfP9gp^bjz@3x5A#VfRH_baFX*U{_$lxiHRu?<Qb{->O15fPpHsEdqD1w!N9G4fv#_#It8ok2Whz#6lgL;SXi_q`WhC;K^L`mH%ar2S8`)nbhI>;)71t4)&+$}29dh$DR32YcGj@Y?cZIeH*>5K7Z8D2SyR}`k&CX1&IrO|I<*Nnti*V+WZogDB2;iyVx*PfM+gkZX=1F`zhW{w(ssLA6eEDPA~9+x?MN3{!%KFNN1y@Lvb}bfT3+n}8#ogO?koq4(<B2?0D-SvkD=6xs!fR7b1mJg^+VQVOk<#RZNwS^wY%i-htB?nt-rxQEI=C~BLhjg_{4h`&592X5AY)~e3Ve+rt3<CPN%Y~ihq+|nk4r$>|l~4qXd@Otz2#64Xa0KRN_={wb8kc(BxuW7Wb(E8SJlOQ;M3aH<D_dFcwppKA(<}v4E2qRJ9YXbYh(~6&17$B`liMeZ<~Ls`CS$G#f()hwO;rw631IkD<*9_5xEzGlpuRH^hr3!jn`v{wh+M&%Jf*%ZIYNB$RaN5v@k_)e7&yvqpg;kETt~Sz)9=CrZ=;8sMyxyr}0P_sVaDnT7`48}W6~aJ##V0IFO33_dmA2JW6*h0&p27rNI)xYy_5-lKhK=%qt1ubwK{Q~JQ}h(~vVPk6bu->mVd;UH7%^$O^FlM*)-PCB5i$ICn$4aV}4<iP|pDhFjgxJ^gWL0+^>Oq|c8KEhk#<oM_hBOl01OZD~TN`t1J(Q)Ax%qT1uD_ZW%z44gBfwFsHOrx>%J|)0)MwWs>6+1cSl{&l2M|im`M|l&hkxfwwxaOTQ3KLI$%VenLGaJVp?<JStkvgfhca>ww0U-!hUbBunE--GuuXtDMktE|IhohvEny^s1C1dAx3r6ruvZZXl$M&8>QxXgr9c(Sjgbd?M|BOL}iAjk{IFk^H3eedI9ttQ=au!dE8YLo%<wVu4vl4Pm)nWLq^N}M5B}Kd1ljo>_MYiJ+5KF%(souL_P%oeS4o}{S>s7#(Y~#tU86w2V(V^fwjm7)V$6Pmysf7&K(1SLgbPattg`mAzFo_zB)T&(mgmSYj&pyR}VkSQUVbt`LC_RXZh(S-TBGhU{l%*6<h@>~AD|`wstim+*rC3OJxe?JUu_Yepim?C*52a$+%@@>sQPcbzf@+C6;v#qjcz_LEqdaz4yUErzmIW0+X@`%<wE0;=g@mjtlw@s4Q<IV-*3bP6smQ*~O&19aC{F?D3J?I#Tf5RJHn&`UIt41DlDrPP;e;pin3-GUUQLrd-q4&#SqYJig7OBv%g6MIpGFU@g;P1yuf7xR&0vK8es~mmqh*aH@dDxG6{i4Eo18J^iD<c5`D<MLsbfghU7yfjeKvZ~M9s6ZDlh6eJcYfoAyvyezcqji-L_Z1Hnk)LooB9VP3aQP--v=k@K{kDV|Ga|PfKG#h;9Xy(}ROa{zuE5y(bPn_6~jl(zqG0yRSFFj;NfchP6e_6={p6gyS47hxbOrxR2SU&&K#9=rwkj=~+(qq0m|zy23PLVE2*#VmyIjheeqKPHF9F-Q~_F6n<P{T}qS9i4Y}3MFCP3<DrVu11dy2;EU1;{nWj|>eg};f5S-<rZTJ{irl){u%hBt;@gt7(dc-RxZkJ7BXtZL=b(y@Ab7>GoJv8L4r9-SZ8IYomOV9lu(LNDaxcql+$AxVuE&|QH<px?t-Is)XFJLFn^xx-TA@q2I8jyjuZe+Dv7=V(BumgF+B^A_993W>jy=ZX1#(0@$jA-Tl91KD$GvJ2^2V&S(b;*ebV=hR2bpSug_kvFQx~cbGh1T)(d?DqtdS24aqij-Ll@((+Ejvek&1R6w5V_*QI)n=InLLvIxf0hIK(Lsu7u(~T8d|1n<x}ub{iqx*PjFB`zwrzY5?1a^>uB}GP%H3?ucy~rv_bG!)iCV74uA!Y*;3s7TRZ;rif8s%KjD1D<Qy)s>_}~*BJb5JfAwQwc}etz*=WR=kX&2mnQ9MoDc`#ED7)UUPODURu#`!7h=QI`^5mYTy48*IR*ssmla(SW;HdDw<al$XN(1oPZcfPEjlUl359Emn^`=)O@}6;euaT-rIA}*{W9uq%bQV<waPEfk*l}0g-qgruxt?Lk|C~1Fi;zthW)-v*J9KW<&e$1xjK*c*)IF#mOtCh$5V#|cb6EuDk+~*Dxl=siKto(h@k$87M?Uq%SF`MK{bL@Bor{B7Vw+H!TH4>N4;h%-1;ET^7#zjJla3_WpHqEbn^KO@9=}4KGFq;QR|}j`^Dg6um9oWMO`oZ8Ax{&Th%(~9bX_}J?eir#)O+-36dHy$gH=;5>Oa(9P3=QcUL_n?bK5SBqo2~-Ps7G&mNu}_f)EX&|>*tN{SE_YowRliwYxdUErXj>84_P3gRW{Y0p8+6SM{@D<V%(_u-(ZhoN=*;-lGiE5adsLuFJkV`xyf_}s2h!*U#*?w?)s_m9N;{r=JCvmOw0-ObZWviFcB^+`xLD!b>XQa>Hmn578?Ytmx4xXCQJqk6b~E|-BN$nUN68VyzBe8ALAQyx9&f|T}N=lW?w#X-hF#=${+z8t88eig-D=JVk#JNE6ckM;eL7!w+gUP|dQ&N5{HRE0d0OM>da5@cB722uM4Xu2i3U9VkJLzVmOEU&S$90^y7p(~t_va+*G5BXR4_x?iPUKJ?n5_Q|*=eznWXz_OGT1m2-7B9b9b;6vU_26vvOrhhd^G^psV!(F5jq*s+r3Yxfc(O57xBV#@r5P!5Xl^of4|}Ahba?iMIQx7|0k?2k?V32&vE=f@V-Dv=aT<vMLjlMEp()kcKF*buSK4yhf1mgwTXYVGqSS|OYil%HY|Z8qrNztWYg-buY{e!L+oO2fQdokGR)P{9qjV&<g$n@Sj5}ep?Qr825)LMc*hX>%$Agnkr+Ak)5l!gk$z6xF0$d}n!YQ*I4`+E%c#w6S4hUkoaJ3<)Oe04t+qwGyQoJ+Es=ytbF!bW~6CDG6?1=uD6mIUtNq+^!O_Ge3oRly;9_hrqNW3nAJ0yS~Z>`h^lJ?$KXUU}7YyS?fMJTPCN)D1N<18bzY0<Q()D}@eDvqsc2Y675pv^=eYD#5*3nv$%LFL_jKLtV5s|dx3Q6PH6)6@?6viy^7btri&C)Y}qy^u)@Gea~$n5nktA>|WMPueYs>N1y4op9nhrUGL`(CjN&e%f4-b-Dod`)Zel!d)Xv9H$@@mI9Y^bWrmp9t@Cki=0CqIJR(@Co{}{&CsG`au|wdr%@7FBIAHKIP2|`vuXddFAnxk_uuu8`WOA)xoF_EEo9<ps#|vM5-eab-~u9DdGVlU>u^(A@T#v?wJ38DF5Voj-dtro>>}|WhI@q8RQ<>6NIl~tpuQQ!aYc8>`N*zRO*fkT^@X~0WI?rxk8O~};vJIuZLYi+q`pT_tXCE-d(*?gh(c&X#peF6Akpr>JL+wcxh5n@aG@LPT0}0{HQIcN+!;`|FKQM+I~L%8Po$!-rV*Y+0C@wthkN;CZIXh@It_<|;zELjcFC^87HwLnvHMbxBH%`zXOv{PBr8{oO1F5!ZI|l@JIUi-*$97BJD_rnt}l6jrdfcQJkK4cZf5Ql)fz`XKgw3dnDsWI4gZS$(8R8u6Y{NQXS$}fneHuO`8KMx8j5OsXG6t_HAVNWc%*^;bQb37aaM-yzH-BMspJ-7AJ^9k2ZJ;>suS6FN_tT@(%Pt#7Km3MN58|G03`NOx?DaMk`{8VBBmQqt#V2QHV#va8o?@jsZKQ(!K4YkM1Z3X)D2YwP8n;+zyq2W|B=__v{*mZmkf{_nlH)5&==>;%PZ%`H+-1`g`ZJSW78|Bp@}h&FqVLlhZrvjrps&OWqAzTO0X6O7+O<&!t&f?*nHFztkgdxH5(;Bm5V?|8crIZq)iiv&H3FFCR8cH;dNS#->Y1tv>Co=4QF|&FD5`E28P6{QXG@vEx?dsL8!!;+(>nw(m>YA!EJ=em$E@OQZGbCV*4z!2z3!j9mYW5{rwMlk0vn0DM)<MR!8nsM5m;{OcIvb-UB<(1_BmR0dJ}71?JoHT*N(Pd2x|Oco|f3a}}E_afORRAfDN)qGTSuuw}uS8eBe{ntw&!v-Sayir_-=(I4?CSZ?BB;YaznJ8YHterT}?W<Vu!O$RDG!+x@`qR_sR8N9`9I>r*72!1`+`4kI4z^2@$^1?w*;9<X_4cW%<LHt}PM^Eq=z(4z|BSoQux7Fg%&*?#}|E*sfx~`MIWSeE6<*NNf<{V0F1H3ITdJ};wW9sPEH=yK=$KeCVm!gT7*2dwb!L;<VM29w{B^Up}ZCCY@q<si4fC@IRukWldlSG>8NkbraEIdSgg)7@T*wBQ1a30G&ZZ^eBvAf~#Vb^_`cCrZ=b#Zb!=pUc=E;g#73h$q(lMlT2^W@6}Wfqt0Jvv{F|8Ptvga((>*b)t75g$QA1Ht&@4F1Jg>@>v-L9UF`{>8yZ*4ffYdN;rGXReBu<NDv7TwI)d8XO$;_6h$K`BLNltUK8X1lN6IJt{&{g;}&<O!~A4(jQ$1yDCMgBpn;4bh#>L5@H9B1^}J*E;O8`plnx*TH$@^*oX(Bl}fBu;)h=Lqx?X>S87~+LZQb$Zu99<T=)9`EzY{(S!K+VJrVPd7%|A`x8gK}5?vWh1Z>vFlQRq_wbAU!F^&D+HHVu`=iWB7=$?5WW}bD%5Pe;@k|Yo%7gWl2J2B*J1w_H9%ZeYCdTrGkt##1@Zez;et!Ot&SV|>wh%Gt(c5v7`?|(R!G<kU!UZ!D}Z~IwKn9=TTBM!f%%~jRrOv0@wvYb<QmDI;YGF4$t85zg=a3J%N^HZsq2r$)&Ib<!n=7S8eJv3ke4of1Yaz3fD8tAgYyjQDnq3d?4+*Mf`Op5s5se+-hrU|GI@V_LbY+!Z{7k;Tcxjw#$7Zei;Cx9-8$*hdgGJ#gKq+rbzyJN!(UiE~YQ=Ix;Ji(Y`nj4cfviHzE1Xy8|D2EjI5XgnBF-k^$kV_F<EL@kjvm}x3I9L3;gCmGzVO2;Y-wDIl5r<4l9ND}zidVhOPNhzK*~RZb0}GL56Cbsk`rd#B-XbAq+-3(tqe)@Y+eoR%v<;e5<qcAmUi;!r@Ky2e;t`V$cD8r6pH{_ho$?J{$>^mF@h4D9zMvrcC_h-2c6%qUY8mlgcwV)libx@E>}{AGZn2Ef{0kYqhu|%NPA^#ZKow2G!ma#&SxA@bTj`7uC5JD+bKn~*-O(vUKw9>NbaZ83I*iqAYLs_w-Krc59pY}32F{9E)se)BO9%b2u&rdp79F$gidjsxeeKj2m7BpO$Yu3>01c0%5!*|-kuRG1uG$NtO9#_ax^1v<A3nEo5SKg(mk#o9xu%AYESgkjKMY6bDeF-1@&W4c(v-Umgdfo*YO)ircIlt5!cr|j!!xp~64X{<aVGYpOQE!sax4WlG~!_0fvi%1geefU4_tLXM@apyvcCiQRg$P6PImqUMII#Um4GTu(iM+OmAFRB>UHSiPcN-nfK;8st2yl-0j^+6I!9bymNu2}&V_k1s@cho{>oKzo}!JweTUNdOBK#id4Z0sHHJ4$j>zscvMZq=Uvz8*Dn?K4idu_TC~}$%v04TxV?-Wq3=h1NU0fM!qjwrqbGoo8a2)hiSxDC9yEO=;UzK@=a@v;<R^H)*y%0^vu4>HaYV*`8U=Dhaa0|JIR)fgEnu>ejg@$xxuLq%KwVJgHpTC$|=;T70l@cf}H)%RZFAQcBUhz32<&qqIoyaUvP}JlJW5eOZdeg5ZXmtlPm}G)BUx!M%p022`il5Q$WywuET&OHa9XfRz+uiviwPd~k@lIJmKi8MF%EYe;+vJCF;T-|PftDWwdT;P7wq$cR|7h6VSvTzcl?d?76>orDSkqJNh0N>)r|;x;pfXvUYwJC7rABFiCC(zXD>J`6LW!EtjCQ413u`JUUaUU&ZY_H2PF7YfOH1f+sG8Zi0A=&onoEt;{H{X8(7wDbaM%q!vc`8VTB~I$UW;fx(b~2tIVg{pI&#&`(t^0j^Hs6*nBPm;zR14di>c!swbm$~p`<4FmNO1*Tc^3oDYhHCdBrP=`hPnet(3s>j+3g`R(qP>8yA;C0KDO1n8oRxvp>=tBt^2Cvm|e3Sy&U2SA#7aGQKW<SAK`MK<$C7aHeM+Z<T{k;h19BFyL0|a+EiPLf7f)+Yvf^D}*@gpPwG>{~<p0&(HhEANI(ziWW=C|1QdS!7*h)!?`3NoGHO`^rF1D5I=K^+1!!ms#p`Arje!|^=VZsRZ+^2cR}B$Gvf5RM|E&DKaQ&I>KbzH53i4Y-4vD$Z#8~$>kljJu`q{VSCN_|0mQptLj+8!oX@QduYgS{{T8Z^aRYKdm`^?9MpymbQg%bF(<1B;FgFWR_5rlk&JB>|UO66yI_H6enH>LT+0{2J8XFekQMM;P0C&1a3f?1sVY_@(=XMNxrQM*OfQwqvW7l?LMJAKE&@=kMN6XZw88C8FRn$5_;2o1+5Nle#m2YHQ9w-}0T1MD3F~38(FL6CYo$y^Yw2(_`Tw&A7+_B1TfQ0jxUhkB{6;r%KTU{oGGU$Zm3oC2^%d&(AljjGPf#$6>>xy!clI%d9dK6!fq1>m#gj^?<*JK2%@ntC-jtYL*^Kf551Dz)fSd~85jNRdVFxUI3?zoE768_FrMC{SAoQPd)s!~N{S#Nl+Djo#7Ox1V}Q|AOfRqFoK8z6O%2dNSRY3CmxvmQuWd_(@V(n5+aD%65YIb!)ayS$}VY+{Zdf?4n_Vy5D@mnkgAsO0DBL`@><<rj>~#X{kj5-%>kU=Ddv#5c)x{=kdQb0m%zU)0TC@V$+*!E71(nUx0<Z2|eb%L@z_HFs!${LhtqHtc|AKvTU?x6n0L{<)36Vl@`EY^$m|s1t2Vkc?Csk16oWRbE*fdDnY?a@JG(VtH(^e5Bot{A^NRD1Wg6PFju0LX`yh?s8K}zhsp`B^bjt=@%4(!^~c?TxnvXm!<Fv@5^EU^prkPQRK)1s=6ihGC~9CA9P)w)R@>qDkq^#c<rG49UY&rF=Loy8s98(&`?=a)hnYzD~ha(=}fj&v#rQQ=*~xshin)GY{$iyMN&+1D$w$O{>T3m2lD<Cg)*+mtyoL1kkkA7M5gBw2%9Z=qPmF8O)I7#v!{uO4p>>v@`bKR31T6Z*nx$1BbA^QwS<!a<~VH00lHD+nPu;2#qG+ERTzIfO=Z6ZAD8=6Z?gOv<H1fo49+jkdi$T)mlBt^xaVZa9e@luz$cBs2APJWTw?AWyot9r!cvpTFh>g5jppTe>nBevMMz^lbT<N``qQ@e<8kjdDalI@{JVV&N)XrtZEDEC+LIhe4PXO)`A>iZd`XL(akD|yB>*hlh>MyPk(crmz5CohI^-_t<Dh@&y>Wi>`3$Q{^^bb|9-8A$5f+2NIL(s5pxKuGdGzynV)s6kqUwl8MuVq4A#;ejj}i;uk=(m2+`C6>BjKl@$IF-QBZiOhnPLVC0qzup%1^xu__PDhv}+$e%VJrUv)=F2u6!lSyu}kHy6TK+g-#jZ_Qad*?OkPqx|zqb7??;>sWoZc+Xe5Q;l$2*hi!2|k+?grU!wC<rftxOPF*gQu~pxxnYg^IRob#ax+-(YQ1XCLOWqz<>A8ZSk}FbH3Y_fr5Xc|<@#&FqqfYVKW_kuv>|}^8jdqVNTsxF`ERE>kqP;)m*izTqHl3j>68ey?$p4mKJDy06-gd7@KgTLfmA9l3R9<nV(o~1>HUGdKT<EHWqXn)@rn{$?Umfq%Q8h^Hr4&3P+sG5QpMO^lr=CS7SqYPL_!<^PjoW{p9OXCWU?b^j1`9fGJ0+$$sTl+1WbSVissgoUVz6GjVhr-HeFwZQSS;li9Vx{mp-@tc&J3>PBjz(F{DOBQEz=m_{ZKA<d9QSPuXbREqw3e<%4_(%@xQ-xWS`CAu2-KKTRYi&mUmefAGN~e{ukI1R9zlBes)WEmWvuY!#cJG>PWd8%RI-Fk{KJt*=W#?s`VABCIt%}pJ7M{B@RpZ_t|kP4$+qh#{em#S}2<$RY2=_t6F(NmIsJ@YjlGq)=Mr&3dS|q1Z{b4)T%o`Kno)^D0H*o-tr1;B4Q(z;s`I9Kvz>LqVVM9O}@Z;?O=*;TZZLAk87@HSg{r^oO&R+i%f#R3w#1`h4m{czHu9zf<L$f1(40kH3c??hf?bID4RH#`W~>B%ZpN!b&9R#c6v1zQ;lac9Kni;_hBGe_9-9eWMmnO_1>t<*2yU4O*@dq&k8hg`A1~$PvKXhv%2*vSwSz4qc;`8wxbpD0?Vey=bz8|#~%zW**fYU|I$0uBn3(NxoEJJ2aCcGjo6|)<W>1To8mm{+FnbNsNC11^2)AZb4FV_^Spmpfc}x)Ls#gB#E_LgCl`JzL1wF(GMDM7RX?~d7$of?S2$w2dcUIP`1UuC*NeK~YFBI5?s@Bp-_x>?>u-`n#9E=)e)P5E6Rx?y`PSN~)_SfhywA1F1FtQ)p2K)vxH5D1Tgs<<8aNpZ1SaGEAx+Iim%OJE&7Ncuq<qSCgIX1zmqfoULxyy0k8J57Xw!3mc|TX(gVBfHaqp~uAaJMH*hz)J;2;8O^xyZTZjZ*UlhfYW{>90eI5;_e-#`1rzbHLAB$v>zC{Zk(hn|ZdjfgUp>BVquw56tOA09O$9iXIobOf_D(Ke%Gn9)s}Rr_!1xXWu}M2=68GyHbezfcL70cI<i%>mgpGm6g-@IiT{CDxV&#-rTFvjk0D?fSBZ+qUAw@&7GZnvQjPyV9Seag6q^XlqlskWX2a!aDzaaL_wH@0j7lqyG406$NA+Fz8oy%c3ZD2P@~JVNb;>rqc=E@#?(()E4KMgz??3j%jIEE;INluh9+IckD_s@0TyoDq)W|VN<P|uuR~P0ipC6u0c~HBvi}Kz@UH*o|Fhk#CN$*mJMAGP#<`;^LdXU*LbUIJRVzhbULPljVv*%^^)GJy_&wBQO>5Wi-e161Pj~j3A&*T(-`B);{G<7)k$ky%|@=kOrAn5KqS-BwJLHG-(ZkYEsPFx8M8vmi^Ui-QD|lI5?dsXn1p7T0}n9|L{^VMU+Y?8<vCg^DT`d+`%AYll14-KwZd8grR3_uMFK|}H3=K*Rh_^|_zXG-?%fNq=Tua(3`MeR=Oh1pTH_ejouf`*u628^4O#(oL)*2zH*alINnMASpCrL^jpFo6TrZ%}OEFB)vzg$d?e^{)_#@BlGq#x`oAd?GwN<{B7cz``XJ?pFh`hF(!Qr3;YzEl?nl_q#y}_XG3D|_?gsBYxHSe^CSzg#TzdAk~y1GtY;{XS%5zlVE+9hYF@vI<;8-AeA?fu!!9QWpwe!=u9DxN@ouXpq8i$Ogs7p3e*l2GeAX>`Rf>IFjy2C?k85owJqY6<01LtB0_C}&jC=r+lwUCY)hZ9*$LW$|{4#arkF{s2oVx^|)x=PA|O3jt6u7K^u<)V|BJ?6aXuirO7fDT`Ohhi%9~s3gp_%7b08ILoiJF4VBn%P^kCT*gyyJ^U5J5RclT@C>dl(xo~)3M}lO<birJN!KmC#<v8?_sN5_VnnS_tvPBn0?`?f3aYI@K0|NT8`Dk$4J>kZN3RivL9JL0On-3bg3g_s)C{u{(IY24q3=&n=10F?z=4S+kmkj0*Th#WX}_jlv)ZStCgOzK&Lev1{uX+oK#wK2eHa0|EAHd88~{a-_5uA<L%Bv8G!oE)0g3`x<qE%B{-);oj(+a|2UTA0;$%KUdRmteKk=-%E^O?#na*52udcb=zH?s@kykCCoBd%JG(zpvIIW2ON5N4Jj!w=|8AFpUT40Snw9?R3t*US0ANY@PaoOAGgh0>_=6iKFy{HI!-+fkXQwf^j;k~ETc6L;Sk7!FRCCzWzVJv5i>U&^AS?W?XtT1Q-<=qQ?c|@Il+TyDC^5AZ4;H@^YC>CMDV1PV+Fp$VlEHGp!#pDIx{2+e(UxMyYas'},
- 'signals': {'title': 'Signal Mover',
-             'folder': 'Signal_Mover',
-             'filename': 'signal_mover.py',
-             'description': 'Relocate connection signals and format their text',
-             'sha256': '13b054c8dbfc013ef0f9bab1efce09277e802af3c337e946596508f81c85055c',
-             'payload': 'c-p;vYjWF2(%^rcqDGEhfNheNWV_u%H+w^tXt%ayNg>MZ@oE$dkOU=+L4X5*mN@zpv4_~R>;d*Ddy>sZJ@FtV_k7>PL|X(3^~lP~cV%vGZx3E}^Dv9TTy(^6a6CA;5T_>tae6L3o}LfH!T!5<$EOFs58LAGd@vk}!O6woye;0Jo`2lG5W}MnC;P|4?$*|Cr=P{esrWP;YzeX373a%D6gN>W@<|pgimuof`8<eY5hZz%Ehj~kCgL_qrs=In7h#fj;k&)A7~V$3<VF;!Ff$91smQ}PoD?EWLXl=-o@Sw*n;56rG|Y170RHD66j|Jv#L?ud2&U5r2MS^_j?>B4yp10(^AI}saxq`VMbzP*aXLks#(4`T^0F%~ZbEymxyZtK5G8`zEyV3j6o+D!E(H(8{lgbHZ}Bnx7Q*sFo>I+{gFKo-|1%L4Vgik`9Gk0Nu-haIrw9g~UYC11%fdVtgQN&E9*P!}g~c+%X;B|_qX7UH=2PtK6|azYM@())9C!ctSdIr{%emmU&~2271@!!)2=9tqyc@hn?3f2%qvV>W79=a^CP=Qst~g1P4t*}t@jsw9f(y>gz&d~pjII;d$0<(dbyvLO@nHXNXefkqn#3!@$8dTb_5e~zBEQe!W7yVYIUghN<^=H6z&u?n(mX0cada{~I^+)O$9Q*o@f*F)d$QM>?hXj=0X>6x*vSB-aX2epWYP6ap+7>r%ELvF1u*P9noa>h;vfM8&Qk^<_Z0`@5SmX@k)-f-5g?or5e9(wDYVPru)skXhm&*;D3Qif;Sa-NSghjE-)*&MO9n5wvqcbx1&lXI<8+ycSJd=?e)z9igv>ude>21w+yTG>z<MzUWC*U|vpCH|I2J_}+X<&&=7i%xBKJ;hHceEF130W*@d;LbfIV?X66^j($T`R-a9F}b%%UX9Z*aS}0P}GBa{z!C+)ct5UdDW|gJcO*VkJUERKUUo%<_fYcX-eH-QA*t0Jta5La;1u(k%KHz?yL|$FqfVnJp2NI88hOvzT{mIhnxm%4I(|$F^EPnmKDgEC}x+AYjn+Ta+$ym>g`(0>F-k1bYrOahRpqJb>-MMV>As>B+)i+96C{U>D(SPb^k2Up&8~cgy(eXh;||Iu8Lo16bzhKrX+#Scy(&nyot7GBG_Cs|7#{s73}<q(^A*qz>u(-JP8`TU&%_d@AP4ybw15U_SJk6wxdS#;_}JPDH+%10LpYMKB*n*Gqr`J|<!y(%S@1;7zpH%7HLSIz|AORKie(9NECZ=|=%G2RKic8E#>C7fzORs0q!AD2}({5a$7Bsfb{`60Fd;jf5Avju7OFG{ZfRv?WfjyIbesKbH~gsrXF$2bjHB!B)Q91Iz?kMYsZ|ClCP7gz!gmnMIcVgDCCx_V(5+OXp%Vnl0fJgrkv&<~SI93y2@k3E5JQvTK-T9;)9k(Hr%5zS7N#ESQ92IO^Or99KyRbJh1WoCR<+r_rPUWK5ShS#CT9f>K043sg(_o8K;Az&IMKmuJ@aML1vJ$=cdtMm;*&|2P<3d^sD4zW8bP&DPn`$>`+M$9IEs^>lCN<<{ZgkE4UZ=x{(^T^yaBsJFX&Tl=3bPDipkd^&{3KH^eaylHK{J3T%e4KKbNQ)@Ns!Rhhor*nAnYU^U~w+s3XyFWNTI>YX<k9(plZ+gNTO41Ib)@#F%@aPcE%_Ia65v@hA!5f$=ygGyJXR084xrHsSO`W~k-GK(50UvY=pwU?eARQ&)6q+Frpvf_ul32487`M_DE)W_Xlo=4be%Kluei)2C?w@}+I)R1kba#K+dL}+2&9k@!vzy6e2`7+PArA9J0555auVJ{5Oja>896|CD=nSO=cs4Ua0*EgYI@2*Mg&A5PC9H2z9^t{g4i?Dd;i$m>ry<}-h~4#|zaYoyBmR$pkW;VWT>$bG&C2JVM|W+pYKhx)2^@&oRB@Zaahrx9upx;MBn@=8m^+S+_fH0+5Bp~fgx6a`#J2O(&!aD+i__!5`TohlfZpx=q(0d{1`PQKe<SJ%@eIx*bt(d&)X5yi=!sndBkZ?aaa+6;1k<gL`+pk^e;W({qY$mWj1G^67kU)fhEjvS*$sAaif5<8BSP>$2Ioibj}9cZyR(IMBxsJ{KXnaucW59yOoR%j@81sx7xe0<*IO5-XC(mahMiYiKn6!2kA}melMnEyv$y-|&CAz&uixx#9iM)HBXmC4{|GNYl!D_67>o4Hmu$Pgz1`{&UefOOVRth1u0_umKv@eP-?qgpUgkIbi)<<10cW&^ATC_cINT-v&%E#6W*|jTPvW`Q{(G|Bs%u4K_^mCTYJ&7S26j9GtoOeKF$~>PW7AI@)*Vs`9JF5967U#Ak|3Fc+y^ct4GI>3kj{3a9HojvzULS8C%hRUxxWrGzf~Co!G-YQuXsW5w*(|V?ZThY!snOrJ8T1di}!?9N~C`jO-C$OIco(zGF&c*5R<y$Pmrj$#nE9W$g%*A7P3OwHO`#D2JZ#E&%4Np9tE|_t7e$_#S(;-HlRvgv@BRaV?Pen_K08c0OBmlJzVZyl{?XWsQ=Y|w}anBxMJQmdvKb-GzW;QF`QRLw(3;|3GWu9nT!aI@TuNH7^*ra?j9%X!=E+pXXPG$5eN@#Tpb+$_l!2|HVYODB+)3XfJBG1P^8OZu`FJ|`U{YaXi|B%wiBKf{P(is4&S?~nbNOfM}V>rsvS14n1rCW`G4R@1C*xP;sT^P`m<*G3!wP=A$Hif6<gI7{PvPwU&-@8T0~z>3j{Rr4Fxf1YQC%NVx%_B-3>%rS}CEC_)A|{#Id>-9=waYkWBr^^re8J0nru)J|&=NfXEZXoyt>v9Tsq=b0Dc8RZrXEM-cLs$cz+bJmVAn0kkrbjE|r(9?Z7bX`vp7YO}-%KFeAb2GtT2f7Rbx*&B592Pg)rn^qg2fM`Cv3By7^WkU!mg%Sq^8V*Q?oJO-5EB0_03zYi`+%sR!%345M4-Uey|D*MT#%SsNgg2zOtM1n9D-)-Fg&H#aXpp>B*>n1;ZhIB2mB?sq?STG)6}z8-ehA8eY;H&*Zzk)lFe^VD|D!D}67bVd=|k4U=RhiguV@=GaOKWWP(tVk61a!BB?O{b5XGP$XgcixMxPNFu}j|&&oSe-Y*K7dPyVn(J8AD#mmpcV0FY~bAHcb_d%X#A*uIQczWo6wv0XX{lVz5LiJB)h@he-U8d<^uA68h9eAmKr>n^ZyZ{2yyhbW+It>0_sbKc!l>ck_E;A37V3h;95(uUC2aJUUjsI6S@#&Ipaj}(HH;t{FX(A<aLwZjItC|IoK2;AZ1CY%Sy>JvVl_5XFy1EFrCNN`)`$taj0`+`?3;AAgr5kyN@*0cNV9H|U!*mjRL5PCp{3J7xtPYD0$*)Ba>InVa4S`U8)ctI8hj{@9T4EpnQADjPYfa^8>wiYjbX*y#L2;;UGw*~MSJU{bb;S*%qg22^#eN~y1p8=zb*{BMCjayIHCe(re_%P-+Xl+G0haWKdHt9m}H%w!@NEh%|@$@|bSb>f?BHhx5|Fl`nRQr;maNMK>*<=^Lt&j<Lc4@He3JDnXZa>^A%agJNt@=uIXb!L|)Ylz6`9*ia0JsAE1llz9BSBW~Y31~U;FJ9*T_y)HZ^YA-Rxp2&0p-YV3j7aG-)J{v($yTNt`Vbl1Tx(@NO;kl#S?$FeL#w~=>QoKeTy2wz3SzmD>X2d%9N-ABXw<YM5}s^L?$;0p0V}_D&=fj2of`_A&_sNZI&K%Vz!P@&ssToOMoHHC`~2sDkmFq7);e14aucR0^mxMWEi7`6jj9$8y<_51ToVHn^m7fOA$<pCCq4HEI+u<#z@Qt_BMl(r%gs3Xz>mEPtn^%Jq}Tr0x)MG9+6-YlZ`D7Q6ge9pGfCXK?V{u#$1Ekb<>fC85qg?zyHUBHB(=DVJLo{z<AQbg0|*7pDlU92)yJP-8a(48s=;o8m}xL0h!zOc3#rL=*R9J*+t%>+d!L-(2Pzd_XH)DXtn}K!-{~4b``+rUjPD1X8`>J0Cf@aJWq*H`>h7lUCpaIP)DP_MleU#oLy#2J$Mzcctm?WPmk*<M;?Nby6Y}cy7ku#id3fG$c0tUk`}EuG!%D*1Dp#0vjZALOvbaen35rKBwaXt$$z94gl6>-A4|)a>l4G#Vs#Ob#af?RW^Xv?k)wE4HU#F`#;;pzWZzop9Hu4pF6e>=gL(R`*7pe4_A)Qwk1M5y;l%8@<DjrizrmK=7A4bjt6rmUF^WLoNpN`;DU}x57ft4CZ5*n%d1;=Gd)sUZDvimliOJDlBzYt*p43|toF)p4^vfM6jLp)@_WDOIDIMow_ASI?T4$Q8TbDul3OBc2{iUz_u3w~e*ig?k?j!QOFQj|PGJ0b}KGIbih8fokyHz{i^(S6QRGubpUeAy^z%Zmi@Cg5bUy8KA6BLY`d3iK0Qnj8#Cp^nlk;6M@vrAprUX4;q5JhouF4ZA>5D^}?A2P;c4@h*>AqDZAdF*sKUyPD4$i}M?wj5y#Tb5A~67%401l$GoChzaPHmrAWS7d?Z%$!ESb&}>qB>lS}FJ$3Amtl@RIows)hgrHzrjplMjvBcTG@y-%EzbZe(A&#q3}B4VKe`<ydnQ3Xjv1P4Gs$n#Tl{hYn@MeGIqZ>?LJ0ax=Fl7T#lAumR{j-cDKT7^L!u<){XIE3?R?z7IQR{t2F?ZtNIQD$kD%_!E5kydKu{7VhE+@>bje8wO1kt2p1YCr$ZaroHriFP4B|uSB=q%wh`@OWdjZrdRGlExQIZ`46}_hZ{rJ*TkG(5uHOAMxhzE-vb1Ug2hN+CpjS)rN-hfo8Uq-N}iKtUXGkJn&ZILFo4{OyJAMiLCrjfUm0ND+u)QjxEY4!*aq{PdEWaU@%tZ~bL(}wh8XS-JX+9Z9s7TyM##1$qe{-<BIM_ZDOqj0R1W{TQ9X<TWeW8hIjPMvg71sYDv2pAGnjr@PT;Iw%$<}{NmC7z?tyaseUUlKCH#HTGlqs7k+pdhEL6ewoiJ#_uhyJts9@73$8zhn<p*~$0L2M2?*i~WP+K}8M+IMj}W2weblf~?5V1?_w2lV`ZO&(Y8BF{YDz#A|5jHAzZ`tFrh{b$#-MTAewYZDQ7Vpk&uZ!S#d~0Na^PF`!P-av`ZG&LzkI^G!G*+NAQHxVN^aI|oJwf6wP|ykEX<DF6~ls|-#@xx4~36{(Qk=cs4@hq%X2VMpN4yZ*g0ZuGh@XAi=2kC?ZT4OXfFd`<&Cc&-vxH#Q7?LY%J?M_-kU#qdyU26;P${BT4~E;$+lq+6PfcYra2&@L$K&_!q(Q-l;K&@wOw<r@m+A`>1nUr(w2Q()iOJW9e5(nTL$N|JDgtT9S1w-s64z9P`jOP-f(KtJS*7zDNq>0vO={X5Zdtw`wnaGy)lkp>^Wj;HWGn<6gmba%)y2ov<V>z4Rc)HwUsns(f6+&-WvBC~RFJa~Wc;{52tZx@76_qZxYD!h6S+oeuWz~Y8l0)<w-!Y+Da#M`TfmS)%Dp4aZt^S70r|JJ|1>vdnv9@-Rl(O1p!hj%645Zv@D`X%3WOC4?l)|vP%0S7mZ!fDquax6vL2#ak}tfl~e*h-Riw+TAi5@$wPaLY2R!VT$g%8`B>iS;5|S@J6SZrLFPLM{vk=!p|bVe%0L)h+1|;0_qk*7)FUubQ5_?^SI2UR$g;>$loZ{rpLvR2rXQ9PHDYsh5h#ElI?%e7(vs`UD@Lc84kd3n}y5QA@fAzt<ws;6G~!e9&vsTtqF0zic@eNi7xPX<47qZy{lpvxh;6tgh`G5a<ZS^hJhD29Qwtg*k#8LqgFIh(|+k_`nNo^d)!WIK-EK(})N<R9@qGhZ(GaK7OP{0`lH`Yki;N-0sQvT{K{<sd2ajDtXE`paFE(UbVa3F3@A2*W9kYl6|NK@VrIQxjz2Y74L&@@FTnfax#euX((SHB4$dtLn;EY1<sh_TiBe6KS{5y@ny<)En9&x%QuVEm_r|6fDHYycZC4}t=hp~nZbA048Hr+!S~eQFV_rSS~+aRE;Me7&Ti|8%iC=jVQ+IkJE|Y-aL<Y~z=*;-#^K~T#HoP{i2vvjV4kjNls|bcc4g2GwJK4GhH22JYAW>OIZo)MKK9kn77T=JQ~Wp@Cnh8yneLs5-6``EqUy^2LGC{{YVEErlx@{&Z6<fV!<0c@>Au`SKh~XbW+|==P{NlmP(_-S4cRqjceAp(Dbj`Nq*X`KHFOPp+5|BNpj|XO_+P_SKMv;OX@G&RJ^YW3-BNKIK8Kwm+(+CIp$7GGWjl<B1mCTgk(4Ozxs0k4?7Si|S5a$qrA7IXv;=_U>KboTWRgZp%N2Jfcam&f<PTEaO<0~Ao49$9a+is=b;c_Ud&enIZ}ULeqeKMagzhE_(ZI#`P68#LTShQtCbO+zg^cdS@voO*o>Mq{Aw75SNt#VzX+>BvccB0!MJB-X4f0fl>!V|yIgV;qclfd6_54yIn6VqFZL~4H?wmPB+&iylH3D=ZLgTF}kKvTpYOx-#3)-s%dN4is3A>b0fWT#M_otn!hpl?oxs2r>aYQ(+)HY;++LN?d*H>3I`ouUjvVOp=(pE&mRrIA&Xf}uVql1v{EyS_hTE2S0x2v>hfU1Br?_xy#gMLV(BO|Sv4RK@1RfF^FImSBps!gULe0wSF%U4|>QuEv|$J05ZT#_MXwP=w|Lq%0S)nbINr9Z`5S-sK2YH$hPT~$p~b*&WbTC{8{Fvf}tzT0qmBF+cH)8jt|hv<9}!!IA-ogNQ+mi|vr;%H4dQ3D6ZZqTY41IQAAhKAm2(&jl36#iyA0z9d|FVO`uh45`}OXs_~)9`}sWo?szV#^qB*}iuVo5+_3t}3=)jRFr<c@AyK7UWu1$8@Y44ARfU(Z{pX^NanHi=K{Uundc0nnL#{rxzj#(M29)5t-`wG9v*Xly)20A5RgD2+9iY=gY~B2y**sAZi!Ucu7ZT4($tN?Z{hrvo23%Z?{4Gl_|N~=i+9SM-wt*u(h^i=2wOyNmCzT=x5sq!jBKH>mSDdtUZg`+M&14ePw#StdP{JOH13wQ$as%<CWzT(8#jR56#y3is`m4q{Wk_4jIpq%P<qPd?AlQ)d2UoYndaFsnkZcRIJf_hK8okp0IF>(Fk_+UPgJbGfalG;GMOprnJ`Zme9Cd;J^A);|@W7A5N9a0<U?Pck=RV?MsEs)}e9UOaF*+Y`~#g?;ybtQg;u^Q>)mM8>2j);2wFJ-=j7JV{QNIoF&5cmXvWnM}p3w_kQcq&Ytp)RblpM-$>mCH?hAeqD58Y7Gfx8l}hJOPwg?Fyt~;C?TWovQ7^V{O9SnFdBrs!hK{)$Wf8Uk-Pf#8*`A+?L#Ao4HIsNb4dvA`@|&`jmoJz?zg2gi>6$g)BsNaguDpQ&Lisoj*-ec`w|hr~dXNDh=83IS*NO;yt$_|!<r1URRixy!#wDAD6OgIPE?MKKT@(0&AalsA!GX1LKOqJF@YjDP_$U0gME_LyevRu&2CPWg&E3k1JC|Hq77(dFG`_#;)qBkBc1nP&@#KYduDr|MU(0ueDl0TM!D@OGo4tc_2ceq{pp2vBD+T3P!WBz)yxAC7W^qQwJhkF`kHS`TQx9Q-4^SNShz!Cn__y6~7(np>Nhz4zgdBTmun_}YXlf6RSd7^rEYWy)uzzv_VzJNX9gUPSUNrm`#?r&rEGSp-$dQ$G;E8ei0i5jZ*CMb3qz1v7M>XR0X2Du)Ye~999O2{ePM-IBp3G%$?@G}@DVFeEVoQuRwt=3MNq9d&CXv9Q{+KejM@G9F^<5?UQmUWmU`6~v@{Z<^MN0QZ=yw|<nfp6k4Nhf=b<9T{84yihUV=h>Rkb2L$2MgfQptW)>SyKjLuRDsR$z6I=jkLu+ki}<!Lkjj%eF4v))M)s#PUme^!rE}cF<0<V589@P53r60+~{5$ZOslO`8C&W^6hEbu%=oGz_7{?q-r+C#%cvF8z9Ct1ay3_@q_VLW|8jC{JS!=aWomnedJ7u;iyfRh<r-1<p+&rudDV*#`Qh$OkeQ`lyMXTy2%;y=sWw)LnNJvlMMu#Ln9s-zLUkoF>;f>JK`EP^YZ1QdM}Z)<z?$JClCDJQd`e>iy-;RgDx}wL_ZSeVQoTyliyYYe>6>Ok;V(i2$9Ph4IR(33{m&eH9vMj`HJ=W=M=@tj0bHFHe`*1UZW{FYjRkw4d=E1IZgKWt~C+yJ84DbW)J|PYFEe2rrZ9pUaRU?ZTWgC|Lcm5jQ9(gA!jsgU@j(L1sng;ZkyC;w3j5A8VA1%>~`LOylAhjqm{ZC7&LOVCqk@%Ap=2k9@shOi>Z@4ca0riu^j9Dj7wq=%m~WWmZtR$FmV9o?)IYYo|D<xoQ#FKRLblZE$XaW}>{*56%ZO61n-LU@usVLa(RHe-+8?qJ_-xqf%ECF(TfjcQ48ryC`K1XHg1)rU%dwu&Z%Od1V;2%3y2aCF>)oWjqUZ3phfe0n<pr5>{a>^sN71)6gVz7(~0gYHjE!n$>SL%|r40o!!^1t2(o)wH7=?lmx&$qkEjYh*9PlIt~BQHz(i;ac-JT8vL(*JzdF&9Sm<GxuJuER1=>odRT?Z^v?e7uI{_Ly6-Tgnp|AX2}BSw)4Q5BCWlBp6eKCpR2&BSQM?q-p|>`YRG6GapjGR#cMKH$!pUkNd9`f+SeA*O(Af$kF(nEsr3Z6i3W=nx5yp}^%F&2Rv;P5LEg!O@1puyo?_Tl6NzvW;>Cr6xHl_J>fa(W^&d`Z(o7)2J<jTnlMhdQU2UAV%&$7DpN6_MfHo076>0LCBij`uBN(jT)k{}0)1t-CP<Ffbi^;Oj?F#P@K><lz3V)pkWT5aPM$%nSoYxoiVO%KZ&3WtlzR`g^0>azFK4n}^0^1(B)Vg_-m&7^R*U%sx+s@v_d;$k=LKvPg)mKjmNWy0{E+CsLUw;a`Ie>glnINImfdZ`KV?tm&}DNI_TC4Z=t1z@}0TI-#8<rzI#lkm--d@lgF<=_wCT4;Bgw#rHsPeN)ZY&0_tQP@bjF=GN0jh9&(*zR7e+SU9;^5VXXtRz<hJ;po`(!YF4x#4Wwm*ibs{B|@faZoF65Z%Xduu7LQJ>;iEH?{eo_E$)4Cx}%tK%RJ4oCOr1nWeXs#gM^*dSB-SYKR?LOgL5dHpW>n`5KZiMV=9phYGez1~idZG|Ks|rR{pQLpL2Mh~x_S9RHS&Z=-2(BPu}+DuPq0uv?lfV(VWpm(7pD%FDI>>aF+A4vgfp*28q5A_+3g_Q<XhLTSB&%4@MwlP<9<>t+%$cvO>bMwDpMv!ia1hn2!Po|jhJ5--GFcW2AJpT)f{XzxZaORsuW!U2b0PSf?=hEQF$h7F;t<`g~#en{&XRVaa`1SciP>{jE^85{b-!+=n)F_VNp!C>Cf!YEqjCD28F-oY*ezAO!6_3^y6k6qIThv$|$F&$9za!xb-wIQ`l%PQGr43=9vq?dJiMrq3if+vMdTv}E^r*bd5b}s}T*@+6Tp`5g%AV$Kq8nJ_PWK4EzY&F`f<J{V&{;KvtAx97#L>^_BB^0n?3i@8e!OxOLzNaYcyKvee5K3nT$G@<@Aukc57kn}}TPtCi4Cdjvka8$fda8Ucs42?4u^l|9M$^9KjHQLVv!)_~+0Q)H!c|wCFp16c<s2jXtQ(K4N?G=cfDW-k93{I_{(57IajZE8#O$oMpp`$_URCc`#x61cAN>mmGa?oM|5Ey*elvS)IbEn(UHaovoKM;I<uBTmK|QJ0+v49dx>TRWQ$#0DUM$`Bk~yUuou%{t(ms;5IkRrDJVSCssH74dV~kd;4TpHSkZ&ilQ3Y`C8j~kZIUon69m{<13|KgBr)Hy^2NyH<T2P>jt#Kezq_WOP<_WtWIMPQa`^Q2-wv8!xk<sfkt0=}8tU{V%PF2@o5mmM$)65m>T{H85xsRALHBciOL2+tB(zco%Z{vD`<kIA)VNGQ;L?fEIg+=<5*Pm^LUBzQuf8Qu6@zZRq)+vT&_7Rs~uQ8l%js*Qv7TiX=*L9XI7krW3?1y%)*IT&g8&(Vd%k5ii^k_;@^H}Q_(a5$8_mzo;6JA$sfLh7)a7Sr_x;uMXSGMdKEBW%(<ID!E(aKr4slpu1yvAy6f4NR2me~An(}^vmc;=bIVl#dJo@VvX@*YI_HZ5zJ=YxY&P|-m9wc;FY9avOJ%*^9!Q<vM?q=5n`K2VpV@I#{9asu84Ye%nka!N5*Qj6p~l{xl|Z=yO|&v92cyjxzS%Q;z%j@@<D=i~Fi{^6I-+424XOhv-$i{(@#u<KAKBW-~qZcWG21|g**&#07u+VU6X(pJ}%E{*sBgj^4(5~6~1F*3d6zG=NC2o{~+XxT6!gm;(h&}PZ!&J}yKINcZk(yNAKsX&ra9Lbi(0Xd0F%=LW5siWkRHx?a!Cf;FOi<Az4B63KF&Rjr|jv>J<SK=TDO_-bqIkD}*SQaTjm<{W1QSr{KMEiD{cBFsu=bNs3t8@S3yQ2@EPCpF=#<X+}2N#2bi=K2R)3>;gH&kzd0&=hp1ZuD4>zu<yIKfFa3`?p#+8sD*$5w!Ap=|OGRAIYrbFe|po~-{!f03`-crztFNdxI*w-Y>|TM?Gm)1G*@7mE4VKEa9<zKmzW&RW}wpy0=)+ga?bcM;f;54eHGcNsO~4!nVnFNm*lH%Ps&o+{r<@!puH9wp*G6Tfrj^2iCmm03QdByJL&W1KEsd9X}fHabtNRTyK6aW_k<3qom$@$zce_Pken(*-|w`7y6teq$NraRV)u$nybKct^Qe7;1F6K!R?oDYix#0HLXbuBX9^>{b1}rUzOteNTTqIAoY+sugyE7m&4tuUg34mC(dWMy=SXf-R?wrz?pGQXrW_jIzvPjT^wtWs-9W>rka}LG=qi;oHf}3~3<MPZ+P18r>D|qYNFkbRh^7Bh<AFKQmWhhLwbve9MnAngx=9p=W^a)adT_1!W~C@$mFwOCAYSMM&T<8P}FcjFBAy@cuBrQI~t@CQUYHJuC@twJN~Kcm#r-902p+k+B#T!Kq~c9RMea7!FO5t#FoD62?FyOXC>pJh+N|y`YX=R|NIi+<+G(Vwm<10Cg^>0$gZ@)sQqk$<%xDabFHnI#24(6JoRe8;=%$MhB~{e<*9_Sa(N6#w9C!d8T~9*BjPcS2p)XqnY}ynzgA42al>50D}!*Uhr<fcFqE<41re(NU_b*Zzu~?hV2S(o%rgVq&5ko&A!#UPs#a^$N{TXY|pw7era8$1`Nh4)C?wqBL9gFOn6=oc=t9o;eA_nR8oQK`!y>ow_iUV?;KTQDRC{%eTBEO+Zv@uPrB|+DN*eN(2WtN$QR(5+W}9?N@IdELiZI0W<qPcl=Wuks+`KC!WvC};~K@&(X0H1EXP}QoJ6)&97t~qX?dHfN^I<OWp%oGT&E=+_ZdjiM5ruJ6s!xc2qvng4khc57E^TQ_$a!9@)VY1If7(zgQ~H8fzouV>XgKEEgLh3%RXrV?NVPdXSNC5py(x8$_EfZQt$5OdH|T{XNYOi<wWF}GmN+7`F|AJDWb$wPV?(4C!3A3>Nn)Pd!*ZhRac9$O9eLzIo1nBB?(BD#Q<TKq+fVz`kPo;WDDhRLHoB|Qso}j{jiQAdPh>aC9)?Y?}(wu1IB70>(tO$HH)HDnLqEJpI{b$sU+L$B+|-jGRTAz=L->2In8>f4N`-WQ5cD{zW2lZ;$2&+XvJh4uhOz5A5{g)CNRZAj@8U?K~{(ROyV@{d&?pb;5pq^xS^{{Ip=MV#n6llFpgn%@v7TQ9u;A9Nb3d)nPnSqTx~rDzw|L?I1`)0TX-b?p`1k?YdJAGuOR%@nq3Zl8yx)3PHGAaKRTi6heHL3J`?S?Ow9ZD@Xy2B+MXok>)*>ipc(IE{~rFOj8ziXvdqq~kJM_qiMDS{$x{UqU04hz2!80lDyQ<oT7+auiY$j=m@rL!B++6Zq1;s{7Fxgt^;0qFZl%8i1tYa?%)_HHF7|yn{W}T?kv~@Oqtz~fva0%DoN~NLDuQomG{w_`h`mhcPP(*kX)92j1HA@-6`<M5gqEmKl^8Fhc)Erf%{&9DdzK4e5htgzsvMm1sjSv0X_ZMY1$-;bLr`L`M_4D#H`>q{D<{&2G$W7FTflZI7sy+YuX42Q<It?9%Tz*LlQnXpy>6FSc+DS;u-@8e)auH362H|2?ucq0Rc7;5NwzNOBJ;&G%KTQ#$X)Q8449PkK=;2!(86V*(@%f*LU_6ipt2#5f8Htwc${8$;gq-#Cv6aGvHI92i0%Q%pCKqbc(<ePEsI&_XKzz&8H+??FJ+2$IwXu)SH7c0?3dR_C*+p_@xn?y3OmcGBxxJznicF8Z>NO@tnrO7`_zi$gpn-9gyl8W-wI3WiV>)ada8&ZAlg^sF(IFze5L9DayhPXdS~cRnv!AVYxm---+D{Gy9o7Z7ToFw+O3@XUI%y%UW<W^F!j5fEG1@`ZjgUng?W<tu>ZoUR44DE=-v0)W$MSSa9JEvUiCA8c_=GJXh=pw85T>yf`7y?WR1Ujr{v#5_wPxWjGfLnxtt_YYK$PxQ!aXo(jZe#<jH?e%3XMz$4=kZHnBPEpCVf)lZI){=Q9tmAI;@*w;!;{J|YH?=-dAepymVH$K7Z-o7Y8~PnNFyN(hK7AGH2H9T{vtd^%F-D2*_HOUoqq27DGn#NJ{eT~)+%0qSj<&5>JRjnz(v5V%_nL9t7sEYihtp~}IvCGVvM|Cxy0|97DEEa_VajX8d~QYaS2qCd!yTxt>}v()N=&|l&_u_X)fg@(#w_qcgCiR^8uOISfvkcE_elR84(mnB~v_yhYmNaqWzx0s~KJe^{B1s&7=>F6!_5Q<=xvxNg1M&BB$46WThdtbI5r2^GbUoE~Mb5NlDNKrIgCKoF{Q;Hgiw#bkx+JTa$`lkAiDhX^oy1j{tu<t#4Pyh4YQh{UmJ=lN$ihhsbh{Nx_mp|_wyyufW4YIHJXy@g-*RP?;9Ak3e!B2Z{27mplw<UvQW@sG3y1za}DBAufN^AzKostEqiMG}BY$Jhs*5iX`jMHj$h|q8K!sr*F)jyY!az7A9!c=wfhM7EN0?k9#RMx?_MO4Hg9hU!a_S7q#2c4eVA7A%rdrA#d%?aOowX=7(xAUgl0}#jPUr5`0+UGW(1-A`sO_5I0*!Mnv932jh2N#3U=cALu)6ZU;VO9E|o}Rem<OU=*#Q*nMFb{qFtPN{GjB4M6l)>`#j@uf9waHf>1hlyC-FdCI`q>C3xCpNCqJC-m(El-p9{Jdo62SI72cCM&*>xXLwZ`B-0|}__d&BTL4S@i7?cKe$haA{zwRlQwg6Vs=UV9Nt@A|v1@ZVM6f79M+t)C1Pqem9a9^K0AtK69(9iGQb@#p5LnfZ)Um}6xJN?3%AY`~+R(rbrz3z#&ab7{!{oZ2;GKXT2x<Xs>?s*E3*r<o2LjIdI+r)Tn{joE43nDsN-gXafv1eyiyhrILpy_2YiJ;3HA?u+H-D?qG(Z_k(wk)ucazyI~WmB|ALIF*{$@{&h!U9xp(mub`D*D(j$p_FArHEA{=RSe<NT@MbPn6vmlgLoD$EsFvarp-9V?cDQT!n4=y-CYZq*D3b;jz09|_x2IfTZ(ts5p^ZIX>jmW*7a9~S#1j2?(e?Fc_Y6=@GzX}yJ7(W)mDsEN|5*MzWV8>cY9u&U!mnrzFODMIL$z9;?Z~7p!`SStnba@ppfYGQ+u+^a)ddc%XH7Pfy1CgCtRQ7{2T<R1=~Rk%DI6T(|Ni2zt+vMOi8OSY_;7*Y}M5y*}N`$F&zF_Vn1ULe0=X0z5((pbi;eydTYP^{cJQqvCMj3+sh!I1dH(322RIjx=}QZ;n3t?bH9oI&J+WFevb(>VFy_f2l;pe3UU}G1Qoy4dG%_q_3-@X9d`p~>13IYOqc{)LeDT@B>NUxsg!9^bP;8uqN5Y4(}9^@pbvBwHySLY#5$q42Dg+!xT3UaVV_^()TeRW#mJbKdziaqKVK!2-^0}qTe-%IARmDwn)Jsh2obs`f9G!Ju=U?|?tb3c*(n>6apx(lP<~qqL`6+1jz=M<G^^S@w3w#8Z&R0b?t~_xZDU!3r!A=z7K$JDc$vDmW=&HWfsYp+;R78atX9=iQgi)S8t@ee)~ZhxW05sq10@phW(fDa*KM;4r48KJO64`)SF$1}H<m`ImOB~hZXQIisp+Ds;VS`ODJ~ea)oaom?aH${(-IcOHL<-`CNEIxOBL>vClbyS+6%OD*cP9UE`B@xbiw=@8MyOa#%LVsU^FzZ>SDGaQKflkshS`R{v#dB#MLMyQFeA|t);+0PBTh*Gi2}tx>Vpm$^yq!6>lC=%GAu%GM7b<*(izEB0h)uVi{2oowxZ%WuyF24S?aAob6IxS6dcoXMutfsgo)>cIjFf^SO~ObkjF^piJsg3I(O~$C$-upFWW#mc4dsjgi&rRz)|^_F3Jws#SBXoaE+qceSc7CTG&sZm<q^l@wH0=X_L6><ef5>-S`M!l35TSZksxbvnS(H%`1Nz0&y~d*Z$_Ky^$``j5kE*YKD!_;2gPmd{{4j6;A<e88AF{c{;oJkktfklL_c3H+XzTa=tMm9m<}K`yUOvIh~Z|784EA7NjV#CiYt^Zu711qpU0SongS)qx5DR(CA9H=vl~uv{qsP8!-45p5`kznqUQhUqymAZuIaPiuZO^{VkDo+Lhxn9GLt`BOhA&j+ZEM^y07K!&esJht`Yr`*tQWBW?WhSfFn+tAu-=R_a5mr=M*gIoHGRD3FX-Y!!?M$<K9Pg3N*TQl1xdf%Hx?wQypPh*HC`#`$U$=ZpvQDsP&jyLBxQgwij4rN@Q)mshPXda`J%I0JX;OJBtse){(lNYPlo*FMZZ|h_<nxXj|-NKn2`B_U=%TamGooh5IV9Mvp8yEoA(q%Yy@XsApj-$6Z;KeSXfl^N?tm;WIE*gKV2rELBhwi<#!4LO1h8uSE=5;0NYF#qVCsyV#DK|m1$WiT)Nyg>ZHN`P)w8o2Qbp+?n4U&gV-<Oh1KN+mhOHDPd+Kkv-v!pItXqD}2SJQBC%ykR}UK@G0fAG7Vl26|#Rnw*dVb$CZbh)LJF+zWXGRv!V2_sC)&a2lCBA8Ai&a0>hjEX08%UIERA75Ar-GZ7%=xWuuxDClrCDQ?`xC3;NHiaH|HI_r2=!ne=(uSymZvky`Bx0l)SNc0rd5%;FyP7BPk5J~UtKTdHW;tTUTVY-$7+ebWmPjrGk+gune|AKH5(mHSpL`e$#mD`_LD#D<y(BL@5Y&|hLs@>67BdOPY(H&QU8p0>6R9s3=^fEoDBg<bIzgbBWEE-Bk(Y2;w%ZreEVzC#PVcO>Oo%~nYFW+?gSWhMAyca&rMnH|Sg{M$p^RBa@MNJ>DbPYe?I^4cul^Q*(jW|S=0I1Z!+n#CU|I_5p7OPl$7^|yO&Cu5XeE)pw91~90(JA69QqAuo-3J~^u0EVwaQf5l!94aZ$jB!ohP+>(@k-=f37UJT!mE{TwaT*FArXUnJEy6Iv0MlDIcJ@aE;~e)?~PD+i$R~oA;V;uCfYkU0<b6YqS47E{tzjK1XV!<`GjKbqiiy-@^gxVye7%c->F>A7hNNY^D!}M%ed!?_Fxd)sra&tqwfz>3O)(=uTy2w;Q_Oj`@^+ar52$>R~$DD7@u<S#;tDEXk>dPIo{4i0e1c9!eSW6@FM(kL97^_fM$jN8u<XlEI>QFi&A)?p6Np2Sf4TL>(RaSdYM~bS7z`3U2`!!NKgy-tOL2HHME}OKUk6)$T?{CGEGtbr4mqMR=RIg@j)@VcED>xq8qU%dD?$bM@cc;dip-D!wOgvC0a#4^{2~FssS`<N(P2EGa<~BbOxo>RMuul}^4Y#>mq))`5+(i~&4QtHr3=|DY#`*xOfJ&$GO>f9qdj6D~zb1w7mMTb7`t2UnGkzVJt!V%Po*AgewyVv_@i>QatAoSfp-Y6~oiz2?FvgNfLE-Ks%3Bl1gWfuUuI3CNO1QDVe}imc$&HOBjB$k90^FWVo{dXrN5C{E`^WDT=n6{)~0mlbSKmBp2Zg49I#Dh}21f>~IA`nSY#sGM*`Wv~nq6i$E*O!a+4>P#OS-&l+&`#{S{yg_+6n26G_w>N1FLI=`TS4c4MsIUIvW@xF!#7Y;J&PmhRFvf1Z#(R0xdLS-T>U*;hA+Dyu)OCaGy5Vgzhcr?7GELc#^88dLR6DIb%S!5lO|>nQA+c4d_klTYb*^z>g0kfUV93Fs=TKX9<lk0K6}74?se$0w*PJ(tZVIlYWS`X(8+k+VqsIzwjXL+Am%P41`f8jF@!@LG5G^>hA6-gBiBL}AM42U|{H&=OeT^Zcx>uzX`xV*7oC+2*9^9R;)FqM4vHDKUXca1brmjbu#C@v#heed0V>rG10TjCy!)r!s+17@2Xo#dz-mAbQ8l1kqSjj_Lb~<oIx+hk8;gm*rGRB5J)exGQa0<bclI`JDkE^;9#N9u>>I_K|^i53)kf-ItJJaFGvfPnR6`8GcBp@QRIJz^(5^fEbA7)-P$+^Lb`%5X580hi*uNv=msZe@TBa8D}b;V}2pjDgohexbWk6zj-ck@*;tTp+R*B+M|C$inoUv$by{Mq;w(hK>SsinEI`x<Xt>I?($w`^n8)PzQl>D4Z-Y4^Kw`qf1?p-Baq6{!A8Fw!7e6G|El)Xw+F0sJv~-k=kUeS$D4=f4pvO=?q<?d*H;lcXT0_?eZ}0agtpoo}!A7*8Y-Cya}dl98oWER)UTKyna6%{fZWWVBh7YPu8C{Uu4+skpnxU;OG>nfhRWviwugMu^Z;%Lga1hSDFa!p}7P7EMAqLF|D3aLTXj?p652!V>t{{AOu?ccA@s?kXuz+v3iyPv2@VKVe}-H(3)aP`a2sXj;m)#;R7`6+&J{A6r{+&g-=?rIBH4HR<gux;@7#miSV6x03I?N>=V_R`cm{z8GO<YgyKZv$$9i?&Y|2JNdiKKnfKoSp}ezDm26ShMla!HP#^9OO>#NGX3oBylhoY+uL=gO&ysotdq)^XtY%hJlUXKCmu-^5-$^t#&~JXRUk3<Xd)4=tU#W{N`YLIMJ6f`ji;T;LeRi?QREuq3Bo`n-{N(DSJ4+|$92({a&4D#X%{$N<H)Jfl80ep8G2pcZ7ta`V4>u00Jb`a=_x6~RCAh5^Ika)4`UbB6tL09v8K!keobt|EbQOKxXOe8uTI%%!pZJMce7Cy;G!H&Ea$2G#9mJ~m`>67Wz~(88>`NM0j+K4dbfXZ@S8Y0A9UUyW9r_rxr_g3R}EaMdrEIEJu7<QHB=u>i>|#!^<W>jrju4WVPuyv`PYfRqdBH>=-ML6u;fz6AwO8l1KD`jm_owDwJ+41C5e3GA@(J|x$91XJj6?#e#_*8a~W!m{DqLyVmMp%cv;ePvhW)ny)e0iMpxfKmiKi&*6ETX=s1sTm8;nT7J<E2%b65KxW~zrupWiW%2A*!2RhwW4WW0qK3>@3_<u@Ghu6`Yto|A-D9`Ie?fFwlq?Ibxh<PJ?WG57ZRyu_vHLVw#mI*Dxu3_=3nLo|%QV&?B!8(e<b)toBlk}8&sFw4g_Z7?c0%e~?jqKy1qDy}%M=*^Q0uu@`eTq-rm#gY>P>ChEVs-MAs*|U;532O$dsW=5oFcm|qqJr2TWwIq!b$l}kXbkb{h3%ej1#4D0CXc4Q@78f=`;>GlXlz9g8^@)v>QkdDi(m_&P?`UOfH3i%)C9EEtu0R$|sb~Tpe0Ba~^}C=WMZ+EY2zyK&qw8^E;BwWY5+7>l|lTN?fcuweluY-DLf<($dPJ?6%}YImyZ;8JOv(n&wU={ZY#3y4p9OHxBnd4o2svpGRLz3ZP0ZTdhYkgdMnCmHaw#5vnY4zMP`~;4DoaZ97OtCIpu`ae#2EyxJ`SxCIObwoW^bDWHW9=%SiijIzQa<%kasA4=EJ(iv@QpDn$#{B3-&eboZto)E%$M^EsjqbkfiTwebk|4S|&8%hs23si8^M5X>l6T%C!5zy)J>H;iO5LAhTXnIA2g8<%Ysq4krvUHP}!U^J)`q7wJ^*T<+z@d*%Ka7SK=Y#!^3dkdwH=>dtqk3D^e2nHE%nzYjH|2<MZ@m9K@x*iC^*!;Uc=M|C@?`K?oPRojox>7IKn9V|c9ZnhZ*_wlfBXwp<5QK@8UFOWAHH;cn0J1diXVRK{qV8(!%+P2KfQ{hVDM7B`*i%f;Cuw)d_ZZTPtR2u4DlZRzW99F86F)D4%y2$Y{4Wbqrvlrd<NyU;l1ZOytD)ufY-_;m*whNvbs`~ES5!A2KT^FN?aO(6m|TiTkaAo)O=xlegO#fLY1yjVaM+VF!O=fKl!5XTO%E((EV^)>8=8HdH)8qp_h9g6?P}^S;FBn_{gYr3(P7?&$`#J#h8?;J4o_n79K|V0>x+FJGkiXn>z#6*r4g6xqGpYo|6BOjw@~wP=sA?3Mv_uR@#5^s9+?=I@4S^RCf1hr={uE(z_m~u3Ais?g!$bOJj2G*eT<!F}bXUbEYkA+hkwvKc<H28Xz=u`aRV@+`=DjHdWl?M`wk$Z=Rip6seE$#WccPTkyjwET!{hhj*AtfrJ>RaENt>twNrOf#A8x0edNvq^eHCA`WnAOkT$co^DgCFOwC?RGbK;+nI!ZPWJ@!h+~toMwdhC+Bf!LPt*n4W{FzgVWIK?2+>mheZ<Gwl$<4<s=k^6=676za5<N0C119zCo6tZGOfB3C+$FqsH*UQr5UR_P^kJr(;oSPDaT~EYSRx`SE)}Wd~Y?{`q_h9kgu2gH4nD3XGZ;=V5>u|#F@MD9cd)96Skvp0^8(UwXT%s`?B|Qy%(lzcu@3Q(sC<xJQ04rtpc=}kV;z8Z6f~+b8n!~P0f!EDH?PfYQ@emiU4a0CRv*2^)U+;Xz%U9GY0b>s5~TP%g3LsjnJ)yrG1LY5JezCBC#P$Ykh=LMcz0&KLsHZS?%e`iHxX~asa^k<Nn13rX=*5ju)2Y+qtUN0-l$XYa373ywT64E0S}DG-a&iLVl)-AN{Rs^}T+*#%f(PEIc3$V#_7Ipuf;!%|rQQECAYy$>19L^zYFrWz66FQ(3%QqVsFRXLI|bx%~<LGD(RW&Gz@(vZ8@ba5^~LrWBl)+mZuqU&#w$A5Z@nY}Z$Sc)Z-Esyz_?Qmw<Cdbfm*Uzbg>*5S?rpC?87=TV`H0!abgzW1Jv@LRMs%u6_?3wmDaJl~e{Xrm!|BTrD~-wI<W8K&pe!!tPVunm3q>Ep-!^DpItQfrkqmTATFD;8*{ZKAwvQqgo~hZ_3WqCdKBRXK(iD9uPFE99QaAT>a;Cg=7d^V~~4Rws9*h!arV7bQ!8GoMYgsvIKGyw0^He`_>nufBXr)ji07evtAot@7Sla;1EzJe4+VA5>X{wq>uDpnRZgA1{Cd;-v(>oRWKGW$f<>o4yrBJu%GFvV;>BsMSaXo&-?4c&H;Kwi{w&jJW!sZRxU0d2Vr>EX6z1Q$Ax2U9Evcx9TjcIjx+rP4=dtV*Ajg^2hRMl48O*ZE~*Tm@}`5+e+`COpRAcg;$?z*DXBBRIW-g(P;C>5vcR1)l&Y{+aQ-KRyO9=BbHr{4CT$QBo=gbq-g`$cD`xPnz}wo-3({n2S5tHp>%^P(}J6w(w=|YVpWy=ln(F@&;WRRJUHwk<kvyHGN+A&&y*%NCF5p1r9T*E^rz`+5vmM$L_aDz4Vk-o;&P`g@c$Oot6X?o$K4FGp}X)6JgzCtgv}r7vu@m^x1<Nx7uBdI)eNBLeX(2nx(u01HGit2-T0ZJ>nQmgmSspI^r_As#J4CA_b~su8=4J8C~8Z^t*b_%vi+)gfO3w~M39+k6xHHU<pk?Clcvm3-<xi|F?ULRj`%eR;-7qp_IonEI|-*Xn|8CdOJ7SlVf(s#>y1#55E$YeXCGzc(eUES@u0Q!r&j$4w6GV2RO1ngki@0-G^{y5yA20u6HE?>g!zu9@b8Dq*7st8<Vqz?<`H1jr1`0U+-m@&qC!%6eiS9@HO3F(E`y?0zdY};DFvjXX#f1;2-W)iqvKEK82?XnSQZy}%V~`9H~;&#N!Vq8Js8kQGf7Q+M$NS?zT_(_CYW2nR;dKBk3Jkk3c7ZzieTunH8uS?<>4qrJSQdxIvYoL%U72<g4dGXYNKR@=_6h~PK(o=yNW1vik!lYLktN~NMO_t`RR_S_t30v<ZzPJPPO%?dsk{(I_sS=GjI6m;9xKuK2E)GFr`MacQJ?N<6=p9I$bdgIMWRXohUxpo3KIFRhZR&jGzm>$hlXAd>PWFg_jzDuU{Kd9<+tmp3a(d+O_$(IWL-;5+!sp3AwBDsY%F9pi~##YvAcfu^Uou56;g|&)LIRWFTTtc`iONBly&Bl}bg_r}zS)#qxyKW<_$nrQHdpH?(AE$B|0usZ=ml1o~)p{mu5=Qeq0sy#g=j@9utfy+mo?jNbTmEkDYB4-4;mr<kG{6K-TnzSs9w)swXEhGO;ub06Qn6bf745HP1Osu}4xn?9PB=N#8znAj_|cf2eNpu>_Uv>xB<bf(#=0|e6JR8qJQDseG_WrSXH-PxNkUi6*hrf=msD6gqjgH~9VWc>_C`TD-`DVcW>jiWd!R)X(bsd?xE_silY&7yzFGWF>KV}8&bw0>4p6OvtIeM%gL?uWkTxXdW6c@caIvc7k+ak46FR+Bj%yT)RqOJX~!4CotO^$auG^wo4ZdkQ`y{MGkR@k!Sxx%3mZcm!K)Cs3z8LiQ8L9ia9aAJC*D>!zpxMo+~&fskdQdB?Jlb;O~cXDfhq!uh`Q98_YAjbblDo&<~hCM{?mWLF2D&d))|;L@!+IUZ&f<Xxo8p3)DEmsVxnk#ShuVn`!QG*_WhT<|puF&{_4brrbyIF0V*wJAze3Jdaps5I!H0ASX}HR+jjeVYE}{PXq}Jh2knGpvYs@fGV)h4D;n2?l~tWtnV6d4x%HrIHXBl$}he@FFMe$ApUAQphFduk#L0KOG-Z?V;1N!HGCJ0qXdP+%>}<#+BSnYE2ir6?2LNM4esam>fYQE8Ap|Qr26UXiWC{&GwS=K0H%r-9F=y+;Tv^Z<s{RW%bBEbjgiyTIx>8k31o&2w~z%zl8Y<<hUqMxKOpDgzWuR!9tWuyQ(EQu|xD-gGc^R*dn(U1@ggR?JjCj2=y4^^&xVk$Ca$9<xbu>q`*Fcx-13bQ{)YYH(GUkbe)`5tt>;mVJbiySD2Y(A(cM>N&sRBkpV(}JiL_0xa+A}8*UPMj?R?QdRy5~+f?R5=ZR@^(JhX=pqm>~MZlav(N}BRo+*T+f=4oT)0!<3JuF<t<jW)`W3UU7NifgO7Mz_C`42}UiijMIP!1W5WU4FxS~t9l3ZJAC5Rv{rb+@P%'},
- 'pin': {'title': 'Cable Pin Spacer',
-         'folder': 'Pin_Spacer',
-         'filename': 'main.py',
-         'description': 'Copy cable spacing, flip block pins, format labels',
-         'sha256': 'a9100c5a4a7c779e996593bcb2a5b9579ba892695e56f2320cd0c3f06ff92e1f',
-         'payload': 'c-q{(>vr2lx+wTxPl2}A8W1r^OLCl~>A<rUiB5D{mb4_<iI27x7f6B<Vv1k`q$IYE{>}r;!_53Yk1|g(->nK&K!K#3o|(O-*WR%RR2Ay-)px(Vc=4k5rc)$&niO8Vm}j@~JRN%b@nDj8?f2gP-Y>r#o$UX^%Vx8zNasmA8C@sdES-AAEFPxQYws2PnkNr)Z=B`Oe~wREpLceH&eqm>GD(JWZ`aFm?>5U5Z%9Ma0L$A!HYwhD1-DV(dgq<y$z7V<zw`D^PmjKMd!H^&KJHx{?(ZEPed%oNjpEt7@a8v(mpr5eeeRb@HvH<H!l-+B9#5|m_*yc&iKl6C+m$bM4&XcUq!qwCCzI?x8F_={)_$JE^W>aboDBYiiL`>w=_DQ|FxqFBMGL2Lcn}shNiq+4sPHbyi!_^t58*P*vpH-U{3wR;Bnfw5*%voy;T`mjdKbNOZ}0fPJL~PA_4e@B42K@!2DEWtwF{w#v%SW(z{1j8o_mJ}MQ7`9TFh{VVy}qruydaMNjr9O`o$Y0W8Bw8fqm1t2YUeTM~flO2~Qv%C-Y_3n`GB1Ob|Dz^J_B4r5%n6?{-l@pHVWMr{krUz`~YvIx_4C_Y4Q}J{1X0Z3|9#c!S>>X45Im0uFW@-=>o#Oy~Hxw|{YR);~Qw_OA1Ib_1|9&a+!OtotngYMs@VI;+r|W^*r@j@rX`=H1148c*j%$LqcE3olRRi+qZ!=ADy`iKoUU-o`Wd`+6&e8K=Bi*fN>LIUMd}+3^m?-2WC9DnkOmdj!<!T~cnhH(1QQQI-^2I49T+*p|>czc@Md?$h~=H%jB{X$DX?EV|xt?{n|Wo5PmD(Il`Tqw*`S^Q4&L77ixqbOdwQ`ZOIT`8-aiud~IxosHWA+KJoj4lmyz%jd8WcmgoNBK;R_x4spftrss|Y|&=+`{M;HAnEtL^mYc_U^AuygvFLTx*n>(WJA=?KZ|Ut{)V%>QGaIzk3NHElXRelJ~f&Y_zhaRezF(<unm)<e6rMk&f&P{u$mYy>sKCJJyI>^UqiU4MG;>ogX}?f%wZ1)@$jpDklrRdzzEJ0f2k4FZ+<(3i=7bQ7rH_6&qcDe1?O~rcyjDTo)0^E)N9kGwgFJv=cjx7hsVFRKkvM4|MyS-=pDC@4uAdaqW$Zq!}jj>?hiXVyKnrhkB8^y&<X}<@9up6<D0j;Z-3m~>K**r>jPRk`F-zrzXvb3J3qYjJntoJ?L&IIfC<Bf#c=SUH_GFCg#X1fox^>n2{QyBPTe{^IXu4TUz{A#DBC+Y42{GvnoR*J;t}qOH_s+Xj)UT5@4c}{-hwst|LE@@_4dy6q_%&6fiCVdyfTFc0GChTre#yOwf8s4)cfV+;y3RPx>R4(>#d`cUq2ik;Q$B(EdaZ80zemZ@FMh!#dw@PwEPYr7C+cJJm?)?9A13sOBd<PZKv^V(o#=~d2$O>!|%gf`iyzz%MOAi3<HSr1kUO?!{l)B5N)X;wzfve7|~q|iBizr!fm9xtGZ^hWZLp$KLngJ%to+vk-wOa+dugM0_&K&;Qz**`y8lVYwSNNNb5|qdms^MkukYz;X}M((F;Za#f#v{d&F-){bxC!bX4^5$oq_ZT5x1CHMrNubnE9xir@_JNQc=1PzYYQ1%NW#nQOjC@HQhV1*ocn7y(B}#~uvl0nItirb#(_{*-rlrCOyxBp4j=`=QsGFJ?fpya@nl5R@IE=_KJfdha8k-Ut|W=gaM@5GNMUJH(Zh_dD>u1q}ewCs}L_PjiC_M;<loUg<Z<q)6;`FKIX8sai~nb_PB@>hI8hcSEn!=>*7NsCP&T0aDXZP#Fp*2$#sq#=7k#9L!bF@eWcT-}#7euDrrU#l!g`7BXy(1v}I-x9H8<E#e1W6zQ#P?^r{s|6${JGHDru-N`rrao!zXdfB(?rZ#UZZ?1W+(I)5WI8%IA|Eg>m!zS!JPodTfCO|Fm>pS#?vd4RGyYl33ktb-k>)a^?-@3<Dt=UUB*c`7*D;*KM>;?wfn<ju3;9^a(>}vtH;A>)DzfSY?-+MdT+qL<_vy~IYYt|a2!+8fW!PjJ2v|81T3xZ&)X`SWr?&8S;n1;xFW&%gI3amCTHQjrA_zs{jV9Hu|K?RJechu+tj98^h^V$KDpkX<09>TSO^#z!Sg&~y(Q$Qp?O9+x}Ew_@<@^ylnUbJBUkrSEUWFy&+@f5ZfUV}iBo3BGcvVlUW&}<Ff#r4JcHKK8^)xwrx04u=%zq|^~?FUA(f+Uk-F@ehhUuk`ZW7sF5p`b=ws9#V80&d@Jf-lGZzeL6vQ6hYNLA>+55Fy}TV_@HbH%^g{TzWSknt;>*w`!Kn789VBqZ-PjZK&WCd`3uzfUya%9E-e^o>zhEo;IzudA-TQFqzH09{mISmfd$27u@uvce(^_>&<SP@Ca<g3?v5H3lM}R6Xei%;nr~qJ33ne3<1+|TYW)8!t>5>lHxwYHs4!UdpwD+fo&|3WW<o9hw6O3=>PKNtoOnDAD;E_^WNFv-tmP%Z0Otz^}h{<+dDhk`%-;)_&w0j8X>AdG7+}?8jkV4BhzXbD{|qy67->CusK`^@FPRu0+|kV{C5G(dca}o2u$u2<Pf9zA)R|K&$GPjprNdar(n1HjDLs=CWIw>PQPIvie%oJ5~xfOKt?H{tpL}BoXiwB<~W}h$O*UnzAp&T2GZ#`gOQ+Hrw=j){M$!e!Nqcx9Kx$sxoL<Maqr=&YO#liGO%DaWpV^EehWKvh94HwVNrpVQBn+zp|HsTJZh!(5#ciXh$D=)$FvnVK<75Ot@3-gaMh`PCbVsxcr<DiFmK%u5Q^+f^RZS>sepq_Ml?pD`2CFf#1orzFcR<9cV0$v(3`--{LOQc0q~~l86?ww@}}kboFJX#4XggjW1Y=ld)4F4-fT8Whoo3APWI1i0F9t&hm~jlEgLA!nJGa)Gd!ciQLD=O^HgDg5F3S_pMfYjOo7i<U-s^E<Ro(6xoSj?@T?pag}t#~?F{m8d>5w^)Hrs%N9gh73*C0&+^up4DsMU<9n4Vg)$;c*%w3W3*6oN~LFbO-aatta8E}ChM-n<{`NtUw9;lZBUR1Pw9pB<$jNO|tJ@VDL5B_Y?3z%YZo#jBHvs7_4xAE5mFYcqy8ZW==`E?bjkE5p3^5tndRd4Kz<d2fObeNPa59qfve!5h1xZ1Lix`K0>C(S8n1xAz3Ic*biaX5Et<=jFR%d6;5GJ#U~Eh~NL?Pt?*n%^?LL?&hd@ZlGw)>vsIwU+w^ghSXK(PJmM8Yy|hyMw29KD<e8<0JJ!;^!Ry2~d6BVx=)^iBU#nwg5-IMGbbO*g?<zU&STXo(DC)QjKYV72<J)gJ4(SL~E1x6+$wvZB>-7N()F=Nr()*pS?Hs&9>;AlMmnx@g72NNqBtT$`RuVFAqO<%pbc~HH=OJXf_|^WK?2y(qf!WQBz|I6fOLWQ$`kDf-#$*$_KVSBc-Pc8G1<H=+9uqg6k+4HC!4r;fDsz^XxY9#E4LM*Lc&@=_tKRN2qN;_4zQ%@=-d4>r<dso(cOc0Djswj3*r#j|>j*f5egkn2$(T<el~Q4p7-qWQ%-AR+r+PH_GUYQSGda0{EuWB&|FfJR6`8KC&?su7p55c>zIGy==gG-r;520NUJKA?j@u#8sdTM{que!B+E;E*5elm~(L;2FwXYi~$=P*zm=R7iXyXVudqmL}JvD0r$O_AuU8SILPKVZ1G3|fPnJspL_&ZNax53Y|$_mh8;&^&EFVneo$Bw2+w3vcyQ2UM;q<IR9FFf@!MIiM+0RfGqFqwFqut8E*l;Xl+L;Lhm%id9q;p7f^y+$aHeB`?$EoxNryM2DNI2&$#IEr7mWQO&@S-e5ok>&Y%uAl{n-HgUEpqBhWdf8zCpn{d|htfU%e%7H@GFmVu+?36EVN@CgC8==ixj<zUVfdwdlHpaCf?I-BOeq#zxXJ8&QX?a^OH_o6p~~VGo|YAGog%vw948dw}1(yEL{z?Gd->sp}m@kCSfa&G^atC3+n2UuV%{KIcC#qDS}){p|;<ZmKy^=cUybH8ig830x%Dsr$7z7#C!$r(3x<qm;GlrT7UC2H9ddD)?5s2|W<Ow?m}MZ_7JXVHZsVLFRUlSAhAFiAf{H6c)hFDa9DGn25Bc8*@U3qr$JiJ93OGd&1Rrbt9CtvLj&z>iV=*Sp*r8W*NY%^n(|n2ZAmRM&v!Bn`UFd?~(^(;ZwvAYNYSPY+#aC+*ACiXn2VRncT)gSy>gNwLjh=aCasFN4xZG5*Ld+87Uht(qGY#@jA)&f1lMoCFE0iGD+!CJOLyN10&Z!YHTzCW+KIrCH-NRflLttkmaaL8Y*{=()j>K<0ajsGaCi+ZkD>`A^|ya1_vWLhM;^}m`{Zj`H<!X@Ko`TE{ED(`sU$*z$^gv#4CskKz9>kt4byWzKBQ|2DoI%x>}(q#nGcu@*&|R#3Ae(3+D*UYFt@OYXEzQP0^%ef)btsz9VWv=rtQ6Z}7Lsg1BIf0!X7<GLtyiBe`L|b7BV0hXKS^gOm+M`#JI)76|?hVE}8-=$w_t9`1fRf=fta!v5jkGy0p><acGUE47IJgS10Kk-wB5yZ8ga9l;QueTXMT@?<Yg0~u*#W)4*jOw6$~1%<50F}tl*8kE%J92krJp1>+LMR0nANdOfYl5Yjs-b)>V2GYU+QiVIOEIX=hArpPJz_h%zAX~(CG;%tD+a(bHe+1tzy*<N$4EQQTeo@{*@<rm>wES}$=U<b&Q@3IDiB=eF?FMK0SkO7@i43yQQh&BYvJM`=xhO$|idL1Jnh>|@q>%%|K4_ZSdG4gE@}Adv)Z;x7X#fTd7lH?7qS|Myh7jTi4JkNXS{_>X>iB}+isMxY)Uz5;H-GKF9L8~@j&ijP7{`sM{tCvC^ObXNMmjH1%pz|ygRT-yon}H&HMbIqqaz4Vg)le50mx9|7pd79QWu;YAANb}-6u*<upqy`lq8~2f{HU5+#|=B4e7OjPBX}?$AcSE_`<%PHJVzzp(FMVcpe!xNHF&|JSJqo_YH&?C+9GQUvjrA?-ex)oM?pJATr(&de4`(k+?K79xG@Hj`?4lu6#QRR(q!q-rpkkC4V0FV)ONXIi9J8;OwLQR%|6Whu9;9w$OiOF{`1fgJiT|Q;Eni>|l!e>Zx|*<x#V|cn5+_k$Lf5MyLX0oEgZa=+?`lp=>0M%4w1pgmh4=U&OaC{LQjpO(vcaxtv1tQiNhWwV0;=TqKd<m@y-VX))mO35OnB$!HSa4o0!}uddf>|LYRY1r7xMeeka;j&i8on9VQc$O)!0bSf&JWO?=cNfUCjoMm(B3WK(#&jWr3pDoL0@F#K)+Cj8B8m@zy;!=2tm8--L73j|9mTG`sid=mgPk{sLvslZvbCIt39~oHPDt_ku?Cn+!TBRza<x3Di4A=pL;JJ74`-#c!8G>%chMM!ek3I5=Wd~QK%b*R#tN%DFcb86)yxwUtPv-o%1K<1g69mXMrh+nihGz8fI3Xz-q--8fP3NWek#-Bj^-+R24!uADI8kf4WKANfQ|APiInZGk4ly8q1TJL4P+834X>=Puv}Sbv)fENp+jQFWPOTQl02skhN=M@FNHf&g*$!4Leq64e)=hpq<*NVC{>O#aDrU%%0G9$^Bh6XR@%(1w=I_t*Nn64@N(69n+$;A5w*gHQ<adc1qjopTM=*m?WZzBWYCd$^4}3Y)CdAWaD;^Xr>3W%7$vslPU+rAUbplD*d7mm?3kXEgJ816&tM<`H_v*p{NVK8iQ;ksy-WN;ZVe9D>Sz#ryKQezPqN0|weWh<fMWu!$rF7Qs+$M1yfYh=oU6<~z%MH4s$)TJriE4^+A$g<&ET>=TtPl@?Lm#zi(C{K(Bu}Qg4}h@GR730f<V3V0%9O*mYP?fq;{oyBV9ID3>S;KoKQ}nq>IgFjOKLQ?=xtTo)5v7n3}&h0A)3j4vQB>rc(>KW1~)UoEB2>hj~elN@(`2F1@E_L8WCqQna6uoqI_bq=cu~`j8bqg*I+T9XVXsUF<%$=(POM`Cpj!gK`e`!FK2GkH_Zce_0sT0)SSNOcm4$6BtIa#AA0nVa?SVItc(v}9d4A@^2H^|uYR%ikRAj<XMuhyEeiwC8qxZM;2(NB^nF@X<b6+bQK}3do6#ziQk<!FmdnQRB|!i(Zps>MQUkYd`LV#`mHsP0QY>*6_0zT)gCtT!U9bOm{Y9Zb#2@9i*?`G!M)ut)cq`e}1n&-ROZDx^{WQtTCPJ|fNn0M5>L4_lkLLi0vB$0~;`fh8a5{=7NU+&5$u8O*b0b=oBsj9fK)R@bjYY)NQNts=KC6koZ8lwCWeJl7>{XRU9djtvITe&!5mHu3B7)lSAD8t8UX{0%j5Oq19V1iPXKkLCXV@Z9nqx2wv0V(a8PZH0P>3RebbBY}k^(Ke6!Qsy2CNxPUd%BkXniSrYvaxRlwv$tO3+LW+eG-VU$Z?trT|K1jyW8&;%%n&C1N(mSVM$cW(^Y!Fk<VV&&ao@Nz7b7sZL}Rid977*75d?`Tlx#^68XhWLjyArXgVwS!a_@Z3|7FWpnp6=EYqSun6tJUC6E0;<8n?9#L!3(wI*wdO$tle$^Jlk{HFG0^Y*eh5T7tQj#X(EngS14Ft=$bYFcDNfzH~x{B8Gx<^hqOTe!fw$)N}kY*rgU8GcXVCH(zKm_0hn?TmP{|A<8f1zQTrcR^$`j8cA);d>M#)j^rAJ()5;!sqX%CN>c1XZ=%iiHeai+HB;K_9kUH}7$Xng>yl4w8zNw4#o*=eNp&xRG|zy-Blmo3t_SSLgp`HUl_wa)9RCNEfuy64n^luqR>*hI0UgP9|gCU*ypMEhw)txD6<=8Fq3-GYL&<3dxv9g$GL0^5YGgNxd32RCO6~uwKi7?vR5}kBMqsX@8^0jL1=TIhHPE;8n3W#a}bStx}ej>QKEP7V9?DO!l=yC5%*yx#_xmbclP2;j8UR2r~%A5BQ%L2>+|fJ2=WlVLt}0!7<j7$9hv8tHC+Wxjc8k*-P*DbbdpAWXiu0eoRsnKE-sw42XnaE0WJt+!@<vsO28o>L^Gfx70sH8TZpO=3muUZ>p`1oYs7C_8ex5$q28f%c{!I_m0v*u<E^t$B8%39HXIqXEB|i6c&pvP!ShV^=hRny5iM04z~PjGO}Y4O_II_6R-73)7!WaimupOM1{%5BaMGoBjCE@fiX%%n4?4>ng-N~KzC)p6>po?$u_NHeQ;3?kvm||VRGW{2WzY)jTY;F9G-gmI4kDMs*&1jiAYs-unIP{Q^U<(V>T{I5#~Xpmu0ivr7rszwiePmeVd^KcSY_)WlIe9L<d!BnMClHbh(K+<UgN^XSUZO`@X!*DAkKH;iAX@%_L5JnvIeo2q`5A@<q(3YPAbSlMwG%@wXC!0K44Xa$H@dg0*h&CJ}!d-&mJpmeaQs8yXhGXakbj06(IpG_7`q{JZk%YDKA*k5_?{%XGK?RyV|$!9pzi)C1b59>hNNAk^yNl9q+;?4lSVt?C#tnD9)Yr;J@?SV9BqWb+WW>1YHjV#M5o_lg*W;Pvj7m0>^`hA?@AtM3Yn1`N5v7NWkSCN?Nmj@4c{miKdM1gK`GsOmUBO^G$0XT(mxy;`Kj4XkxMXV>NQ`ev?;8HU|a?!3*z)Q3ODu-+;oBkreU79;0;9KWDBB!C`nu?d-xY#V})v+~*LV#-VZS?xWE^ghiN?jk?b!79VAeKfjhJ1CA#jY87=n4YwFvoG(;P#bX?#k3fA#wUe-CU{Y0S~LS`1K@#Cn<bpVSIS)?17JiC#XHG06usWPvUKv+%oLo+H`_EWS%7So^hz1^wC;z@fGRr{8mqn-#xPU@!5vJm7l4pCL<eOaHf}IlU6L2=U1>ex30+m~Rm<Ws#fibce^zW$E`!t(K^LF@Sw2r+?S!6sx!T-^6e)S)-9=J!TV1a<s+Y^{c>64Gmw-1@h9KfCC(8;DDw<(otGlk(z7v}r{O_grnFvyQj6TEg*DN8hZ$JNk48nOrR!e2M)>fmcx#-1<7o;=P1lVbf?s%M+X9{<-(7uA`Kd3YB(3V9jz0obr`3@c~b4SyHPI}kO8PaH4Db2=YIf1h`O{)!F<EAm4&;*9>0QH~1MThg8VGc0|s$!QNqQ-@3V>F?5X8AjCj}pD&+Ey)Ue}$FZHnD4d6h?e+Fr#dUb{oyHt=nXdZ!F(j8s)uZH2?1V(6cS(>#XL+j*}Jsk%#3d6Zq^O9dYn)GJ)ewben-qE3j<@=E%jG)pwoIm$sm8@m*)|b#-HtfNkup+ImaI(X!mnx^4bKu+|7HHekNqz+?8AyH*Y=(*!8lAj^%|4}N0@d{BHw7t;nLxsj@mT!lDvLnSFBya#MD>#kU1AXbLs(hjkhQuqWMKI-`gOSu8K&MqPf7<foj!}~)C;Ill-#;l4Od$-B$AjvWGLWL&Vjsvf?cGp(?D`PD!@ltK`Rn5Ugp<rw#(HaUt(V8Q#I)pMe70ME2H1B|n+aiEe>hY#FGu?*vuP{BWz5<R7nU->Joz|hD3N380c!1J@txB)NJkS843VNVlKS$f$^$w(@RF9N2LbIXXEA*sJ3k7Cn&=v}9UkvLe$FO3;s44{DR!3ST!76_od$qUeC^XG`@3*y~kG5$l`(76(__>mSMoI<~fa15o-=ZC@*=WdVWWW@Q3Xz~H6vr7+@n9$hX=Ek9*66Ha!xBp|gqJGMQOYq8&r?0I1@b4@BXSrY#rF7|loFUZ>ZnHn*$UMl|IY~rZK>Y9NqKf3UCv5Os^&-Bx!#c|s%+7goed6nM8@Q8$4&)5M?kRb9-5r}EPa=bzDw%+eMecEv-=Jr?3RV8*Yvlz8yKNm-vUIDNipxMOqdZ42~CN&Xd2g0lmK&+{Bwamb?xB<<Jt_<9I_8$ouGA-uNB7sP7C-NKAolW;Y}#RiC$Rf033QgNauM>$`aumOKU5A)H*!$;S*tE&9=0wi-wKXXJR=f(N}`^yN-?HKO<Dz3Ca(Q=Oyk|E^?RlOhVq{D>vn}MtZ<O*02sWqO;|^CQLXVH4=CdvYV4K8P39ctnN*>^F44%M1m{2Gl7y9fLvZ&Jyit^+9)Nv!pOq(({tId5ItvzFNgP*{5mh9>WVCma}Eq=Wauug;~9`Mc&xn&>2Kvx=#tZLjP_1&WhpFxdA>Gaf%=g#89%U&>nxd03tk;QhMKu_xEh+9Xde0~g=42_paM(6Rry>@*YCnt8)fXRA{azJ=6TC_6?EW1I%@?{<on(#xqxIcWR1%t;h1hteH;@)m+7FVnK(U{$t_SbBJ+l}lxSGHmC}1g237G1-H}blUsUHLLza)!o*|Lp?h&VpXj-I2UYw!fn~6qpStva>S$TA->gfWRM_1}!Lu#T7A67~Vo+hi5;4cFP|2^}$ru09!<A7KxfpJBqk<Aw-A5I!g$_Qbk-L?QaP`QjGJOm{qlC7`vY%wcZqrz|@!o=h{rH^4^VA5a4ZkyR(tr&aZ@6ntnsSVkRh?cQb1O$Mrn`ANr;W;h}%9IXMdPhJgy1EoomH%^*=7t*)LLV=IN8!Nig2nl4vbdd!A-xDC`)|sz3perHXe4fz1nsoF>GTd&Qm|ev%#aXi$8p235$seQ!I3;dvWi0ynN|EWwTFymT}ZD0%Vlf79P$HVM~Ad|C1fJJNh1`>9{{_c!2M9V6yBumN%k`d^T5c2hA3`a6*~E7tw32taF47i>{9no6rcR-2@{V^lQ!?MMryQUtp2t%*HO!O161ji`O{Q^n~GlQH_2Yzr0P9RM=hf@v-e7vLfFHfQ7yV+g|v?K!@Q5yjPugNRAV_>cPamxN?`zpo6PSqnJ2Pe*U5ANAPxXr>S=h_#C}xSZ2Yg@Yx)QG8b;E4&9|E&s;^?eKpblo`7p#I2q~zdj5gsA3zWL(6KeE8u}%11=R!)Xr~>xg6Q;u<Y_m#DqLATsFK%^!B)xA_#Bi2lBDk29p=5#2liQe-K64s{f-qw^@q#Kb@K*&n@GcD>)-qYvb!|}U!xk}&3?D3YzK-De3b=9-Py2UoXghH?5j#Xa7WnW(QL->G^Zjy<Nxxf&D9;+5)d3HT*-Db2oNC3ZQo>71qC_(n3FmK&nrc=%2hYRwy+WbQP}I_ib6vpBaVB&O-Xleq{LgbUbVE!Ta3nB*PKTs8(=wA*N3bkXwHpxg96TuOewi$oX;%n*!eWT5MYMvrX@BTQ9|&O@wT```-}k<pd&4|a&hxkhUHVg%YLNh{!n=z>V#2iO83hT?V=OcBdX}KF{aR%ZJE(|8)cIaKY&0`?on*HO8kf=G8hxhAOI>mPqWff-a~%AhDk?+Q)vV7!bhIE7HXXY~uUmnfIH$qs(5Y&>%=IEE(3RH!JGJAeCNoj~s=1vKpiOWFu-f5pF<TOtu=NkPMxKH~gWjGlo|9Rt0`YQM;GW)-!wy!cfXBo+P{kKm<!xM=@E9hFh+*N9Z~YY>P&w}|YbhxgDliMGDPsYlx0tdhoJV*9QvYByzlrkpgtc>%Q6I*N>g<0NA<2Bi4Sy1jauVNVfc7K^&7XOohsVW7CDIyAyq|$twGoym9HAXQAOo7}8<|Ev{+kbUS|oE~C1^VOlxc-%QDHv9Vk0>Eq@cus)b910RcGH*+$5hdyG#&_i!xVI@hm;A*8o?9&YF3`VbxM*T}XA%)8xMY0KCB~npdE#oA$C>d7EDgB_Lil8PO5Y0Bza%;JqEqrW7)&$0oN>;|t{fw27Op9~W0y<b+mvmB6oa$syp3IbWt)8LI?NPESwH4=;LTWc5Do9UtsnoSc2>;sHmG>XcOg%#-)P4`D5=4k*J4$A0@gZddeJ>p^=!?ccdjn{7l=p#1ahO7kcOdsM!~$E&$_IQd6&NOE&(6@l?Z6!eMDzASw~u1NY4cU3Jh*Y4T|G*{cs7-x?XRO^zu%Pf*qHKRT1Z&$zh6#OkR7qn^$2Rf#^ydFliD!&$vDT8XoiT<s_F{=uZiXuhLYFz~8iJ<@~=XQgNTTIBMJ;vE!4Ir$n^}eYNi-=8eDTPD{7g<|XM)>esOKX&k#|5JEOVKqcm1ot!#;*-0h77iN8TrF(w&b|FD${x$&#+VzdWrcC!9#zTxRUSERofcWzq^>Gc&SUmPs8ws=GiP#M=0wN9^xNKGGi75@Og^fYZe!*YIX@KUQC$)jygu-Un@2r_;Owc&ih~KOwCxHnqWFzMli27zbKzRM1&$N4ID<9DW~)nd5`Q|wL9BykakSjUl||1xq1Z;*V}<lIT^xKX(`dthj?P-eE|fuWHaytoo5x9;7##YyO@pr%SV|U4H0^eGA;Ufr9Cpn>AZ@J)()*aJwzc(|L{Z=$CpeeFr1X5vn72aOSA1#N8Uz+UqW`PqX#p7Af_O0<FW%)OhVI#&_{ysAbrRrgb$YTfNVi{y6|Ay?CMEPREa*n3j*Y}?<ThX>m5IMs$nl)Dj_fa+ErUUBK#!}*Woa!O0W)vohsm&8;D*MyM`DeRpNAMuxtus_~hcZ-dTzG3a<rcStuG&B9J`0msHfGK(*~trU0spR75gll*hSAL*^z8DQ|9ywYgH2s=MM-N@hy@aIHv<VdugT#JYvW%M2^nQoq$Z4=r4Ekm^?zq~fW{UqWN3J1aYkq9rSpOY#9kQ(D!1Gze?^U6k{D-UYvl;<j(7G{`iXzy(lJ2)bLypA}1}LYvZ0F-dwjsuhIlmGZKOG70mY5F)&Uh_t(g3CzgViNY#~t$r8&6Z)t>ftG~+Lti8lzsm<0`kIl%NAhQN@{HvBN@DiAgDjg6g5|WGFWIllkd$=&Mu21`{DoeO^*xp0!I2c0{k=|)_V#-pdvM{Tv|r@!_;@!?6zy?zMW@<?1!hUUEfG!g99^nU&wA&*v(LT$MemP`{`uj5??pRXA5ZYX$x*c3+1?c$OCQBTjaB+o_)}ttR7O>K7nuR&SUD7(0?rgV61D@nlW&5f={di%75iq|UtN53o|Blvc36J6y2!vOSv0vNGNX&>*J*Y?)dGy>l7^(&mq=Eu(*#Fm*+tX>#4^Ia8VXi4PDQ$X^GuvZ4>cDuOYz_6E#jQS;gpl>&dSMDZoF0L6#+(|0hKp6mHs^IPtv=@N>V{Dbo~Vkc~&YVCx8-1*Y&vmfgTw8>#C&_t6r&gMT9327MO4qv@MScJ4cw^8JZhK7Su<A##1xW2wS<4VLU8~O9CwZcyGj;tNj_EL^-|g7gIp7H<@ydL?va2QWcS<P^nHGu3Mg}@hIjJ#u~tA-6d11gUQKu;QoF-Jo$94GEk2f6E9y(#lEvQM)Oqfjb~Q(4ZX6m14m>@Ishf?#ol*Xqxc;elP1c#0=pj)W#WC*Os`6+kCP0{+JzvZ+C^;9YgnShv&Hp|XVm2d0emu{U>H&|b6G;lYOWN{1pK7!o?*S@Y*7d{$<x`~N3{|_k5wGgy8)7dV<A^in=S}%uW4VY*ddK|P)Pv@hnLTXq!7&UMh=o;j4yFB*bIoDMP^dz@U&B%<%Y)OHN>h$Gpxz1;?C&mVMT_yu`1yrsBi}gLVtV-WzWpCU$n1e_oEPUEV_&(ICr<-gym9Y+qqsbpB<Jo7Oe#hM2-vX_XuR~g*KIml3CY?Wl&KvnxZnOQu9mQMuFuBBgZlKIr?KL__pyCKdd=gJw92Q)XAjvfQ*y6Ed=rO#J)96$o|lXC-USzVplpXQl98a&!!tNp$fdGmx{kB{eig|ous>28I;R@l#$(n)!HNNG6-uF-|472lqHN)F*G;=ohra8JsWyf3E8?Yq3Q}mf(qKUf@i1X1uBq4c%eE#@J2;T4@qnRf?catShnWYM|hWp68}ot)zCu;;cpQ;l-4uHd6izY{e2yc%$-H*u6J%p2y8VUqjON5D}V>ZHvA|E8nf>z3`~WUKkl7+6cP8RHwgdp)HQ50^r_dp_F&Vr!pB%Q9j8l&i3-c%WPuh0sf&&QD_BwD^G_w=;FjzFX2-BfufFMysZ-FqqVvtIDm(i@ZClHi)mKhwRiDD8Iqa3}efj9$xc%jhZMyqZfj%;K06l_;!K%dnDy12A5cOht#dR4Wer@VxziCOVqsP*$3aM?npuv(V>P3QZO;MGcY-oax@^KM*0OfiQXb?a2F{_if0yV|mPd!zmPrltyD5j<y5LEx#%BpGj15v$sEJZVOEMC5KIlYSV%6&RTLj?xtYLYvSVSg!oS2jy>77@?|2HnhVQ=Co0rIPP~rKny{v6aM1&O>J(v6&AN7$QXt0WlNz(@JTs&wsCs1whaxPZ*PF^N8z!=^>gIFEDZcV#(F}qf^a9&MA6`nS^8b4(9Y7bJ84?fyz$&42uAwscVx(#PGo>$HVKL#KRk@rNB%YX0>7-MROde@DQ!T7kf@*-E~n!!_cd>xniQ}qdPGLS=1}5CXPf81iO87&5;^M`~^`bJouqJ(256m#4UZ`s{xcH(5$=&SB~(15O~T@u>K|}RXydMulHrEq(tzwCD6}xZK&b<?aq$WT6$>7XF1YG{rEXj(z<S^wtySzUuDaNfZ@sL!C@ZN{hghr$-S$Snw_%`^2X!>pzNv-Z5+m!ptBoaLhjgV>8`Sc>=LfEW;kG5c9~xVF7BY7(9Rxrw|QLk$-uox3w~QH(#x{>pvu*_2SCHHF-CI|1UJ#>mXb#AO*>DpFb^w2DJQFC09~y-ANwt|Q$Db^y!{@%neX{m@Q$%ZOr~S5%8HBo(&U3nB#DixF6vXcJ<g0jI-W%b)66W!yAop`t<B=CSe#mRniVW5VKV>+4xMic26(TpBFg6SdRLjg%Gbe$)NkyU=@P^}Tx({zn2tAE<ecyT6Y&}fwrawvbW}uU_VC7ZEOrPYwpTGS#F6nM1b$)BRNVdMORB9zSEjHM_BYgYP~vZ7rLNR4ArV!2mZ45isghbYvMQ5!kW3=cbBfD#U$HqHP16WyD!CC3K?G1{2|S>B#D9oMK{%80Ir4IRFE-vtE%=YpBEHTO(j^;=(pcvOG&Z}t&QfMr%+yXl>eb{=p;9qKk2G<3<T#`}Qmhv>s?#@S+xibtl{^PcO_!CXOTY0H%v7@SoshH<M6Ls^Gp@H=TJ1JI2~=_^Hd2gO3f(BHuE*Qu+AK^$rn?(zym&Ulc<mc<qM9VghnDFURpwd8X!pPyChSi=%aQTS7gNoV0l$c~+tWD~#hm(c_8r5W1HxUaU(XT!(WTlRC!<njsFt=^=-$Pp4$R9h&93gd#pGU)tqMlqlMM{4t4!P`-E1WL?ESiI8F-pUUM>TZtHJ|ZF7bk5o`GlGPC0W_HBB;7cGH>2QQzVQj5MUY)<Oo%+5skL8e=V<DTbByGbVEwpP@uDKm^d@fBqkS;9@Za-I!xqnSdSXd`lF%dT5nfN6(miC-twtMfSJ9X-_S^rpQ1}iJm_th$x!XYHYzS3bH~S6#SAN!3OqKU$nPcR=`6QT|-d`BN`Y9n@hzfscMpuiy6Wxg)@UPbkKfVv;t?96-AAk2~<&r%+@rpYgGm|R>%KbxwIEZCHgWMfl&37D6@-OCiQbeCwk}ZCiWY%7d~<~Mt6D?n)D1q_0>?>fzU|yEI=eRjCOvn+7`53!4H}?Dzdqja&qqDGcTyLZRT$N7Cl4DGWLz4$jnp7g(}Gxt=3I*Wd{{-DK^ubqnLR7&GDz+Puj;v`G$#0;XcD3lpAQ>49l&pPEsF%QvE8p2rL%)`O`LclmkRJ-cpdL;v!mUVpTxvS}b*!Dzxwy3o@>fKMhN$Z8#c)ifnSnd6<;D$kE~Fp2ET#^OTQjN>5(vKBoMtlr1hWyle9WjWsT=Qen$W=yDZ3`Z7nqD}RJ0vY{8og<qfE%tAVS9oJ6-YjtOr(DM4hXv-Gtf#nk))>dvJZDkbppIp>PFEfauMnv79DgN9$JN$6iJCKBg<xo$r>4CDGH95=yY7_Rva6XVKDWqb?1G5#;?;3{kSuM!cjz7MHhT)PbAt+0wWrZZLB>;p^4ZoIts*VB;dU0FdtU|}Ic~O#x#r2zVAa3|IGj&2~@)U=GA>6B}hFt<^u~{0f18zS7^y^8aAQe#WS*kpVP+a)^<m?}Z$G<u}FT~(|`0@1Q>|*cuqFeI|Xa$@XnUkR|C0HyQrV1#qfCV{qpImH-U5O&lB%{{h0rf}s;{^yaDa#+GTD#+&iP1df3b_Ie?2_>YT6Ie5(F!cfG#R`rj>3YEc*gUkZJ^eM<j8xpxTUUVh7*#0TDgN=@fFnxUxiP@Ea*nPV1*|zh15!euSyZ!H}NqIro<tfn5IF7y}2RzeX{|Y6SpWkNlV-h9C^|8*UZ_K9xb*xS&djYWV^=PG1=%Z<+tbk0epe`qX;)oB$V-Gr_`}Ha=+56pftPN35vDxb8j+H*=!2!dwNdg)+m*V<ZXK`H5uB<ny6eN5KCmu?syUvX(rm|IluBQF{RCzlC6xC8WbmqkwhimLanW+W><n?mpg>`PAAjFEt<C|<rBjIvry<+WN|I8OSdCVZGmO8SCe`SrB<=i_o#&+4~r6u3sUb(4!LcK)0*G(xz2=oq}r+Zspq3)u(-C9n#*pvc0tsblJyspC{p$j!2%T^8vy$G+Ux)!UIfm<0;769bj^jBK&EPEICZZZksE;p1qWT;5QRF%zA6_mswLoUyrb2veieB;)&(|rXDSO{F0FF=&9k*eY0Q<Ypsk)Uca<z8%$~WkO4RTyS))lWp$2%S_-nvvZFx$~PO_7ccH5d53u?}U;di{dt7k^G+i0!t<*3n~L@H|N&}>U;T)b!*LMfz*qd41ODpGaBi1?9*M>+}`CpB{ulZ|J!VXfAcmL94@u&R1xgW<<(V>gc3pd9&z0cfKkc8wvH_7K50?uYVp174*Rkl5jMgjsH?A`-qbuG?DC#vvw=pA?T?%1NlNP`@@9)smMGyomBtB&3Qq3-J*%W)zS{f0As7=PCQpyo=5%ULQXlT^ybs^(;!rm!9OGN{;gl1z#=x8gs<(CYj??2RLZ&pm)@}I6OJ-H00(t*Qb}a)npO&_xFxZjt}?uj=ax@z26PVP|57C@PzPczS?S@vG;S^+KR^#RGvbW`D#Qzl->aUX7?g>{B<LdP&;$;8`P~UbBH^Mq(S<LJW{RJ2HjqTem1Strlm^d7wJ+efaf$@0T&v7TeSvQOguXImCgfmh8>-p{NvN9i0RT+WOO~!lTO7DTCu^86`K8|_&9(llL|kXCs$O)D5;s<jFWnlWb_@g8qp*DV@dmCACrQTW=MzMMvt;P(6We8w)PS{U3fuzec64hvzn1ow&n_~G~x{|^yERW9q5%l!{qt&5EW6Ki%&@Dol-NhW&4<j53}Q7+qGkLEx;(WBkwM|JG+$}{j*4oO4oUVssib>qAk{jcL#qoip*m0t9c^2sa7TU6|4%w@u%an-ucPV=MtGvocdF!(w}JlHbTSmj113VqsGY=@*}|@^7NPxi6D_iRg+;C<sb!7N=TVHRmF)M3sg>(wkYU3e(-HLrn(u5CM<N?eDTUKrsl|>>7qjWWb-9nmECLD^lPH0_IpOS@UI<UVW~(~(x<VHz*^A@>L|cg5qOUpg#Ui^w1Mo$2*ecpBqdmp81FcD0;!O+vJrEpOC<H`uNdajTC4{}DWsCBi-SVoW0Mic-QIb^kq=%?S%<uXaf%qxSIZ(WxYWE9M}ZDX=A(0m+Vi3nJW*2O1{u>OlACGwwcLyrM1UQgnR%WsIPe8v)fu%Qszjbl8LdZnndJnSuq7kRLd8Cq3PtJwUy6+kKmu@8O&sTrs;UdExU4l^T3o!P**QxEfpCo%bf==f$e3Yq>YSRCU$Q5bV#jOVSkh`&x3ZkF)|7WWEmJ<!oUq`EP_`ycpXi+>ZTY(%NnS_fauSzS#=NZYty`2JSg~T&(EJ9AVRlW8{X)jp{#d2Q!aOFm|2(ts&l=294s0(AV~R1Ls1C%;N31q`)pw%0Nvv=+gb7T+*<^kxcj=|qd*c@sOp0M_g9Ke%z55$PEp#V260K_IGe*+1g$;2jQl9IZteA7;TInZ1DmRI9lSDJhMq&&nlQFEFgx*Z+3Z4fgQY>nINPieE*u)zNyT%zm`3GGpTOq!+R!};pWi$iPEryn(xzIZ}{P3Z7);qpfFD>~-pr;epZR`Q4xT6jH|JM8cS$kvG5howGNW-NTf3IvWKu3cO_V~2H7H480aUU$K6wvQB*y@JeWv=F|x4(CK@#(B*$c_Br(iPBw4(+dkd_Z#24CBr@HFYDrltqJd9w&iRbYR;6P@Nn2xe+`|1g8MCVo6$q-)d`jW3@{3bkr0@uhipl4wC>ph0gR*%^hpsdN1F=wEodr&#i`7da4Ov#?j*gbwf5Rcy9QXPBSw#68fUyE#}I=6;lAr#a=F<B)ro0V_h&_XXCJQF!YWOfO?<$A^r8s$;HLVNBD7mdUSYE{=|3m2>#wbIX>>~U!0uvfdkY{ag3)8$fmj6#T4zDBr0+=mc5`y`!`&f3d=@m&SyGaKB|+q(6h;B)W|J_jqX_5zpB<(Yw)f@g_m5Isy?(%^`HS<`ytj}5s*i61L|WD{F-1FR<42l(=i!M?4u?oAT%_J4qc>jM-*Y!!Z4wF`4H)7AH`wncT4--(x^kH95dNbkyvq^_=CA|lwtBwQL^GacI}lA5so>_@~?P_>J~-6pg<4U>VYLlh;<)1j?X_L7nj_EG(_1zMxI<6@3mK68cxETc;D&ieWxxm1$OYZQPHn^tf>U7ugaA~qMgVrlAv7GUeYs<RlWyFNll|IINiW?0&oZyMwfuGD!WQfTM~wBuTS=Inq>E!2B7x_Cox#0AUh*36wfd(RgT^Y9!P)4l;g7mzzO;F(Gu1rp?a2|00JW_ye@tGO9Z~0ll#z789o5f<JV4Jy2FM$fz)loU)bd<ThhOBK^S_1!#|ngCEKR|7VWGN7t;qpH0Cy>N%0QV$BOoJJ^vNfuWpGBi#`_^2J&c%(b_3oD9b2bT2P})eEtenP(hWRdS0T_D=W!Cq?2Wsh3#FoSvZ+NvO0N(QyGTQ=kOis-Z_FFE%L|0D_cvC^KHe~^)TM~myf@I^muf#ci<@%6o9~=wA2mFtK@u$Q?A6*s|}l~JP~y}v`}l+bTw=oXY?JCO};AtV<w~T+=zjWW+ivS;Dcu!yz*@}+`Gt8FCY+RR7N%R+|?ZfLP>lel{v_6Z!xeISOf1-Ee-dT(wR&qrQcdUvh%vJ*DYzR-<9GQ4kT)&M+@K$YD?EQ85$SZ(l-OCLyV^~3S32MS{0rc)%NAmF20=hgeS%^UMO;j%q4TV^w?lItIV-p1GmI!zqq0h8{RH+d&1`4n&9#<>Zc4PVqm3_nIKLYHje+tm#D?Pi0r+P+<fJur92AigJ>aC4N>V%>C9C3O05%h2tr2DECE~0c^Z~2!y9gssA6Y!W-^nVp7lN)9sc^;MHlIZoxE`|jql=gf|u%@914|%(21AP0k5hS^~+>mRsc78!ZGr|@!Q$B&AFV*;p)Xo*!?S;!+;^?pp@*0p`=CJvf?Hyj%&3nAUsaHv%UNFXVjrdF1epEi{vYOx`{-pbKhaA$C-VCD23VyA2|={dSMhZKl1cc;zyX1O8Uq=4{&qoza&`}2E4(UkSw9{QDKBDeoPyQ$|Ua;%V=*7W?yK+qh%UGst+ZH;siie>2U&=#|L2<yANfinx?ESn*5_psh*;?I$N<RN*;;Tlt5=k0+>_5XqYzJib@g26(eU@Q)%)Qg^|{n<OJo28m;wGEq8^}8&N<_@J`UKmFaXH$d*Zir!rXAwcIi_uS#uTBnmSw6c5pfM<Yj+OtDE&u``%BsNS+l1aVzgU4{%dDyqw{;T2ly4W(2|MJ;gA(WOwOjKFoAPHpT%=cNqeE3FA4#Lhs#Wca*PTX&^0p)Mn1DPa|=%JzY6bjhnm7mEj%{3^Ee)OacGD|yHYrBt$PEv8uz^*I8W8V9VC<<w-hEZ=aZFW%|i`MKqp&m2zaU?RRO^P8M9qbY5>X?8K$A>@`$&JKS)Jl;DpDha6dDR%Ik)Np#F%l3kPAi|~$;^uhccnHVA2|y&{C2<VgPv^j_X9bnD04k<ZK`5S{s_A?Ju*)%3NXtABL)JCQTNwqGB)6Hq$sv21i(B_=9bLPa4ksYb*}2<T)5LD*sJxd^0Dw@~v#GK!CWLeAc!!uw2dD@WULA@qY3MNh8%zVgu}nA#`Gav_8hR)>UMW**5(P2~n>5h8O0vJ^p!?)o=cwaqo-E~m(gi9q!01b)h`l$!q*Hp_c}|5%FiSek0XS+9$T~(XRm)@8_Cl|uJKQL_;#M^R(ay1GeyJ(ZVoemQ=bGiZc0T6UOA0LZhfZhK*7@XQf|*)DEP>I2lE9`TE3)sejP5H3N^wiuaID%+gk}BEt%_^iP?9#g45KivPU>7!_?8J)D`T30!QHib;!0;*_vYwdRY^bD>0+Jc6g-m>$Q>y`mD59Eq=L}N7CEvdd6=^hxx4+Qv^zfoV6n<9!m9zT<fa;Mvee3DsAUIjyf%~~n*D!tz75)`3z%}nHamZq8#BfR>lGj}Z|G{wd|uAn=^JWv!kNInwSpjuVDGw3(N$FJPuiot$dTi#c~fet5ObH5UKG>eXt;>OLCLVkW@*KN_77I0l-ZzSvH`|=YVQX0U|`Qxx^Zr1E?y8v(Lhav?7~ZplL66(58*P@uxml<KKj?$F>B;#Gn*_5vsPpK@IdAMXPQukB+*cxrjzt5s%Aq~q1DVDS}`G`E72`wR+@8CV3TuErB#&P7iWR8COf*(a1s$p$zUz&C;4?dX09-f$v_QnI=2Hqtu(xQ7c{iSbXLY6Z_gB9VJikp)W{~2F*z3yt>RcQOm15eI8J_HYh$xPk>q#m(qsw{N~Nt+&i@oxqP-)+nv^|mH;d9kFrro^<GC)PdCQDTSna-Gk8JluFpKaH(I3<CmuZFVrj(7-#Zah`Xu)FdsGur@=*Ipg(1*T0nKnN+#<EYPoK<Ll<Z8>ITxFZ`7v8X%nhX`w!g<OOzuKuQ&(ta6nMLAO{iGugl)8yTFLXY9eCT%GqS|Rm{|2@3)U<Iv<^ovd%jV}kPq<vH?bl4%ptU!8*{bqWB{&dDU-7k|8HaZd;oUMS`&^douj;8eDQhi*t&%lWy0W{6_CqB_Tw^Y)yJdT6v~A9~S)L*J1-P}HlHFvUt&R~N`^J81nHA$lNp)dpdNp!2k0>2It%wjdH;^Pu!>#6GWo#^<%py~MaA=|e1Phqg5+RMj&}j}WPFj=!lt&Z+Z=ocsv{@FERY*WVOj~n9Qs}?^UhSSl_X76BE0N`Kjs`GT+a&2UK%foCjz^n7V*U{3%gFBc&Cr-X0~+(S&^RM|^(scwBH<0teAc`8bavc3Ag_FtR=Hc2<2FI9%zZUe=Ab61)|jYj9UwPmgSKl;oI)%OAf47&CYl4&l+sq;5H;kwxdgQuVr9Xv3|@Oxc#BFCQMvY^d*gIKh&vjj7T8~QwaOSVIr#a<E=%jhBuQqi?at0y;qyrG<JLYHdJYE%WGf%E)}ea*9H|GrtVoL57NCy6bl0XXqbw=3=D^_K%%MbG+j@KuBMFyM3W%q(DDI>A3r$_dIR5#?$>}Ma@9&2fzny%#@b-?mOb!JY^}Lfa@2m%H&Uzj1P(0MR<__nj<)nwkcw|09b&@E`?h>8n8Pg3cJ4*3_uP{l#LT$S$nq=td$<&5BVlvyRLcKb-)pDGa&C;zq=82L#RAID2{Y>R?*J7^2{ukB^$&w)UA&@_omHt{Rzmf+0E%bZAZ`Et8n1w`C3L`F-<d!zE(RS6s3J8lLyBLEta8u}S>_9;l*r^x}Zf5L-m<Cr{7|oGN86av^S+3ACc`RIPi3nVJ8mDU8d3DR-${V`I`dY(gvE$m2>Dy2s0z$Zt3#vht8=h=#T*RoXNw_3}Bv*pfmBfeZHY_=4!E=pbLwO1q8Ua1PIxjv+3y>$-ESXjupdZyJPdaIlb8}03QKN;#Z5^?=1lvABue9&g3M+}#@VOrSZdg&7nhZ6wqUUJub-S-4N-8=BbeJs{Way1}j*RHer084^e_AJt;Ea)tX9jDM!)`e)QedELG$7d+n+golf0v=@N)Q?OLO^`~u$Z8emNtj;1l#YeTTJ1GTDyT8iHRMN7GXkmjHghFfR{uCsZtFQQ;hEtB?r!~{hrhlO}dVb_lZinB)ZPI*gfsqLSY&FLRK;5S5MWMgft>MtNiNK4T&^~v7HH(n7{r8o7%|o_WmtWe{X^sT{pM%bWX6wZ}AQ@s-kSx(M3qsrW<o9E*dh8Z8+T{lQ*itCgvP70v^`kZplbyo@AM5thU}w;s<QitxDFhI-#)lpViDG?oom$+L7{$ys-5F2pS%?${5#YMY_--wYFS|lm!dhkqZ*n&@5auTb@hEQz}o5Ppvqq+PUzuRzx{%qRe|%7}Po-R2PSZ>e__=|3dC6@m^(~tdgDUc<1)o$#)?nn|@TCdsv;L?om32+ibJmGlQ5kP(Hh3WcFYi{YrMKZU>sO>%B`bG00qCPoRq9BOb-w$h9MpF?Q9IWQ-+(fK#Nc*-e!`gQfgW$NRmri@n2ROm`w=mG@P|=%7h+$B7}(h+2tK-pqV!PvgVh;Ss4CTwfX`SaY2rqNOUE69-Nk!(4dX(e@<<6$39Yi}QJk?%RrO71N0)>E~RwiBNe5q*xX!FXoo^?5}fXW`TomvIPiY*{xv~mB@JK3Ir2?<z1CUxtf8QT#kpkoD&89fcFjhIC=}nhjzYNNkli;<p#@@1w_6L;?@70mloGp3C*|aeXka4&JHgy*+zE-2aLj;Ku$bY6*x<#{}EUJ^lq~pFaA);QOv(qDgm8woVuihu4_<$nV?qy>CL9!D(*8eYNa7(M|Wa119JykjYp_4n;L8Dd8ciBWy_^>CH>PusoifrC6df(IKd4xs3^wPBv8vU&dS%X`TDN`8Yu=f7q78~sbK=jvZXrubl%y-<5gpHPLL82mJ9VL^3Ytt(+1=EXRN7X7(*m!fEn=AV;ma@O}^w>uMBqPS5|WoMkQlCe-#qZtbGw2zAl5rh2U@2vPfw!G=9$uGvJ!<r*&tv)5#e6-7vBhx3n^AOfAsrENPeN5Cs$9mKoU?Sdjb<>t20l)@&9tKD6dyrxd~j!@M3((wR}8OJ_r*0CFm~Mcx2K8PUrWNYyvT+M;CE!QA0ouhaDHB7+j8g+OzXHmi3ff1{Fb&0M>jNL~VkEh|*$st(GPy~^YdWr9<TGv~DCDhsSCaFI~GLEc|g-b_c*?(hBb%hAdHKRObS25TQLrbET!o%Qw(+9$_HU!;E3k~2Y*B00Vtq}Pi~xmJ)a*>Vn;pu535x{h(f`?qoaHOb2pFFmg<$5QUJ#(#8;8G-LG9>2&ocWFU^Hf0rcuFVJF`)GXh$<xU}DvqE*Esy}~t}b!{C1F}n6wnt?UD|g_dFP}nqMjN@k5o0n66bWFZ{85%rsC6*@i*-jtY9i-ZmS9A3y~<$e^GffDmnfe%d$G+KrT53<Vve*RGkIwfzHQL_hYQPf5TMGB1$!f@uHeDeyd(iNvbKiNRfL7?Ytu-Rck{MRVI`&FoapmOJ7Zxu%=wn=GBtcD=RExs|dn41w*f(e$u}xvn?QS^@wuoRP$7>-zVN6;lu{2#4_xTQiyatyQmSG3~Kd^EJt|Yf5w;C^lDYGfVE@_Xtv9#tSY8bnoqb83x`6x3#{lUYiX-PRGT`$_N$sJmA<ss`UXj<vuAHO?o6pKx1)105gO}DRTXlsLf5gcMl0W3<+E1dQ_Z{S=&`l}MD7ZZx36~ajT<$|ig~>XITP1f<?ZS|sQ@-O-!_&c{F!o=0{4x7NwvaP_@c50y5El3Z)x;<L;b#WQAX64UF^n_05?AW`r%KK@%$l@CB4hh@BTqm#@wn@Zb503SKFp;L1;YTu0ik~t6#!O!qbz(V@&CA^xgM=VO3Pa2$+!4B*4qU2nlN)fT|crMCd~tT2(>IUrXNzaN%5ncdF(PQrHb?>MxqX(E3%ZK&0-V6a<Xxe0oRcGe3|v-YCVe2JZ~xQ`+y3dLJ(E*5beI_w*3B&UjjkG12;B%8^9mDv&3beoclGzX1)`v_Irvr9uUXt(zp*DTos6!^+82V=j*}HS99%sz5;~t)z3^p%%L+1=94E(e9hh58K<yxz>AwuXwKNUC`MoeY`#c#DC#R3D=95*wZqaBOY+_j#!G|8VtUNRn*i#XUvh(D8Pp!as!x{#LT}?E^O}?m^rQ^&AmUQ2<9zCV<g@X?!AmfyiY{=>FM}6^ghox?WEz}nwE~O$UIO#6YpS~Kg%}htDVr<jyR)mK!N7PWqK9zAAep|N?eBzakz}hd~+FJy(<Rc!ysG^_`#s2VZz(DjN8jW@LpfG?q=1erT0VJei#HlN2iC!{XhEqN4>qXz2p5}lYVCde!P@{dl(T#EcgVr8U>AP$`M}W4emCVKtU`Jm-&r~_~}1dj}Ni(4&Xo7k$mMC17nN<jWJMT43uY2Lq<zvjx}R!Ndd5$4LE*%0s>kpln)*4!yNH49AEf-P+}z2vJxMC0jF|)h!OAmXD8?9?cTw!Jpk>Gdl&n^_0GM$qob4Gdk3Us{^Luz;X!qKUtzU}&Yv0KS+&EjJ+)6U1r#qSEUigNKwjT4eJaMMrc2pXgTP8U5sD-;u2)P${QM9u8LaIxX7_OsAv01{frWWR*JayZN=pJ3`jzo5$_>x{7TuFIQW<j|+W33NVdh!Vo888cPgbA-Gez~6&Uzotdgs5fn-3Qxd*m-6xbZgx<ak&C-TD@feXQ(@4D^509AQj`___NN!M2#a4TI%X<cq>48EKoP?~W`a^^T6lXP*Rkg*i;PO{gmQ7{MAJQ6-`-5n^^K)Hc<ErcCqoVydVoN=~fV`G9JThZ#^mL?0vI(e8nIaEcrbRc9JpNPsOF6W#&G3#642-r!@-OEblMrxSM9&F9KG0T-OIqfSwDL!C&TB$)aksT601PS+~YHxVF;%>V$9nmUE1UUu?=R*@uLKVMAy$O{Cv-UM+05uCc@Pj*-bORo2~?zRiW{HAlWoMm&oKg5yMKti$&v@5r#q#i>0U>8g>NHde!TESbep{;)!(~Kf((sG;rY0aaZOP%Hl&2ePwuXL7~%Oc9Vx#d7n|1>tULWps7y6&ms#(K9i;Nk2;j}&VLP|}`fZOH-QQP5CRSs7rS(7ulGKL~rTnd4@V&9i$3E{&nvI2o^)@vWd99V-C`XHy}t{F(s9jBf{{*vq>m(cM<G+<EE-ZX<7poier%TS`3mvxaC(%LZU7lWyJTSpF5*54e`M6o$#H@(N|}DQ79<I~IHUCm&DAT~>mU-k||o<rZI3s$s<j!@eR?D#H*dyhi1z^C=;f-&MY(o-cY|zl*+0<Rb<+vK4gFBIDG^EqsWMxslJ&$we8M=?k^z`gBUeKmzQq=sRSzWZAykpfn48PGuozyz49_rN`p7A|lt?j;yx0{zc(;eeH*$aED*60(fS>d-<qTC|ws}v5HktleJmzDwRXKPGLUeN}*j7W7J0~OIcW2(@^beUT$TrudZj^tzg2ke0A3b-uf8M(!O1-@~KwFsN!+Pq1*}${*el9=zlmo>UAjpf3X;k(}$M*h9AE2JM-I_a&d+J9llejE^A@7?apX%J1bfo^@XAE(|NQTgb9dOL|XjCeBAy?xr-DXk*!)3SPJ6>n0M0tw4Fr?@5}iGa-JBPftkA5+ixTag=(qnuJ>q-_EfqsDk@lBfA|K*jwx?Nm7v6xN5)DZG+nlAY9~oNgtUYuVsp}q+9}yFi!`N{zc)ek>Jq)`uBYgDG?moq(<HHk)OyAsDU|inJB4O3)zvdf918MMZehwEIL{Wt8_p!aBtU^)WaZ%K8tXL{8k!ZnOY?NF+NPj-R1FKObG)dcx@L9`U_VAlsoeM-!L(c}KuqlY())07)+0j5_1n<%Bwq|E+yf*j_KfMUaVjljBmjj3t|z7n#6gfSgj`jCR0&wVRI*HHGoTp%l~tIMt!x=}EtdTmKu>hm+XsL+V>o4+Ax9FG=}rI5gkwEH@SZ~vo<|cX-|(E;`DZM<F0(~mH&Y`wFkQ0nuJ!l=@uQA!jOU^tJi~7w8=DdiZxhO~f_8Wt5DydeGXYU|&UmrZFP82hEDFS(Ez%>XY30|;bQA6?zT&%9SJO#v%_rTo4)=|sX=vX#uI6bq#WS5}i2PYMkjWpJtnBCb$Rd5~$e-NXwG?nA6}0BCah{abl|v{PtA_F^RVdKYbBP8!u-)r44Wbm_grmIk<Gs`K-vI6LWffd1$hS+r9_8e9jU*I`L6Cb_%8il>jC0Ty63=9v6FW&<<co^sk2Sg4N1t8JDHCn!XknxuAY9DzQ^Im(IOThRvNI}?I6)>=Za~V*Dft!I)Y^ZLp}Y@=XXh6kYq$-)PAU#mC^$4r;7x8aHt$gvZ7a$bCl6B7<+9(JOsH!Y!X#w@9oVaAr`nNUyf^9hcW<7j!1cx72KQEJiwpLqLg7{WTno=f7A5l6BOlhHrtU10*sj(V5iAC-op5EV-O$;gDqM>UuSEMc*~o5{Qp(fHFCu`hERbx1E@xDA^)#;Q-lvNb@8A$_?S)4=+Yh}n6%*))2(%NHHfUVO6_Jek*^kJ%tFe2_>|o^nEFbFZpBU@DdK|02D|4vn(v5x`)ySo=yd#SG<s3y}5vU4S5GJcAZ5;dWm2uTZ$l#;Q<>{R|ZDh0ej*gh07ycU)G8=5D<?4JgMUcr2e570$UMu@C)qGQ9NwEdWlxbDL{uWea!WYcBp1H1|P@OVlYF^P}37jiG>}w!GPKR17jfiEaaIXW(;{gnRI=8dc=pADAf0iVeQU0|kNX>1lxz0XAA@uB=(Q1c&-#a@#JpQ$7*0;hPDvS7GVE9lIXqu8YUQi-N#DTZ*%uydqsypf3X=Dy&d3qZI8Mfy5(v{o-7y(iXvg9JfkagpfDV_2-iYp$?(il!Ct`%(tB>8oTzr>Ys0NXOcY(;<*Jt~c@-5Sm5(JY8y6Giq$O4cjH8<FrO78;zW@+U=Ss|f)DYw~gL!c!6OOf)Re(jZ{U(a6Ra+vj#vMFd~>zEh+KYn`1{qvWgpx2{o@#AAAFqE$hPOkxT3v=I5nJ2)W$^nCAguPM-eC3{#|C9H^!say@Z-s%+rP8r6iG+yntD+#A=nBi2Ou%nVWD{yNX43=xgCQg8T=h2smZ<eG1MoT{9MC}V~EN=_`_tI<syZ#4b?R~iDowdsp;HZ|ukbZ%>3%LBy>LXQcV68hvTsGEiAgvWi6#e-<FkPizY-fvEUc<*aTg=g_6A$n@NOeO>0huCPpt(xzOum?s2VLwP_kM?gPM7nWZ2B5bY5(LS?mcSFLb)555R-5Z49jj0F_I-XDuuQ>|JGfk6bK*pjt@Wd&M&;kJ39HbR7a9Lrk()7xb<FnK5x)%JWa<yM5xdoKsl#UxY)b+bpDJ{STn80Kr7Js;jhPgM}5rZ4&(f=^P?#y9A$VR&(mx4YC)$x>T=MdPFSi}_1oE1T@JVc`$1A*uerD$usk8fEpWeSpyN*;f9aj6F?P4#7@t119JnbR3-$T!@Svx9y!C9U=F{{ZbyDmXLyq2B%cje3SgZc6M}9Mrhj|NXYct;NZqwUe0QCQX5BS%~(E+ZV=Y{?NIH#YK&Xw;fJBpH~h;u)hDkk-dRY;)@JnXZ_uMtgNBoiuVE$;Mw_Y$3S&9Q>3P^pA$4FjvG>@NJlfQ(P(6Sgv4if*0lsga~*1p&fXNA2?<QA{jVF}=OyubZi@op_nAucx)oK#$DPwL4l|defItv-Y-`acM+C^;AoLX{=L;kL{joawym5h+wVeQ#yg-P-X#5V>8$r`?;UdpK#>m50#pb8M^VZ1b)*^uX@haJ(Bs2IOAXQ297xNPqxnjroXg#GA-G|QkgBJ70xN+>;<aj;emLgN$z3vFBa!ZqBU5KbKT0z8Jnw%YAdsnXyS{?6;G#ku=iQMG;X+^#JJ76b4t@t0M+NxuWBc>o3=hf5|9iGSe6zAnco%d!QU*y04#WWN1mo3d5J1_)6n!YRSx>|0_y@i^Bi$ElPMhnCN#fGM+-sQD)wiLN(&v#0JOEwUVx$xqbCK%7RUqGggi|g+4ARw9jGv?rnOUvU{WfZCuOMh_*Iv08!4=fk8`ZOjL)(1?ia6ZB%s%gv!E3GmczWWT&x{MU<6*M%)?D#7As;b)*{`1L!iaF%o3YNS}@iBrceuZE6-&Jj<-<H^xq0J2pIqRcB#l76j#{07e1z?x$Y(*k#=x~l$i|62n|_|9imaLfr~px&$7Yjp^x`Js<@B`@8E^tgo-P9Q1w2SAwtz-b5HZNduUbFwB63#-sa*jBU5VYDg7KZIO2ZWL`Z#uwQJQCxAq(`b>yQ%wvY3Xx%{l=BH2yIE8AZc7t@f0yc!uJkc|V-D=e)hUTOI3-?3a2dr-+R%&w>DzpAk;mTt*~jC6AEvKbbpQYgHV7#xSNCp}-A2;8aGGK+d*e(!ot@UGJZTP7IIjeOv)28k{KLL)9`72W9S4B$-#(W<hK93_44-*ktR_QX!QYDSAQjaAEg<c$0(3w&r8aMifl??;6PR#OSql@||w*Nz48m&Ow+hT`Fe6RHJ}tQd*G(C<2e!_cscJBQT=$YT$=2zn9(PgdNktXVuRW@{@6xi^}_S{1j?COafixZPFZ<fV6hlie$xbz}*}=w(O#jhF+xw+GVWESoJ@$wxR(Ge2ZDfiJfh<Aj1(jM-<?K6Z&@2U-b7C1WR9G|5SqyxCV#g#QMnTVv8~CwwH<g-u5fp$sE&;w|}B(1rGC(T4>f&pdjF#G)yTvV2!3QH#GOwkD(GTa`3y3Bwf!C3+V%2-S_Fh_YDtNjJZ4u+C~~(W5U-@6einR{Wi?>W=bPy-_xHXRNxVnDQ)#=2geE9aHM!o05r?z^Bu!*G4j~d_{zYX_0i%rC1(I-oSUPijbW*obW9Dm*s?Kzj>Y$o;tX1_rtTk9@Lxx3^k``RLpxc(F(DEQ=`ICD&k^Amr*kSz4FZ1kjKQbO-7HL799V6eBoW3oW9_@{DLpv3pu_QFP{9`tq&~O)mo#j{vfqR_;O;kS`aPSiG@W=wYOz?3ayJI+hOIVtS{sGNfOOyMTMc&RzrI-oI<295zJEMyddsr8TTrvX*BS}c}R>ugdeK!rP=RlT~RHZJnxv&ZgRd3s#u(7<WQ)T{c0sE5m`A6>&jn+_S&rb9T>f=d;n}%p~z9DxpC0uKL$bYzO((~TNP1+5c4mPy{ubo3@g`q^X+ixtn3_krpjIIj7}T14ozp15!PNb{K~qsQcGYQCE}nf+v{>N67pYdMoc%pkZDLW?C^|bYX;%97+8_?s-=sCx&(K#Kr78%zFmIs0TT()p<C;<1EU|zaxtcY<H5?dH&f)FU(lb`$PZ{EtQNOYKcv5+_w-KvsE%PslMgE1L`h~UE``}Yd~XNAY$8L}HXMunncf`L^tB;#P{hu#)tfwui}`Y59D*Q8IRb?qLF5qANkSq;IDeRjx5@k_8-;*6LrK!ASV>Dlfn$SnrZPg(C1~B5lDWdm`C`M|a_Vb}Z6EuDKp*F*fOzC@JhdM0NO2G}8q>Lekg7uj+rU}%aV+tMNNXPAMqPF**f}okc_e4#i%C+1T>W7%L6a&%w<IXV3=^d;Q|B5<r;3$%w^|oQa<^&@;QJ1X!qRUAj4Gq+^_23c?@0V%5-D+=h$Z{Osog|3J-W0-^!T>B9q#PHe}35c5&nx6qP86#l~U%7RL#GkvS&Y=WQ)9|O+mr89;l^Lx*<K%kjC~N_25tT$!;K#Hwxe1Sb|GS+z*?I+$e6>Yj8c!*<>a7BPrdyC^=3ivJ8s$r+{kDim27{&oR43kq%OjIhTI89fZcDC+0|1yXa;E5`>}@NPuY#ucn&K9K}CyxK}bB1D_vi8)XpE^K-n~^7!QFV1=ko&3~h6#oWGb2o0LnZJ3ZZT(V5hG3~9Ux$UVd?T7kyKWCM-1zINH#<dx0n!mg@=VZ+fSCcy`xJ5m}C?k&tic~SZfpT;Tn=grx-YPpHGP{ITT$x_0hy+T~MHUrYMa5HWV~V#@MmjtOvYbwB!mPX~3AYhe#y^vq|0UdO!0T888=Il`LBB-lkNQtXKP35+KKF?pWgh^QQ?gZLm-~hiMmN~my>g62GiMuwY6#>2THd51;3LRK|E+%Y)-?o&!Qf8LseUxci+Tf}4CGAd4)I9T+in>S<*}EI_OJ6_QR^~u0neav7q22LhiG|d(l7u<J;gUw4+youz!~An+UN^H+bKsNx<uxiOv5rFFBGbbX;e`m&1K8!HEPTW2U<U`on4nc4dyi>H?d`vpQBl6sI8c8nT^!K0LLF_hUYlB7YPnshPo1lCVBjkpS0XFG1X~-=2r^H;`}L!)zO+IQd*#wT+up(Z&kkBA$gFr8#Voflwb}?7y`Zu2w;RhW&Pw$%ZwXjSUEZSNAJv#N?VW82g`bh%x`KefqPT}(F;@dG^$&OQXqPU%7Ajm==_Gr#!tw$t$eF^+-#1Q)ya9i!*jDO!RQ`1Rg>vfa9&6^1LnAbtF<+p08`=AQ({}8GiLC#1cy#7hOOwpkjQ`V$AmRq+@j}Q^eCz?yy-GYs&`9RjOOBZd1ypS6<XyRAZ<4W6crj6Nk2!7R2{^`PpaKp=w87_JV#m(%ut6YcagWFr%zjD78C=wpY_f^9bEtxGQ)s)^|roA9-2X@1To4#IHwBY8>n#|vdDQnPC%~17*DG53FC5-qZ#0e<ehii`wZ|;iC%5j(lT~b-_3FK7u3^r*}!nk>nx_2JHI97n11#(LSe6=$`OW>uqGsfjf3mmx-6CmY{_sjM`s`M*HTg?yn-XmvwtO1KO~8+V!~oyE_(#hbrRy~_c4UO-$$H7#khbQzY4rp-lgAe({}R3_NmM5IFKtiiLXi6;5jS?%AeBThl_sE>mQ%=e?L4vIQboUWve!fZrcG!XvrGG;XNBgn<mx4C|>0CR+!I=`6ydhUpVM}KK^uc1alw3C3U@7F&w*tXH#A){WnAf1b$=Zr|pp94I*R9MIbT{o@<S?)>UA*sOUdsmgqP;FALIi_(B0e0A5LF3-#EWlTtCP%Pf3~j`;ULk;HHIPStnmc;`tXDeuK+R4y@(ZW1hWeQOC7RkNr}o?J4rxeU#^OpSLoQL`C4g`b56NzS$F@(iH+)@xZ;T%x)P9Xk@Nal@c(FlWbw&q+5p_8*NmFDl6N1wcFJ()8p}s|X|vy5p}jD4^f8PPYLPEPsU<ph5zcim=XG>UJh=!S*$#ZDsEo#d)E5Wt+iTH;_S`WY(Th`Ln37W!wvW)Q1y5d*0q`R^oQd7Uad`3Es}~G$E(n`*b?W?mON=8edN{thUa~7HsM@2A2?E-JoG%u!Nb9V}!l3cGB-RaHC$69k)H0EHF(>o0tS|76WKtiH{ScA9rbi{%fKf)G_wtUH^IKd$!8{@@wS39Pf^Q91nRz&Oe=f*xT>H)8y@VM?Kx&J3GLJ^gn)d^6BE}@E98o|2|3*d5X{gk9L1}GkUwrk3N37=wau#KmGXTr&u-HJAy|$fB$hj82H-nS$o;X!y!WbU7V+g?B7vv5-_m1UY_^SC;arz4?q1hlu!Tu+u=p8GD(p%;OXG|9|k)xBYI3!yq`|fdB5MntlMT@G5FcZvuqyCzjiLZwu1Vb&ODt@5{h{A{s(LhPLV<a&S!96bKlkFI>~O4hPV8;KWsmI|7QEuo89eKJKNjN*0*p|(tjnbx8HAv->XV=b`uJJxdus~HMoxG@h`u++97#M2a9=9wEQ**Cbs}_e(06dTQ@KAVPuu4rl+G~?s$rUR*uJHyN7){pJQIi&vA}w;zbhq7;aNt=`5WOZ=9{GEd_(SnzFB~H^0v)z=q=M=sYN5E2aEeAW~uSN=n*Q`s9|QvsZXJ9cRu@U^r+wq$)R79fg^yRfCic)(u18ruGT8oJ0H`r*t{UlY*9wQCiMHMwt42;@&X~M`3I3eTo5Hi4o>z6}!-py7L<~<)XHE{3Rj=MKr?rK#&9<fFF;3+}?J!E&7ZAU9ct%5YIYZ_sMagzernVT;*B9l}|-#_AsjehCfr1EQ;VlER3dDyiy#dHpW5(h?`L}m1h$p5Usp9oTR3ojsUC1#n;00=uDCk(9D~tY<-VM-_MhO-jHst6}<Z1a(j~=@8RlK$}`t-#F&u8qw4e2ge%C0pymJa>G0?PSRZlda5n;;$jKd5+iB$t(mj=@^0f*r%%<eVuG4alGD?``ot*ZLy*&zNJMd1=PW~H4FYlk6e(5yK8O5IYvdecWrcxFhvClw<Wg5)5zIWbu0mn5mNG3<1vG07Q%JepU&Wfs<V73EcD?oM)E%sn%H&o=F3M;VX;_XjOBVTBNjp@7;dEh+%1tX=q#PqACOH|S!z|C{4HwI&dEFy#m|DlpA$lFr<Za@h2!~1kJzcFKKIJBQ=e_^DZ5w9GIqw~8hrV&6lL;8!zW$3@$2C_VOQ}yTZk<vc9Q#r|Q3mAy)@is6J(0q6M?dYc;@Gqe2Ka78>b^PZdMeiK!G#bAh4}AU{u@2B{G)xBLAI)B6&aA<8IKB>VFt9LEn{bJHX4Z&5<y}Bbmt0fQR1Q0wqZJkXFep=;q#4S;dN&JpJR|fFo3*6|^C@E0U-;0B^NP$vi`3x(ZKerEFvkXdJ*MPEsMO+_MYNWXAD0teF#=#dyoDp9vH$X?INllTVs*Vqnv5eKq(7khgHg2IG|Vg>Jw!X(0EDAu^fnyB+9Oo;UuTK;>Cg}V9{K>iBfn9C9WL@B%Of8+%@KV02Jj%Usq>q3_!a0w0pFg-Utv*0pyoCQ0w|K;+QyBr+Xkb<fKUH5oWkJ_Azz)h`a#XQhv<&RAQ^}<oKe|EpEG&-UHb!YTD1B0=v05THhQh+z|hCx%K^Y(%m2BDb9?WHG)HHPBOD)E(06JkZfIyAi(#CPOjKdYn&~Y<=7*e0$}?ap)=-%BkdK&8c*ofMDcLY|Zx~8<Mb=;X?FwjAJ9dEW{n`TQeG>V|Ex=+i-|DDx#3~gm49@+GbrthuW}!fQ5E3sGB4G^~xvKkRFFV9t;o0&A$=;Z4%sD>zypYy*_=7<O2aCagS+65B@3(L$zS=BIC$r!iE(M5|vXdzE=xr4_OOW|)$XtVYC_EjWH@oShYrfBC0aO3GHFZQsk>ZjFH_`O%Z3_(yUF~dsC}-;;f9c0?J1{dSq23drqy!iGk_j)a=Jkc>!*D{2K8A7#!LtMuwSxe}rB0&U@INjb$6`TtJRRO3&bs#l8${O6L`kO+0cagE%84)?+ju77pNj&c=VYS-C+zN6$D)u09i_!w2*+HJax)MJ^YR2W4;q%jq+I&%1zQ*u{HXJWm;MHLI`d1^H*|@t+_K@GTEL#;XY{FXKZXqu$$h=+%&ZK|+t+kQS3wis&^PLa?p7wU*#*T(vW%p6LgwAH71a8hFO42S_NAtya9p6bD^QsM7S`>0&h@Fz=_7I0DsM3wURe+o@2X1WMc*+i*PV0Bl&{|gQ)T=~w20w!CzPEdQ&?D47dYVwddyTN7}ZC_XEfs#PQ8JJz>Nv)hW-VY-cZ^D8L?D1teyl%t=qFOJW!p}F!&nIfb1&{(+^hCU7GVIWcSCw0Uss3^>yB>)3e^^!`|->aQ$fov^pv7v(detk4E$rEsf(2?QAqFxHy~5N;d3GxEnlkf}%=slBMRU@lDx`EIEd`&*Rx7nO+0F{QifxtFIZ}?!Jp}VZiq>hX!Q=IzPqo!>`1~AfQYcS3)h_Hjljl0LrCH=9F2upG*nVTNO*>Jj*7<CUlG%Zv0tUG<6D9pcYwQP^TcP6(0{(l!@)T6p3##bTwkJ`deoSELlE~<KLl(;X$1hG)B^@Sl2!%u9isP-+9?TRy%LNifa((9)cCvVz&|(j8{|p$~=Q+;{DT_+1OW3UaaB)*D#}M=PGy1xP7ay+s@nIxy-^C_`S_oGj6#SVRAD$tlzWzD@Q*&GibT#xf2Z`C9j=$uravHto#GUh~8_|6AIju+mS+*tH57#)Mk$=Q~lz_i<4=4l%S|(s4BI=4>j*pW&j-$knc%ES%`aDaEd*cTj^J>ON`Z&=gl?Cn?j2ngNV+$ZsD(~rz`y?>3HslGj3{5`W|$V872+ASbT9sB%={-I3d%y!*^KunXncthRq|ZT?W_U4)3cHYl2EE!-7}kjLD?8hsrlB$o9XODrdhoOlj5o;fJ>mZ+>|D3jcrS?RLHCYI~hD+T2)Iv88bTQZmT^r|OH%FYBV+Ze6s)jvGpL`r2b3x%7O;(2yh>=#n$uJeNm;39sXj8dyqWY9Ffh1MQSN&(M~^Sc<}~QuGtK4mmL~$3@REpL}`ss1Dp{W0|B8udQE}NrxyQjy_ddTa}<$Z8to~VnBAnA*T+^Ti7*ZZ-odee~<)bV%LE~SHxej)JoX{T}E`Rp&^l6!BVq)q@iLzn-<w5E-cASk-{~UlhuzfJwtU~wzt*ZmTG&aK?A-lXbY4IAC?JBk+q&C3cGT1jhnBA#-Wy&Ln&Bc|Aa=?w|TKGKbgY*`TseUINO>PHh6_E?RghT!X1Nm_;VBajtdnvfSZZBxS?A|wQVV>EV3+xko*(OCaLb6NtV&a2tC5SiN{r=@8d=FLqV@pEFxQO#ONZi$7_xbP=Ui@+ia`e$lh%reVJ9OMh$>pnrFjo((-@**yk+o+9gq@R^?38rd3%JaqLsc6x}5MHYtkuIw63$$%r{15~+|mGfwEr0Dq9TUYTT4atL_KWZv;bi61%WuY=mV!m`lW6Xe)AN<I-Fjdc2E*Y9RUhnzTgg-%npj(n+%0N`_vH6#oN%2V92)}@dCuyd#y?y5Rok+?cOjIP@&J8u*V#*Q=O8wl@=17!m<8AZr-!>lj^7oDsU{G!<<Lj{<X9=^&G+I~`H5J>|4Ydj_n@q7-Gde!ignCpTK`&+0I7g|Ayt9zHo@>{3tK&P9sv}<q+XOl(7WZs@+*$hSMC6+HMW<W}@2#%BuW`76{+`nCLLUiSnyP>m-21Eu<0z`z+uG0^qcXoDi))f~MY-WSoJO}0)DYa5&K$BMB^z%Zp3**uLILA|vhKeo~G48lirJ{~U+*AG;$%s=UPdQ6`Lr*yb?u)*~mH^2yXy|T+5RNOVBz&(RQ{F?Dz`@u9SLi^ShK01MpW^f2A2z0!hmI{V6=O}8tR(X2_F)-QR>k<OA79@J{DS{-G)@NN@5x-_zx;9h_qXv|Q_vnxk~r_<NjN<;8ypZD)p&Yb^7q#6bJei{U9N~rlFvj+5r?4_POqS`_$6X6g!c$9p3JzVdK|m@EVMLsz%UwA=UKzR#s~sG_Btz2o)05k6swOe!A4UVrrrYsDlrNKy~WuGGDVx%Aj?&s5Slse6LyCGcW_8W6Ypdkzhl7C`oY(8jdx`uN-$k2=M_84hIoP9Pqk0wGFy0<yqV$)@qUN+a;j$KrSpz!WaSli^66~9hgi=_q%)($IWMRb@XV~A0YA#x8D;hj*y~H5a{m{)RDC76rrpF$mTJc?d`1RCA{WT59J6z1cUXYaIo*Vgw?EG(?V|3DOAdaLIhzW1bLVO@L{jIVLvYxS=wE?Kg0q$ztkhlm*xLh{v3KBo>>V8L9ebyToWlB%2I5N8)j;|M;Mw{<I6$|w_R)#MX;5b=n&JJ=|I^dofl~mq56t_Nm*O`<?iv(aJ2Cp?d&ePR9ggVITEt~~#W_hTPhaiu^J-Cg8oRv{T)BA>1(_gz>|ekh!~HnwdB5(RdZ&9A7rnFN8noW=j?;JU@H;rkAXqv4?|4V#29~+$DEnx_8Td7R3ccPRd;1qODtV3$vl*5wX;DCsvHgMbrkOkjlVXK1FoKA{mkQcxd_q3ta*Hjis+EQCTR45KGD^t<(QbS_>|hZh&R|ia2^?#<jwq-s!h(al^((CwWH`7}UB&9wJ(Ikoqe#D#s6#hd8APs}>{xrf)>I`RFEg<_1JTaSv?Gnl*7f(x8{*7H?Zlk}8*{pXy!PhkHdrt!WXfPBl4ghJe=gG8jz=)EU8$7Nl;Y4p?Q)jJ6q-=CJ)?8l=Sn?BDqqgGt_IQ;kska-3O)9@a0VX>V@=-57rc%aS5k+_UxDZ)z?;T+tzx?#VT=(`$8N)zYTMtb99|LjL7gOYT0xC5_ru}Ac{4d~al$72Gx(22%4`tkK_gkN<0g#Fq)1BWhq^*8qcfvwuu8%!tJr{iH7$Ul>vWuF2;HcB*8lq$OMUs7xJpM@3IsZDnFD+28USuQMq&fSNE0u2_ok&j7^*LYI+BUvBZIIER^kV4%-Ae3P_~1na>R9^2LICtlI?bzydpmCT^#OHa+0&2QOAb8Ww6T2s%yj~oVlb&s`mPVmWS{PlsmK@_Ca_B_<q+MZ>sMl_hNkV;!0hT(0<V;(yqcmR}M?jWYW2;E6N!pvC5o1u6ofrIXyi&M``t)YH^#<tID2~>G-MOtprF`^XJ!g&(qn`H6G}CgbAp+tBC=qs_O=I@yhCWRUERaI-ZRh3FgbX8ma(=M*-6sWcH4ZzGz&*v7qh^?kr}rByV9TaOT`--GB;_O6fMru9qYeklxeb*J72Zb5;iTV5C;zDsP7Nl5AQQ+-V~&yw2m<4PZRH>6i&E+6G!ciG-uqJ09DuYT6i8=aNnu!NI>`RdRt=cMRU1Ex9s)AFMoopP5h11)mH1Stk;-Wdc+$h$~m8*{;1q-n=|(%{?1jIwg9x;WPlI-Cg;T8wxP=RgRK1kX=T8v8%>iiuF0CnF6YJXa~TEVk=h+*Onu<jxX4f5)?Xli5PJ9eWZ7$5#GH2>wo*-z11M+ua)feXR1g?^I{;o5gXz?(!`!NllLiepr`adLU>RT@izvqb=4D8!i%y0X_}&HQMt%=YsmV|*g5UG63n(qI{6K(?y~H7do_-NE?PCcEi$moir5V7=3K>U_R(bzA)mhn!<Ig-ZpFAH?+tBiTzp+7#WVvZ9S1acD8w%18vob2bssiKiW`<JJ+o$_;83K;sF_*Ht{PtCJi|IU@JY%PH)!}fRXGR#bNZjt^Z&cJYw2wo2*UUN3Uf-TMh1Fpl!KKxZKaA@O)L%wS%n11B~&r5s6^sN@C*4R?99%-$M(7uxHV1U>|=Ijb{^knXp^yXS1N)uDeJYavT{nS;7bLB{MRdHGC{D}U%I%u$Uu-Xr-xYfaH;}tR7HEot92dLsP5aw;AguJCWAhR-UAa-7g8xVBclmhtSlC!W<?>4=%SoX^M$w^Sn(i0%1{*dX1<&7ju)H&WSsj*1kM2UBcZuY99=70V-eDZM1;V=()OcWI8Y**YSE?|R1ns6cz<A%eF`M18w*Lf)pVV;Ua!n+X5G1&04us2{1d(G2mvEJJsOdVHey=a(?P@I{gCj&>PPUko`HC2d6sQ2oM<7b3N0Y=7R-%XbwKFR58Bx}K+EDL1gbWWU>~l9j6UMcKubKtb@rMS_VZiF7eedx9zb~2ZyaJ5lb5{c<qNQKyxg6R*qQh{Y#TKG`<2v<`|lhSJye`Ibl;BxA+X3w6Duvq{eYJP{Cc|sV)k%a=8=O@gnK}>)VrbD4=ni+y56S$1pZfuhzfDT%8ay|w@F(ey{enq#6g=^HhRp>Wg&mTZ+JkgqOs1Nsq~f0P#eq|r9#Ip0>D$T0g6%C0Rga!eE&3^_iy5@F>%Je0odRST1H8`P1-tX%rGJ5wC0S(>S3J3#NTvTqR<M>ZC-F1nUGoD21$x@h9;m@b1vgdPm|dRqpeYPMt)YJgVxft{)Z$7cB8Oa|6UM97_q~}^c_qL?%_KeE)lC?9@ZqsrVx7r3Pt6(JM-IdkU=DUkBSjwAMZ!NYf=HEe337cUq5~((r1A=ZV|m!C8udX2)6=q1y!a)!~WvILt=JiU#GXb_g`#Y`?;9XhlEJCDHH|5kHp-<LqJx<l|{#m(}0KaeBo(J41Bv<f19X5r1)~^4bwaSvK`Aq0aj0Vg-<wn?j^Qu_(PtCi29kjNQexH06=qYJ`JBq&<ze0Q3f?mdukJd*-Ajb^X&2}pFy;(tD-D!ruP<JEZ%HK1eJKEs<ICKm*Mo-k})M-M2;7VSThpoEMI2Ri+olUH`j341SHb$ZIGq;OZCy}{N}nWG;}E|ZedAlAB@$JncM5o1B^yP<uFQ*7+loNwgDEkH()9@Z&dGAJ_HR@n%qu{h{CD%C^;`LldG(JF}>&((lL5Y7S{D-GD#Mo?~;2$@j4{pe<WbS8=Pc!cf;ec_=^w%g)V~vP_UaDKr;k{@v0JEsVaD{ss?9L-yQu1^3(Yu'}}
+TEXT_HEIGHT = 0.25
+TEXT_PITCH = 0.36
+TOP_INSET = 0.40
+BOTTOM_CLEARANCE = 0.15
+BLACK_COLOUR = 0
+BOLD_STYLE = 1
+CENTER_ALIGNMENT = 2
+POSITION_TOLERANCE = 0.02
+COM_MISSING = -2147352572
+BLOCK_LOCATION_TOLERANCE = 0.10
+LOG_STREAM = None
+
+def log(message=""):
+    line = str(message)
+    print(line, flush=True)
+    if LOG_STREAM is not None:
+        LOG_STREAM.write(line + "\n")
+        LOG_STREAM.flush()
 
 
-def _unpack(tool_id: str) -> bytes:
-    item = TOOLS[tool_id]
-    content = zlib.decompress(base64.b85decode(item["payload"].encode("ascii")))
-    actual = hashlib.sha256(content).hexdigest()
-    if actual != item["sha256"]:
-        raise RuntimeError("Bundled tool failed integrity verification: " + tool_id)
-    compile(content.decode("utf-8"), item["filename"], "exec")
-    return content
+def normalize_pin(value):
+    if value is None:
+        return None
+    if isinstance(value, float) and math.isfinite(value) and value.is_integer():
+        return str(int(value))
+    val = str(value).strip()
+    return val or None
 
 
-def get_runtime_folder() -> Path:
-    preferred = Path(__file__).resolve().parent / "E3_Tools_Runtime"
-    try:
-        preferred.mkdir(parents=True, exist_ok=True)
-        with tempfile.NamedTemporaryFile(dir=str(preferred), delete=True):
-            pass
-        return preferred
-    except OSError:
-        fallback = Path(os.environ.get("LOCALAPPDATA") or Path.home()) / "E3_Tools_Runtime"
-        fallback.mkdir(parents=True, exist_ok=True)
-        return fallback
-
-
-def install_tool(tool_id: str, base: Path) -> Path:
-    item = TOOLS[tool_id]
-    directory = base / item["folder"]
-    directory.mkdir(parents=True, exist_ok=True)
-    destination = directory / item["filename"]
-    content = _unpack(tool_id)
-    if destination.exists():
-        existing = destination.read_bytes()
-        if existing == content:
-            return destination
-        # Don't silently discard user edits or scripts from an older version.
-        suffix = datetime.now().strftime("%Y%m%d_%H%M%S")
-        backup = directory / (destination.stem + ".backup_" + suffix + ".py")
-        index = 2
-        while backup.exists():
-            backup = directory / (destination.stem + ".backup_" + suffix + f"_{index}.py")
-            index += 1
-        shutil.copy2(destination, backup)
-    temporary = destination.with_suffix(".py.tmp")
-    temporary.write_bytes(content)
-    os.replace(temporary, destination)
-    return destination
-
-
-def all_sources_ok() -> bool:
-    for key in TOOLS:
-        _unpack(key)
-    return True
-
-
-def open_folder(path: Path):
-    path.mkdir(parents=True, exist_ok=True)
-    if sys.platform == "win32":
-        os.startfile(str(path))
-    elif sys.platform == "darwin":
-        subprocess.Popen(["open", str(path)])
+def parse_id_result(value):
+    """Support E3's (count, ID-array) COM return and normal ID arrays."""
+    if value is None:
+        return []
+    if isinstance(value, (tuple, list)):
+        if (len(value) >= 2 and isinstance(value[1], (tuple, list))
+                and isinstance(value[0], (int, float))):
+            ids = value[1]
+            try:
+                expected_count = int(value[0])
+                ids = list(ids)
+                if expected_count < len(ids):
+                    # COM wrappers can prepend output/status values.
+                    ids = ids[-expected_count:] if expected_count > 0 else []
+            except (ValueError, TypeError):
+                pass
+        else:
+            ids = value
     else:
-        subprocess.Popen(["xdg-open", str(path)])
-
-
-class MegaApp:
-    """A small, white/light-blue hub; opens tools only on user clicks."""
-    def __init__(self):
-        self.root=tk.Tk()
-        self.root.title('E3 Tools | Main Menu')
-        self.root.configure(bg=COLOR['page'])
-        self.root.resizable(False,False)
-        self.root.geometry('468x352+65+85')
-        self.root.attributes('-topmost',True)
-        self.runtime=get_runtime_folder()
-        self.running=None
-        self.running_id=None
-        self.buttons={}
-        self.status=tk.StringVar(value='Select a tool to open')
-        self.detail=tk.StringVar(value='')
-        self.build_ui()
-        self.root.after(120,self.show_menu)
-        self.root.after(650,self.watch_child)
-        self.root.protocol('WM_DELETE_WINDOW',self.on_close)
-        self.log_menu_open()
-
-    def log_menu_open(self):
+        ids = [value]
+    result = []
+    for v in ids:
         try:
-            path=self.runtime/'mega_launcher_startup.log'
-            with path.open('a',encoding='utf-8') as f:
-                f.write(f'{datetime.now().isoformat(timespec="seconds")} MENU START - {SUITE_VERSION}\n'
-                        f'  file={Path(__file__).resolve()}\n  python={sys.executable}\n'
-                        '  tools=header, signals, pin (none auto-started)\n')
-        except Exception:pass
+            i = int(v)
+            if i > 0 and i != COM_MISSING:
+                result.append(i)
+        except (TypeError, ValueError):
+            pass
+    return result
 
-    def show_menu(self):
-        if self.running is None:
-            self.root.deiconify();self.root.lift()
-            try:self.root.focus_force()
+
+def get_ids(method, *arguments):
+    # E3's GetSymbolIds(None, 0) uses an output array BEFORE a mode argument;
+    # GetViewIds(None), GetAllSheetIds(None) and some wrapper versions differ.
+    attempts = ((None, *arguments), arguments, (*arguments, None))
+    for args in attempts:
+        try:
+            value = parse_id_result(method(*args))
+            if value:
+                return value
+        except Exception:
+            continue
+    return []
+
+
+def select_id(obj, object_id):
+    """Do not mistake E3 versions returning None from SetId for failure."""
+    try:
+        result = obj.SetId(int(object_id))
+        if isinstance(result, (int, float)) and result == 0:
+            return False
+        if hasattr(obj, "GetId"):
+            current = obj.GetId()
+            if current is not None and int(current) != int(object_id):
+                return False
+        return True
+    except Exception:
+        return False
+
+
+def optional_call(obj, name):
+    try:
+        return getattr(obj, name)()
+    except Exception:
+        return None
+
+
+def get_symbol_location(sym):
+    try:
+        raw = sym.GetSchemaLocation(None, None, None, None, None)
+        if not isinstance(raw, (tuple, list)) or len(raw) < 3:
+            return None
+        return {"sheet_id": int(raw[0]), "x": float(raw[1]), "y": float(raw[2])}
+    except Exception:
+        return None
+
+
+def get_symbol_area(sym):
+    try:
+        raw = sym.GetPlacedArea(None, None, None, None)
+        if not isinstance(raw, (tuple, list)) or len(raw) < 5 or int(raw[0]) <= 0:
+            return None
+        l, b, r, t = map(float, raw[1:5])
+        if not (r > l and t > b):
+            return None
+        return {"left": l, "bottom": b, "right": r, "top": t}
+    except Exception:
+        return None
+
+
+def inside_block(loc, block):
+    tol = BLOCK_LOCATION_TOLERANCE
+    return (loc is not None and loc["sheet_id"] == block["sheet_id"]
+            and block["left"] - tol <= loc["x"] <= block["right"] + tol
+            and block["bottom"] - tol <= loc["y"] <= block["top"] + tol)
+
+
+def scan_sheet_symbols(prj, sht, sheet_id):
+    if not select_id(sht, sheet_id):
+        raise RuntimeError(f"Could not select E3 sheet ID {sheet_id}.")
+    ids = get_ids(sht.GetSymbolIds)
+    if ids:
+        return ids
+    log(f"  Sheet {sheet_id} has no sheet-local symbol ID array; scanning project IDs instead.")
+    return get_ids(prj.GetSymbolIds)
+
+
+def wait_for_block_selection(preview=False, default_anchor='location'):
+    """Compact, nonmodal light-themed control panel. Existing action/Enter behavior."""
+    import tkinter as tk
+    root = tk.Tk()
+    root.title('E3 | Block Header Formatter')
+    root.configure(bg='#FFFFFF')
+    root.geometry('432x256')
+    root.resizable(False, False)
+    root.attributes('-topmost', True)
+    done = {'value': False}
+    result = {'action':'close', 'anchor':default_anchor}
+    anchor_choice = tk.StringVar(value=default_anchor)
+    white = '#FFFFFF'; pale = '#EAF4FF'; blue = '#2381CF'
+    dark = '#203B55'; muted = '#627E99'; line = '#D5E4F2'
+
+    def finish(action):
+        if done['value']: return
+        done['value'] = True
+        result['action'] = action
+        result['anchor'] = anchor_choice.get()
+        root.quit()
+
+    root.protocol('WM_DELETE_WINDOW', lambda: finish('close'))
+    head = tk.Frame(root,bg=pale,height=52)
+    head.pack(fill='x'); head.pack_propagate(False)
+    tk.Label(head,text='Block Header Formatter',font=('Segoe UI',12,'bold'),
+             bg=pale,fg=dark).pack(anchor='w',padx=14,pady=(7,0))
+    tk.Label(head,text='Location  ·  Saber  ·  Equipment / Part ID  ·  Designation',
+             font=('Segoe UI',8),bg=pale,fg=muted).pack(anchor='w',padx=14)
+
+    body=tk.Frame(root,bg=white)
+    body.pack(fill='both',expand=True,padx=14,pady=(9,2))
+    tk.Label(body,text='1   Select one or more blocks in E3',font=('Segoe UI',10,'bold'),
+             bg=white,fg=dark).pack(anchor='w')
+    tk.Label(body,text='2   Click Format headers',font=('Segoe UI',10),
+             bg=white,fg=dark).pack(anchor='w',pady=(3,7))
+    tk.Frame(body,bg=line,height=1).pack(fill='x',pady=(0,8))
+    tk.Label(body,text='Place header:',font=('Segoe UI',9,'bold'),
+             bg=white,fg=dark).pack(anchor='w')
+    choices=tk.Frame(body,bg=white)
+    choices.pack(anchor='w',pady=(1,4))
+    for label,value in (('Keep location','location'),('Top of block','top')):
+        tk.Radiobutton(choices,text=label,value=value,variable=anchor_choice,
+                       font=('Segoe UI',9),bg=white,fg=dark,activebackground=white,
+                       selectcolor=pale,highlightthickness=0).pack(side='left',padx=(0,17))
+    note=('Preview mode: no changes will be made.' if preview else
+          'Blank Saber values are filled with XXX.')
+    tk.Label(body,text=note,font=('Segoe UI',8),fg=muted,bg=white).pack(anchor='w')
+
+    buttons=tk.Frame(root,bg=white)
+    buttons.pack(fill='x',padx=14,pady=(3,10))
+    def btn(text,action,primary=False,width=10):
+        return tk.Button(buttons,text=text,command=lambda:finish(action),width=width,
+            font=('Segoe UI',9,'bold' if primary else 'normal'),
+            bg=blue if primary else pale,fg=white if primary else dark,
+            activebackground='#1466B2' if primary else '#D9ECFF',
+            activeforeground=white if primary else dark,relief='flat',borderwidth=0,
+            cursor='hand2',pady=5)
+    format_button=btn('Format headers','complete',True,15)
+    format_button.pack(side='left')
+    btn('Fill blank Saber','prepare',False,14).pack(side='left',padx=(7,0))
+    btn('Close','close',False,7).pack(side='right')
+    root.bind('<Return>',lambda _e:finish('complete'))
+    root.bind('<KP_Enter>',lambda _e:finish('complete'))
+    root.bind('<Escape>',lambda _e:finish('close'))
+    root.update_idletasks()
+    root.geometry(f'432x256+{max(0,root.winfo_screenwidth()-472)}+80')
+    format_button.focus_set()
+    # Preserve the previously working read-only Enter detection in E3.
+    try:
+        import ctypes
+        key=ctypes.windll.user32.GetAsyncKeyState
+        previous=bool(key(0x0D)&0x8000)
+        armed=not previous
+        def poll():
+            nonlocal previous, armed
+            if done['value']:return
+            try:
+                down=bool(key(0x0D)&0x8000)
+                if not down:armed=True
+                if down and not previous and armed:finish('complete')
+                previous=down
             except Exception:pass
-            self.root.attributes('-topmost',True)
+            if not done['value']:root.after(30,poll)
+        root.after(30,poll)
+    except Exception:pass
+    try:
+        root.mainloop()
+        return result
+    finally:
+        root.destroy()
 
-    def build_ui(self):
-        bg=COLOR['page']; pale=COLOR['soft']
-        head=tk.Frame(self.root,bg=pale,height=48)
-        head.pack(fill='x');head.pack_propagate(False)
-        tk.Label(head,text='E3 Tools',bg=pale,fg=COLOR['text'],
-                 font=('Segoe UI',14,'bold')).pack(side='left',padx=13,pady=10)
-        tk.Label(head,text='MAIN MENU',bg=pale,fg=COLOR['accent'],
-                 font=('Segoe UI',8,'bold')).pack(side='right',padx=14,pady=14)
-        tk.Label(self.root,text='Choose a tool:',bg=bg,fg=COLOR['muted'],
-                 font=('Segoe UI',9)).pack(anchor='w',padx=13,pady=(8,6))
-        for key,title,description in (
-            ('header','Header Formatter','Format the text at the top of a block'),
-            ('signals','Signal Mover','Move connection labels into place'),
-            ('pin','Cable Pin Spacer','Match pin spacing and format labels'),
-        ):
-            self.tool_card(key,title,description)
-        row=tk.Frame(self.root,bg=bg)
-        row.pack(fill='x',padx=13,pady=(5,4))
-        self.small_link(row,'Logs',lambda:open_folder(self.runtime)).pack(side='left')
-        self.small_link(row,'Import pin data',self.import_pin_data).pack(side='left',padx=(15,0))
-        self.small_link(row,'Close',self.on_close).pack(side='right')
-        status=tk.Frame(self.root,bg=pale,height=28,highlightbackground=COLOR['border'],highlightthickness=1)
-        status.pack(fill='x',padx=13,pady=(3,6));status.pack_propagate(False)
-        tk.Label(status,textvariable=self.status,bg=pale,fg=COLOR['text'],
-                 font=('Segoe UI',8),anchor='w').pack(fill='x',padx=8,pady=5)
 
-    def tool_card(self,key,title,desc):
-        panel=tk.Frame(self.root,bg=COLOR['panel'],height=61,
-                       highlightthickness=1,highlightbackground=COLOR['border'])
-        panel.pack(fill='x',padx=13,pady=(0,5));panel.pack_propagate(False)
-        content=tk.Frame(panel,bg=COLOR['panel'])
-        content.pack(side='left',fill='both',expand=True,padx=11,pady=(9,4))
-        tk.Label(content,text=title,bg=COLOR['panel'],fg=COLOR['text'],
-                 font=('Segoe UI',10,'bold'),anchor='w').pack(fill='x')
-        tk.Label(content,text=desc,bg=COLOR['panel'],fg=COLOR['muted'],
-                 font=('Segoe UI',8),anchor='w').pack(fill='x')
-        button=tk.Button(panel,text='Open',command=lambda k=key:self.launch(k),
-                         bg=COLOR['accent'],fg='#FFFFFF',
-                         activebackground=COLOR['accent_hover'],activeforeground='#FFFFFF',
-                         font=('Segoe UI',9,'bold'),width=7,borderwidth=0,
-                         relief='flat',cursor='hand2',pady=5)
-        button.pack(side='right',padx=10,pady=12)
-        self.buttons[key]=button
+def selected_symbol_id_candidates(prj, sht, app):
+    """Read current E3 GUI selection, WITHOUT changing GUI selection.
 
-    def small_link(self,frame,label,command):
-        return tk.Button(frame,text=label,command=command,font=('Segoe UI',8),
-                         fg=COLOR['accent'],bg=COLOR['page'],
-                         activeforeground=COLOR['accent_hover'],
-                         activebackground=COLOR['page'],borderwidth=0,
-                         cursor='hand2',padx=0,pady=0)
+    Different COM versions expose selection at job, sheet or application level;
+    each getter may use an out parameter or return an array directly. We use
+    only explicit *Selected* getter names and never auto-pick from sheet IDs.
+    """
+    active_sheet_id = None
+    for method_name in ('GetActiveSheetId',):
+        try:
+            sheet_id = getattr(prj, method_name)()
+            if isinstance(sheet_id, (int, float)) and int(sheet_id) > 0:
+                active_sheet_id = int(sheet_id)
+                break
+        except Exception:
+            continue
+    if active_sheet_id is not None:
+        select_id(sht, active_sheet_id)
+    log(f'Active E3 sheet: {active_sheet_id if active_sheet_id else "not reported by COM"}')
 
-    def set_buttons(self,enabled):
-        for key,button in self.buttons.items():
-            button.configure(state='normal' if enabled else 'disabled',
-                             bg=COLOR['accent'] if enabled else '#B9CBDD',
-                             cursor='hand2' if enabled else 'arrow')
+    # Explicitly symbol-only queries first, generic selected object IDs last.
+    # The fallback generic query is ALWAYS type-checked as a placed CABBLOCK.
+    probes = (
+        ('job', prj, 'GetSelectedSymbolIds'),
+        ('job', prj, 'GetSelectedSymbolsIds'),
+        ('job', prj, 'GetSelectedSymbolId'),
+        ('sheet', sht, 'GetSelectedSymbolIds'),
+        ('sheet', sht, 'GetSelectedSymbolsIds'),
+        ('sheet', sht, 'GetSelectedSymbolId'),
+        ('app', app, 'GetSelectedSymbolIds'),
+        ('job', prj, 'GetSelectedObjectIds'),
+        ('job', prj, 'GetSelectedIds'),
+        ('sheet', sht, 'GetSelectedObjectIds'),
+        ('sheet', sht, 'GetSelectedIds'),
+        ('app', app, 'GetSelectedObjectIds'),
+        ('app', app, 'GetSelectedIds'),
+    )
+    attempted = []
+    found = set()
+    for label, obj, method_name in probes:
+        try:
+            getter = getattr(obj, method_name)
+        except Exception:
+            continue
+        # Avoid evaluating an integer method return as the selected ID unless
+        # GetSelectedSymbolId explicitly returns one number. For array-style
+        # getters, require an array (or a count + array) in the result.
+        for args in ((None,), (), (None, 0), (0, None)):
+            try:
+                result = getter(*args)
+            except Exception as exc:
+                attempted.append(f'{label}.{method_name}{args}: {str(exc)[:75]}')
+                continue
+            if isinstance(result, (tuple, list)):
+                ids = parse_id_result(result)
+            elif method_name == 'GetSelectedSymbolId':
+                ids = parse_id_result(result)
+            else:
+                ids = []
+            attempted.append(f'{label}.{method_name}{args}: {ids}')
+            if ids:
+                found.update(ids)
+                break
+    log('GUI SELECTION READBACK:')
+    for item in attempted[:45]:
+        log(f'  {item}')
+    if len(attempted) > 45:
+        log(f'  ... {len(attempted)-45} additional getter attempts')
+    if not found:
+        raise RuntimeError(
+            'No selected symbol IDs were returned by this E3 COM build. '
+            'Select one or more CABBLOCK borders in E3 before pressing Enter. '
+            'If it is already selected, send the GUI SELECTION READBACK log; '
+            'your E3 version may use another selection API. NO CHANGES MADE.'
+        )
+    return sorted(found)
 
-    def launch(self,tool_id):
-        # Called only from an explicitly clicked tool-specific Open button.
-        if self.running is not None and self.running.poll() is None:
-            messagebox.showinfo('Another E3 tool is open',
-                'Close the running utility before opening another one. This prevents '
-                'two scripts from modifying the E3 drawing simultaneously.',parent=self.root)
+
+def get_selected_cabblocks(prj, sht, app):
+    """Return ALL uniquely selected CABBLOCKs; ignore selected non-blocks.
+
+    A drag/box selection can include pins, lines or text as well as the blocks.
+    These are never used as targets. At least one placed CABBLOCK is required.
+    """
+    ids = selected_symbol_id_candidates(prj, sht, app)
+    sym = prj.CreateSymbolObject()
+    other_symbols = []
+    blocks = []
+    for sid in ids:
+        if not select_id(sym, sid):
+            log(f'  Selected ID {sid}: not a valid E3 symbol ID; ignored')
+            continue
+        kind = str(optional_call(sym, 'GetSymbolTypeName') or '')
+        if 'CABBLOCK' not in kind.upper():
+            other_symbols.append((sid, kind))
+            continue
+        location, area = get_symbol_location(sym), get_symbol_area(sym)
+        if location is None or area is None:
+            raise RuntimeError(
+                f'Selected CABBLOCK {sid}: missing placed location/area. '
+                'Batch cancelled: NO CHANGES MADE.'
+            )
+        block = {
+            'id': sid, 'sheet_id': location['sheet_id'], 'kind': kind,
+            'owner': '<selected block>', 'view_id': None, 'view_number': None,
+            **area,
+        }
+        blocks.append(block)
+    if not blocks:
+        raise RuntimeError(
+            f'No placed CABBLOCK found among {len(ids)} selected E3 ID(s). '
+            f'Non-block symbols: {other_symbols[:12]}. '
+            'Click one or more CABBLOCK borders and press Enter again. '
+            'NO CHANGES MADE.'
+        )
+    blocks.sort(key=lambda b: (b['sheet_id'], -b['top'], b['left'], b['id']))
+    log(f'SELECTION: {len(blocks)} selected CABBLOCK(s); '
+        f'{len(other_symbols)} selected non-block symbol(s) ignored.')
+    for b in blocks:
+        log(f'  BLOCK {b["id"]}: sheet {b["sheet_id"]} | {b["kind"]!r} | '
+            f'X=[{b["left"]:.3f},{b["right"]:.3f}] '
+            f'Y=[{b["bottom"]:.3f},{b["top"]:.3f}]')
+    if other_symbols:
+        log(f'  IGNORED non-block selections (first 15): {other_symbols[:15]}')
+    return blocks
+
+
+def popup(message, error=False):
+    try:
+        import tkinter as tk
+        from tkinter import messagebox
+        root = tk.Tk()
+        root.withdraw()
+        root.attributes('-topmost', True)
+        (messagebox.showerror if error else messagebox.showinfo)(
+            'E3 Block Header Formatter (Saber Parameter 1)', str(message), parent=root
+        )
+        root.destroy()
+    except Exception:
+        log(str(message))
+
+
+def choose_log_path():
+    for folder in (Path(__file__).resolve().parent, Path(tempfile.gettempdir())):
+        try:
+            result = folder / 'E3_Saber_Header_Formatter_Log.txt'
+            with open(result, 'a', encoding='utf-8'):
+                pass
+            return result
+        except OSError:
+            continue
+    raise RuntimeError('Could not create a diagnostic log.')
+
+
+def text_type_hint(txt):
+    hints = []
+    for getter in ('GetTypeName', 'GetTextTypeName', 'GetTypeDescription',
+                   'GetAttributeName', 'GetName', 'GetSource'):
+        val = optional_call(txt, getter)
+        if isinstance(val, str) and val.strip():
+            hints.append(val.strip())
+    return ' | '.join(dict.fromkeys(hints))[:180]
+
+
+def get_text_xy(text, block):
+    """Read E3 SCHEMATIC coordinates; do not assume a symbol-relative value.
+
+    The existing signal mover confirmed E3 text supports GetSchemaLocation.
+    Only accept a decoded position reasonably close to the parent CABBLOCK.
+    That protects from treating status codes/sheet IDs as coordinates.
+    """
+    probes = (
+        (None, None, None, None, None),
+        (None, None, None),
+        (None, None),
+        (),
+        # This was the signature in the proven older Equipment-ID formatter.
+        # Some E3 COM builds fill lists and only return a status integer.
+        ([0.0], [0.0], [""], [""], [""]),
+    )
+    sheet = int(block['sheet_id'])
+    options = []
+    raw_preview = []
+    for args in probes:
+        try:
+            raw = text.GetSchemaLocation(*args)
+        except Exception:
+            continue
+        if len(args) >= 2 and isinstance(args[0], list) and isinstance(args[1], list):
+            raw_preview.append('out-arrays=' + repr((args[0], args[1]))[:140])
+            try:
+                ax, ay = float(args[0][0]), float(args[1][0])
+                if (math.isfinite(ax) and math.isfinite(ay) and
+                    block['left'] - 2 <= ax <= block['right'] + 2 and
+                    block['bottom'] - 2 <= ay <= block['top'] + 2):
+                    options.append((1, ax, ay))
+            except (IndexError, TypeError, ValueError):
+                pass
+        raw_preview.append(repr(raw)[:140])
+        if not isinstance(raw, (tuple, list)):
+            continue
+        nums = []
+        for number in raw:
+            try:
+                nums.append(float(number))
+            except (TypeError, ValueError):
+                nums.append(None)
+        candidates = []
+        if len(nums) >= 3 and nums[0] is not None and int(nums[0]) == sheet:
+            candidates.append((0, nums[1], nums[2]))
+        if len(nums) >= 4 and nums[1] is not None and int(nums[1]) == sheet:
+            candidates.append((0, nums[2], nums[3]))
+        if len(nums) >= 3 and nums[0] in (-1, 0, 1):
+            candidates.append((2, nums[1], nums[2]))
+        if len(nums) >= 2:
+            candidates.append((3, nums[0], nums[1]))
+        for priority, x, y in candidates:
+            if x is None or y is None or not (math.isfinite(x) and math.isfinite(y)):
+                continue
+            if (block['left'] - 2 <= x <= block['right'] + 2 and
+                    block['bottom'] - 2 <= y <= block['top'] + 2):
+                options.append((priority, x, y))
+        if options and min(op[0] for op in options) == 0:
+            break
+    if not options:
+        raise RuntimeError(f"Block {block['id']}: cannot read absolute schematic "
+                           f"text position. GetSchemaLocation returned: {raw_preview[:3]}. "
+                           'No text formatting applied; attribute display changes may already exist.')
+    options.sort(key=lambda item: item[0])
+    best_priority = options[0][0]
+    distinct = {(round(x, 4), round(y, 4)) for p, x, y in options if p == best_priority}
+    if len(distinct) > 1:
+        raise RuntimeError(f"Block {block['id']}: multiple possible coordinates "
+                           f"from E3 text getter: {sorted(distinct)}. No changes made.")
+    return {'x': options[0][1], 'y': options[0][2]}
+
+
+def inspect_block_texts(prj, blocks):
+    """Read only texts owned by the selected CABBLOCK symbols (not their pins)."""
+    all_texts = {}
+    sym = prj.CreateSymbolObject()
+    txt = prj.CreateTextObject()
+    attr = prj.CreateAttributeObject()
+    for block in blocks:
+        if not select_id(sym, block['id']):
+            raise RuntimeError(f"Selected block {block['id']} disappeared.")
+        ids = get_ids(sym.GetTextIds)
+        # In the original working Equipment script, attr.GetTextIds(None) was
+        # the *reliable* lookup; it can expose texts that a bare type scan misses.
+        extra = []
+        for aid in get_ids(sym.GetAttributeIds):
+            if select_id(attr, aid):
+                extra.extend(get_ids(attr.GetTextIds))
+        ids = list(dict.fromkeys(ids + extra))
+        entries = defaultdict(list)
+        for tid in ids:
+            if not select_id(txt, tid):
+                continue
+            try:
+                typ = int(txt.GetType())
+            except Exception:
+                continue
+            raw_val = optional_call(txt, 'GetText')
+            value = '' if raw_val is None else str(raw_val)
+            hint = text_type_hint(txt)
+            entries[typ].append({'id': tid, 'type': typ, 'value': value, 'hint': hint})
+        all_texts[block['id']] = entries
+        log(f"BLOCK {block['id']} (sheet {block['sheet_id']}): "
+            f"{len(ids)} attached text IDs; {len(entries)} text types")
+        for typ in sorted(entries):
+            for e in entries[typ]:
+                log(f"  TYPE {typ:<5} ID {e['id']:<10} "
+                    f"VALUE={e['value'][:120]!r} HINT={e['hint'][:90]!r}")
+    return all_texts
+
+
+def available_method(obj, name):
+    try:
+        return callable(getattr(obj, name))
+    except Exception:
+        return False
+
+
+def normalize_attribute_name(value):
+    """Compare names ignoring punctuation/spacing, NOT typo correction."""
+    return ''.join(ch.lower() for ch in str(value or '') if ch.isalnum())
+
+
+# E3 has two alternate identifiers occupying the same third header row.
+# Equipment is usually a named, generic type-1000 attribute; higher level
+# blocks can instead have standard type-482 Additional Part ID text.
+EQUIPMENT_NAMES = {
+    'equipmentidentifacation', 'equipmentidentification',
+    'equipmentid', 'equipmentidentifier',
+}
+PART_ID_NAMES = {
+    'additionalpartid', 'additionalpart', 'additionalpartnumber',
+    'additionalpartidentifier', 'additionalpartidentification',
+}
+SABER_NAMES = {'saberparam1', 'saberparameter1'}
+
+
+def read_block_attribute_links(prj, blocks):
+    """Resolve symbol attribute owners by their actual name, not text type."""
+    sym = prj.CreateSymbolObject()
+    attr = prj.CreateAttributeObject()
+    result = {}
+    for block in blocks:
+        bid = block['id']
+        if not select_id(sym, bid):
+            raise RuntimeError(f'CABBLOCK {bid} unavailable during attribute scan.')
+        found = {'saber': [], 'equipment': [], 'part_id': [], 'other': []}
+        for aid in get_ids(sym.GetAttributeIds):
+            if not select_id(attr, aid):
+                continue
+            name = str(optional_call(attr, 'GetName') or '').strip()
+            normalized = normalize_attribute_name(name)
+            tids = get_ids(attr.GetTextIds)
+            record = {'id': aid, 'name': name, 'text_ids': tids}
+            if normalized in SABER_NAMES:
+                role = 'saber'
+            elif normalized in EQUIPMENT_NAMES:
+                role = 'equipment'
+            elif normalized in PART_ID_NAMES:
+                role = 'part_id'
+            else:
+                role = 'other'
+            found[role].append(record)
+            log(f'  BLOCK {bid} ATTRIBUTE {aid}: name={name!r} '
+                f'role={role}, linked display text IDs={tids}')
+        result[bid] = found
+    return result
+
+
+def _one_attribute(block_id, links, role):
+    """Never silently choose between repeated copies of the same attribute."""
+    choices = links[block_id].get(role, [])
+    if len(choices) > 1:
+        raise RuntimeError(
+            f'CABBLOCK {block_id}: {len(choices)} {role} attributes: '
+            f'{[(x["id"], x["name"]) for x in choices]}. '
+            'Resolve duplicates in E3 before writing anything.')
+    return choices[0] if choices else None
+
+
+def choose_identifier_attribute(block_id, links):
+    """Find the one E3 attribute carrying row #3; never create or copy values.
+
+    If BOTH names exist, a single attribute with linked display text can be
+    chosen safely. If both are displayed (or neither is), refuse to guess.
+    """
+    equipment = _one_attribute(block_id, links, 'equipment')
+    part = _one_attribute(block_id, links, 'part_id')
+    if equipment and part:
+        shown = [(role, item) for role, item in
+                 (('equipment', equipment), ('part_id', part))
+                 if item['text_ids']]
+        if len(shown) == 1:
+            chosen = shown[0]
+            log(f'  BLOCK {block_id}: both identifiers exist; using the one '
+                f'with a linked displayed text: {chosen[0]}.')
+            return chosen
+        raise RuntimeError(
+            f'CABBLOCK {block_id}: BOTH Equipment Identification and '
+            'Additional Part ID attributes exist, with no unambiguous '
+            'single displayed choice. Make only the desired field visible '
+            'before formatting. No identifier will be guessed.')
+    if part:
+        return 'part_id', part
+    if equipment:
+        return 'equipment', equipment
+    return None, None
+
+
+def _one_linked_header_text(block_id, owner, role, flat):
+    if owner is None:
+        return None
+    attached = list(dict.fromkeys(owner['text_ids']))
+    if len(attached) > 1:
+        raise RuntimeError(
+            f'CABBLOCK {block_id}: {role} attribute {owner["id"]} has '
+            f'{len(attached)} text IDs; cannot choose safely.')
+    if not attached:
+        return None
+    tid = attached[0]
+    if tid not in flat:
+        raise RuntimeError(
+            f'CABBLOCK {block_id}: linked {role} text {tid} missing from '
+            'symbol/attribute text scan.')
+    return flat[tid]
+
+
+def ensure_header_attribute_displays(prj, blocks):
+    """Create/enable existing bound Saber and identifier texts when supported.
+
+    E3 versions can refuse DisplayAttribute even though the attribute exists.
+    Never manufacture an unbound text or replace a missing identifier with a
+    generic type-1000 field; the resolve step handles safe type-482 fallback.
+    """
+    sym = prj.CreateSymbolObject()
+    attr = prj.CreateAttributeObject()
+    linked = read_block_attribute_links(prj, blocks)
+    # Preflight ambiguity across the entire selection before ANY E3 writes.
+    for block in blocks:
+        choose_identifier_attribute(block['id'], linked)
+    for block in blocks:
+        bid = block['id']
+        if not select_id(sym, bid):
+            raise RuntimeError(f'CABBLOCK {bid} disappeared before attribute display.')
+        original_value = get_symbol_saber_value(sym, allow_missing=True)
+        if not original_value:
+            set_symbol_saber_xxx(sym, bid)
+        saber = _one_attribute(bid, linked, 'saber')
+        if saber is None:
+            if not select_id(sym, bid):
+                raise RuntimeError(f'CABBLOCK {bid} disappeared.')
+            try:
+                added = sym.AddAttributeValue(
+                    SABER_ATTRIBUTE_NAME, get_symbol_saber_value(sym) or 'XXX')
+                log(f'  BLOCK {bid}: AddAttributeValue(saberParam1) returned {added!r}')
+            except Exception as exc:
+                log(f'  BLOCK {bid}: AddAttributeValue failed: {exc}')
+            linked = read_block_attribute_links(prj, blocks)
+            saber = _one_attribute(bid, linked, 'saber')
+        if saber is None:
+            raise RuntimeError(
+                f'CABBLOCK {bid}: no actual symbol Attribute object for '
+                'Saber Parameter 1. Check that this attribute is defined '
+                'for SYMBOLS in E3; value may already have been set to XXX.')
+        ident_role, ident_owner = choose_identifier_attribute(bid, linked)
+        targets = [('saber', saber)]
+        if ident_owner is not None:
+            targets.append((ident_role, ident_owner))
+        for role, item in targets:
+            if not select_id(attr, item['id']):
+                raise RuntimeError(
+                    f'CABBLOCK {bid}: {role} attribute {item["id"]} disappeared.')
+            before_ids = get_ids(attr.GetTextIds)
+            if before_ids:
+                # apply_plan explicitly sets text visibility to 1 later.
+                log(f'  BLOCK {bid} {role}: linked text IDs {before_ids}; '
+                    'will enable visibility during formatting.')
+                continue
+            log(f'  BLOCK {bid}: {role} has no linked text; calling DisplayAttribute()')
+            try:
+                response = attr.DisplayAttribute()
+            except Exception as exc:
+                # For missing Saber we can keep the slot empty; for the
+                # identifier the resolver may still find a type-482 text.
+                log(f'  BLOCK {bid} {role}: DisplayAttribute failed: {exc}')
+                continue
+            if not select_id(attr, item['id']):
+                raise RuntimeError(f'CABBLOCK {bid}: {role} attribute vanished.')
+            after_ids = get_ids(attr.GetTextIds)
+            log(f'  BLOCK {bid} {role}: DisplayAttribute returned {response!r}; '
+                f'linked texts now {after_ids}')
+            if not after_ids:
+                log(f'  BLOCK {bid} {role}: E3 has no bound displayed text. '
+                    'The resolver will check safe existing alternatives.')
+    return read_block_attribute_links(prj, blocks)
+
+
+def get_symbol_saber_value(sym, allow_missing=False):
+    try:
+        raw = sym.GetAttributeValue(SABER_ATTRIBUTE_NAME)
+    except Exception as exc:
+        if allow_missing:
+            log(f'  Missing/inaccessible Saber attribute: {type(exc).__name__}: {str(exc)[:120]}')
+            return None
+        raise RuntimeError(f'Cannot read existing symbol saberParam1: {exc}') from exc
+    if raw is None:
+        return ''
+    if isinstance(raw, (tuple, list)):
+        if len(raw) != 1 or not isinstance(raw[0], str):
+            raise RuntimeError(f'Ambiguous symbol GetAttributeValue response: {raw!r}')
+        raw = raw[0]
+    return str(raw).strip()
+
+
+def preflight_saber_attributes(prj, plan):
+    """Validate symbol-only Saber property access before changing any E3 data."""
+    sym=prj.CreateSymbolObject()
+    for item in plan:
+        if item['field'] != 'saber': continue
+        if not select_id(sym,item['block']['id']):
+            raise RuntimeError(f"Block {item['block']['id']} disappeared.")
+        attr=get_symbol_saber_value(sym,allow_missing=False)
+        item['before_attribute_value']=attr
+        item['set_xxx']=not attr.strip() and not item['before_value'].strip()
+        item['new_attr_needed']=False
+        if item['set_xxx'] and not (available_method(sym,'SetAttributeValue') or
+                                   available_method(sym,'AddAttributeValue')):
+            raise RuntimeError('No symbol-level Saber attribute setter in this E3 build.')
+        log(f"  Block {item['block']['id']} saberParam1={attr!r}; "
+            f"visible type {item['type']}={item['before_value']!r}; "
+            f"set XXX={item['set_xxx']}")
+    return plan
+
+
+def preflight_positions(prj,plan):
+    txt=prj.CreateTextObject()
+    for item in plan:
+        if not select_id(txt,item['id']):
+            raise RuntimeError(f"Text {item['id']} disappeared before formatting.")
+        item['before']=get_text_xy(txt,item['block'])
+        item['move_needed']=(abs(item['before']['x']-item['x'])>POSITION_TOLERANCE or
+                             abs(item['before']['y']-item['y'])>POSITION_TOLERANCE)
+        log(f"  Block {item['block']['id']} {FIELD_LABELS[item['field']]} "
+            f"text {item['id']}: {item['before']} -> "
+            f"({item['x']:.3f},{item['y']:.3f}) move={item['move_needed']}")
+    return plan
+
+
+def old_function_nodes_to_hide(blocks, all_texts, plan):
+    """Hide ONLY existing Device Function display nodes on selected blocks.
+
+    The old formatter left these visible at the second header row. We do not
+    modify their text content, property value, type, position or formatting.
+    """
+    target_ids = {item['id'] for item in plan}
+    old_nodes = []
+    seen = set()
+    for block in blocks:
+        for record in all_texts[block['id']].get(14, []):
+            tid = record['id']
+            if tid in target_ids or tid in seen:
+                raise RuntimeError(
+                    f'Text {tid} appears in multiple selected blocks or overlaps '
+                    'a target header text; batch refused before changes.'
+                )
+            seen.add(tid)
+            old_nodes.append({'id': tid, 'block': block, 'value': record['value']})
+    log(f'  OLD DEVICE FUNCTION LABELS: {len(old_nodes)} will be hidden '
+        '(their values and E3 attributes are not changed).')
+    return old_nodes
+
+
+def _same_xy(txt, block, x, y):
+    try:
+        actual = get_text_xy(txt, block)
+        return (abs(actual['x'] - x) <= POSITION_TOLERANCE and
+                abs(actual['y'] - y) <= POSITION_TOLERANCE)
+    except Exception:
+        return False
+
+
+def move_text(txt, item):
+    """Only try signatures already used by the working signal relocator."""
+    method = getattr(txt, 'SetSchemaLocation', None)
+    if method is None:
+        raise RuntimeError('E3 Text.SetSchemaLocation is unavailable.')
+    old = item['before']
+    b = item['block']
+    attempts = (
+        ((item['x'], item['y']), (old['x'], old['y']), 'x,y'),
+        ((b['sheet_id'], item['x'], item['y']),
+         (b['sheet_id'], old['x'], old['y']), 'sheet,x,y'),
+    )
+    errors = []
+    for new, rollback, signature in attempts:
+        try:
+            result = method(*new)
+        except Exception as exc:
+            errors.append(f'{signature}: {exc}')
+            continue
+        if _same_xy(txt, b, item['x'], item['y']):
             return
         try:
-            script=install_tool(tool_id,self.runtime)
-            python=Path(sys.executable)
-            if sys.platform=='win32' and python.name.lower()=='python.exe':
-                candidate=python.with_name('pythonw.exe')
-                if candidate.is_file():python=candidate
-            cmd=[str(python),str(script)]
-            if tool_id=='pin':cmd.append('--worker')
-            output_path=script.parent/'launcher_output.log'
-            flags=getattr(subprocess,'CREATE_NO_WINDOW',0) if sys.platform=='win32' else 0
-            with output_path.open('a',encoding='utf-8') as fd:
-                fd.write('\n--- User opened ' + tool_id + ' at ' +
-                         datetime.now().isoformat(timespec='seconds') +
-                         ' ['+SUITE_VERSION+'] ---\n')
-            with output_path.open('a',encoding='utf-8') as fd:
-                self.running=subprocess.Popen(cmd,cwd=str(script.parent),
-                    stdin=subprocess.DEVNULL,stdout=fd,stderr=subprocess.STDOUT,
-                    creationflags=flags,close_fds=True)
-            self.running_id=tool_id
-            self.set_buttons(False)
-            self.status.set(TOOLS[tool_id]['title']+' is open')
-            self.detail.set('Close its window to enable all three tools again')
-            # Parent remains visible as a separate window. Do not launch another
-            # tool, hide the menu, or steal E3's keyboard focus.
-            self.root.attributes('-topmost',False)
+            method(*rollback)
         except Exception as exc:
-            self.running=None
-            self.running_id=None
-            self.set_buttons(True)
-            self.status.set('Launch failed — see error message')
-            self.detail.set(str(exc)[:95])
-            messagebox.showerror('E3 tool launch error',str(exc),parent=self.root)
+            raise RuntimeError(f"Text {item['id']} moved but readback failed "
+                               f"and rollback also failed: {exc}; CHECK E3") from exc
+        raise RuntimeError(f"Text {item['id']}: SetSchemaLocation({signature}) "
+                           'returned but new position was not verified. '
+                           f'Rolled back (reported result={result!r}); batch stopped.')
+    raise RuntimeError(f"Text {item['id']}: unable to set position: {errors}")
 
-    def watch_child(self):
+
+def checked_style_write(txt, method, value, field):
+    try:
+        result = getattr(txt, method)(value)
+    except Exception as exc:
+        raise RuntimeError(f"Text {field}: {method}({value}) failed: {exc}") from exc
+    # E3 methods sometimes return None on success; negative status means error.
+    if isinstance(result, (int, float)) and result < 0:
+        raise RuntimeError(f"Text {field}: {method}({value}) returned {result}.")
+
+
+def set_symbol_saber_xxx(sym,block_id):
+    """Modify ONLY the selected SYMBOL attribute; verify by reading it back."""
+    if not select_id(sym,block_id):
+        raise RuntimeError(f'Block {block_id} no longer available')
+    before=get_symbol_saber_value(sym)
+    if before:
+        return False
+    errors=[]
+    for name in ('SetAttributeValue','AddAttributeValue'):
+        if not available_method(sym,name): continue
         try:
-            if self.running is not None:
-                rc=self.running.poll()
-                if rc is not None:
-                    name=TOOLS[self.running_id]['title']
-                    self.running=None
-                    self.running_id=None
-                    self.set_buttons(True)
-                    self.status.set(name+(' closed' if rc==0 else ' exited with an error'))
-                    self.detail.set('Choose another tool above' if rc==0 else
-                                    'Check launcher_output.log in its tool folder')
-                    self.show_menu()
-        finally:
-            self.root.after(650,self.watch_child)
+            rv=getattr(sym,name)(SABER_ATTRIBUTE_NAME,'XXX')
+            if type(rv) is int and rv<0:
+                errors.append(f'{name} returned {rv}')
+                continue
+            after=get_symbol_saber_value(sym)
+            if after=='XXX':
+                log(f'  BLOCK {block_id}: {name}(saberParam1, XXX) confirmed')
+                return True
+            errors.append(f'{name} readback={after!r}')
+        except Exception as exc:
+            errors.append(f'{name}: {type(exc).__name__}: {exc}')
+    raise RuntimeError(f'Block {block_id}: cannot set symbol Saber Parameter 1 to XXX; '
+                       + '; '.join(errors))
 
-    def import_pin_data(self):
-        previous=filedialog.askdirectory(title='Select your previous Block Pin Spacer script folder',
-                                          parent=self.root)
-        if not previous:return
-        destination=self.runtime/TOOLS['pin']['folder']
-        destination.mkdir(parents=True,exist_ok=True)
-        imported=[];skipped=[]
-        for suffix in ('_recovery.json','_pin_identity.json'):
-            candidate=Path(previous)/('main'+suffix)
-            if not candidate.is_file():
-                old=Path(previous)/('E3_Cable_To_Block_Pin_Spacing_V15_ZUKEN_LIGHT_GUI'+suffix)
-                if old.is_file():candidate=old
-            newfile=destination/('main'+suffix)
-            if not candidate.is_file():
-                skipped.append('not found: '+candidate.name);continue
-            if newfile.exists():
-                skipped.append('already exists: '+newfile.name);continue
+
+def apply_plan(prj,plan,old_function_labels=None):
+    """Format verified existing linked texts only, not unbound graphics."""
+    txt=prj.CreateTextObject()
+    sym=prj.CreateSymbolObject()
+    completed=0
+    filled=0
+    try:
+        for item in plan:
+            if item['field']=='saber' and item['set_xxx']:
+                filled+=int(set_symbol_saber_xxx(sym,item['block']['id']))
+            if not select_id(txt,item['id']):
+                raise RuntimeError(f"Text {item['id']} disappeared.")
+            field=item.get('label', FIELD_LABELS[item['field']])
+            for method,val in (
+                ('SetVisibility',1), ('SetStyle',BOLD_STYLE),
+                ('SetColour',BLACK_COLOUR),('SetHeight',TEXT_HEIGHT),
+                ('SetAlignment',CENTER_ALIGNMENT)):
+                checked_style_write(txt,method,val,field)
+            if item['move_needed']:
+                move_text(txt,item)
+            completed+=1
+            log(f"  DONE block {item['block']['id']} | {field} text {item['id']}")
+        for old in (old_function_labels or []):
+            if not select_id(txt,old['id']):
+                raise RuntimeError(f"Old function text {old['id']} disappeared")
+            checked_style_write(txt,'SetVisibility',0,'Old Function display')
+        return completed,filled
+    except Exception:
+        log(f'PARTIAL FAILURE: {completed}/{len(plan)} labels formatted; '
+            'earlier E3 writes may remain. Inspect drawing.')
+        raise
+
+
+def prepare_selected_saber_attributes(prj,blocks,preview=False):
+    """Add XXX as a SYMBOL attribute value, without touching unrelated text."""
+    sym=prj.CreateSymbolObject()
+    # Read/verify all target symbols before first write.
+    staged=[]
+    for b in blocks:
+        if not select_id(sym,b['id']): raise RuntimeError(f"Block {b['id']} disappeared")
+        before=get_symbol_saber_value(sym,allow_missing=False)
+        if not before and not (available_method(sym,'SetAttributeValue') or
+                               available_method(sym,'AddAttributeValue')):
+            raise RuntimeError(f"Block {b['id']} has no symbol-level attribute setter")
+        staged.append((b['id'],before))
+        log(f"  PREPARE BLOCK {b['id']} saberParam1: {before!r} -> "
+            f"{'XXX' if not before else '(preserve existing)'}")
+    if preview:
+        log('PREPARE DRY RUN: no E3 changes made')
+        popup(f'Checked {len(staged)} block(s). No values changed.\n'
+              'Start without --dry-run to set blank symbol Saber attributes to XXX.')
+        return 0
+    count=0
+    for bid,before in staged:
+        if not before: count+=int(set_symbol_saber_xxx(sym,bid))
+    log(f'PREPARE COMPLETE: {count} blank symbol attributes set to XXX '
+        f'across {len(staged)} selected block(s).')
+    popup(f'Prepared {len(staged)} selected block(s).\n'
+          f'{count} blank Saber Parameter 1 attributes set to XXX.\n\n'
+          'Next: If the Saber display text is missing, select ONE block and use\n'
+          'Insert > Attribute Text > Saber Parameter 1, with\n'
+          'Bind to selected Cell. The new text may appear as type 1000.\n'
+          'Then run Format Headers (Enter).')
+    return count
+
+
+def inspect_creation_api(prj, blocks, all_texts):
+    """Read-only E3 COM inspection: no attribute writes, no added texts.
+
+    This is intentionally conservative. Some pywin32 COM dispatch objects
+    raise on str()/int(), so this never coerces live COM objects.
+    """
+    sym = prj.CreateSymbolObject()
+    log('SABER CREATION API CAPABILITIES (READ ONLY):')
+    member_names = ('GetAttributeValue', 'GetAttributeIds', 'GetAttributeNames',
+                    'GetAttributeName', 'AddAttributeValue', 'SetAttributeValue',
+                    'AddText', 'AddAttributeText', 'InsertText', 'CreateText',
+                    'AddTextNode', 'GetTextIds')
+    for block in blocks:
+        if not select_id(sym, block['id']):
+            log(f"  BLOCK {block['id']}: unable to bind symbol")
+            continue
+        log(f"  BLOCK {block['id']}:")
+        for name in member_names:
+            log(f'    {name}: {"AVAILABLE" if available_method(sym, name) else "not exposed"}')
+        for attr in (SABER_ATTRIBUTE_NAME, 'Saber Parameter 1'):
+            if not available_method(sym, 'GetAttributeValue'):
+                break
             try:
-                data=json.loads(candidate.read_text(encoding='utf-8-sig'))
-                if not isinstance(data,dict):raise ValueError('Expected a JSON object')
-                shutil.copy2(candidate,newfile)
-                imported.append(newfile.name)
+                value = sym.GetAttributeValue(attr)
+                if type(value) in (int, float, str, bool) or value is None:
+                    shown = repr(value)
+                elif type(value) in (tuple, list):
+                    shown = repr([repr(v) if type(v) in (int,float,str,bool) or v is None else f'<{type(v).__name__}>' for v in value])
+                else:
+                    shown = f'<{type(value).__name__} COM object>'
+                log(f'    GetAttributeValue({attr!r}) => {shown}')
             except Exception as exc:
-                skipped.append(f'{candidate.name}: {exc}')
-        messagebox.showinfo('Pin spacer data',
-            'Imported: '+(', '.join(imported) or 'none')+'\nSkipped: '+
-            (', '.join(skipped) or 'none')+
-            '\n\nImported pin identities are checked against live E3 before use.',
-            parent=self.root)
-
-    def on_close(self):
-        if self.running is not None and self.running.poll() is None:
-            if not messagebox.askyesno('Close launcher?',
-                'An E3 utility is still open. Close only the launcher and let it finish?',
-                parent=self.root):return
-        self.root.destroy()
+                log(f'    GetAttributeValue({attr!r}) => {type(exc).__name__}: {str(exc)[:130]}')
+        types = sorted(all_texts[block['id']])
+        log(f'    Attached text types: {types}')
+    log('The mere existence of AddText does NOT prove its signature or that it creates attribute-linked text.')
 
 
-def main():
-    if "--self-test" in sys.argv:
-        print("Bundled sources valid:",all_sources_ok())
-        with tempfile.TemporaryDirectory() as temp:
-            for key in TOOLS:
-                path=install_tool(key,Path(temp))
-                assert hashlib.sha256(path.read_bytes()).hexdigest()==TOOLS[key]["sha256"]
-                assert path.read_text(encoding="utf-8").strip()
-                # A second extraction must be idempotent.
-                assert install_tool(key,Path(temp))==path
-        print("Extraction, checksums, Python syntax and idempotence: PASS")
-        return
-    if "--extract" in sys.argv:
-        folder=get_runtime_folder()
-        for key in TOOLS:
-            print(install_tool(key,folder))
-        return
-    if '--diagnose' in sys.argv:
-        print('MAIN MENU file:', Path(__file__).resolve())
-        print('Launcher version:', SUITE_VERSION)
-        print('Three tools:', ', '.join(TOOLS))
-        print('No E3 utility auto-launches: PASS')
-        return
-    MegaApp().root.mainloop()
 
-if __name__=="__main__":main()
+def _required_single(block, types, type_number, label):
+    hits = types.get(type_number, [])
+    if len(hits) != 1:
+        raise RuntimeError(
+            f"CABBLOCK {block['id']}: expected exactly one {label} text "
+            f"(type {type_number}), found {len(hits)}. "
+            "Add the missing field with your existing script or resolve duplicates "
+            "before formatting. NO CHANGES MADE."
+        )
+    return hits[0]
+
+
+def compute_header_anchor(text_obj, block, location_text_id, layout_anchor='location'):
+    """Use the original Location text XY unless top alignment was requested.
+
+    Fails before text moves when a layout would extend below the block.
+    """
+    bid = block['id']
+    if layout_anchor == 'location':
+        if not select_id(text_obj, location_text_id):
+            raise RuntimeError(
+                f'CABBLOCK {bid}: cannot select Location text {location_text_id}.')
+        original_xy = get_text_xy(text_obj, block)
+        cx, first_y = original_xy['x'], original_xy['y']
+        # Never shift a low Location upward behind the user's back.
+        if (cx < block['left'] - BLOCK_LOCATION_TOLERANCE or
+                cx > block['right'] + BLOCK_LOCATION_TOLERANCE or
+                first_y > block['top'] + BLOCK_LOCATION_TOLERANCE):
+            raise RuntimeError(
+                f'CABBLOCK {bid}: Device Location text {location_text_id} is '
+                f'outside the header area at ({cx:.3f}, {first_y:.3f}). '
+                'Reposition it in E3, or choose "Block top". '
+                'No text formatting applied.')
+    elif layout_anchor == 'top':
+        cx = (float(block['left']) + float(block['right'])) / 2
+        first_y = float(block['top']) - TOP_INSET
+    else:
+        raise ValueError(f'Unknown layout_anchor={layout_anchor!r}')
+    final_y = first_y - (len(HEADER_ORDER) - 1) * TEXT_PITCH
+    minimum = float(block['bottom']) + BOTTOM_CLEARANCE
+    if final_y < minimum - POSITION_TOLERANCE:
+        raise RuntimeError(
+            f'CABBLOCK {bid}: header anchored at Location Y={first_y:.3f} '
+            f'cannot fit four rows at {TEXT_PITCH:.2f} pitch: '
+            f'last row Y={final_y:.3f}, required minimum {minimum:.3f}. '
+            'Move Device Location up in E3, or choose "Block top" '
+            'to explicitly use the previous layout. No text formatting applied.')
+    log(f'  BLOCK {bid} HEADER ANCHOR: {layout_anchor} '
+        f'X={cx:.3f}, first Y={first_y:.3f}, last Y={final_y:.3f}')
+    return cx, first_y
+
+
+def resolve_header_texts(prj, blocks, all_texts, saber_type=SABER_TYPE,
+                         equipment_type=EQUIPMENT_TYPE,
+                         designation_type=DEVICE_DESIGNATION_TYPE,
+                         attribute_links=None, layout_anchor='location'):
+    """Map Location / Saber / (Equipment OR Part ID) / Designation.
+
+    Attribute links are authoritative. E3 type-482 is a safe explicit Part ID
+    fallback. Type-1000 requires operator confirmation unless attribute-bound.
+    A missing Saber display preserves its row without moving other values into it.
+    """
+    mapping = {'location': LOCATION_TYPE, 'saber': int(saber_type),
+               'equipment': int(equipment_type),
+               'designation': int(designation_type)}
+    if (min(mapping.values()) <= 0 or len(set(mapping.values())) != 4 or
+            set(mapping.values()) & {14, 1010} or
+            ADDITIONAL_PART_TYPE in (LOCATION_TYPE, int(saber_type),
+                                     int(designation_type))):
+        raise RuntimeError(f'Protected/overlapping header mapping {mapping}')
+    if attribute_links is None:
+        attribute_links = read_block_attribute_links(prj, blocks)
+    if layout_anchor not in ('location', 'top'):
+        raise ValueError(f'Unknown layout_anchor={layout_anchor!r}')
+    plan, uncertain, pending_saber = [], [], []
+    used = set()
+    text_obj = prj.CreateTextObject()
+    for block in blocks:
+        bid = block['id']
+        fields = all_texts[bid]
+        loc = _required_single(block, fields, LOCATION_TYPE, 'Location')
+        des = _required_single(block, fields, mapping['designation'],
+                               'Device Designation')
+        flat = {record['id']: record for entries in fields.values()
+                for record in entries}
+        selected = {}
+        sources = {}
+        saber_owner = _one_attribute(bid, attribute_links, 'saber')
+        saber_text = _one_linked_header_text(bid, saber_owner, 'saber', flat)
+        if saber_text:
+            selected['saber'] = saber_text
+            sources['saber'] = f'attribute {saber_owner["id"]}'
+        # A uniquely typed #5002 text can also be bound to the Saber property
+        # in E3 versions where Attribute.GetTextIds omits a hidden display.
+        if 'saber' not in selected:
+            specific = fields.get(mapping['saber'], [])
+            if len(specific) == 1:
+                selected['saber'] = specific[0]
+                sources['saber'] = f'dedicated type-{mapping["saber"]}'
+            elif len(specific) > 1:
+                raise RuntimeError(
+                    f'CABBLOCK {bid}: multiple type-{mapping["saber"]} Saber texts.')
+
+        ident_role, ident_owner = choose_identifier_attribute(bid, attribute_links)
+        identifier = _one_linked_header_text(bid, ident_owner,
+                                              ident_role, flat)
+        identifier_label = ('Additional Part ID' if ident_role == 'part_id'
+                            else 'Equipment Identification')
+        if identifier:
+            sources['equipment'] = f'attribute {ident_owner["id"]}: {ident_owner["name"]}'
+        elif ident_role == 'part_id':
+            # Some libraries expose Additional Part as a STANDARD E3 text type
+            # instead of an attribute-linked type-1000 display.
+            matches = fields.get(ADDITIONAL_PART_TYPE, [])
+            if len(matches) == 1:
+                identifier = matches[0]
+                sources['equipment'] = 'unique standard Additional Part type-482'
+            else:
+                raise RuntimeError(
+                    f'CABBLOCK {bid}: Additional Part ID attribute exists but '
+                    f'no bound text or unique type-482 display found '
+                    f'({len(matches)} candidates). Enable its E3 visibility.')
+        elif ident_role == 'equipment':
+            raise RuntimeError(
+                f'CABBLOCK {bid}: Equipment Identification attribute exists '
+                'but no linked text was found. Enable its E3 visibility.')
+        else:
+            # No named attribute owner: definitive standard type-482 first.
+            part_options = fields.get(ADDITIONAL_PART_TYPE, [])
+            if len(part_options) == 1:
+                identifier = part_options[0]
+                identifier_label = 'Additional Part ID'
+                sources['equipment'] = 'unique standard type-482'
+            elif len(part_options) > 1:
+                raise RuntimeError(
+                    f'CABBLOCK {bid}: multiple type-482 Additional Part texts; '
+                    'cannot choose one safely.')
+            else:
+                # Legacy generic #1000: never guess between Saber and ID.
+                reserved = {r['id'] for r in selected.values()}
+                options = [t for t in fields.get(mapping['equipment'], [])
+                           if t['id'] not in reserved]
+                if len(options) == 1:
+                    identifier = options[0]
+                    sources['equipment'] = 'unverified type-1000 legacy fallback'
+                    uncertain.append({'block_id': bid, 'role': 'Equipment / Part ID',
+                                      'text_id': identifier['id'],
+                                      'value': identifier['value']})
+                else:
+                    raise RuntimeError(
+                        f'CABBLOCK {bid}: no uniquely identifiable Equipment ID '
+                        'or Additional Part ID. Expected a named attribute, '
+                        'one type-482 text, or one unclaimed type-1000 text; '
+                        f'found {len(options)} generic and {len(part_options)} part texts.')
+        selected['equipment'] = identifier
+        if 'saber' not in selected:
+            pending_saber.append(bid)
+            log(f'  BLOCK {bid}: Saber display unavailable; reserving row #2. '
+                'Enable Saber attribute visibility in E3 and rerun if needed.')
+        else:
+            log(f'  BLOCK {bid}: Saber text {selected["saber"]["id"]} '
+                f'from {sources["saber"]}')
+        log(f'  BLOCK {bid}: {identifier_label} text {identifier["id"]} '
+            f'from {sources["equipment"]}')
+        if ('saber' in selected and
+                selected['saber']['id'] == identifier['id']):
+            raise RuntimeError(
+                f'CABBLOCK {bid}: Saber and identifier refer to the same text.')
+        if identifier['id'] in (loc['id'], des['id']):
+            raise RuntimeError(
+                f'CABBLOCK {bid}: identifier mapped to Location/Designation text.')
+
+        height = float(block['top']) - float(block['bottom'])
+        needed = TOP_INSET + 3 * TEXT_PITCH + BOTTOM_CLEARANCE
+        if height < needed:
+            raise RuntimeError(
+                f'CABBLOCK {bid}: needs {needed:.3f} height; has {height:.3f}.')
+        cx, first_y = compute_header_anchor(
+            text_obj, block, loc['id'], layout_anchor)
+        slots = {'location': loc, 'saber': selected.get('saber'),
+                 'equipment': identifier, 'designation': des}
+        for i, field in enumerate(HEADER_ORDER):
+            record = slots[field]
+            if record is None:
+                continue
+            if record['id'] in used:
+                raise RuntimeError(
+                    f'Text {record["id"]} mapped twice. No formatting done.')
+            used.add(record['id'])
+            plan.append({'block': block, 'field': field,
+                         'label': identifier_label if field == 'equipment'
+                                  else FIELD_LABELS[field],
+                         'type': record['type'], 'id': record['id'],
+                         'before_value': record['value'],
+                         'x': cx, 'y': first_y - i * TEXT_PITCH})
+    return plan, uncertain, pending_saber
+
+
+def confirm_generic_1000_matches(matches):
+    """Ask before using any generic text without a proven parent attribute."""
+    if not matches:
+        return True
+    from tkinter import Tk, messagebox
+    root = Tk()
+    root.withdraw()
+    root.attributes('-topmost', True)
+    lines = [
+        'These generic type-1000 text nodes have no proven ATTRIBUTE link.',
+        'Inspect the actual E3 display BEFORE confirming formatting:',
+        '',
+    ]
+    for m in matches:
+        lines.append(f'BLOCK {m["block_id"]}: proposed {m["role"]} '
+                     f'text ID {m["text_id"]}, value {m["value"]!r}')
+    lines.extend(['', 'YES = format the proposed text IDs.',
+                  'NO = cancel without formatting (earlier attribute display '
+                  'operations may remain).'])
+    try:
+        return bool(messagebox.askyesno('E3 — Confirm generic attribute texts',
+                                        '\n'.join(lines), parent=root))
+    finally:
+        root.destroy()
+
+
+def run(action='complete', preview=False, saber_type=None,
+        equipment_type=None, designation_type=None, inspect_api=False,
+        layout_anchor='location'):
+    global LOG_STREAM
+    path = choose_log_path()
+    try:
+        LOG_STREAM = open(path, 'a', encoding='utf-8')
+        log('\n' + '=' * 80)
+        log('NEW SABER HEADER BATCH: ' + datetime.now().astimezone().isoformat(timespec='seconds'))
+        log('BUILD: ' + BUILD_ID)
+        log('SOURCE FILE: ' + str(Path(__file__).resolve()))
+        log(f'ACTION: {action}; dry-run={preview}; inspect-api={inspect_api}; anchor={layout_anchor}')
+        log('HEADER: LOCATION > SABER PARAMETER 1 > EQUIPMENT OR ADDITIONAL PART ID > DEVICE DESIGNATION')
+        log('E3 attribute text can have generic display type 1000; 5002 is not guaranteed.')
+        log('Equipment ID or Additional Part ID (type 482) is REQUIRED. Types 14/1010 unchanged.')
+        log('Equipment attribute names include historic typo: Equipment Identifacation.')
+        log('=' * 80)
+        import win32com.client as win32
+        app = win32.gencache.EnsureDispatch('CT.Application')
+        prj = app.CreateJobObject()
+        sht = prj.CreateSheetObject()
+        blocks = get_selected_cabblocks(prj, sht, app)
+        all_texts = inspect_block_texts(prj, blocks)
+        if inspect_api:
+            inspect_creation_api(prj, blocks, all_texts)
+            read_block_attribute_links(prj, blocks)
+            popup('Read-only API check complete.\nLog: ' + str(path))
+            return 0
+        if action == 'prepare':
+            return prepare_selected_saber_attributes(prj, blocks, preview=preview)
+        # Validate actual Location anchors BEFORE touching Saber attributes or labels.
+        initial_txt = prj.CreateTextObject()
+        for block in blocks:
+            loc = _required_single(block, all_texts[block['id']],
+                                   LOCATION_TYPE, 'Location')
+            _required_single(block, all_texts[block['id']],
+                             designation_type if designation_type is not None else
+                             DEVICE_DESIGNATION_TYPE, 'Device Designation')
+            needed = TOP_INSET + 3 * TEXT_PITCH + BOTTOM_CLEARANCE
+            if block['top'] - block['bottom'] < needed:
+                raise RuntimeError(f'CABBLOCK {block["id"]}: too short for header.')
+            compute_header_anchor(initial_txt, block, loc['id'], layout_anchor)
+        if preview:
+            links = read_block_attribute_links(prj, blocks)
+            log('DRY RUN - ATTRIBUTE DISPLAY CHECK:')
+            for block in blocks:
+                bid = block['id']
+                for role in ('saber', 'equipment', 'part_id'):
+                    a = _one_attribute(bid, links, role)
+                    if a is None:
+                        log(f'  BLOCK {bid} {role}: no matching symbol attribute; '
+                            'needs creation/check before formatting.')
+                    elif not a['text_ids']:
+                        log(f'  BLOCK {bid} {role}: attribute {a["id"]} has no visible '
+                            'text; Complete would call DisplayAttribute().')
+                    else:
+                        log(f'  BLOCK {bid} {role}: linked texts {a["text_ids"]}')
+            log('DRY RUN: no E3 changes made; run without --dry-run to '
+                'create missing bound display texts and arrange the header.')
+            popup('Previewed selected attribute bindings. No E3 changes made.\n'
+                  f'Log: {path}\n'
+                  'Run without --dry-run to complete missing label creation.')
+            return 0
+        log('ENSURING ATTRIBUTE-LINKED DISPLAY TEXTS (using old block-maker method):')
+        ensure_header_attribute_displays(prj, blocks)
+        # DisplayAttribute creates brand-new text IDs; always rescan.
+        all_texts = inspect_block_texts(prj, blocks)
+        links = read_block_attribute_links(prj, blocks)
+        plan, generic_matches, pending_saber = resolve_header_texts(
+            prj, blocks, all_texts,
+            saber_type if saber_type is not None else SABER_TYPE,
+            equipment_type if equipment_type is not None else EQUIPMENT_TYPE,
+            designation_type if designation_type is not None else DEVICE_DESIGNATION_TYPE,
+            attribute_links=links, layout_anchor=layout_anchor,
+        )
+        preflight_positions(prj, plan)
+        preflight_saber_attributes(prj, plan)
+        hidden = old_function_nodes_to_hide(blocks, all_texts, plan)
+        log(f'BATCH READY: blocks={len(blocks)}, labels={len(plan)}, '
+            f'generic-attribute candidates={len(generic_matches)}')
+        if generic_matches:
+            log('GENERIC TYPE-1000 FIELD IDENTIFICATION — OPERATOR CONFIRMATION REQUIRED:')
+            for match in generic_matches:
+                log('  ' + repr(match))
+            if not confirm_generic_1000_matches(generic_matches):
+                log('CANCELLED: operator declined generic type-1000 identification. '
+                    'NO E3 WRITES MADE.')
+                popup('Cancelled. No E3 changes made; selection window will reopen.')
+                return 0
+        formatted, filled = apply_plan(prj, plan, hidden)
+        if pending_saber:
+            log(f'PARTIAL SUCCESS: formatted {formatted} existing labels. '
+                f'Saber display missing on {len(pending_saber)} block(s): '
+                f'{pending_saber}. Slot #2 reserved. Device Function value unchanged.')
+            popup(f'Formatted {len(blocks)} block(s).\n'
+                  f'Saber is still hidden on {len(pending_saber)} block(s).\n'
+                  'Enable its bound text visibility in E3, then rerun.\n'
+                  f'Details in log: {path}')
+        else:
+            log(f'SUCCESS: formatted all {formatted} labels on '
+                f'{len(blocks)} selected blocks; blank Saber attributes filled={filled}.')
+            popup(f'Formatted {len(blocks)} block(s): {formatted} header texts.\n'
+                  'Equipment / Part ID chosen automatically.\n'
+                  'Check the drawing before saving.')
+        return 0
+    except Exception:
+        log('ERROR: ' + traceback.format_exc())
+        raise
+    finally:
+        if LOG_STREAM is not None:
+            LOG_STREAM.close()
+        LOG_STREAM = None
+
+
+def main(argv=None):
+    parser = argparse.ArgumentParser(description='Bulk selected E3 CABBLOCK header formatter.')
+    parser.add_argument('--dry-run', action='store_true', help='Read-only preview.')
+    parser.add_argument('--layout-anchor', choices=('location','top'),
+                        default='location',
+                        help='Initial layout: preserve existing Device Location (default) or block top.')
+    parser.add_argument('--inspect-api', action='store_true', help='Read-only COM capability report.')
+    parser.add_argument('--saber-type', type=int, default=None, help='Explicit display text type, default 5002.')
+    parser.add_argument('--equipment-type', type=int, default=None, help='Equipment display type, default 1000.')
+    parser.add_argument('--designation-type', type=int, default=None, help='Designation text type, default 212.')
+    args = parser.parse_args(argv)
+    print('E3 HEADER FORMATTER BUILD: ' + BUILD_ID, flush=True)
+    print('E3 HEADER FORMATTER FILE: ' + str(Path(__file__).resolve()), flush=True)
+    layout_anchor=args.layout_anchor
+    while True:
+        try:
+            selection = wait_for_block_selection(preview=(args.dry_run or args.inspect_api),
+                                                default_anchor=layout_anchor)
+            action=selection['action']
+            layout_anchor=selection['anchor']
+        except Exception as exc:
+            print('Selection window failed:', exc)
+            return 1
+        if action == 'close':
+            print('CLOSED: no more E3 changes.')
+            return 0
+        try:
+            run(action=action, preview=args.dry_run, saber_type=args.saber_type,
+                equipment_type=args.equipment_type,
+                designation_type=args.designation_type,
+                inspect_api=args.inspect_api, layout_anchor=layout_anchor)
+        except Exception as exc:
+            print('FAILED:', exc)
+            popup(str(exc) + '\n\nThe selection window will reopen.', error=True)
+
+
+if __name__ == '__main__':
+    sys.exit(main())
