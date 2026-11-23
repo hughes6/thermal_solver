@@ -8,7 +8,7 @@ No spreadsheet scripts included.
 
 Requirements: Windows + Python 3 + tkinter + the dependencies of the selected
 original E3 script, with E3.series running. Test formatting on a saved E3 copy.
-Run: python E3_Tools_Mega_Launcher.py
+Run: python E3_TOOLS_MAIN_MENU_V2.py
 Optional smoke test: python E3_Tools_Mega_Launcher.py --self-test
 """
 from __future__ import annotations
@@ -26,7 +26,7 @@ from tkinter import messagebox, filedialog
 from datetime import datetime
 import zlib
 
-SUITE_VERSION = "E3-TOOLS-MEGA-V1-2026-11-23"
+SUITE_VERSION = "E3-TOOLS-MEGA-V2-MENU-FIRST-2026-11-23"
 COLOR = {
     "page": "#FFFFFF", "panel": "#F1F7FF", "soft": "#E8F3FF",
     "border": "#D4E3F4", "accent": "#2381CF", "accent_hover": "#1466B2",
@@ -1095,184 +1095,212 @@ def open_folder(path: Path):
 
 
 class MegaApp:
+    """Menu first: never start any E3 tool until its specific button is pressed."""
     def __init__(self):
         self.root = tk.Tk()
-        self.root.title("E3 Tools")
+        self.root.title("E3 MEGA LAUNCHER  |  Main Menu")
         self.root.configure(bg=COLOR["page"])
         self.root.resizable(False, False)
-        self.root.geometry("558x428")
-        self.root.minsize(558, 428)
-        try: self.root.iconbitmap(default="")
-        except Exception: pass
+        self.root.geometry("560x444")
+        try:
+            # Place the menu on the left, leaving E3's right-side tool dialogs clear.
+            sx = self.root.winfo_screenwidth()
+            self.root.geometry(f"560x444+{max(16, min(80, sx-600))}+90")
+        except Exception:
+            pass
         self.root.attributes("-topmost", True)
         self.runtime = get_runtime_folder()
         self.running = None
         self.running_id = None
         self.buttons = {}
-        self.status = tk.StringVar(value="Ready to launch an E3 tool")
-        self.detail = tk.StringVar(value="Open your E3 project first · run one tool at a time")
+        self.status = tk.StringVar(value="Choose one of the three tools below")
+        self.detail = tk.StringVar(value="No tools launch automatically")
         self.build_ui()
+        self.root.after(120, self.show_menu)
         self.root.after(650, self.watch_child)
         self.root.protocol("WM_DELETE_WINDOW", self.on_close)
+        self.log_menu_open()
+
+    def log_menu_open(self):
+        try:
+            logpath = self.runtime / "mega_launcher_startup.log"
+            with logpath.open("a", encoding="utf-8") as fd:
+                fd.write(f"{datetime.now().isoformat(timespec='seconds')} "
+                         f"MENU START - {SUITE_VERSION}\n"
+                         f"  file={Path(__file__).resolve()}\n"
+                         f"  python={sys.executable}\n"
+                         "  tools=header, signals, pin (none auto-started)\n")
+        except Exception:
+            pass
+
+    def show_menu(self):
+        # Ensures the launcher, not the last-used child utility, appears first.
+        if self.running is None:
+            self.root.deiconify()
+            self.root.lift()
+            try: self.root.focus_force()
+            except Exception: pass
+            self.root.attributes("-topmost", True)
 
     def build_ui(self):
-        bg = COLOR["page"]
-        header = tk.Frame(self.root, bg=bg)
-        header.pack(fill="x", padx=18, pady=(14, 7))
-        tk.Label(header, text="E3 Tools", bg=bg, fg=COLOR["text"],
-                 font=("Segoe UI", 16, "bold")).pack(side="left")
-        tk.Label(header, text="UTILITY HUB", bg=bg, fg=COLOR["accent"],
-                 font=("Segoe UI", 8, "bold")).pack(side="right", pady=(7,0))
-        tk.Frame(self.root, bg=COLOR["border"], height=1).pack(fill="x", padx=18)
-        tk.Label(self.root, text="Choose a tool to open", bg=bg, fg=COLOR["muted"],
-                 font=("Segoe UI", 9)).pack(anchor="w", padx=18, pady=(9,7))
-        for idx,(key,title,description) in enumerate([
-            ("header", "Block Header Formatter", "Location · Saber · Equipment · Designation"),
-            ("signals", "Signal Mover", "Connection signal positions, bolding & color"),
-            ("pin", "Cable Pin Spacer", "Match gaps · flip pins · format pin text"),
-        ]):
-            self.tool_card(key,title,description)
+        bg=COLOR['page']
+        top=tk.Frame(self.root,bg=COLOR['soft'],height=70)
+        top.pack(fill='x')
+        top.pack_propagate(False)
+        tk.Label(top,text='E3 MEGA LAUNCHER',bg=COLOR['soft'],fg=COLOR['text'],
+                 font=('Segoe UI',15,'bold')).pack(anchor='w',padx=18,pady=(10,0))
+        tk.Label(top,text='MAIN MENU  •  THREE INDEPENDENT UTILITIES',bg=COLOR['soft'],
+                 fg=COLOR['accent'],font=('Segoe UI',8,'bold')).pack(anchor='w',padx=18)
+        tk.Label(self.root,text='Select a tool to open its own window:',bg=bg,
+                 fg=COLOR['muted'],font=('Segoe UI',9)).pack(anchor='w',padx=18,pady=(11,8))
+        items=(
+            ('header','1','Block Header Formatter','Location · Saber · Equipment ID · Designation'),
+            ('signals','2','Connection Signal Relocator','Move and format connection signal numbers'),
+            ('pin','3','Cable-to-Block Pin Spacer','Match cable gaps · flip pins · format labels'),
+        )
+        for key,num,title,desc in items:
+            self.tool_card(key,num,title,desc)
+        bottom=tk.Frame(self.root,bg=bg)
+        bottom.pack(fill='x',padx=18,pady=(6,3))
+        self.small_link(bottom,'Open logs',lambda:open_folder(self.runtime)).pack(side='left')
+        self.small_link(bottom,'Import old pin data',self.import_pin_data).pack(side='left',padx=(17,0))
+        self.small_link(bottom,'Close',self.on_close).pack(side='right')
+        status_box=tk.Frame(self.root,bg=COLOR['soft'],height=47,
+                 highlightbackground=COLOR['border'],highlightthickness=1)
+        status_box.pack(fill='x',padx=18,pady=(5,6))
+        status_box.pack_propagate(False)
+        tk.Label(status_box,textvariable=self.status,bg=COLOR['soft'],fg=COLOR['text'],
+                 font=('Segoe UI',9,'bold'),anchor='w').pack(fill='x',padx=9,pady=(4,0))
+        tk.Label(status_box,textvariable=self.detail,bg=COLOR['soft'],fg=COLOR['muted'],
+                 font=('Segoe UI',8),anchor='w').pack(fill='x',padx=9,pady=(0,3))
 
-        actions = tk.Frame(self.root,bg=bg)
-        actions.pack(fill="x",padx=18,pady=(10,2))
-        self.small_link(actions,"Tool files / logs",lambda:open_folder(self.runtime)).pack(side="left")
-        self.small_link(actions,"Import old pin data",self.import_pin_data).pack(side="left",padx=(15,0))
-        self.small_link(actions,"Close",self.on_close).pack(side="right")
-
-        statusframe = tk.Frame(self.root,bg=COLOR["soft"],height=46,
-                               highlightbackground=COLOR["border"], highlightthickness=1)
-        statusframe.pack(fill="both",padx=18,pady=(6,9))
-        tk.Label(statusframe,textvariable=self.status,bg=COLOR["soft"],fg=COLOR["text"],
-                 font=("Segoe UI",9,"bold"),anchor="w").pack(fill="x",padx=10,pady=(5,0))
-        tk.Label(statusframe,textvariable=self.detail,bg=COLOR["soft"],fg=COLOR["muted"],
-                 font=("Segoe UI",8),anchor="w").pack(fill="x",padx=10,pady=(0,5))
-
-    def tool_card(self, key, title, description):
-        panel = tk.Frame(self.root,bg=COLOR["panel"],height=72,
-                         highlightbackground=COLOR["border"],highlightthickness=1)
-        panel.pack(fill="x",padx=18,pady=(0,7))
+    def tool_card(self,key,num,title,desc):
+        panel=tk.Frame(self.root,bg=COLOR['panel'],height=78,
+                       highlightbackground=COLOR['border'],highlightthickness=1)
+        panel.pack(fill='x',padx=18,pady=(0,7))
         panel.pack_propagate(False)
-        left=tk.Frame(panel,bg=COLOR["panel"])
-        left.pack(side="left",fill="both",expand=True,padx=12,pady=(10,6))
-        tk.Label(left,text=title,bg=COLOR["panel"],fg=COLOR["text"],
-                 font=("Segoe UI",10,"bold"),anchor="w").pack(fill="x")
-        tk.Label(left,text=description,bg=COLOR["panel"],fg=COLOR["muted"],
-                 font=("Segoe UI",8),anchor="w").pack(fill="x",pady=(2,0))
-        btn=tk.Button(panel,text="Launch",command=lambda:self.launch(key),bg=COLOR["accent"],
-                      fg="#FFFFFF",activebackground=COLOR["accent_hover"],
-                      activeforeground="#FFFFFF",borderwidth=0,relief="flat",
-                      font=("Segoe UI",9,"bold"),cursor="hand2",width=9)
-        btn.pack(side="right",padx=12,pady=16,ipady=5)
+        lbl=tk.Label(panel,text=num,bg=COLOR['soft'],fg=COLOR['accent'],
+                     font=('Segoe UI',13,'bold'),width=3)
+        lbl.pack(side='left',padx=(8,5),pady=13,fill='y')
+        left=tk.Frame(panel,bg=COLOR['panel'])
+        left.pack(side='left',fill='both',expand=True,pady=(14,4))
+        tk.Label(left,text=title,bg=COLOR['panel'],fg=COLOR['text'],
+                 font=('Segoe UI',10,'bold'),anchor='w').pack(fill='x')
+        tk.Label(left,text=desc,bg=COLOR['panel'],fg=COLOR['muted'],
+                 font=('Segoe UI',8),anchor='w').pack(fill='x',pady=(3,0))
+        btn=tk.Button(panel,text='Open',command=lambda choice=key:self.launch(choice),
+                      bg=COLOR['accent'],fg='#FFFFFF',
+                      activebackground=COLOR['accent_hover'],activeforeground='#FFFFFF',
+                      borderwidth=0,relief='flat',font=('Segoe UI',9,'bold'),
+                      cursor='hand2',width=9)
+        btn.pack(side='right',padx=10,pady=18,ipady=5)
         self.buttons[key]=btn
 
     def small_link(self,frame,label,command):
-        return tk.Button(frame,text=label,command=command,font=("Segoe UI",8),
-                         fg=COLOR["accent"],bg=COLOR["page"],
-                         activeforeground=COLOR["accent_hover"],activebackground=COLOR["page"],
-                         borderwidth=0,cursor="hand2",padx=0,pady=0)
+        return tk.Button(frame,text=label,command=command,font=('Segoe UI',8),
+                         fg=COLOR['accent'],bg=COLOR['page'],
+                         activeforeground=COLOR['accent_hover'],
+                         activebackground=COLOR['page'],borderwidth=0,cursor='hand2',
+                         padx=0,pady=0)
 
-    def set_buttons(self, enabled):
-        for button in self.buttons.values():
-            button.configure(state="normal" if enabled else "disabled",
-                             bg=COLOR["accent"] if enabled else "#B4C5D5",
-                             cursor="hand2" if enabled else "arrow")
+    def set_buttons(self,enabled):
+        for key,button in self.buttons.items():
+            button.configure(state='normal' if enabled else 'disabled',
+                             bg=COLOR['accent'] if enabled else '#B9CBDD',
+                             cursor='hand2' if enabled else 'arrow')
 
-    def launch(self, tool_id):
+    def launch(self,tool_id):
+        # Called only from an explicitly clicked tool-specific Open button.
         if self.running is not None and self.running.poll() is None:
-            messagebox.showinfo("Tool already running",
-                "Close the open E3 utility before launching another. This prevents "
-                "two scripts changing E3 objects at the same time.",parent=self.root)
+            messagebox.showinfo('Another E3 tool is open',
+                'Close the running utility before opening another one. This prevents '
+                'two scripts from modifying the E3 drawing simultaneously.',parent=self.root)
             return
         try:
             script=install_tool(tool_id,self.runtime)
             python=Path(sys.executable)
-            if sys.platform == "win32" and python.name.lower()=="python.exe":
-                candidate=python.with_name("pythonw.exe")
-                if candidate.is_file(): python=candidate
+            if sys.platform=='win32' and python.name.lower()=='python.exe':
+                candidate=python.with_name('pythonw.exe')
+                if candidate.is_file():python=candidate
             cmd=[str(python),str(script)]
-            # V15 normally exits after spawning a detached worker. Launch its
-            # worker directly so the hub can track the actual live E3 window.
-            if tool_id=="pin": cmd.append("--worker")
-            output_path=script.parent / "launcher_output.log"
-            flags=getattr(subprocess,"CREATE_NO_WINDOW",0) if sys.platform=="win32" else 0
-            with output_path.open("a",encoding="utf-8") as fd:
-                fd.write("\n--- Launch " + datetime.now().isoformat(timespec="seconds")
-                         + " [" + SUITE_VERSION + "] ---\n")
-            with output_path.open("a",encoding="utf-8") as fd:
+            if tool_id=='pin':cmd.append('--worker')
+            output_path=script.parent/'launcher_output.log'
+            flags=getattr(subprocess,'CREATE_NO_WINDOW',0) if sys.platform=='win32' else 0
+            with output_path.open('a',encoding='utf-8') as fd:
+                fd.write('\n--- User opened ' + tool_id + ' at ' +
+                         datetime.now().isoformat(timespec='seconds') +
+                         ' ['+SUITE_VERSION+'] ---\n')
+            with output_path.open('a',encoding='utf-8') as fd:
                 self.running=subprocess.Popen(cmd,cwd=str(script.parent),
-                       stdin=subprocess.DEVNULL,stdout=fd,stderr=subprocess.STDOUT,
-                       creationflags=flags,close_fds=True)
+                    stdin=subprocess.DEVNULL,stdout=fd,stderr=subprocess.STDOUT,
+                    creationflags=flags,close_fds=True)
             self.running_id=tool_id
             self.set_buttons(False)
-            self.status.set(TOOLS[tool_id]["title"]+" running")
-            self.detail.set("Its E3 window is open · close it to return here")
-            # Let the child window receive focus; keep hub behind it.
-            self.root.attributes("-topmost",False)
+            self.status.set(TOOLS[tool_id]['title']+' is open')
+            self.detail.set('Close its window to enable all three tools again')
+            # Parent remains visible as a separate window. Do not launch another
+            # tool, hide the menu, or steal E3's keyboard focus.
+            self.root.attributes('-topmost',False)
         except Exception as exc:
             self.running=None
             self.running_id=None
             self.set_buttons(True)
-            self.status.set("Could not launch tool")
-            self.detail.set(str(exc)[:90])
-            messagebox.showerror("Launch error",str(exc),parent=self.root)
+            self.status.set('Could not open the selected utility')
+            self.detail.set(str(exc)[:95])
+            messagebox.showerror('E3 tool launch error',str(exc),parent=self.root)
 
     def watch_child(self):
         try:
             if self.running is not None:
                 rc=self.running.poll()
                 if rc is not None:
-                    name=TOOLS[self.running_id]["title"]
+                    name=TOOLS[self.running_id]['title']
                     self.running=None
                     self.running_id=None
                     self.set_buttons(True)
-                    self.status.set(name + (" closed" if rc==0 else " exited with an error"))
-                    self.detail.set("Ready for another tool" if rc==0 else
-                         "See Tool files / logs → launcher_output.log for details")
+                    self.status.set(name+(' closed' if rc==0 else ' exited with an error'))
+                    self.detail.set('Choose another tool above' if rc==0 else
+                                    'Check launcher_output.log in its tool folder')
+                    self.show_menu()
         finally:
             self.root.after(650,self.watch_child)
 
     def import_pin_data(self):
-        """Optional migration only; never overwrite current run's recovery files."""
-        previous=filedialog.askdirectory(title="Select your previous Block Pin Spacer script folder",
+        previous=filedialog.askdirectory(title='Select your previous Block Pin Spacer script folder',
                                           parent=self.root)
         if not previous:return
-        destination=self.runtime / TOOLS["pin"]["folder"]
+        destination=self.runtime/TOOLS['pin']['folder']
         destination.mkdir(parents=True,exist_ok=True)
-        imported=[]
-        skipped=[]
-        for suffix in ("_recovery.json","_pin_identity.json"):
-            candidate=Path(previous) / ("main"+suffix)
-            # Earlier versions may have used the named V15 script rather than main.py.
+        imported=[];skipped=[]
+        for suffix in ('_recovery.json','_pin_identity.json'):
+            candidate=Path(previous)/('main'+suffix)
             if not candidate.is_file():
-                old=Path(previous) / ("E3_Cable_To_Block_Pin_Spacing_V15_ZUKEN_LIGHT_GUI"+suffix)
+                old=Path(previous)/('E3_Cable_To_Block_Pin_Spacing_V15_ZUKEN_LIGHT_GUI'+suffix)
                 if old.is_file():candidate=old
-            newfile=destination / ("main"+suffix)
+            newfile=destination/('main'+suffix)
             if not candidate.is_file():
-                skipped.append("not found: "+candidate.name)
-                continue
+                skipped.append('not found: '+candidate.name);continue
             if newfile.exists():
-                skipped.append("already exists: "+newfile.name)
-                continue
+                skipped.append('already exists: '+newfile.name);continue
             try:
-                data=json.loads(candidate.read_text(encoding="utf-8-sig"))
-                if not isinstance(data,dict):
-                    raise ValueError("Expected a JSON object")
+                data=json.loads(candidate.read_text(encoding='utf-8-sig'))
+                if not isinstance(data,dict):raise ValueError('Expected a JSON object')
                 shutil.copy2(candidate,newfile)
                 imported.append(newfile.name)
             except Exception as exc:
-                skipped.append(f"{candidate.name}: {exc}")
-        messagebox.showinfo("Pin spacer data", "Imported: " + (", ".join(imported) or "none")
-                    + "\nSkipped: " + (", ".join(skipped) or "none")
-                    + "\n\nImported identities are still checked against live E3 before use.",
-                    parent=self.root)
+                skipped.append(f'{candidate.name}: {exc}')
+        messagebox.showinfo('Pin spacer data',
+            'Imported: '+(', '.join(imported) or 'none')+'\nSkipped: '+
+            (', '.join(skipped) or 'none')+
+            '\n\nImported pin identities are checked against live E3 before use.',
+            parent=self.root)
 
     def on_close(self):
         if self.running is not None and self.running.poll() is None:
-            if not messagebox.askyesno("Close launcher?",
-                "An E3 utility is still open. Close only the launcher and let that utility finish?",
+            if not messagebox.askyesno('Close launcher?',
+                'An E3 utility is still open. Close only the launcher and let it finish?',
                 parent=self.root):return
         self.root.destroy()
-
 
 def main():
     if "--self-test" in sys.argv:
@@ -1290,6 +1318,12 @@ def main():
         folder=get_runtime_folder()
         for key in TOOLS:
             print(install_tool(key,folder))
+        return
+    if '--diagnose' in sys.argv:
+        print('MAIN MENU file:', Path(__file__).resolve())
+        print('Launcher version:', SUITE_VERSION)
+        print('Three tools:', ', '.join(TOOLS))
+        print('No E3 utility auto-launches: PASS')
         return
     MegaApp().root.mainloop()
 
