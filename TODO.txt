@@ -1,9 +1,14 @@
-"""E3.series CABBLOCK header formatter V14.
+"""E3.series CABBLOCK header formatter V15.
 
 Select any number of CABBLOCKs in E3, press Enter; the always-on-top
 window returns after each batch until you click Close/X or press Esc.
 
-Header: Location > Saber Parameter 1 > Equipment ID OR Additional Part ID > Device Designation.
+Header order is chosen by dragging rows in the compact GUI. The initial order:
+Device Designation > Location > Agile Number > Device Function.
+UI names map to the existing E3 text objects and never overwrite their values:
+  Device designation = type 212; Location = type 15;
+  Agile number = Equipment Identification OR Additional Part ID;
+  Device function = Saber Parameter 1 (saberParam1), NOT E3 type 14.
 All visible, bold, colour 0 (black), center alignment 2, height 0.25.
 Existing Function (type 14) values and combined text (1010) are not edited.
 
@@ -19,10 +24,11 @@ If E3 refuses to create its bound text, formats the OTHER THREE rows while
 leaving the reserved Saber slot empty. After manually inserting bound Saber
 Attribute Text in E3, rerun Complete Headers to format all four rows.
 Never inserts unbound/free-standing text or edits Function/combined values.
-V14 trusts the user's current Device Location placement as the anchor,
-including ANY position outside the CABBLOCK outline; four rows follow at 0.36
-spacing even if some or all are outside the block. The location is never moved
-unless Block top is explicitly selected. Header size never changes the block.
+V15 trusts the user's current Device Location placement as the anchor, even
+outside the block. Reordered rows are positioned relative to the Location row
+so Location itself stays fixed. With Block Top selected, the FIRST ordered row
+starts at the block top inset. All rows have 0.36 spacing; block is unchanged.
+The selected order is saved as header_order.json beside this script.
 Test on a saved E3 project copy. The installed E3 COM API is not testable here.
 
 Test first on a saved copy of your E3 project.
@@ -38,7 +44,7 @@ from collections import defaultdict
 from datetime import datetime
 from pathlib import Path
 
-BUILD_ID = 'SABER-HEADER-V14-USER-ANCHOR-ANYWHERE-2026-11-23'
+BUILD_ID = 'SABER-HEADER-V15-DRAG-HEADER-ORDER-2026-11-23'
 LOCATION_TYPE = 15
 SABER_ATTRIBUTE_NAME = 'saberParam1'
 SABER_TYPE = 5002        # type specified by user, may display as generic 1000
@@ -46,11 +52,66 @@ EQUIPMENT_TYPE = 1000   # generic attribute text, verify owner via attr.GetTextI
 ADDITIONAL_PART_TYPE = 482  # E3 standard Additional Part ID text type
 DEVICE_DESIGNATION_TYPE = 212
 UNSAFE_COMBINED_TYPE = 1010
-HEADER_ORDER = ('location', 'saber', 'equipment', 'designation')
+# Internal E3 roles stay unchanged; the visible names are user-friendly aliases.
+HEADER_ORDER = ('designation', 'location', 'equipment', 'saber')
 FIELD_LABELS = {
-    'location': 'Location', 'saber': 'Saber Parameter 1',
-    'equipment': 'Equipment Identification / Additional Part ID', 'designation': 'Device Designation',
+    'location': 'Location', 'saber': 'Device function',
+    'equipment': 'Agile number', 'designation': 'Device designation',
 }
+HEADER_EXAMPLES = {
+    'designation': 'PNL', 'location': 'BXRXUX',
+    'equipment': '2XXX-500', 'saber': 'PASSTHRU',
+}
+HEADER_ORDER_FILENAME = 'header_order.json'
+
+
+def validate_header_order(order=None):
+    """Accept exactly the four supported internal E3 roles, once each."""
+    if order is None:
+        return HEADER_ORDER
+    if not isinstance(order, (tuple, list)) or len(order) != len(HEADER_ORDER):
+        raise ValueError('Header order must have exactly four rows.')
+    cleaned = tuple(str(field) for field in order)
+    if len(set(cleaned)) != 4 or set(cleaned) != set(HEADER_ORDER):
+        raise ValueError(f'Invalid or duplicated header roles in order: {cleaned!r}')
+    return cleaned
+
+
+def _order_paths():
+    primary = Path(__file__).resolve().parent / HEADER_ORDER_FILENAME
+    fallback = Path.home() / '.e3_tools' / HEADER_ORDER_FILENAME
+    return (primary, fallback)
+
+
+def load_header_order():
+    """Read saved drag order; corrupt files do not change the working default."""
+    for filename in _order_paths():
+        if filename.is_file():
+            try:
+                data = json.loads(filename.read_text(encoding='utf-8-sig'))
+                return validate_header_order(data['order'])
+            except (ValueError, TypeError, KeyError, OSError) as exc:
+                log(f'Ignoring invalid saved header order {filename}: {exc}')
+    return HEADER_ORDER
+
+
+def save_header_order(order):
+    """Persist only safe E3 roles, atomically, without touching drawing data."""
+    value = validate_header_order(order)
+    errors = []
+    for filename in _order_paths():
+        tmp = filename.with_suffix(filename.suffix + '.tmp')
+        try:
+            filename.parent.mkdir(parents=True, exist_ok=True)
+            tmp.write_text(json.dumps({'version': 1, 'order': list(value)}, indent=2) + '\n',
+                           encoding='utf-8')
+            tmp.replace(filename)
+            return filename
+        except OSError as exc:
+            errors.append(str(exc))
+            try: tmp.unlink(missing_ok=True)
+            except OSError: pass
+    raise OSError('Could not save header order: ' + '; '.join(errors))
 TEXT_HEIGHT = 0.25
 TEXT_PITCH = 0.36
 TOP_INSET = 0.40
@@ -187,92 +248,196 @@ def scan_sheet_symbols(prj, sht, sheet_id):
     return get_ids(prj.GetSymbolIds)
 
 
-def wait_for_block_selection(preview=False, default_anchor='location'):
-    """Compact, nonmodal light-themed control panel. Existing action/Enter behavior."""
+def wait_for_block_selection(preview=False, default_anchor='location',
+                             default_order=None):
+    """Compact Zuken-blue panel with a draggable, persistent four-row order."""
     import tkinter as tk
+    from tkinter import messagebox
+    order = list(validate_header_order(default_order))
     root = tk.Tk()
     root.title('E3 | Block Header Formatter')
     root.configure(bg='#FFFFFF')
-    root.geometry('432x256')
+    root.geometry('474x393')
     root.resizable(False, False)
     root.attributes('-topmost', True)
     done = {'value': False}
-    result = {'action':'close', 'anchor':default_anchor}
+    result = {'action': 'close', 'anchor': default_anchor, 'order': tuple(order)}
     anchor_choice = tk.StringVar(value=default_anchor)
     white = '#FFFFFF'; pale = '#EAF4FF'; blue = '#2381CF'
     dark = '#203B55'; muted = '#627E99'; line = '#D5E4F2'
+    selected = {'index': None}
+    row_h = 35
+    pad_top = 4
+
+    def remember():
+        try:
+            save_header_order(order)
+        except OSError as exc:
+            messagebox.showwarning('Header order not saved',
+                'The order works for this session but could not be saved.\n' +
+                str(exc), parent=root)
 
     def finish(action):
-        if done['value']: return
+        if done['value']:
+            return
+        if action != 'close':
+            remember()
         done['value'] = True
-        result['action'] = action
-        result['anchor'] = anchor_choice.get()
+        result.update(action=action, anchor=anchor_choice.get(), order=tuple(order))
         root.quit()
 
     root.protocol('WM_DELETE_WINDOW', lambda: finish('close'))
-    head = tk.Frame(root,bg=pale,height=52)
+    head = tk.Frame(root, bg=pale, height=52)
     head.pack(fill='x'); head.pack_propagate(False)
-    tk.Label(head,text='Block Header Formatter',font=('Segoe UI',12,'bold'),
-             bg=pale,fg=dark).pack(anchor='w',padx=14,pady=(7,0))
-    tk.Label(head,text='Location  ·  Saber  ·  Equipment / Part ID  ·  Designation',
-             font=('Segoe UI',8),bg=pale,fg=muted).pack(anchor='w',padx=14)
+    tk.Label(head, text='Block Header Formatter', font=('Segoe UI', 12, 'bold'),
+             bg=pale, fg=dark).pack(anchor='w', padx=14, pady=(7, 0))
+    tk.Label(head, text='Set the order of the four header fields',
+             font=('Segoe UI', 8), bg=pale, fg=muted).pack(anchor='w', padx=14)
 
-    body=tk.Frame(root,bg=white)
-    body.pack(fill='both',expand=True,padx=14,pady=(9,2))
-    tk.Label(body,text='1   Select one or more blocks in E3',font=('Segoe UI',10,'bold'),
-             bg=white,fg=dark).pack(anchor='w')
-    tk.Label(body,text='2   Click Format headers',font=('Segoe UI',10),
-             bg=white,fg=dark).pack(anchor='w',pady=(3,7))
-    tk.Frame(body,bg=line,height=1).pack(fill='x',pady=(0,8))
-    tk.Label(body,text='Place header:',font=('Segoe UI',9,'bold'),
-             bg=white,fg=dark).pack(anchor='w')
-    choices=tk.Frame(body,bg=white)
-    choices.pack(anchor='w',pady=(1,4))
-    for label,value in (('Use Location position','location'),('Top of block','top')):
-        tk.Radiobutton(choices,text=label,value=value,variable=anchor_choice,
-                       font=('Segoe UI',9),bg=white,fg=dark,activebackground=white,
-                       selectcolor=pale,highlightthickness=0).pack(side='left',padx=(0,17))
-    note=('Preview mode: no changes will be made.' if preview else
-          'Header text may be outside the block. Blank Saber = XXX.')
-    tk.Label(body,text=note,font=('Segoe UI',8),fg=muted,bg=white).pack(anchor='w')
+    body = tk.Frame(root, bg=white)
+    body.pack(fill='both', expand=True, padx=14, pady=(8, 0))
+    tk.Label(body, text='Select one or more blocks in E3, then format.',
+             font=('Segoe UI', 9), bg=white, fg=dark).pack(anchor='w')
+    order_head = tk.Frame(body, bg=white)
+    order_head.pack(fill='x', pady=(10, 5))
+    tk.Label(order_head, text='Header order  ·  drag rows to rearrange',
+             font=('Segoe UI', 9, 'bold'), bg=white, fg=dark).pack(side='left')
 
-    buttons=tk.Frame(root,bg=white)
-    buttons.pack(fill='x',padx=14,pady=(3,10))
-    def btn(text,action,primary=False,width=10):
-        return tk.Button(buttons,text=text,command=lambda:finish(action),width=width,
-            font=('Segoe UI',9,'bold' if primary else 'normal'),
-            bg=blue if primary else pale,fg=white if primary else dark,
+    def reset_order():
+        order[:] = HEADER_ORDER
+        selected['index'] = None
+        redraw_rows()
+        remember()
+
+    tk.Button(order_head, text='Reset', command=reset_order,
+              font=('Segoe UI', 8), bg=white, fg=blue, relief='flat',
+              activebackground=white, activeforeground=blue,
+              cursor='hand2', borderwidth=0).pack(side='right')
+
+    canvas = tk.Canvas(body, bg=white, height=row_h * 4 + 2 * pad_top,
+                       highlightthickness=0, borderwidth=0, cursor='hand2', takefocus=1)
+    canvas.pack(fill='x')
+
+    def redraw_rows():
+        canvas.delete('all')
+        width = max(390, canvas.winfo_width())
+        for i, field in enumerate(order):
+            y = pad_top + i * row_h
+            active = i == selected['index']
+            canvas.create_rectangle(1, y, width-2, y+row_h-3,
+                fill='#DCEEFF' if active else ('#F3F8FE' if i % 2 == 0 else '#FFFFFF'),
+                outline='#9DC9EF' if active else line, width=1)
+            canvas.create_text(16, y+15, text='≡', font=('Segoe UI', 14, 'bold'),
+                fill=blue, anchor='center')
+            canvas.create_text(32, y+15, text=FIELD_LABELS[field],
+                font=('Segoe UI', 9, 'bold'), fill=dark, anchor='w')
+            canvas.create_text(width-16, y+15, text=HEADER_EXAMPLES[field],
+                font=('Segoe UI', 9), fill=muted, anchor='e')
+
+    def row_index(y):
+        return max(0, min(3, int((y - pad_top) // row_h)))
+
+    def start_drag(event):
+        selected['index'] = row_index(event.y)
+        canvas.focus_set()
+        redraw_rows()
+
+    def drag(event):
+        i = selected['index']
+        if i is None:
+            return
+        j = row_index(event.y)
+        if j != i:
+            field = order.pop(i)
+            order.insert(j, field)
+            selected['index'] = j
+            redraw_rows()
+
+    def finish_drag(_event):
+        if selected['index'] is not None:
+            selected['index'] = None
+            redraw_rows()
+            remember()
+
+    def key_reorder(event):
+        i = selected['index']
+        if i is None:
+            i = 0
+        j = max(0, min(3, i + (-1 if event.keysym == 'Up' else 1)))
+        if i != j:
+            field = order.pop(i)
+            order.insert(j, field)
+        selected['index'] = j
+        redraw_rows()
+        remember()
+        return 'break'
+
+    canvas.bind('<Configure>', lambda _e: redraw_rows())
+    canvas.bind('<Button-1>', start_drag)
+    canvas.bind('<B1-Motion>', drag)
+    canvas.bind('<ButtonRelease-1>', finish_drag)
+    canvas.bind('<Up>', key_reorder)
+    canvas.bind('<Down>', key_reorder)
+
+    anchor_row = tk.Frame(body, bg=white)
+    anchor_row.pack(fill='x', pady=(9, 0))
+    tk.Label(anchor_row, text='Anchor:', font=('Segoe UI', 9, 'bold'),
+             bg=white, fg=dark).pack(side='left', padx=(0, 7))
+    for label, value in (('Keep Location where placed', 'location'),
+                         ('Top of block', 'top')):
+        tk.Radiobutton(anchor_row, text=label, value=value, variable=anchor_choice,
+                       font=('Segoe UI', 8), bg=white, fg=dark,
+                       activebackground=white, selectcolor=pale,
+                       highlightthickness=0).pack(side='left', padx=(0, 8))
+    note = ('Preview only — no E3 changes.' if preview else
+            'Location stays put; rows above/below follow your chosen order.')
+    tk.Label(body, text=note, font=('Segoe UI', 8), fg=muted,
+             bg=white).pack(anchor='w', pady=(8, 0))
+
+    buttons = tk.Frame(root, bg=white)
+    buttons.pack(fill='x', padx=14, pady=(4, 11))
+    def btn(text, action, primary=False, width=10):
+        return tk.Button(buttons, text=text, command=lambda: finish(action), width=width,
+            font=('Segoe UI', 9, 'bold' if primary else 'normal'),
+            bg=blue if primary else pale, fg=white if primary else dark,
             activebackground='#1466B2' if primary else '#D9ECFF',
-            activeforeground=white if primary else dark,relief='flat',borderwidth=0,
-            cursor='hand2',pady=5)
-    format_button=btn('Format headers','complete',True,15)
+            activeforeground=white if primary else dark, relief='flat',
+            borderwidth=0, cursor='hand2', pady=5)
+    format_button = btn('Format headers', 'complete', True, 15)
     format_button.pack(side='left')
-    btn('Fill blank Saber','prepare',False,14).pack(side='left',padx=(7,0))
-    btn('Close','close',False,7).pack(side='right')
-    root.bind('<Return>',lambda _e:finish('complete'))
-    root.bind('<KP_Enter>',lambda _e:finish('complete'))
-    root.bind('<Escape>',lambda _e:finish('close'))
+    btn('Fill blank function', 'prepare', False, 16).pack(side='left', padx=(7, 0))
+    btn('Close', 'close', False, 7).pack(side='right')
+    root.bind('<Return>', lambda _e: finish('complete'))
+    root.bind('<KP_Enter>', lambda _e: finish('complete'))
+    root.bind('<Escape>', lambda _e: finish('close'))
     root.update_idletasks()
-    root.geometry(f'432x256+{max(0,root.winfo_screenwidth()-472)}+80')
+    root.geometry(f'474x393+{max(0, root.winfo_screenwidth()-514)}+80')
+    redraw_rows()
     format_button.focus_set()
-    # Preserve the previously working read-only Enter detection in E3.
+    # Read-only Enter detection while the operator is selecting blocks in E3.
     try:
         import ctypes
-        key=ctypes.windll.user32.GetAsyncKeyState
-        previous=bool(key(0x0D)&0x8000)
-        armed=not previous
+        key = ctypes.windll.user32.GetAsyncKeyState
+        previous = bool(key(0x0D) & 0x8000)
+        armed = not previous
         def poll():
             nonlocal previous, armed
-            if done['value']:return
+            if done['value']:
+                return
             try:
-                down=bool(key(0x0D)&0x8000)
-                if not down:armed=True
-                if down and not previous and armed:finish('complete')
-                previous=down
-            except Exception:pass
-            if not done['value']:root.after(30,poll)
-        root.after(30,poll)
-    except Exception:pass
+                down = bool(key(0x0D) & 0x8000)
+                if not down:
+                    armed = True
+                if down and not previous and armed:
+                    finish('complete')
+                previous = down
+            except Exception:
+                pass
+            if not done['value']:
+                root.after(30, poll)
+        root.after(30, poll)
+    except Exception:
+        pass
     try:
         root.mainloop()
         return result
@@ -1021,28 +1186,32 @@ def _required_single(block, types, type_number, label):
     return hits[0]
 
 
-def compute_header_anchor(text_obj, block, location_text_id, layout_anchor='location'):
-    """Anchor four rows to user-positioned Location, even outside the block.
+def compute_header_anchor(text_obj, block, location_text_id,
+                          layout_anchor='location', header_order=None):
+    """Top Y for the ordered stack, keeping Location fixed if requested.
 
-    E3 headers are text, not block geometry: the user is free to place them
-    above, below, or beside a block. Never resize/move the CABBLOCK or reject
-    the header for crossing its border. Top mode keeps its original origin.
+    When Location is row 2, e.g. Designation > Location > Agile > Device
+    Function, the first row is 0.36 ABOVE Location. This respects the user's
+    actual existing Location position (even entirely outside the block).
     """
+    order = validate_header_order(header_order)
     bid = block['id']
     if layout_anchor == 'location':
         if not select_id(text_obj, location_text_id):
             raise RuntimeError(
                 f'CABBLOCK {bid}: cannot select Location text {location_text_id}.')
         original_xy = get_text_xy(text_obj, block)
-        cx, first_y = original_xy['x'], original_xy['y']
+        cx = original_xy['x']
+        first_y = original_xy['y'] + order.index('location') * TEXT_PITCH
     elif layout_anchor == 'top':
         cx = (float(block['left']) + float(block['right'])) / 2
         first_y = float(block['top']) - TOP_INSET
     else:
         raise ValueError(f'Unknown layout_anchor={layout_anchor!r}')
-    final_y = first_y - (len(HEADER_ORDER) - 1) * TEXT_PITCH
+    final_y = first_y - (len(order) - 1) * TEXT_PITCH
     log(f'  BLOCK {bid} HEADER ANCHOR: {layout_anchor} '
         f'X={cx:.3f}, first Y={first_y:.3f}, last Y={final_y:.3f} '
+        f'Location row #{order.index("location")+1} '
         '(off-block header text is ALLOWED)')
     return cx, first_y
 
@@ -1050,12 +1219,13 @@ def compute_header_anchor(text_obj, block, location_text_id, layout_anchor='loca
 def resolve_header_texts(prj, blocks, all_texts, saber_type=SABER_TYPE,
                          equipment_type=EQUIPMENT_TYPE,
                          designation_type=DEVICE_DESIGNATION_TYPE,
-                         attribute_links=None, layout_anchor='location'):
+                         attribute_links=None, layout_anchor='location',
+                         header_order=None):
     """Map Location / Saber / (Equipment OR Part ID) / Designation.
 
     Attribute links are authoritative. E3 type-482 is a safe explicit Part ID
     fallback. Type-1000 requires operator confirmation unless attribute-bound.
-    A missing Saber display preserves its row without moving other values into it.
+    A missing Saber display preserves its selected slot without moving other values into it.
     """
     mapping = {'location': LOCATION_TYPE, 'saber': int(saber_type),
                'equipment': int(equipment_type),
@@ -1069,6 +1239,7 @@ def resolve_header_texts(prj, blocks, all_texts, saber_type=SABER_TYPE,
         attribute_links = read_block_attribute_links(prj, blocks)
     if layout_anchor not in ('location', 'top'):
         raise ValueError(f'Unknown layout_anchor={layout_anchor!r}')
+    order = validate_header_order(header_order)
     plan, uncertain, pending_saber = [], [], []
     used = set()
     text_obj = prj.CreateTextObject()
@@ -1152,7 +1323,7 @@ def resolve_header_texts(prj, blocks, all_texts, saber_type=SABER_TYPE,
         selected['equipment'] = identifier
         if 'saber' not in selected:
             pending_saber.append(bid)
-            log(f'  BLOCK {bid}: Saber display unavailable; reserving row #2. '
+            log(f'  BLOCK {bid}: Device function display unavailable; reserving row #{order.index("saber")+1}. '
                 'Enable Saber attribute visibility in E3 and rerun if needed.')
         else:
             log(f'  BLOCK {bid}: Saber text {selected["saber"]["id"]} '
@@ -1168,10 +1339,10 @@ def resolve_header_texts(prj, blocks, all_texts, saber_type=SABER_TYPE,
                 f'CABBLOCK {bid}: identifier mapped to Location/Designation text.')
 
         cx, first_y = compute_header_anchor(
-            text_obj, block, loc['id'], layout_anchor)
+            text_obj, block, loc['id'], layout_anchor, order)
         slots = {'location': loc, 'saber': selected.get('saber'),
                  'equipment': identifier, 'designation': des}
-        for i, field in enumerate(HEADER_ORDER):
+        for i, field in enumerate(order):
             record = slots[field]
             if record is None:
                 continue
@@ -1180,8 +1351,7 @@ def resolve_header_texts(prj, blocks, all_texts, saber_type=SABER_TYPE,
                     f'Text {record["id"]} mapped twice. No formatting done.')
             used.add(record['id'])
             plan.append({'block': block, 'field': field,
-                         'label': identifier_label if field == 'equipment'
-                                  else FIELD_LABELS[field],
+                         'label': FIELD_LABELS[field],
                          'type': record['type'], 'id': record['id'],
                          'before_value': record['value'],
                          'x': cx, 'y': first_y - i * TEXT_PITCH})
@@ -1216,8 +1386,9 @@ def confirm_generic_1000_matches(matches):
 
 def run(action='complete', preview=False, saber_type=None,
         equipment_type=None, designation_type=None, inspect_api=False,
-        layout_anchor='location'):
+        layout_anchor='location', header_order=None):
     global LOG_STREAM
+    order = validate_header_order(header_order)
     path = choose_log_path()
     try:
         LOG_STREAM = open(path, 'a', encoding='utf-8')
@@ -1225,8 +1396,8 @@ def run(action='complete', preview=False, saber_type=None,
         log('NEW SABER HEADER BATCH: ' + datetime.now().astimezone().isoformat(timespec='seconds'))
         log('BUILD: ' + BUILD_ID)
         log('SOURCE FILE: ' + str(Path(__file__).resolve()))
-        log(f'ACTION: {action}; dry-run={preview}; inspect-api={inspect_api}; anchor={layout_anchor}')
-        log('HEADER: LOCATION > SABER PARAMETER 1 > EQUIPMENT OR ADDITIONAL PART ID > DEVICE DESIGNATION')
+        log(f'ACTION: {action}; dry-run={preview}; inspect-api={inspect_api}; anchor={layout_anchor}; order={order}')
+        log('HEADER ORDER: ' + ' > '.join(FIELD_LABELS[k] for k in order))
         log('E3 attribute text can have generic display type 1000; 5002 is not guaranteed.')
         log('Equipment ID or Additional Part ID (type 482) is REQUIRED. Types 14/1010 unchanged.')
         log('Equipment attribute names include historic typo: Equipment Identifacation.')
@@ -1253,7 +1424,7 @@ def run(action='complete', preview=False, saber_type=None,
             _required_single(block, all_texts[block['id']],
                              designation_type if designation_type is not None else
                              DEVICE_DESIGNATION_TYPE, 'Device Designation')
-            compute_header_anchor(initial_txt, block, loc['id'], layout_anchor)
+            compute_header_anchor(initial_txt, block, loc['id'], layout_anchor, order)
         if preview:
             links = read_block_attribute_links(prj, blocks)
             log('DRY RUN - ATTRIBUTE DISPLAY CHECK:')
@@ -1286,6 +1457,7 @@ def run(action='complete', preview=False, saber_type=None,
             equipment_type if equipment_type is not None else EQUIPMENT_TYPE,
             designation_type if designation_type is not None else DEVICE_DESIGNATION_TYPE,
             attribute_links=links, layout_anchor=layout_anchor,
+            header_order=order,
         )
         preflight_positions(prj, plan)
         preflight_saber_attributes(prj, plan)
@@ -1304,10 +1476,10 @@ def run(action='complete', preview=False, saber_type=None,
         formatted, filled = apply_plan(prj, plan, hidden)
         if pending_saber:
             log(f'PARTIAL SUCCESS: formatted {formatted} existing labels. '
-                f'Saber display missing on {len(pending_saber)} block(s): '
-                f'{pending_saber}. Slot #2 reserved. Device Function value unchanged.')
+                f'Device function (Saber) display missing on {len(pending_saber)} block(s): '
+                f'{pending_saber}. The chosen Device function row is reserved. E3 type-14 value unchanged.')
             popup(f'Formatted {len(blocks)} block(s).\n'
-                  f'Saber is still hidden on {len(pending_saber)} block(s).\n'
+                  f'Device function (Saber) is still hidden on {len(pending_saber)} block(s).\n'
                   'Enable its bound text visibility in E3, then rerun.\n'
                   f'Details in log: {path}')
         else:
@@ -1340,12 +1512,15 @@ def main(argv=None):
     print('E3 HEADER FORMATTER BUILD: ' + BUILD_ID, flush=True)
     print('E3 HEADER FORMATTER FILE: ' + str(Path(__file__).resolve()), flush=True)
     layout_anchor=args.layout_anchor
+    header_order=load_header_order()
     while True:
         try:
             selection = wait_for_block_selection(preview=(args.dry_run or args.inspect_api),
-                                                default_anchor=layout_anchor)
+                                                default_anchor=layout_anchor,
+                                                default_order=header_order)
             action=selection['action']
             layout_anchor=selection['anchor']
+            header_order=validate_header_order(selection['order'])
         except Exception as exc:
             print('Selection window failed:', exc)
             return 1
@@ -1356,7 +1531,8 @@ def main(argv=None):
             run(action=action, preview=args.dry_run, saber_type=args.saber_type,
                 equipment_type=args.equipment_type,
                 designation_type=args.designation_type,
-                inspect_api=args.inspect_api, layout_anchor=layout_anchor)
+                inspect_api=args.inspect_api, layout_anchor=layout_anchor,
+                header_order=header_order)
         except Exception as exc:
             print('FAILED:', exc)
             popup(str(exc) + '\n\nThe selection window will reopen.', error=True)
