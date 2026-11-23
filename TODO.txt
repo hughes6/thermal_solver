@@ -1,1322 +1,661 @@
-"""E3.series CABBLOCK header formatter V12.
+"""E3.series: copy cable-side pin spacing to one side of a CABBLOCK.
 
-Select any number of CABBLOCKs in E3, press Enter; the always-on-top
-window returns after each batch until you click Close/X or press Esc.
+Workflow: choose cable symbol -> choose one of its pins (left/right) -> choose
+CABBLOCK -> preview -> apply. Uses existing placed connector-pin symbols; it
+never edits logical pin names, device/connector assignments, or block geometry.
 
-Header: Location > Saber Parameter 1 > Equipment Identification > Device Designation.
-All visible, bold, colour 0 (black), center alignment 2, height 0.25.
-Existing Function (type 14) values and combined text (1010) are not edited.
+IMPORTANT: E3 COM differs by installation. This script deliberately REFUSES
+writes if it cannot verify per-pin symbol ownership, a location setter or the
+post-write pin position. Test in a disposable copy of the project.
 
-This version uses the working block-maker approach:
-Symbol.GetAttributeIds -> Attribute.GetName -> Attribute.GetTextIds.
-Attribute.DisplayAttribute() is attempted but may return 0 without creating text.
-The older block-maker used the misspelled name "Equipment Identifacation".
-Generic text type 1000 is NOT enough to distinguish Equipment from Saber.
-Both are resolved by their actual parent attributes wherever exposed.
-
-Complete Headers fills blank saberParam1 with XXX and attempts to display it.
-If E3 refuses to create its bound text, formats the OTHER THREE rows while
-leaving the reserved Saber slot empty. After manually inserting bound Saber
-Attribute Text in E3, rerun Complete Headers to format all four rows.
-Never inserts unbound/free-standing text or edits Function/combined values.
-V12 defaults to keeping Device Location at its CURRENT schematic position,
-using it as the X/Y anchor for the rows below (0.36 spacing). Optionally choose
-Block top in the UI for the previous top-aligned layout. Do not automatically
-shift a low Device Location text upward: warn if the four rows cannot fit.
-Test on a saved E3 project copy. The installed E3 COM API is not testable here.
-
-Test first on a saved copy of your E3 project.
+Run from E3 Add-ons or with: py E3_Cable_To_Block_Pin_Spacing.py
+Requires e3series (preferred) or pywin32.
 """
 from __future__ import annotations
-import argparse
+import gc
 import json
 import math
-import sys
-import tempfile
-import traceback
-from collections import defaultdict
-from datetime import datetime
+import os
 from pathlib import Path
+import statistics
+import subprocess
+import sys
+import tkinter as tk
+from tkinter import ttk, messagebox
+import traceback
+from datetime import datetime
 
-BUILD_ID = 'SABER-HEADER-V12-LOCATION-ANCHOR-2026-11-23'
-LOCATION_TYPE = 15
-SABER_ATTRIBUTE_NAME = 'saberParam1'
-SABER_TYPE = 5002        # type specified by user, may display as generic 1000
-EQUIPMENT_TYPE = 1000   # generic attribute text, verify owner via attr.GetTextIds
-DEVICE_DESIGNATION_TYPE = 212
-UNSAFE_COMBINED_TYPE = 1010
-HEADER_ORDER = ('location', 'saber', 'equipment', 'designation')
-FIELD_LABELS = {
-    'location': 'Location', 'saber': 'Saber Parameter 1',
-    'equipment': 'Equipment Identification', 'designation': 'Device Designation',
-}
-TEXT_HEIGHT = 0.25
-TEXT_PITCH = 0.36
-TOP_INSET = 0.40
-BOTTOM_CLEARANCE = 0.15
-BLACK_COLOUR = 0
-BOLD_STYLE = 1
-CENTER_ALIGNMENT = 2
-POSITION_TOLERANCE = 0.02
-COM_MISSING = -2147352572
-BLOCK_LOCATION_TOLERANCE = 0.10
-LOG_STREAM = None
-
-def log(message=""):
-    line = str(message)
-    print(line, flush=True)
-    if LOG_STREAM is not None:
-        LOG_STREAM.write(line + "\n")
-        LOG_STREAM.flush()
+VERSION = 'CABLE-BLOCK-PIN-SPACING-V1-20261123'
+MISSING = -2147352572
+EDGE_ALLOWANCE = 0.65   # maximum distance, drawing units, from block edge
+POINT_TOL = 0.015      # position readback tolerance in E3 drawing units
+LOGFILE = Path(__file__).with_suffix('.log')
 
 
-def normalize_pin(value):
-    if value is None:
-        return None
-    if isinstance(value, float) and math.isfinite(value) and value.is_integer():
-        return str(int(value))
-    val = str(value).strip()
-    return val or None
+def log(text):
+    with LOGFILE.open('a', encoding='utf-8') as f:
+        f.write(f'{datetime.now().isoformat(timespec="seconds")} {text}\n')
 
 
-def parse_id_result(value):
-    """Support E3's (count, ID-array) COM return and normal ID arrays."""
-    if value is None:
+def ids_from_return(raw):
+    """Never treat an E3 count/status integer as an object ID."""
+    if raw is None:
         return []
-    if isinstance(value, (tuple, list)):
-        if (len(value) >= 2 and isinstance(value[1], (tuple, list))
-                and isinstance(value[0], (int, float))):
-            ids = value[1]
-            try:
-                expected_count = int(value[0])
-                ids = list(ids)
-                if expected_count < len(ids):
-                    # COM wrappers can prepend output/status values.
-                    ids = ids[-expected_count:] if expected_count > 0 else []
-            except (ValueError, TypeError):
-                pass
+    if isinstance(raw, (tuple, list)):
+        if len(raw) >= 2 and isinstance(raw[0], int) and not isinstance(raw[1], (int, float)):
+            raw = raw[1:]
         else:
-            ids = value
-    else:
-        ids = [value]
-    result = []
-    for v in ids:
-        try:
-            i = int(v)
-            if i > 0 and i != COM_MISSING:
-                result.append(i)
-        except (TypeError, ValueError):
-            pass
-    return result
-
-
-def get_ids(method, *arguments):
-    # E3's GetSymbolIds(None, 0) uses an output array BEFORE a mode argument;
-    # GetViewIds(None), GetAllSheetIds(None) and some wrapper versions differ.
-    attempts = ((None, *arguments), arguments, (*arguments, None))
-    for args in attempts:
-        try:
-            value = parse_id_result(method(*args))
-            if value:
-                return value
-        except Exception:
-            continue
+            # An (object-count, [ids]) result sometimes has additional metadata.
+            if len(raw) == 2 and isinstance(raw[0], int) and isinstance(raw[1], int):
+                return []
+        values = []
+        for v in raw:
+            if isinstance(v, (tuple, list)):
+                values.extend(v)
+            else:
+                values.append(v)
+        return list(dict.fromkeys(int(v) for v in values
+                   if isinstance(v, (int, float)) and int(v) > 0 and int(v) != MISSING))
     return []
 
 
-def select_id(obj, object_id):
-    """Do not mistake E3 versions returning None from SetId for failure."""
-    try:
-        result = obj.SetId(int(object_id))
-        if isinstance(result, (int, float)) and result == 0:
-            return False
-        if hasattr(obj, "GetId"):
-            current = obj.GetId()
-            if current is not None and int(current) != int(object_id):
-                return False
-        return True
-    except Exception:
-        return False
-
-
-def optional_call(obj, name):
-    try:
-        return getattr(obj, name)()
-    except Exception:
-        return None
-
-
-def get_symbol_location(sym):
-    try:
-        raw = sym.GetSchemaLocation(None, None, None, None, None)
-        if not isinstance(raw, (tuple, list)) or len(raw) < 3:
-            return None
-        return {"sheet_id": int(raw[0]), "x": float(raw[1]), "y": float(raw[2])}
-    except Exception:
-        return None
-
-
-def get_symbol_area(sym):
-    try:
-        raw = sym.GetPlacedArea(None, None, None, None)
-        if not isinstance(raw, (tuple, list)) or len(raw) < 5 or int(raw[0]) <= 0:
-            return None
-        l, b, r, t = map(float, raw[1:5])
-        if not (r > l and t > b):
-            return None
-        return {"left": l, "bottom": b, "right": r, "top": t}
-    except Exception:
-        return None
-
-
-def inside_block(loc, block):
-    tol = BLOCK_LOCATION_TOLERANCE
-    return (loc is not None and loc["sheet_id"] == block["sheet_id"]
-            and block["left"] - tol <= loc["x"] <= block["right"] + tol
-            and block["bottom"] - tol <= loc["y"] <= block["top"] + tol)
-
-
-def scan_sheet_symbols(prj, sht, sheet_id):
-    if not select_id(sht, sheet_id):
-        raise RuntimeError(f"Could not select E3 sheet ID {sheet_id}.")
-    ids = get_ids(sht.GetSymbolIds)
-    if ids:
-        return ids
-    log(f"  Sheet {sheet_id} has no sheet-local symbol ID array; scanning project IDs instead.")
-    return get_ids(prj.GetSymbolIds)
-
-
-def wait_for_block_selection(preview=False, default_anchor='location'):
-    """Always-on-top nonmodal window; E3 remains available for selecting blocks."""
-    import tkinter as tk
-    from tkinter import ttk
-    root=tk.Tk()
-    root.title('E3 - Saber Parameter 1 Header Formatter')
-    root.attributes('-topmost', True)
-    root.resizable(False,False)
-    result={'action':'close', 'anchor':default_anchor}
-    anchor_choice=tk.StringVar(value=default_anchor)
-    done={'value':False}
-
-    def finish(action):
-        if not done['value']:
-            done['value']=True
-            result['action']=action
-            result['anchor']=anchor_choice.get()
-            root.quit()
-
-    root.protocol('WM_DELETE_WINDOW', lambda:finish('close'))
-    frame=ttk.Frame(root,padding=18)
-    frame.pack(fill='both',expand=True)
-    ttk.Label(frame,text='Block Header Formatter — Saber Parameter 1',
-              font=('Segoe UI',12,'bold')).pack(anchor='w',pady=(0,10))
-    ttk.Label(frame,text=(
-        '1. Select one or more CABBLOCKs in E3.\n'
-        '2. Press ENTER / Complete Headers. Blank Saber attributes\n'
-        '   will be filled with XXX on the selected SYMBOL instances.\n'
-        '3. Complete Headers displays missing bound Saber attribute text.\n'
-        '4. Equipment ID is found using its original attribute name.\n'
-        '5. Repeat for other blocks; Close / X / Esc to exit.'),
-        justify='left').pack(anchor='w')
-    ttk.Separator(frame,orient='horizontal').pack(fill='x',pady=12)
-    status=('PREVIEW ONLY — neither button will change E3.' if preview else
-            'Attribute-linked Saber & Equipment; black/bold/center 0.25.')
-    ttk.Label(frame,text=status).pack(anchor='w',pady=(0,8))
-    ttk.Label(frame,text='Header position:', font=('Segoe UI',10,'bold')).pack(anchor='w')
-    ttk.Radiobutton(frame, text='Keep Device Location in place (default)',
-                    variable=anchor_choice,value='location').pack(anchor='w',pady=(2,0))
-    ttk.Radiobutton(frame, text='Move header to top of CABBLOCK (previous layout)',
-                    variable=anchor_choice,value='top').pack(anchor='w',pady=(0,9))
-    ttk.Label(frame,text='Other rows follow Device Location at 0.36 spacing.').pack(anchor='w',pady=(0,9))
-    row=ttk.Frame(frame)
-    row.pack(fill='x')
-    ttk.Button(row,text='Prepare XXX Attributes',command=lambda:finish('prepare')).pack(side='left')
-    format_button=ttk.Button(row,text='Complete Headers (Enter)',command=lambda:finish('complete'))
-    format_button.pack(side='left',padx=(10,0))
-    ttk.Button(row,text='Close (Esc)',command=lambda:finish('close')).pack(side='right')
-    root.bind('<Return>',lambda e:finish('complete'))
-    root.bind('<KP_Enter>',lambda e:finish('complete'))
-    root.bind('<Escape>',lambda e:finish('close'))
-    root.update_idletasks()
-    x=max(0,root.winfo_screenwidth()-root.winfo_width()-40)
-    root.geometry(f'+{x}+80')
-    format_button.focus_set()
-    # Passive, read-only Enter detection while the E3 window has keyboard focus.
-    try:
-        import ctypes
-        key=ctypes.windll.user32.GetAsyncKeyState
-        previous=bool(key(0x0D)&0x8000)
-        armed=not previous
-        def poll():
-            nonlocal previous, armed
-            if done['value']: return
-            try:
-                down=bool(key(0x0D)&0x8000)
-                if not down: armed=True
-                if down and not previous and armed: finish('complete')
-                previous=down
-            except Exception: pass
-            if not done['value']: root.after(30,poll)
-        root.after(30,poll)
-    except Exception:
-        pass
-    try:
-        root.mainloop()
-        return result
-    finally:
-        root.destroy()
-
-
-def selected_symbol_id_candidates(prj, sht, app):
-    """Read current E3 GUI selection, WITHOUT changing GUI selection.
-
-    Different COM versions expose selection at job, sheet or application level;
-    each getter may use an out parameter or return an array directly. We use
-    only explicit *Selected* getter names and never auto-pick from sheet IDs.
-    """
-    active_sheet_id = None
-    for method_name in ('GetActiveSheetId',):
+def get_ids(obj, method):
+    fn = getattr(obj, method, None)
+    if fn is None:
+        return []
+    for args in ((None,), (), ([],)):
         try:
-            sheet_id = getattr(prj, method_name)()
-            if isinstance(sheet_id, (int, float)) and int(sheet_id) > 0:
-                active_sheet_id = int(sheet_id)
-                break
+            result = fn(*args)
+            values = ids_from_return(result)
+            if values:
+                return values
+            # If the argument was an out-array, it may have been populated.
+            if args and isinstance(args[0], list):
+                values = ids_from_return([args[0]])
+                if values:
+                    return values
         except Exception:
-            continue
-    if active_sheet_id is not None:
-        select_id(sht, active_sheet_id)
-    log(f'Active E3 sheet: {active_sheet_id if active_sheet_id else "not reported by COM"}')
-
-    # Explicitly symbol-only queries first, generic selected object IDs last.
-    # The fallback generic query is ALWAYS type-checked as a placed CABBLOCK.
-    probes = (
-        ('job', prj, 'GetSelectedSymbolIds'),
-        ('job', prj, 'GetSelectedSymbolsIds'),
-        ('job', prj, 'GetSelectedSymbolId'),
-        ('sheet', sht, 'GetSelectedSymbolIds'),
-        ('sheet', sht, 'GetSelectedSymbolsIds'),
-        ('sheet', sht, 'GetSelectedSymbolId'),
-        ('app', app, 'GetSelectedSymbolIds'),
-        ('job', prj, 'GetSelectedObjectIds'),
-        ('job', prj, 'GetSelectedIds'),
-        ('sheet', sht, 'GetSelectedObjectIds'),
-        ('sheet', sht, 'GetSelectedIds'),
-        ('app', app, 'GetSelectedObjectIds'),
-        ('app', app, 'GetSelectedIds'),
-    )
-    attempted = []
-    found = set()
-    for label, obj, method_name in probes:
-        try:
-            getter = getattr(obj, method_name)
-        except Exception:
-            continue
-        # Avoid evaluating an integer method return as the selected ID unless
-        # GetSelectedSymbolId explicitly returns one number. For array-style
-        # getters, require an array (or a count + array) in the result.
-        for args in ((None,), (), (None, 0), (0, None)):
-            try:
-                result = getter(*args)
-            except Exception as exc:
-                attempted.append(f'{label}.{method_name}{args}: {str(exc)[:75]}')
-                continue
-            if isinstance(result, (tuple, list)):
-                ids = parse_id_result(result)
-            elif method_name == 'GetSelectedSymbolId':
-                ids = parse_id_result(result)
-            else:
-                ids = []
-            attempted.append(f'{label}.{method_name}{args}: {ids}')
-            if ids:
-                found.update(ids)
-                break
-    log('GUI SELECTION READBACK:')
-    for item in attempted[:45]:
-        log(f'  {item}')
-    if len(attempted) > 45:
-        log(f'  ... {len(attempted)-45} additional getter attempts')
-    if not found:
-        raise RuntimeError(
-            'No selected symbol IDs were returned by this E3 COM build. '
-            'Select one or more CABBLOCK borders in E3 before pressing Enter. '
-            'If it is already selected, send the GUI SELECTION READBACK log; '
-            'your E3 version may use another selection API. NO CHANGES MADE.'
-        )
-    return sorted(found)
-
-
-def get_selected_cabblocks(prj, sht, app):
-    """Return ALL uniquely selected CABBLOCKs; ignore selected non-blocks.
-
-    A drag/box selection can include pins, lines or text as well as the blocks.
-    These are never used as targets. At least one placed CABBLOCK is required.
-    """
-    ids = selected_symbol_id_candidates(prj, sht, app)
-    sym = prj.CreateSymbolObject()
-    other_symbols = []
-    blocks = []
-    for sid in ids:
-        if not select_id(sym, sid):
-            log(f'  Selected ID {sid}: not a valid E3 symbol ID; ignored')
-            continue
-        kind = str(optional_call(sym, 'GetSymbolTypeName') or '')
-        if 'CABBLOCK' not in kind.upper():
-            other_symbols.append((sid, kind))
-            continue
-        location, area = get_symbol_location(sym), get_symbol_area(sym)
-        if location is None or area is None:
-            raise RuntimeError(
-                f'Selected CABBLOCK {sid}: missing placed location/area. '
-                'Batch cancelled: NO CHANGES MADE.'
-            )
-        block = {
-            'id': sid, 'sheet_id': location['sheet_id'], 'kind': kind,
-            'owner': '<selected block>', 'view_id': None, 'view_number': None,
-            **area,
-        }
-        blocks.append(block)
-    if not blocks:
-        raise RuntimeError(
-            f'No placed CABBLOCK found among {len(ids)} selected E3 ID(s). '
-            f'Non-block symbols: {other_symbols[:12]}. '
-            'Click one or more CABBLOCK borders and press Enter again. '
-            'NO CHANGES MADE.'
-        )
-    blocks.sort(key=lambda b: (b['sheet_id'], -b['top'], b['left'], b['id']))
-    log(f'SELECTION: {len(blocks)} selected CABBLOCK(s); '
-        f'{len(other_symbols)} selected non-block symbol(s) ignored.')
-    for b in blocks:
-        log(f'  BLOCK {b["id"]}: sheet {b["sheet_id"]} | {b["kind"]!r} | '
-            f'X=[{b["left"]:.3f},{b["right"]:.3f}] '
-            f'Y=[{b["bottom"]:.3f},{b["top"]:.3f}]')
-    if other_symbols:
-        log(f'  IGNORED non-block selections (first 15): {other_symbols[:15]}')
-    return blocks
-
-
-def popup(message, error=False):
+            pass
+    # Pywin32-only output array fallback.
     try:
-        import tkinter as tk
-        from tkinter import messagebox
-        root = tk.Tk()
-        root.withdraw()
-        root.attributes('-topmost', True)
-        (messagebox.showerror if error else messagebox.showinfo)(
-            'E3 Block Header Formatter (Saber Parameter 1)', str(message), parent=root
-        )
-        root.destroy()
-    except Exception:
-        log(str(message))
-
-
-def choose_log_path():
-    for folder in (Path(__file__).resolve().parent, Path(tempfile.gettempdir())):
-        try:
-            result = folder / 'E3_Saber_Header_Formatter_Log.txt'
-            with open(result, 'a', encoding='utf-8'):
-                pass
-            return result
-        except OSError:
-            continue
-    raise RuntimeError('Could not create a diagnostic log.')
-
-
-def text_type_hint(txt):
-    hints = []
-    for getter in ('GetTypeName', 'GetTextTypeName', 'GetTypeDescription',
-                   'GetAttributeName', 'GetName', 'GetSource'):
-        val = optional_call(txt, getter)
-        if isinstance(val, str) and val.strip():
-            hints.append(val.strip())
-    return ' | '.join(dict.fromkeys(hints))[:180]
-
-
-def get_text_xy(text, block):
-    """Read E3 SCHEMATIC coordinates; do not assume a symbol-relative value.
-
-    The existing signal mover confirmed E3 text supports GetSchemaLocation.
-    Only accept a decoded position reasonably close to the parent CABBLOCK.
-    That protects from treating status codes/sheet IDs as coordinates.
-    """
-    probes = (
-        (None, None, None, None, None),
-        (None, None, None),
-        (None, None),
-        (),
-        # This was the signature in the proven older Equipment-ID formatter.
-        # Some E3 COM builds fill lists and only return a status integer.
-        ([0.0], [0.0], [""], [""], [""]),
-    )
-    sheet = int(block['sheet_id'])
-    options = []
-    raw_preview = []
-    for args in probes:
-        try:
-            raw = text.GetSchemaLocation(*args)
-        except Exception:
-            continue
-        if len(args) >= 2 and isinstance(args[0], list) and isinstance(args[1], list):
-            raw_preview.append('out-arrays=' + repr((args[0], args[1]))[:140])
+        import pythoncom
+        import win32com.client as w
+        for flags, seed in ((pythoncom.VT_BYREF | pythoncom.VT_VARIANT, None),
+                            (pythoncom.VT_BYREF | pythoncom.VT_ARRAY | pythoncom.VT_I4, [])):
             try:
-                ax, ay = float(args[0][0]), float(args[1][0])
-                if (math.isfinite(ax) and math.isfinite(ay) and
-                    block['left'] - 2 <= ax <= block['right'] + 2 and
-                    block['bottom'] - 2 <= ay <= block['top'] + 2):
-                    options.append((1, ax, ay))
-            except (IndexError, TypeError, ValueError):
-                pass
-        raw_preview.append(repr(raw)[:140])
-        if not isinstance(raw, (tuple, list)):
-            continue
-        nums = []
-        for number in raw:
-            try:
-                nums.append(float(number))
-            except (TypeError, ValueError):
-                nums.append(None)
-        candidates = []
-        if len(nums) >= 3 and nums[0] is not None and int(nums[0]) == sheet:
-            candidates.append((0, nums[1], nums[2]))
-        if len(nums) >= 4 and nums[1] is not None and int(nums[1]) == sheet:
-            candidates.append((0, nums[2], nums[3]))
-        if len(nums) >= 3 and nums[0] in (-1, 0, 1):
-            candidates.append((2, nums[1], nums[2]))
-        if len(nums) >= 2:
-            candidates.append((3, nums[0], nums[1]))
-        for priority, x, y in candidates:
-            if x is None or y is None or not (math.isfinite(x) and math.isfinite(y)):
-                continue
-            if (block['left'] - 2 <= x <= block['right'] + 2 and
-                    block['bottom'] - 2 <= y <= block['top'] + 2):
-                options.append((priority, x, y))
-        if options and min(op[0] for op in options) == 0:
-            break
-    if not options:
-        raise RuntimeError(f"Block {block['id']}: cannot read absolute schematic "
-                           f"text position. GetSchemaLocation returned: {raw_preview[:3]}. "
-                           'No text formatting applied; attribute display changes may already exist.')
-    options.sort(key=lambda item: item[0])
-    best_priority = options[0][0]
-    distinct = {(round(x, 4), round(y, 4)) for p, x, y in options if p == best_priority}
-    if len(distinct) > 1:
-        raise RuntimeError(f"Block {block['id']}: multiple possible coordinates "
-                           f"from E3 text getter: {sorted(distinct)}. No changes made.")
-    return {'x': options[0][1], 'y': options[0][2]}
-
-
-def inspect_block_texts(prj, blocks):
-    """Read only texts owned by the selected CABBLOCK symbols (not their pins)."""
-    all_texts = {}
-    sym = prj.CreateSymbolObject()
-    txt = prj.CreateTextObject()
-    attr = prj.CreateAttributeObject()
-    for block in blocks:
-        if not select_id(sym, block['id']):
-            raise RuntimeError(f"Selected block {block['id']} disappeared.")
-        ids = get_ids(sym.GetTextIds)
-        # In the original working Equipment script, attr.GetTextIds(None) was
-        # the *reliable* lookup; it can expose texts that a bare type scan misses.
-        extra = []
-        for aid in get_ids(sym.GetAttributeIds):
-            if select_id(attr, aid):
-                extra.extend(get_ids(attr.GetTextIds))
-        ids = list(dict.fromkeys(ids + extra))
-        entries = defaultdict(list)
-        for tid in ids:
-            if not select_id(txt, tid):
-                continue
-            try:
-                typ = int(txt.GetType())
+                arg = w.VARIANT(flags, seed)
+                result = fn(arg)
+                values = ids_from_return(result) or ids_from_return([arg.value])
+                if values:
+                    return values
             except Exception:
                 continue
-            raw_val = optional_call(txt, 'GetText')
-            value = '' if raw_val is None else str(raw_val)
-            hint = text_type_hint(txt)
-            entries[typ].append({'id': tid, 'type': typ, 'value': value, 'hint': hint})
-        all_texts[block['id']] = entries
-        log(f"BLOCK {block['id']} (sheet {block['sheet_id']}): "
-            f"{len(ids)} attached text IDs; {len(entries)} text types")
-        for typ in sorted(entries):
-            for e in entries[typ]:
-                log(f"  TYPE {typ:<5} ID {e['id']:<10} "
-                    f"VALUE={e['value'][:120]!r} HINT={e['hint'][:90]!r}")
-    return all_texts
+    except ImportError:
+        pass
+    return []
 
 
-def available_method(obj, name):
+def com_method_names(obj):
+    names = set(n for n in dir(obj) if not n.startswith('_'))
     try:
-        return callable(getattr(obj, name))
+        info = obj._oleobj_.GetTypeInfo()
+        attr = info.GetTypeAttr()
+        for i in range(attr.cFuncs):
+            desc = info.GetFuncDesc(i)
+            name_list = info.GetNames(desc.memid)
+            if name_list:
+                names.add(str(name_list[0]))
     except Exception:
-        return False
+        pass
+    return sorted(names)
 
 
-def normalize_attribute_name(value):
-    """Compare names ignoring punctuation/spacing, NOT typo correction."""
-    return ''.join(ch.lower() for ch in str(value or '') if ch.isalnum())
+def optional(obj, method, *args):
+    try:
+        return getattr(obj, method)(*args)
+    except Exception:
+        return None
 
 
-# The old CABBLOCK maker actually spells this `Identifacation`.
-EQUIPMENT_NAMES = {
-    'equipmentidentifacation', 'equipmentidentification',
-    'equipmentid', 'equipmentidentifier', 'additionalpartid',
-    'additionalpart', 'additionalpartnumber',
-}
-SABER_NAMES = {'saberparam1', 'saberparameter1'}
+def open_e3():
+    try:
+        import e3series
+        app = e3series.Application()
+        job = app.CreateJobObject()
+        if job.GetId():
+            return app, job, 'official e3series wrapper'
+    except Exception as exc:
+        log(f'e3series wrapper unavailable: {exc}')
+    import win32com.client
+    app = win32com.client.Dispatch('CT.Application')
+    job = app.CreateJobObject()
+    if not job.GetId():
+        raise RuntimeError('No active E3 project.')
+    return app, job, 'pywin32'
 
 
-def read_block_attribute_links(prj, blocks):
-    """Get the authoritative Attribute->Text ID bindings used by block_maker.
-
-    A text's type 1000 is generic; the *parent Attribute.GetName()* tells
-    us whether it is Equipment or Saber. All operations here are read-only.
-    """
-    sym = prj.CreateSymbolObject()
-    attr = prj.CreateAttributeObject()
-    result = {}
-    for block in blocks:
-        bid = block['id']
-        if not select_id(sym, bid):
-            raise RuntimeError(f'CABBLOCK {bid} unavailable during attribute scan.')
-        found = {'saber': [], 'equipment': [], 'other': []}
-        for aid in get_ids(sym.GetAttributeIds):
-            if not select_id(attr, aid):
-                continue
-            name = str(optional_call(attr, 'GetName') or '').strip()
-            normalized = normalize_attribute_name(name)
-            tids = get_ids(attr.GetTextIds)
-            record = {'id': aid, 'name': name, 'text_ids': tids}
-            if normalized in SABER_NAMES:
-                role = 'saber'
-            elif normalized in EQUIPMENT_NAMES:
-                role = 'equipment'
-            else:
-                role = 'other'
-            found[role].append(record)
-            log(f'  BLOCK {bid} ATTRIBUTE {aid}: name={name!r} '
-                f'role={role}, linked display text IDs={tids}')
-        result[bid] = found
+def obj(job, category, oid):
+    maker = {'symbol': 'CreateSymbolObject', 'pin': 'CreatePinObject',
+             'device': 'CreateDeviceObject'}[category]
+    result = getattr(job, maker)()
+    result.SetId(int(oid))
     return result
 
 
-def _one_attribute(block_id, links, role):
-    """Never silently choose between duplicate attribute owners."""
-    choices = links[block_id][role]
-    if len(choices) > 1:
-        raise RuntimeError(
-            f'CABBLOCK {block_id}: {len(choices)} {role} attributes: '
-            f'{[(x["id"], x["name"]) for x in choices]}. '
-            'Resolve duplicates in E3 before writing anything.')
-    return choices[0] if choices else None
-
-
-def ensure_header_attribute_displays(prj, blocks):
-    """Materialize *bound* texts using the working DisplayAttribute method.
-
-    The real old script did:
-      aid = sym.AddAttributeValue('Equipment Identifacation', value)
-      attr.SetId(aid)
-      attr.DisplayAttribute()
-      attr.GetTextIds(None)
-    We use the existing attributes where possible, and never add/free-type an
-    unrelated text object or overwrite existing nonblank data.
-    """
-    sym = prj.CreateSymbolObject()
-    attr = prj.CreateAttributeObject()
-    linked = read_block_attribute_links(prj, blocks)
-    for block in blocks:
-        bid = block['id']
-        if not select_id(sym, bid):
-            raise RuntimeError(f'CABBLOCK {bid} disappeared before attribute display.')
-        original_value = get_symbol_saber_value(sym, allow_missing=True)
-        if original_value is None:
-            # A missing symbol attribute is not the same as blank: we can add
-            # it, but must confirm its actual E3 Attribute object afterward.
-            original_value = ''
-        if not original_value:
-            set_symbol_saber_xxx(sym, bid)
-        saber = _one_attribute(bid, linked, 'saber')
-        if saber is None:
-            # Setting a property can return a value without creating an
-            # attribute on this *placed symbol*. The working script creates
-            # its attribute through AddAttributeValue and gets its ID.
-            if not select_id(sym, bid):
-                raise RuntimeError(f'CABBLOCK {bid} disappeared.')
-            try:
-                added = sym.AddAttributeValue(SABER_ATTRIBUTE_NAME,
-                    get_symbol_saber_value(sym) or 'XXX')
-                log(f'  BLOCK {bid}: AddAttributeValue({SABER_ATTRIBUTE_NAME!r}) returned {added!r}')
-            except Exception as exc:
-                log(f'  BLOCK {bid}: AddAttributeValue unavailable/failed: {exc}')
-            linked = read_block_attribute_links(prj, blocks)
-            saber = _one_attribute(bid, linked, 'saber')
-        if saber is None:
-            raise RuntimeError(
-                f'CABBLOCK {bid}: no actual symbol Attribute object named '
-                f'{SABER_ATTRIBUTE_NAME!r} or "Saber Parameter 1" found. '
-                'GetAttributeValue alone does not produce visible text. '
-                'Check whether Saber Parameter 1 is defined for SYMBOLS in '
-                'your E3 project and check the ATTRIBUTE log. Changes made '
-                'so far may include setting blank saberParam1 to XXX.')
-
-        # Requery each owner immediately before displaying. Never trust an
-        # old COM object reference after selecting another symbol/attribute.
-        for role in ('saber', 'equipment'):
-            item = _one_attribute(bid, linked, role)
-            if item is None:
-                if role == 'equipment':
-                    log(f'  BLOCK {bid}: no named Equipment attribute in symbol GetAttributeIds; '
-                        'resolver may use the single preexisting type-1000 text as a fallback.')
-                continue
-            if not select_id(attr, item['id']):
-                raise RuntimeError(f'CABBLOCK {bid}: {role} attribute {item["id"]} disappeared.')
-            before_ids = get_ids(attr.GetTextIds)
-            if before_ids:
-                log(f'  BLOCK {bid}: {role} already displayed via attribute {item["id"]}: {before_ids}')
-                continue
-            log(f'  BLOCK {bid}: {role} attribute {item["id"]} has no text; calling DisplayAttribute()')
-            try:
-                response = attr.DisplayAttribute()
-            except Exception as exc:
-                raise RuntimeError(
-                    f'CABBLOCK {bid}: could not display {role} attribute '
-                    f'{item["name"]!r}: {exc}') from exc
-            # A returned success code alone is not enough; the actual
-            # attribute's *linked text IDs* are the verification.
-            if not select_id(attr, item['id']):
-                raise RuntimeError(f'CABBLOCK {bid}: {role} attribute vanished after display.')
-            after_ids = get_ids(attr.GetTextIds)
-            log(f'  BLOCK {bid} {role}: DisplayAttribute returned {response!r}; '
-                f'attribute-linked texts now {after_ids}')
-            if not after_ids:
-                if role == 'saber':
-                    log(f'  BLOCK {bid}: E3 did NOT create Saber text for attribute '
-                        f'{item["id"]}; preserving attribute value and formatting '
-                        'the other 3 header rows. No unrelated text substituted.')
-                else:
-                    # Equipment Identification is already present in the user's
-                    # sample. A missing Equipment label must never be confused
-                    # with Saber or silently replaced with generic text.
-                    raise RuntimeError(
-                        f'CABBLOCK {bid}: Equipment Identification attribute '
-                        f'{item["id"]} has no visible text; DisplayAttribute() '
-                        f'returned {response!r}. Refusing unsafe substitution.')
-    return read_block_attribute_links(prj, blocks)
-
-
-def get_symbol_saber_value(sym, allow_missing=False):
-    try:
-        raw = sym.GetAttributeValue(SABER_ATTRIBUTE_NAME)
-    except Exception as exc:
-        if allow_missing:
-            log(f'  Missing/inaccessible Saber attribute: {type(exc).__name__}: {str(exc)[:120]}')
-            return None
-        raise RuntimeError(f'Cannot read existing symbol saberParam1: {exc}') from exc
-    if raw is None:
-        return ''
-    if isinstance(raw, (tuple, list)):
-        if len(raw) != 1 or not isinstance(raw[0], str):
-            raise RuntimeError(f'Ambiguous symbol GetAttributeValue response: {raw!r}')
-        raw = raw[0]
-    return str(raw).strip()
-
-
-def preflight_saber_attributes(prj, plan):
-    """Validate symbol-only Saber property access before changing any E3 data."""
-    sym=prj.CreateSymbolObject()
-    for item in plan:
-        if item['field'] != 'saber': continue
-        if not select_id(sym,item['block']['id']):
-            raise RuntimeError(f"Block {item['block']['id']} disappeared.")
-        attr=get_symbol_saber_value(sym,allow_missing=False)
-        item['before_attribute_value']=attr
-        item['set_xxx']=not attr.strip() and not item['before_value'].strip()
-        item['new_attr_needed']=False
-        if item['set_xxx'] and not (available_method(sym,'SetAttributeValue') or
-                                   available_method(sym,'AddAttributeValue')):
-            raise RuntimeError('No symbol-level Saber attribute setter in this E3 build.')
-        log(f"  Block {item['block']['id']} saberParam1={attr!r}; "
-            f"visible type {item['type']}={item['before_value']!r}; "
-            f"set XXX={item['set_xxx']}")
-    return plan
-
-
-def preflight_positions(prj,plan):
-    txt=prj.CreateTextObject()
-    for item in plan:
-        if not select_id(txt,item['id']):
-            raise RuntimeError(f"Text {item['id']} disappeared before formatting.")
-        item['before']=get_text_xy(txt,item['block'])
-        item['move_needed']=(abs(item['before']['x']-item['x'])>POSITION_TOLERANCE or
-                             abs(item['before']['y']-item['y'])>POSITION_TOLERANCE)
-        log(f"  Block {item['block']['id']} {FIELD_LABELS[item['field']]} "
-            f"text {item['id']}: {item['before']} -> "
-            f"({item['x']:.3f},{item['y']:.3f}) move={item['move_needed']}")
-    return plan
-
-
-def old_function_nodes_to_hide(blocks, all_texts, plan):
-    """Hide ONLY existing Device Function display nodes on selected blocks.
-
-    The old formatter left these visible at the second header row. We do not
-    modify their text content, property value, type, position or formatting.
-    """
-    target_ids = {item['id'] for item in plan}
-    old_nodes = []
-    seen = set()
-    for block in blocks:
-        for record in all_texts[block['id']].get(14, []):
-            tid = record['id']
-            if tid in target_ids or tid in seen:
-                raise RuntimeError(
-                    f'Text {tid} appears in multiple selected blocks or overlaps '
-                    'a target header text; batch refused before changes.'
-                )
-            seen.add(tid)
-            old_nodes.append({'id': tid, 'block': block, 'value': record['value']})
-    log(f'  OLD DEVICE FUNCTION LABELS: {len(old_nodes)} will be hidden '
-        '(their values and E3 attributes are not changed).')
-    return old_nodes
-
-
-def _same_xy(txt, block, x, y):
-    try:
-        actual = get_text_xy(txt, block)
-        return (abs(actual['x'] - x) <= POSITION_TOLERANCE and
-                abs(actual['y'] - y) <= POSITION_TOLERANCE)
-    except Exception:
-        return False
-
-
-def move_text(txt, item):
-    """Only try signatures already used by the working signal relocator."""
-    method = getattr(txt, 'SetSchemaLocation', None)
-    if method is None:
-        raise RuntimeError('E3 Text.SetSchemaLocation is unavailable.')
-    old = item['before']
-    b = item['block']
-    attempts = (
-        ((item['x'], item['y']), (old['x'], old['y']), 'x,y'),
-        ((b['sheet_id'], item['x'], item['y']),
-         (b['sheet_id'], old['x'], old['y']), 'sheet,x,y'),
-    )
-    errors = []
-    for new, rollback, signature in attempts:
-        try:
-            result = method(*new)
-        except Exception as exc:
-            errors.append(f'{signature}: {exc}')
+def symbol_location(sym):
+    # Confirmed in the user's existing working CABBLOCK header formatter:
+    # e3Symbol.GetSchemaLocation(None,None,None,None,None) -> (sheet,x,y,...).
+    attempts = ((None, None, None, None, None), (), (None, None, None))
+    for args in attempts:
+        r = optional(sym, 'GetSchemaLocation', *args)
+        if not isinstance(r, (tuple, list)) or len(r) < 3:
             continue
-        if _same_xy(txt, b, item['x'], item['y']):
+        try:
+            sheet, x, y = int(r[0]), float(r[1]), float(r[2])
+            if sheet > 0 and all(math.isfinite(v) for v in (x, y)):
+                return (sheet, x, y)
+        except (ValueError, TypeError):
+            continue
+    return None
+
+
+def pin_location(pin):
+    # Some versions give individual PIN coordinates even for multi-pin symbols.
+    # This is only used as a READ of source pins; do not move logical pins.
+    for args in ((None, None, None, None, None), (), (None, None, None)):
+        r = optional(pin, 'GetSchemaLocation', *args)
+        if isinstance(r, (tuple, list)) and len(r) >= 3:
+            try:
+                v = (int(r[0]), float(r[1]), float(r[2]))
+                if v[0] > 0 and math.isfinite(v[1]) and math.isfinite(v[2]):
+                    return v
+            except (ValueError, TypeError):
+                pass
+    return None
+
+
+def symbol_area(sym):
+    r = optional(sym, 'GetPlacedArea', None, None, None, None)
+    if isinstance(r, (tuple, list)) and len(r) >= 5:
+        try:
+            a = tuple(float(v) for v in r[1:5])
+            if int(r[0]) > 0 and a[2] > a[0] and a[3] > a[1]:
+                return a  # left,bottom,right,top
+        except (TypeError, ValueError):
+            pass
+    return None
+
+
+def selected(job):
+    return {'symbols': get_ids(job, 'GetSelectedSymbolIds'),
+            'pins': get_ids(job, 'GetSelectedPinIds'),
+            'blocks': get_ids(job, 'GetSelectedBlockIds')}
+
+
+def selection_symbol(job, sel):
+    sids = sel['symbols']
+    if len(sids) == 1:
+        return sids[0]
+    if not sids and len(sel['pins']) == 1:
+        p = obj(job, 'pin', sel['pins'][0])
+        sid = optional(p, 'GetSymbolId')
+        if isinstance(sid, int) and sid > 0:
+            return sid
+        sids = get_ids(p, 'GetSymbolIds')
+        if len(sids) == 1:
+            return sids[0]
+    raise ValueError('Select exactly ONE placed E3 symbol or individual pin, then press the button.')
+
+
+def is_block(sym):
+    flag = optional(sym, 'IsBlock')
+    typ = optional(sym, 'GetSymbolType')
+    hints = ' '.join(str(optional(sym, name) or '') for name in
+                     ('GetName', 'GetSymbolTypeName', 'GetSymbolName')).upper()
+    return flag in (True, 1) or typ == 4 or 'CABBLOCK' in hints
+
+
+def source_or_block(job, sid, sel):
+    s = obj(job, 'symbol', sid)
+    loc = symbol_location(s)
+    if not loc:
+        raise RuntimeError(f'Symbol {sid}: E3 did not return its sheet/X/Y.')
+    area = symbol_area(s)
+    did = optional(s, 'GetDeviceId') or optional(s, 'GetOwnerDeviceId')
+    # In E3 a CABBLOCK is often a device, not a standalone Block object.
+    if not (isinstance(did, int) and did > 0) and len(sel['blocks']) == 1:
+        did = sel['blocks'][0]
+    return {'sid': sid, 'did': did if isinstance(did, int) and did > 0 else None,
+            'sheet': loc[0], 'x': loc[1], 'y': loc[2], 'area': area,
+            'block': is_block(s)}
+
+
+def gather_markers(job, parent):
+    """View-scoped connector pin markers; never scan the entire sheet.
+
+    Only connector symbols owned by the selected parent device/block are used.
+    If multiple placed block views share one device, accept the symbols near
+    this placed view only. A connector GROUP is never a movable single pin.
+    """
+    root = obj(job, 'symbol', parent['sid'])
+    owner = obj(job, 'device', parent['did']) if parent['did'] else None
+    connector_ids = set()
+    for thing in (root, owner):
+        if thing is None: continue
+        for name in ('GetConnectorIds', 'GetBlockConnectorIds'):
+            connector_ids.update(get_ids(thing, name))
+
+    symbols = set()
+    pin_candidates = set()
+    for thing in (root, owner):
+        if thing is None: continue
+        pin_candidates.update(get_ids(thing, 'GetPinIds'))
+    for cid in connector_ids:
+        try:
+            c = obj(job, 'device', cid)
+            symbols.update(get_ids(c, 'GetSymbolIds'))
+            pin_candidates.update(get_ids(c, 'GetPinIds'))
+        except Exception as exc:
+            log(f'Connector device {cid} cannot be read: {exc}')
+    for pid in pin_candidates:
+        try:
+            p = obj(job, 'pin', pid)
+            symbols.update(get_ids(p, 'GetSymbolIds'))
+            psid = optional(p, 'GetSymbolId')
+            if isinstance(psid, int) and psid > 0:
+                symbols.add(psid)
+        except Exception:
+            pass
+    # A cable may itself be represented as a set of pin symbols, not a block.
+    if owner and not symbols:
+        symbols.update(get_ids(owner, 'GetSymbolIds'))
+    symbols.discard(parent['sid'])
+    a = parent['area']
+    out = []
+    for sid in sorted(symbols):
+        try:
+            s = obj(job, 'symbol', sid)
+            loc = symbol_location(s)
+            if not loc or loc[0] != parent['sheet']:
+                continue
+            _, x, y = loc
+            if a:
+                if not (a[0]-EDGE_ALLOWANCE <= x <= a[2]+EDGE_ALLOWANCE and
+                        a[1]-EDGE_ALLOWANCE <= y <= a[3]+EDGE_ALLOWANCE):
+                    continue
+            else:
+                # Without a source outline, do not gather distant device views.
+                if math.hypot(x-parent['x'], y-parent['y']) > 8:
+                    continue
+            pids = get_ids(s, 'GetPinIds')
+            if len(pids) == 0:
+                # This could be a multi-pin graphic symbol; it is not safe to
+                # use unless a unique connected pin identifies it.
+                linked = []
+                for pid in pin_candidates:
+                    try:
+                        pp = obj(job, 'pin', pid)
+                        sid_from_pin = optional(pp, 'GetSymbolId')
+                        if sid_from_pin == sid or sid in get_ids(pp, 'GetSymbolIds'):
+                            linked.append(pid)
+                    except Exception:
+                        pass
+                pids = list(dict.fromkeys(linked))
+            if len(pids) != 1:
+                log(f'SKIP candidate symbol {sid}: {len(pids)} pins (not a single-pin symbol)')
+                continue
+            out.append({'sid': sid, 'pid': pids[0], 'x': x, 'y': y,
+                        'sheet': loc[0], 'moveable': True})
+        except Exception as exc:
+            log(f'SKIP linked symbol {sid}: {exc}')
+    # If the selected source symbol has internal pins (one symbol housing
+    # several actual nodes), try reading individual E3 pin coordinates.
+    if not out:
+        for pid in sorted(pin_candidates):
+            try:
+                p = obj(job, 'pin', pid)
+                loc = pin_location(p)
+                if loc and loc[0] == parent['sheet']:
+                    out.append({'sid': None, 'pid': pid, 'x': loc[1],
+                                'y': loc[2], 'sheet': loc[0], 'moveable': False})
+            except Exception:
+                pass
+    return sorted(out, key=lambda x: (-x['y'], x['x'], x['pid']))
+
+
+def side_of_pin(parent, points, pin):
+    a = parent['area']
+    if a:
+        middle = (a[0] + a[2])/2
+    elif len(points) >= 2:
+        middle = (min(p['x'] for p in points) + max(p['x'] for p in points))/2
+        if abs(min(p['x'] for p in points) - max(p['x'] for p in points)) < POINT_TOL:
+            raise ValueError('Unable to distinguish left and right side of cable pins.')
+    else:
+        raise ValueError('Need a source outline or pins on both sides to determine side.')
+    return 'left' if pin['x'] < middle else 'right', middle
+
+
+def pick_edge(points, side, mid, area=None):
+    p = [v for v in points if (v['x'] < mid if side == 'left' else v['x'] >= mid)]
+    if area:
+        edge = area[0] if side == 'left' else area[2]
+        p = [v for v in p if abs(v['x'] - edge) <= EDGE_ALLOWANCE]
+    # Multiple pins at identical Y positions are ambiguous even if ordered.
+    ys = [v['y'] for v in p]
+    if any(abs(ys[i] - ys[j]) <= POINT_TOL for i in range(len(ys)) for j in range(i+1, len(ys))):
+        raise ValueError(f'{side} edge has multiple pins at the same Y position. Cannot determine pin order safely.')
+    return sorted(p, key=lambda v: -v['y'])
+
+
+def make_plan(src, dst, src_side, target_side):
+    if not dst['block']:
+        raise ValueError('Target must be a placed CABBLOCK/block symbol.')
+    if not dst['area']:
+        raise ValueError('Target block outline GetPlacedArea could not be read.')
+    if not src['points']:
+        raise ValueError('No view-scoped source pin symbols were identified.')
+    if not dst['points']:
+        raise ValueError('No view-scoped target pin symbols were identified.')
+    smid = (src['area'][0]+src['area'][2])/2 if src['area'] else (min(p['x'] for p in src['points'])+max(p['x'] for p in src['points']))/2
+    dmid = (dst['area'][0]+dst['area'][2])/2
+    source_pins = pick_edge(src['points'], src_side, smid, src['area'])
+    targets = pick_edge(dst['points'], target_side, dmid, dst['area'])
+    if len(source_pins) < 2:
+        raise ValueError('Need at least TWO cable pins on the selected edge.')
+    if len(targets) < 2:
+        raise ValueError('Need at least TWO individual connector-pin symbols on the block edge.')
+    if any(not p['moveable'] for p in targets):
+        raise ValueError('Target has non-individual pin geometry; cannot reposition as single-pin symbols.')
+    if len({p['sid'] for p in targets}) != len(targets):
+        raise ValueError('Two target pins share a placed symbol. Refusing to move a whole pin group.')
+    src_gaps = [source_pins[i]['y']-source_pins[i+1]['y'] for i in range(len(source_pins)-1)]
+    if any(g <= POINT_TOL for g in src_gaps):
+        raise ValueError('Source pins do not have distinct vertical coordinates.')
+    mode = 'exact offset pattern' if len(source_pins) == len(targets) else 'median pitch (pin counts differ)'
+    offsets = [source_pins[0]['y']-p['y'] for p in source_pins] if len(source_pins)==len(targets) else [i*statistics.median(src_gaps) for i in range(len(targets))]
+    top = targets[0]['y']
+    output = []
+    for pin, off in zip(targets, offsets):
+        new_y = top-off
+        if not (dst['area'][1]-0.03 <= new_y <= dst['area'][3]+0.03):
+            raise ValueError(f'New pin Y={new_y:.3f} is outside target block top/bottom. Block size will NOT be changed.')
+        output.append({'sid': pin['sid'], 'pid': pin['pid'], 'sheet': pin['sheet'],
+                       'x': pin['x'], 'old_y': pin['y'], 'new_y': new_y})
+    if len({round(p['new_y'],3) for p in output}) != len(output):
+        raise ValueError('Calculated overlapping target pins. Aborting.')
+    return {'source_count': len(source_pins), 'target_count': len(targets),
+            'mode': mode, 'source_pitch': statistics.median(src_gaps),
+            'target_side': target_side, 'source_side': src_side,
+            'source': src, 'target': dst, 'changes': output}
+
+
+def move_symbol(job, item):
+    """Only attempt absolute location setters, verify new position; fail closed.
+
+    No e3Symbol move-by-offset calls, no unplace/re-place, and no E3 geometry
+    resize calls. COM moves connected objects only as E3 normally permits.
+    """
+    s = obj(job, 'symbol', item['sid'])
+    old = symbol_location(s)
+    if not old or old[0] != item['sheet'] or abs(old[1]-item['x'])>POINT_TOL or abs(old[2]-item['old_y'])>POINT_TOL:
+        raise RuntimeError(f'Pin symbol {item["sid"]} has changed since Preview. Refresh before applying.')
+    if abs(item['new_y']-item['old_y']) <= POINT_TOL:
+        return 'already aligned'
+    # SetSchemaLocation is an E3 text method in previous scripts; symbol
+    # implementations may or may not expose it. Do NOT presume it exists.
+    attempts = [ ('SetSchemaLocation', (item['x'], item['new_y']),
+                 (item['x'], item['old_y'])),
+                 ('SetSchemaLocation', (item['sheet'],item['x'],item['new_y']),
+                 (item['sheet'],item['x'],item['old_y'])),
+                 ('SetPosition', (item['x'],item['new_y']),
+                 (item['x'],item['old_y'])) ]
+    errors = []
+    for method, args, rollback in attempts:
+        fn = getattr(s, method, None)
+        if fn is None:
+            continue
+        try:
+            result = fn(*args)
+        except Exception as exc:
+            errors.append(f'{method}{args}: {exc}')
+            continue
+        new = symbol_location(s)
+        if new and new[0]==old[0] and abs(new[1]-item['x'])<=POINT_TOL and abs(new[2]-item['new_y'])<=POINT_TOL:
+            return f'{method}{args}, result={result!r}'
+        # If a COM call succeeded but position was not verified, DO NOT try
+        # another call with a different signature: attempt rollback and stop.
+        try:
+            fn(*rollback)
+            restored = symbol_location(s)
+            if not restored or math.hypot(restored[1]-old[1], restored[2]-old[2]) > POINT_TOL:
+                raise RuntimeError('rollback readback does not match original')
+        except Exception as exc:
+            raise RuntimeError(f'Symbol {item["sid"]}: attempted {method}, location not verified, rollback FAILED: {exc}. Inspect E3 immediately.') from exc
+        raise RuntimeError(f'Symbol {item["sid"]}: {method} did not change position; rolled back. E3 setter needs version-specific mapping.')
+    log('AVAILABLE SYMBOL MOVE/PLACE/SET METHODS: '+repr([n for n in com_method_names(s) if any(k in n.lower() for k in ('move','place','schema','position','location'))]))
+    raise RuntimeError('No verified automatic symbol location setter available for this E3 version. '
+                       'E3 e3Symbol.PlaceInteractively exists for manual moving, but does not give this script an automatic coordinate move. '
+                       f'Tried absolute methods; errors={errors[:3]}')
+
+
+def run_changes(job, plan):
+    done=[]
+    try:
+        for item in plan['changes']:
+            result=move_symbol(job, item)
+            log(f'APPLY pin={item["pid"]} symbol={item["sid"]} {item["old_y"]:.3f}->{item["new_y"]:.3f}: {result}')
+            if result != 'already aligned':
+                done.append(item)
+        return len(done)
+    except Exception:
+        log('WARNING: apply interrupted. Attempting to restore moved symbols.')
+        for item in reversed(done):
+            try:
+                back=dict(item)
+                back['old_y'],back['new_y']=item['new_y'],item['old_y']
+                move_symbol(job,back)
+                log(f'ROLLBACK OK {item["sid"]}')
+            except Exception as exc:
+                log(f'ROLLBACK FAILED {item["sid"]}: {exc}; manually inspect project')
+        raise
+
+
+class App:
+    def __init__(self):
+        self.root=tk.Tk()
+        self.root.title('E3 • Cable → CABBLOCK Pin Spacing')
+        self.root.attributes('-topmost',True)
+        self.root.geometry('775x605+350+85')
+        self.src=None
+        self.src_side=None
+        self.clicked=None
+        self.dst=None
+        self.plan=None
+        self.target_side=tk.StringVar(value='opposite')
+        self.status=tk.StringVar(value='Select the CABLE body/symbol in E3, then click 1.')
+        f=ttk.Frame(self.root,padding=14)
+        f.pack(fill='both',expand=True)
+        ttk.Label(f,text='Match cable-side pin spacing on a CABBLOCK',font=('Segoe UI',13,'bold')).pack(anchor='w')
+        ttk.Label(f,text='In E3: select one object per step, then return here. The E3 window stays usable.').pack(anchor='w',pady=(6,9))
+        buttons=ttk.Frame(f)
+        buttons.pack(fill='x')
+        ttk.Button(buttons,text='1. Capture CABLE',command=self.capture_cable).pack(side='left',padx=(0,7))
+        ttk.Button(buttons,text='2. Capture cable SIDE PIN',command=self.capture_side).pack(side='left',padx=(0,7))
+        ttk.Button(buttons,text='3. Capture BLOCK',command=self.capture_block).pack(side='left')
+        r=ttk.Frame(f)
+        r.pack(fill='x',pady=(12,9))
+        ttk.Label(r,text='Target side:').pack(side='left')
+        ttk.Radiobutton(r,text='Opposite side (mating)',variable=self.target_side,value='opposite',command=self.clear_plan).pack(side='left',padx=(8,10))
+        ttk.Radiobutton(r,text='Same side',variable=self.target_side,value='same',command=self.clear_plan).pack(side='left')
+        ttk.Button(r,text='4. PREVIEW',command=self.preview).pack(side='right')
+        self.output=tk.Text(f,height=23,width=90,wrap='none',font=('Consolas',9))
+        self.output.pack(fill='both',expand=True)
+        self.output.insert('end','Reads actual placed E3 connector pins.\nNo names, signals, IDs, connections, or block dimensions are changed.\n\n')
+        ttk.Label(f,textvariable=self.status,foreground='#334c67',wraplength=745).pack(anchor='w',pady=(8,7))
+        rr=ttk.Frame(f)
+        rr.pack(fill='x')
+        self.apply_button=ttk.Button(rr,text='5. APPLY to block',command=self.apply,state='disabled')
+        self.apply_button.pack(side='left')
+        ttk.Button(rr,text='Clear / start over',command=self.reset).pack(side='left',padx=12)
+        ttk.Button(rr,text='Close',command=self.root.destroy).pack(side='right')
+        self.root.protocol('WM_DELETE_WINDOW',self.root.destroy)
+        self.root.after(100,self.root.lift)
+        self.write('Build: '+VERSION)
+        self.write('Log: '+str(LOGFILE))
+
+    def write(self, s):
+        self.output.insert('end',str(s)+'\n')
+        self.output.see('end')
+        log(str(s))
+
+    def error(self,e):
+        self.write('ERROR: '+str(e))
+        log(traceback.format_exc())
+        self.status.set(str(e))
+        messagebox.showerror('Cable pin spacing',str(e),parent=self.root)
+
+    def clear_plan(self):
+        self.plan=None
+        self.apply_button.configure(state='disabled')
+
+    def reset(self):
+        self.src=self.dst=self.clicked=None
+        self.src_side=None
+        self.clear_plan()
+        self.status.set('Select a CABLE symbol in E3 and capture it.')
+        self.write('--- Cleared; ready for a new cable ---')
+
+    def read_selection(self):
+        app,job,backend=open_e3()
+        sel=selected(job)
+        self.write(f'Selection: {sel} ({backend})')
+        return app,job,sel
+
+    def capture_cable(self):
+        try:
+            app,job,sel=self.read_selection()
+            sid=selection_symbol(job,sel)
+            parent=source_or_block(job,sid,sel)
+            parent['points']=gather_markers(job,parent)
+            if len(parent['points'])<2:
+                raise RuntimeError(f'Cable symbol {sid}: found {len(parent["points"])} single-pin positions. Need at least 2. Check log for linked connector discovery.')
+            self.src=parent
+            self.clicked=self.dst=None
+            self.src_side=None
+            self.clear_plan()
+            self.write(f'CABLE {sid} / device {parent["did"]}: {len(parent["points"])} positioned pins, sheet {parent["sheet"]}, bounds={parent["area"]}')
+            self.status.set('Now select ONE cable pin on the left or right in E3, then click 2.')
+        except Exception as exc:self.error(exc)
+        finally:gc.collect()
+
+    def capture_side(self):
+        try:
+            if not self.src:raise ValueError('Capture the cable first (button 1).')
+            app,job,sel=self.read_selection()
+            candidate_sids=set(sel['symbols']); candidate_pids=set(sel['pins'])
+            matches=[p for p in self.src['points'] if
+                     (p['sid'] in candidate_sids if p['sid'] is not None else False) or p['pid'] in candidate_pids]
+            if len(matches)!=1:
+                raise ValueError('Click one INDIVIDUAL pin on the captured cable. Selection must match one of its linked pin symbols. '+
+                                 f'Got {len(matches)} matching pins out of {len(self.src["points"])}.')
+            self.clicked=matches[0]
+            self.src_side,_=side_of_pin(self.src,self.src['points'],self.clicked)
+            self.clear_plan()
+            self.write(f'CABLE SIDE: {self.src_side.upper()} / clicked pin {self.clicked["pid"]}, Y={self.clicked["y"]:.3f}')
+            self.status.set('Now select ONE CABBLOCK in E3 and click 3.')
+        except Exception as exc:self.error(exc)
+        finally:gc.collect()
+
+    def capture_block(self):
+        try:
+            if not self.src or not self.src_side:raise ValueError('Capture cable and a side pin first.')
+            app,job,sel=self.read_selection()
+            sid=selection_symbol(job,sel)
+            parent=source_or_block(job,sid,sel)
+            if not parent['block']:
+                raise ValueError(f'Symbol {sid} does not report itself as a CABBLOCK.')
+            if sid==self.src['sid']:
+                raise ValueError('Cable and target block must be different symbols.')
+            parent['points']=gather_markers(job,parent)
+            self.dst=parent
+            self.clear_plan()
+            self.write(f'BLOCK {sid} / device {parent["did"]}: {len(parent["points"])} positioned single pins, bounds={parent["area"]}')
+            if parent['points']:
+                sample = obj(job, 'symbol', parent['points'][0]['sid'])
+                methods = [n for n in com_method_names(sample) if any(k in n.lower() for k in ('move','place','schema','position','location'))]
+                self.write(f'PIN SYMBOL COM positioning methods: {methods}')
+            self.status.set('Press PREVIEW. No E3 locations have been changed.')
+        except Exception as exc:self.error(exc)
+        finally:gc.collect()
+
+    def preview(self):
+        try:
+            if not self.src or not self.dst or not self.src_side:
+                raise ValueError('Complete cable, side pin, and block selection (steps 1–3) first.')
+            side=(('left' if self.src_side=='right' else 'right')
+                  if self.target_side.get()=='opposite' else self.src_side)
+            self.plan=make_plan(self.src,self.dst,self.src_side,side)
+            p=self.plan
+            self.write('\n--- READ-ONLY PREVIEW ---')
+            self.write(f'Cable {p["source"]["sid"]} {p["source_side"]}: {p["source_count"]} pins; median pitch {p["source_pitch"]:.4f}')
+            self.write(f'Block {p["target"]["sid"]} {p["target_side"]}: {p["target_count"]} pins; {p["mode"]}')
+            self.write('Pin SID       X        current Y    proposed Y    delta Y')
+            for x in p['changes']:
+                self.write(f'{x["sid"]:10d} {x["x"]:8.3f} {x["old_y"]:12.3f} {x["new_y"]:13.3f} {x["new_y"]-x["old_y"]:10.3f}')
+            self.write('Block outline and pin X coordinates remain unchanged. NOT connected/pluggable automatically.')
+            self.apply_button.configure(state='normal')
+            self.status.set('Review the pin IDs/Y values before choosing APPLY. Save a project copy first.')
+        except Exception as exc:self.clear_plan();self.error(exc)
+
+    def apply(self):
+        if not self.plan:return
+        p=self.plan
+        n=sum(abs(v['new_y']-v['old_y'])>POINT_TOL for v in p['changes'])
+        if not messagebox.askyesno('Apply pin spacing',
+            f'Move {n} individual CABBLOCK connector-pin symbols?\n\n'+
+            'Save a separate project copy first.\nThe block size will not change.\n'+
+            'If E3 does not support a verified symbol-position setter, the script will STOP.',parent=self.root):
             return
         try:
-            method(*rollback)
-        except Exception as exc:
-            raise RuntimeError(f"Text {item['id']} moved but readback failed "
-                               f"and rollback also failed: {exc}; CHECK E3") from exc
-        raise RuntimeError(f"Text {item['id']}: SetSchemaLocation({signature}) "
-                           'returned but new position was not verified. '
-                           f'Rolled back (reported result={result!r}); batch stopped.')
-    raise RuntimeError(f"Text {item['id']}: unable to set position: {errors}")
+            app,job,backend=open_e3()
+            current=source_or_block(job,p['target']['sid'],{'blocks':[]})
+            current['points']=gather_markers(job,current)
+            # Re-generate preview from live target positions to avoid stale edits.
+            refreshed=make_plan(p['source'],current,p['source_side'],p['target_side'])
+            if [(v['sid'],round(v['old_y'],3),round(v['new_y'],3)) for v in refreshed['changes']] != [
+                (v['sid'],round(v['old_y'],3),round(v['new_y'],3)) for v in p['changes']]:
+                raise RuntimeError('Target pin layout changed since preview. Capture block and preview again.')
+            if current['area']!=p['target']['area']:
+                raise RuntimeError('Target block geometry changed since preview. Aborting.')
+            count=run_changes(job,p)
+            self.write(f'APPLY COMPLETE: moved {count} connector pin symbols.')
+            self.status.set(f'Finished: moved {count} pins. Verify E3 visually before saving.')
+            self.clear_plan()
+        except Exception as exc:self.clear_plan();self.error(exc)
+        finally:gc.collect()
 
 
-def checked_style_write(txt, method, value, field):
-    try:
-        result = getattr(txt, method)(value)
-    except Exception as exc:
-        raise RuntimeError(f"Text {field}: {method}({value}) failed: {exc}") from exc
-    # E3 methods sometimes return None on success; negative status means error.
-    if isinstance(result, (int, float)) and result < 0:
-        raise RuntimeError(f"Text {field}: {method}({value}) returned {result}.")
-
-
-def set_symbol_saber_xxx(sym,block_id):
-    """Modify ONLY the selected SYMBOL attribute; verify by reading it back."""
-    if not select_id(sym,block_id):
-        raise RuntimeError(f'Block {block_id} no longer available')
-    before=get_symbol_saber_value(sym)
-    if before:
-        return False
-    errors=[]
-    for name in ('SetAttributeValue','AddAttributeValue'):
-        if not available_method(sym,name): continue
+def main():
+    if '--worker' not in sys.argv:
+        # E3's Add-on launcher may lock selection until its process exits.
+        # Launch detached child, as in the user's working Match Properties GUI.
+        flags=getattr(subprocess,'DETACHED_PROCESS',0)|getattr(subprocess,'CREATE_NEW_PROCESS_GROUP',0)
         try:
-            rv=getattr(sym,name)(SABER_ATTRIBUTE_NAME,'XXX')
-            if type(rv) is int and rv<0:
-                errors.append(f'{name} returned {rv}')
-                continue
-            after=get_symbol_saber_value(sym)
-            if after=='XXX':
-                log(f'  BLOCK {block_id}: {name}(saberParam1, XXX) confirmed')
-                return True
-            errors.append(f'{name} readback={after!r}')
-        except Exception as exc:
-            errors.append(f'{name}: {type(exc).__name__}: {exc}')
-    raise RuntimeError(f'Block {block_id}: cannot set symbol Saber Parameter 1 to XXX; '
-                       + '; '.join(errors))
-
-
-def apply_plan(prj,plan,old_function_labels=None):
-    """Format verified existing linked texts only, not unbound graphics."""
-    txt=prj.CreateTextObject()
-    sym=prj.CreateSymbolObject()
-    completed=0
-    filled=0
+            subprocess.Popen([sys.executable,str(Path(__file__).resolve()),'--worker'],
+                             cwd=str(Path(__file__).resolve().parent),creationflags=flags,
+                             stdin=subprocess.DEVNULL,stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL,
+                             close_fds=True)
+            return
+        except Exception:
+            log('DETACHED GUI LAUNCH FAILED: '+traceback.format_exc())
+            raise
     try:
-        for item in plan:
-            if item['field']=='saber' and item['set_xxx']:
-                filled+=int(set_symbol_saber_xxx(sym,item['block']['id']))
-            if not select_id(txt,item['id']):
-                raise RuntimeError(f"Text {item['id']} disappeared.")
-            field=FIELD_LABELS[item['field']]
-            for method,val in (
-                ('SetVisibility',1), ('SetStyle',BOLD_STYLE),
-                ('SetColour',BLACK_COLOUR),('SetHeight',TEXT_HEIGHT),
-                ('SetAlignment',CENTER_ALIGNMENT)):
-                checked_style_write(txt,method,val,field)
-            if item['move_needed']:
-                move_text(txt,item)
-            completed+=1
-            log(f"  DONE block {item['block']['id']} | {field} text {item['id']}")
-        for old in (old_function_labels or []):
-            if not select_id(txt,old['id']):
-                raise RuntimeError(f"Old function text {old['id']} disappeared")
-            checked_style_write(txt,'SetVisibility',0,'Old Function display')
-        return completed,filled
+        log(f'=== Start {VERSION} ===')
+        gui=App();gui.root.mainloop()
     except Exception:
-        log(f'PARTIAL FAILURE: {completed}/{len(plan)} labels formatted; '
-            'earlier E3 writes may remain. Inspect drawing.')
+        log('FATAL: '+traceback.format_exc())
         raise
 
-
-def prepare_selected_saber_attributes(prj,blocks,preview=False):
-    """Add XXX as a SYMBOL attribute value, without touching unrelated text."""
-    sym=prj.CreateSymbolObject()
-    # Read/verify all target symbols before first write.
-    staged=[]
-    for b in blocks:
-        if not select_id(sym,b['id']): raise RuntimeError(f"Block {b['id']} disappeared")
-        before=get_symbol_saber_value(sym,allow_missing=False)
-        if not before and not (available_method(sym,'SetAttributeValue') or
-                               available_method(sym,'AddAttributeValue')):
-            raise RuntimeError(f"Block {b['id']} has no symbol-level attribute setter")
-        staged.append((b['id'],before))
-        log(f"  PREPARE BLOCK {b['id']} saberParam1: {before!r} -> "
-            f"{'XXX' if not before else '(preserve existing)'}")
-    if preview:
-        log('PREPARE DRY RUN: no E3 changes made')
-        popup(f'Checked {len(staged)} block(s). No values changed.\n'
-              'Start without --dry-run to set blank symbol Saber attributes to XXX.')
-        return 0
-    count=0
-    for bid,before in staged:
-        if not before: count+=int(set_symbol_saber_xxx(sym,bid))
-    log(f'PREPARE COMPLETE: {count} blank symbol attributes set to XXX '
-        f'across {len(staged)} selected block(s).')
-    popup(f'Prepared {len(staged)} selected block(s).\n'
-          f'{count} blank Saber Parameter 1 attributes set to XXX.\n\n'
-          'Next: If the Saber display text is missing, select ONE block and use\n'
-          'Insert > Attribute Text > Saber Parameter 1, with\n'
-          'Bind to selected Cell. The new text may appear as type 1000.\n'
-          'Then run Format Headers (Enter).')
-    return count
-
-
-def inspect_creation_api(prj, blocks, all_texts):
-    """Read-only E3 COM inspection: no attribute writes, no added texts.
-
-    This is intentionally conservative. Some pywin32 COM dispatch objects
-    raise on str()/int(), so this never coerces live COM objects.
-    """
-    sym = prj.CreateSymbolObject()
-    log('SABER CREATION API CAPABILITIES (READ ONLY):')
-    member_names = ('GetAttributeValue', 'GetAttributeIds', 'GetAttributeNames',
-                    'GetAttributeName', 'AddAttributeValue', 'SetAttributeValue',
-                    'AddText', 'AddAttributeText', 'InsertText', 'CreateText',
-                    'AddTextNode', 'GetTextIds')
-    for block in blocks:
-        if not select_id(sym, block['id']):
-            log(f"  BLOCK {block['id']}: unable to bind symbol")
-            continue
-        log(f"  BLOCK {block['id']}:")
-        for name in member_names:
-            log(f'    {name}: {"AVAILABLE" if available_method(sym, name) else "not exposed"}')
-        for attr in (SABER_ATTRIBUTE_NAME, 'Saber Parameter 1'):
-            if not available_method(sym, 'GetAttributeValue'):
-                break
-            try:
-                value = sym.GetAttributeValue(attr)
-                if type(value) in (int, float, str, bool) or value is None:
-                    shown = repr(value)
-                elif type(value) in (tuple, list):
-                    shown = repr([repr(v) if type(v) in (int,float,str,bool) or v is None else f'<{type(v).__name__}>' for v in value])
-                else:
-                    shown = f'<{type(value).__name__} COM object>'
-                log(f'    GetAttributeValue({attr!r}) => {shown}')
-            except Exception as exc:
-                log(f'    GetAttributeValue({attr!r}) => {type(exc).__name__}: {str(exc)[:130]}')
-        types = sorted(all_texts[block['id']])
-        log(f'    Attached text types: {types}')
-    log('The mere existence of AddText does NOT prove its signature or that it creates attribute-linked text.')
-
-
-
-def _required_single(block, types, type_number, label):
-    hits = types.get(type_number, [])
-    if len(hits) != 1:
-        raise RuntimeError(
-            f"CABBLOCK {block['id']}: expected exactly one {label} text "
-            f"(type {type_number}), found {len(hits)}. "
-            "Add the missing field with your existing script or resolve duplicates "
-            "before formatting. NO CHANGES MADE."
-        )
-    return hits[0]
-
-
-def compute_header_anchor(text_obj, block, location_text_id, layout_anchor='location'):
-    """Use the original Location text XY unless top alignment was requested.
-
-    Fails before text moves when a layout would extend below the block.
-    """
-    bid = block['id']
-    if layout_anchor == 'location':
-        if not select_id(text_obj, location_text_id):
-            raise RuntimeError(
-                f'CABBLOCK {bid}: cannot select Location text {location_text_id}.')
-        original_xy = get_text_xy(text_obj, block)
-        cx, first_y = original_xy['x'], original_xy['y']
-        # Never shift a low Location upward behind the user's back.
-        if (cx < block['left'] - BLOCK_LOCATION_TOLERANCE or
-                cx > block['right'] + BLOCK_LOCATION_TOLERANCE or
-                first_y > block['top'] + BLOCK_LOCATION_TOLERANCE):
-            raise RuntimeError(
-                f'CABBLOCK {bid}: Device Location text {location_text_id} is '
-                f'outside the header area at ({cx:.3f}, {first_y:.3f}). '
-                'Reposition it in E3, or choose "Block top". '
-                'No text formatting applied.')
-    elif layout_anchor == 'top':
-        cx = (float(block['left']) + float(block['right'])) / 2
-        first_y = float(block['top']) - TOP_INSET
-    else:
-        raise ValueError(f'Unknown layout_anchor={layout_anchor!r}')
-    final_y = first_y - (len(HEADER_ORDER) - 1) * TEXT_PITCH
-    minimum = float(block['bottom']) + BOTTOM_CLEARANCE
-    if final_y < minimum - POSITION_TOLERANCE:
-        raise RuntimeError(
-            f'CABBLOCK {bid}: header anchored at Location Y={first_y:.3f} '
-            f'cannot fit four rows at {TEXT_PITCH:.2f} pitch: '
-            f'last row Y={final_y:.3f}, required minimum {minimum:.3f}. '
-            'Move Device Location up in E3, or choose "Block top" '
-            'to explicitly use the previous layout. No text formatting applied.')
-    log(f'  BLOCK {bid} HEADER ANCHOR: {layout_anchor} '
-        f'X={cx:.3f}, first Y={first_y:.3f}, last Y={final_y:.3f}')
-    return cx, first_y
-
-
-def resolve_header_texts(prj, blocks, all_texts, saber_type=SABER_TYPE,
-                         equipment_type=EQUIPMENT_TYPE,
-                         designation_type=DEVICE_DESIGNATION_TYPE,
-                         attribute_links=None, layout_anchor='location'):
-    """Use verified attribute->text links, reserving a slot for missing Saber.
-
-    A failed Saber DisplayAttribute() must not prevent Location, Equipment and
-    Designation being formatted. Never relabel Equipment as Saber. A generic
-    unlinked #1000 is not proof of either field's attribute owner.
-
-    Returns: plan, uncertain matches, list of block IDs needing manual Saber
-    insertion. All four layout slots are reserved, even with three labels.
-    """
-    mapping = {'location': LOCATION_TYPE, 'saber': int(saber_type),
-               'equipment': int(equipment_type),
-               'designation': int(designation_type)}
-    if (min(mapping.values()) <= 0 or len(set(mapping.values())) != 4 or
-            set(mapping.values()) & {14, 1010}):
-        raise RuntimeError(f'Protected/overlapping header mapping {mapping}')
-    if attribute_links is None:
-        attribute_links = read_block_attribute_links(prj, blocks)
-    if layout_anchor not in ('location', 'top'):
-        raise ValueError(f'Unknown layout_anchor={layout_anchor!r}')
-    plan, uncertain, pending_saber = [], [], []
-    used = set()
-    text_obj = prj.CreateTextObject()
-    for block in blocks:
-        bid = block['id']
-        fields = all_texts[bid]
-        loc = _required_single(block, fields, LOCATION_TYPE, 'Location')
-        des = _required_single(block, fields, mapping['designation'], 'Device Designation')
-        flat = {record['id']: record for entries in fields.values() for record in entries}
-        selected = {}
-        sources = {}
-        for role in ('saber', 'equipment'):
-            owner = _one_attribute(bid, attribute_links, role)
-            if owner is None:
-                continue
-            attached = list(dict.fromkeys(owner['text_ids']))
-            if len(attached) > 1:
-                raise RuntimeError(
-                    f'CABBLOCK {bid}: {role} attribute {owner["id"]} has '
-                    f'{len(attached)} text IDs, cannot choose one safely.')
-            if attached:
-                tid = attached[0]
-                if tid not in flat:
-                    raise RuntimeError(
-                        f'CABBLOCK {bid}: linked {role} text {tid} not included '
-                        'in symbol/attribute text scan.')
-                selected[role] = flat[tid]
-                sources[role] = f'attribute {owner["id"]}: {owner["name"]}'
-
-        # Some E3 symbol definitions include a dedicated Saber text type.
-        if 'saber' not in selected:
-            specific = fields.get(mapping['saber'], [])
-            if len(specific) == 1:
-                candidate = specific[0]
-                if candidate['id'] not in [x['id'] for x in selected.values()]:
-                    selected['saber'] = candidate
-                    sources['saber'] = 'dedicated type-' + str(mapping['saber'])
-            elif len(specific) > 1:
-                raise RuntimeError(
-                    f'CABBLOCK {bid}: multiple type-{mapping["saber"]} Saber texts.')
-
-        # Equipment must be properly linked when an Equipment Attribute object
-        # is known. Only use type 1000 fallback for legacy blocks without that
-        # Attribute object, and require operator confirmation in that case.
-        if 'equipment' not in selected:
-            equip_owner = _one_attribute(bid, attribute_links, 'equipment')
-            if equip_owner is not None:
-                raise RuntimeError(
-                    f'CABBLOCK {bid}: Equipment Identification attribute '
-                    f'{equip_owner["id"]} exists but no linked text was found. '
-                    'Cannot safely format Equipment; use Insert > Attribute Text.')
-            reserved = {x['id'] for x in selected.values()}
-            options = [t for t in fields.get(mapping['equipment'], [])
-                       if t['id'] not in reserved]
-            if len(options) == 1:
-                selected['equipment'] = options[0]
-                sources['equipment'] = 'unverified type-1000 legacy fallback'
-                uncertain.append({'block_id': bid, 'role': 'Equipment',
-                                  'text_id': options[0]['id'],
-                                  'value': options[0]['value']})
-            else:
-                raise RuntimeError(
-                    f'CABBLOCK {bid}: missing Equipment Identification display. '
-                    f'Found {len(options)} unclaimed type-1000 texts, cannot '
-                    'identify Equipment reliably.')
-
-        if 'saber' not in selected:
-            # Never assign the Equipment display to a missing Saber label.
-            pending_saber.append(bid)
-            log(f'  BLOCK {bid}: SABER DISPLAY MISSING; its row will stay blank. '
-                'Insert bound Saber Attribute Text in E3 and rerun.')
-        else:
-            log(f'  BLOCK {bid}: Saber text {selected["saber"]["id"]} '
-                f'identified from {sources["saber"]}')
-        log(f'  BLOCK {bid}: Equipment text {selected["equipment"]["id"]} '
-            f'identified from {sources["equipment"]}')
-        if 'saber' in selected and selected['saber']['id'] == selected['equipment']['id']:
-            raise RuntimeError(f'CABBLOCK {bid}: Saber and Equipment refer to SAME text.')
-
-        height = float(block['top']) - float(block['bottom'])
-        needed = TOP_INSET + 3 * TEXT_PITCH + BOTTOM_CLEARANCE
-        if height < needed:
-            raise RuntimeError(f'CABBLOCK {bid}: needs {needed:.3f} height; has {height:.3f}.')
-        cx, first_y = compute_header_anchor(
-            text_obj, block, loc['id'], layout_anchor)
-        slots = {'location': loc, 'saber': selected.get('saber'),
-                 'equipment': selected['equipment'], 'designation': des}
-        for i, field in enumerate(HEADER_ORDER):
-            record = slots[field]
-            if record is None:
-                continue  # KEEP this index/spacing open for the missing row.
-            if record['id'] in used:
-                raise RuntimeError(f'Text {record["id"]} mapped twice. No formatting done.')
-            used.add(record['id'])
-            plan.append({'block': block, 'field': field, 'type': record['type'],
-                         'id': record['id'], 'before_value': record['value'],
-                         'x': cx, 'y': first_y - i * TEXT_PITCH})
-    return plan, uncertain, pending_saber
-
-
-def confirm_generic_1000_matches(matches):
-    """Ask before using any generic text without a proven parent attribute."""
-    if not matches:
-        return True
-    from tkinter import Tk, messagebox
-    root = Tk()
-    root.withdraw()
-    root.attributes('-topmost', True)
-    lines = [
-        'These generic type-1000 text nodes have no proven ATTRIBUTE link.',
-        'Inspect the actual E3 display BEFORE confirming formatting:',
-        '',
-    ]
-    for m in matches:
-        lines.append(f'BLOCK {m["block_id"]}: proposed {m["role"]} '
-                     f'text ID {m["text_id"]}, value {m["value"]!r}')
-    lines.extend(['', 'YES = format the proposed text IDs.',
-                  'NO = cancel without formatting (earlier attribute display '
-                  'operations may remain).'])
-    try:
-        return bool(messagebox.askyesno('E3 — Confirm generic attribute texts',
-                                        '\n'.join(lines), parent=root))
-    finally:
-        root.destroy()
-
-
-def run(action='complete', preview=False, saber_type=None,
-        equipment_type=None, designation_type=None, inspect_api=False,
-        layout_anchor='location'):
-    global LOG_STREAM
-    path = choose_log_path()
-    try:
-        LOG_STREAM = open(path, 'a', encoding='utf-8')
-        log('\n' + '=' * 80)
-        log('NEW SABER HEADER BATCH: ' + datetime.now().astimezone().isoformat(timespec='seconds'))
-        log('BUILD: ' + BUILD_ID)
-        log('SOURCE FILE: ' + str(Path(__file__).resolve()))
-        log(f'ACTION: {action}; dry-run={preview}; inspect-api={inspect_api}; anchor={layout_anchor}')
-        log('HEADER: LOCATION > SABER PARAMETER 1 > EQUIPMENT > DEVICE DESIGNATION')
-        log('E3 attribute text can have generic display type 1000; 5002 is not guaranteed.')
-        log('Equipment is REQUIRED. Types 14/1010 never have their values changed.')
-        log('Equipment attribute names include historic typo: Equipment Identifacation.')
-        log('=' * 80)
-        import win32com.client as win32
-        app = win32.gencache.EnsureDispatch('CT.Application')
-        prj = app.CreateJobObject()
-        sht = prj.CreateSheetObject()
-        blocks = get_selected_cabblocks(prj, sht, app)
-        all_texts = inspect_block_texts(prj, blocks)
-        if inspect_api:
-            inspect_creation_api(prj, blocks, all_texts)
-            read_block_attribute_links(prj, blocks)
-            popup('Read-only API check complete.\nLog: ' + str(path))
-            return 0
-        if action == 'prepare':
-            return prepare_selected_saber_attributes(prj, blocks, preview=preview)
-        # Validate actual Location anchors BEFORE touching Saber attributes or labels.
-        initial_txt = prj.CreateTextObject()
-        for block in blocks:
-            loc = _required_single(block, all_texts[block['id']],
-                                   LOCATION_TYPE, 'Location')
-            _required_single(block, all_texts[block['id']],
-                             designation_type if designation_type is not None else
-                             DEVICE_DESIGNATION_TYPE, 'Device Designation')
-            needed = TOP_INSET + 3 * TEXT_PITCH + BOTTOM_CLEARANCE
-            if block['top'] - block['bottom'] < needed:
-                raise RuntimeError(f'CABBLOCK {block["id"]}: too short for header.')
-            compute_header_anchor(initial_txt, block, loc['id'], layout_anchor)
-        if preview:
-            links = read_block_attribute_links(prj, blocks)
-            log('DRY RUN - ATTRIBUTE DISPLAY CHECK:')
-            for block in blocks:
-                bid = block['id']
-                for role in ('saber', 'equipment'):
-                    a = _one_attribute(bid, links, role)
-                    if a is None:
-                        log(f'  BLOCK {bid} {role}: no matching symbol attribute; '
-                            'needs creation/check before formatting.')
-                    elif not a['text_ids']:
-                        log(f'  BLOCK {bid} {role}: attribute {a["id"]} has no visible '
-                            'text; Complete would call DisplayAttribute().')
-                    else:
-                        log(f'  BLOCK {bid} {role}: linked texts {a["text_ids"]}')
-            log('DRY RUN: no E3 changes made; run without --dry-run to '
-                'create missing bound display texts and arrange the header.')
-            popup('Previewed selected attribute bindings. No E3 changes made.\n'
-                  f'Log: {path}\n'
-                  'Run without --dry-run to complete missing label creation.')
-            return 0
-        log('ENSURING ATTRIBUTE-LINKED DISPLAY TEXTS (using old block-maker method):')
-        ensure_header_attribute_displays(prj, blocks)
-        # DisplayAttribute creates brand-new text IDs; always rescan.
-        all_texts = inspect_block_texts(prj, blocks)
-        links = read_block_attribute_links(prj, blocks)
-        plan, generic_matches, pending_saber = resolve_header_texts(
-            prj, blocks, all_texts,
-            saber_type if saber_type is not None else SABER_TYPE,
-            equipment_type if equipment_type is not None else EQUIPMENT_TYPE,
-            designation_type if designation_type is not None else DEVICE_DESIGNATION_TYPE,
-            attribute_links=links, layout_anchor=layout_anchor,
-        )
-        preflight_positions(prj, plan)
-        preflight_saber_attributes(prj, plan)
-        hidden = old_function_nodes_to_hide(blocks, all_texts, plan)
-        log(f'BATCH READY: blocks={len(blocks)}, labels={len(plan)}, '
-            f'generic-attribute candidates={len(generic_matches)}')
-        if generic_matches:
-            log('GENERIC TYPE-1000 FIELD IDENTIFICATION — OPERATOR CONFIRMATION REQUIRED:')
-            for match in generic_matches:
-                log('  ' + repr(match))
-            if not confirm_generic_1000_matches(generic_matches):
-                log('CANCELLED: operator declined generic type-1000 identification. '
-                    'NO E3 WRITES MADE.')
-                popup('Cancelled. No E3 changes made; selection window will reopen.')
-                return 0
-        formatted, filled = apply_plan(prj, plan, hidden)
-        if pending_saber:
-            log(f'PARTIAL SUCCESS: formatted {formatted} existing labels. '
-                f'Saber display missing on {len(pending_saber)} block(s): '
-                f'{pending_saber}. Slot #2 reserved. Device Function value unchanged.')
-            popup(f'Formatted {formatted} existing header texts across '
-                  f'{len(blocks)} CABBLOCK(s).\n\n'
-                  'Saber Parameter 1 still has no visible E3 text on '
-                  f'{len(pending_saber)} block(s): {pending_saber}.\n\n'
-                  'For each affected block: select ONLY the block in E3;\n'
-                  'Insert > Attribute Text > Saber Parameter 1;\n'
-                  'enable Bind to selected Cell; place it anywhere.\n'
-                  'Then select the block and run Complete Headers again.\n\n'
-                  'Do not insert a free Text object or move Equipment ID into this row.\n'
-                  f'Log: {path}\nSave your project after checking the drawing.')
-        else:
-            log(f'SUCCESS: formatted all {formatted} labels on '
-                f'{len(blocks)} selected blocks; blank Saber attributes filled={filled}.')
-            popup(f'Formatted {len(blocks)} CABBLOCK(s): {formatted} labels.\n'
-                  'Location > Saber Parameter 1 > Equipment ID > Designation.\n'
-                  'All labels bold / black / centered / 0.25 / visible.\n'
-                  f'Log: {path}\nSave the E3 project.')
-        return 0
-    except Exception:
-        log('ERROR: ' + traceback.format_exc())
-        raise
-    finally:
-        if LOG_STREAM is not None:
-            LOG_STREAM.close()
-        LOG_STREAM = None
-
-
-def main(argv=None):
-    parser = argparse.ArgumentParser(description='Bulk selected E3 CABBLOCK header formatter.')
-    parser.add_argument('--dry-run', action='store_true', help='Read-only preview.')
-    parser.add_argument('--layout-anchor', choices=('location','top'),
-                        default='location',
-                        help='Initial layout: preserve existing Device Location (default) or block top.')
-    parser.add_argument('--inspect-api', action='store_true', help='Read-only COM capability report.')
-    parser.add_argument('--saber-type', type=int, default=None, help='Explicit display text type, default 5002.')
-    parser.add_argument('--equipment-type', type=int, default=None, help='Equipment display type, default 1000.')
-    parser.add_argument('--designation-type', type=int, default=None, help='Designation text type, default 212.')
-    args = parser.parse_args(argv)
-    print('E3 HEADER FORMATTER BUILD: ' + BUILD_ID, flush=True)
-    print('E3 HEADER FORMATTER FILE: ' + str(Path(__file__).resolve()), flush=True)
-    layout_anchor=args.layout_anchor
-    while True:
-        try:
-            selection = wait_for_block_selection(preview=(args.dry_run or args.inspect_api),
-                                                default_anchor=layout_anchor)
-            action=selection['action']
-            layout_anchor=selection['anchor']
-        except Exception as exc:
-            print('Selection window failed:', exc)
-            return 1
-        if action == 'close':
-            print('CLOSED: no more E3 changes.')
-            return 0
-        try:
-            run(action=action, preview=args.dry_run, saber_type=args.saber_type,
-                equipment_type=args.equipment_type,
-                designation_type=args.designation_type,
-                inspect_api=args.inspect_api, layout_anchor=layout_anchor)
-        except Exception as exc:
-            print('FAILED:', exc)
-            popup(str(exc) + '\n\nThe selection window will reopen.', error=True)
-
-
-if __name__ == '__main__':
-    sys.exit(main())
+if __name__=='__main__':
+    main()
