@@ -1,1311 +1,1296 @@
-"""E3.series - SELECT ONE OR MORE CABBLOCKS, PRESS ENTER, FORMAT SIGNALS.
+"""E3 Tools – self-contained, light-blue launcher for three Zuken E3 utilities.
 
-HOW TO USE
-  1. Run this script. A small instruction window opens.
-  2. Switch to E3.series and select one or more CABBLOCK borders
-     (Ctrl-click additional blocks, or use E3's multi-selection tools).
-  3. The instructions remain on top while you click blocks in E3. Move the
-     instruction window aside if it covers the blocks you need to select.
-     Press Enter in E3, or return to the instruction window and press Enter.
-  4. The script checks ALL selected blocks and their pins/texts BEFORE making
-     any change. Non-block objects in the selection are ignored.
-  5. Blocks with pins on only ONE edge: connection signal numbers move to the
-     opposite INSIDE edge. Blocks with pins on BOTH edges: signals move to the
-     CENTER. Same-row left/right signals use separate middle lanes so their
-     labels do not stack on each other. All become bold (SetStyle(1)) and E3
-     palette colour 4 (SetColour(4)).
-  6. After the result message closes, the instructions return so you can select
-     another batch. Use Close, the window X, or Esc when finished.
+One Python file to distribute. The three ORIGINAL tools are stored as compressed
+source assets, extracted on demand to E3_Tools_Runtime beside this launcher.
+Each runs in its own process (one at a time), so original Windows COM behavior,
+UI event loops, and pin-spacer text-worker subprocesses are preserved.
+No spreadsheet scripts included.
 
-There is no Excel file or manually entered page/connector number.
-Pressing Enter authorizes changes if the full batch preflight succeeds.
-Press Esc, Close, or the window X to exit. Previously completed batches remain formatted.
-
-Optional read-only preview: python E3_Bulk_Signal_Relocator_Centered.py --dry-run
-Optional type override:    python E3_Bulk_Signal_Relocator_Centered.py --type 1007
-
-All blocks must have identifiable pin symbols; ambiguous pin/text ownership
-stops the batch BEFORE any changes. A COM error during execution can still
-leave partial formatting, which is reported in the log.
-Requires Windows, pywin32, tkinter and a running E3.series project.
+Requirements: Windows + Python 3 + tkinter + the dependencies of the selected
+original E3 script, with E3.series running. Test formatting on a saved E3 copy.
+Run: python E3_Tools_Mega_Launcher.py
+Optional smoke test: python E3_Tools_Mega_Launcher.py --self-test
 """
 from __future__ import annotations
-import argparse
-import math
-import sys
-import traceback
-from collections import defaultdict, Counter
-from datetime import datetime
+import base64
+import hashlib
+import json
+import os
 from pathlib import Path
+import shutil
+import subprocess
+import sys
 import tempfile
+import tkinter as tk
+from tkinter import messagebox, filedialog
+from datetime import datetime
+import zlib
 
-SIGNAL_NAME_TYPE = 617
-PIN_NUMBER_TYPE = 203
-DEVICE_DESIGNATION_TYPE = 12
-AUTO_SIGNAL_TYPES = (1007, 7)
-BOLD_STYLE = 1
-SIGNAL_COLOUR = 4
-TEXT_TYPE_DESCRIPTIONS = {
-    7: 'Signal name', 12: 'Device designation', 203: 'Pin number (project)',
-    410: 'Wire number (user-defined)', 617: 'Local signal name (project)',
-    1007: 'Connection signal',
+SUITE_VERSION = "E3-TOOLS-MEGA-V1-2026-11-23"
+COLOR = {
+    "page": "#FFFFFF", "panel": "#F1F7FF", "soft": "#E8F3FF",
+    "border": "#D4E3F4", "accent": "#2381CF", "accent_hover": "#1466B2",
+    "text": "#203B55", "muted": "#627E99", "green": "#267658",
 }
-EDGE_MARGIN = 0.16
-# When left/right pins occupy the same Y row, keep their numbers on separate
-# sides of the block's centerline with a small visible gap. This is deliberate:
-# assigning both the exact same (center_x, y) would stack two independent texts.
-CENTER_LANE_GAP = 0.15
-SAME_ROW_Y_TOLERANCE = 0.06
-CENTER_ALIGNMENT = 2  # E3 text alignment: 1 left, 2 center, 3 right
-MAX_SHEET_TEXT_Y_DISTANCE = 0.16
-MAX_SHEET_TEXT_X_DISTANCE = 1.15
-POSITION_VERIFICATION_TOLERANCE = 0.015
-BLOCK_LOCATION_TOLERANCE = 0.10
-MAX_PIN_EDGE_OFFSET = 0.65
-TOP_Y_TOLERANCE = 1e-4
-COM_MISSING = -2147352572
-LOG_STREAM = None
+TOOLS = {
+    'header': {
+        "title": 'Block Header Formatter',
+        "folder": 'Header_Formatter',
+        "filename": 'header_formatter.py',
+        "description": 'Location, Saber, Equipment ID, Device Designation',
+        "sha256": '45a18c67832612b629d2b8b65d4b205cd0e89d8b5815221a03a57fe8589600ac',
+        "payload": (
+            'c-qZ<Yg60Umgsl?iam7INKP9ENHWu7;#3iE5>FH00_jeQLwSTPgF3?USTf+lP&Gede&PI*yB_-'
+            '~ZP_N>=hp2yhuE_AYwfkyd#$~(vC(_g&f{4U=VE{F{rkh?{a?jR9F5|c7-'
+            'zHFs3_pmZ`(WVM&m3_<6$A9$wEx#w^#5y8|y~7NG789swJkgIL}3I0_}E1aTALuy^j|8W;WR@vT5T!nT)b~F^h}&Y?6y;jQz*a@J'
+            '3uk1^k^)iX;__Y%YdrGW;&~(=3l)eihkF^_&l3E}v+M9dVcqqaw*B;+;5)a7ri9EV_-'
+            'c(`|Ux`_FkYy^SY@=#SuUGEVgC2k~7pjNzX=xt`F&c4IG1#a)soS83c5S6Mo0iD8yz^O@KZ;Z+(9zc=AYjBA5sK|AVtrv(s8u5Sv'
+            'l)!up2ZuB0KyhtY3;=_D0q|w4+F^$Fc>!!Gi(m8-Snv9_5+pA;}k3<na6e8T-+TLo4Xcmh}R)~0%6!8cadVZ7S;x3-'
+            '$*v~wNwg}VvZ1x>TxJt9(_s!erJ5Fdion-'
+            '*XPUCEG3zKhujElXZm?c;9BJPiJvH4Eu@A%^p0IKrv93}%V11$8@gCw7((Lz56n*!#9m~lIWNeXx-Zli_VQvlU{Qru+la5#%20tB'
+            'wG4NHjyz!auxPaD=WqBY$nc|MKP6uwSyW*e2wi+J-k+KrF#1aNl9pkv@}ZEfMSj*iboJjv$QH=@YIh<9S1<Tn;BjAz*`qf5K-'
+            'J}Yhr>VRBXdWXwd;B*oI=&+bashGmA&?r*N&&B;sJd5uTZy%<Bow!Z=+3hq1v=fY&xfmyDn!`e)$#;?CP=uJ<1RL@7>sLYn3Bz1Y'
+            '6`?E=fK-'
+            '1BM+s&$<_*snk}>=SU1swM<4jAQP)3R4^H04~asKJF*Auhs9%q@PaU+eRJKBO9T4FrICGt_pQ$#cvf6*3ubPjK$39LAUNlf5P+Bz'
+            'PN8W@xih$ZU4&*Is9A}RoYS@ZPZq@?f>4iQeP-8dr9@d!DbcN*d4coxT-'
+            'c>z#S2!lr+k3p`_(Mx?~_!zYtK$yfR9!K+(f%rX+r`TQ|ZcQCv7TD4Lm($bU(YeTnH!;i%5D4}!!8clsd5#Sem@dQf>&tJjN5h+p'
+            '2qD7{!Fm;^K)=GR_N#vp`7|0rt7cmqPq7z*9W()?XuL-phdE6VPT2ZOUv~tQ>@LaXIOXXk5fWGvY(5;Cwm8U$0z~s7qd8)yjr=AV'
+            '!!v<nmlsFCnosYe*{CDn??fbH8b$+M45JD5IY#6<k8^-'
+            '6zy$CTkpVCb2*)2t+K1T`Z~@OLY)=u<S%jbWk3WmOlRh3V>;;ZM5dn!5cnpw4VTa>n=5~vHA%j@pB+MA?#>U1*gHGUJFrEX&hzA3'
+            'a+)lF@vKHu{7L_;DquDhaK!B(G{zslo)Mo(CjryD~bQ3&NW5j*+eHIPlD<IxHEKqdhV>pN!SEA4;85aD`2u@p(01;9z$nX5?6vj='
+            'HEA`_EPNVVuOaJg-'
+            '&_57e5uEM4@11Ub>g^rCKY*i~z#;d}`^QI{dq?}9j!!ptws!tyb9;Mp=T*>9zYWg6o%Epf_L~N^AMBl<pZ4E>IqwaQ_CDh;fkj9H'
+            '`I2n(W@~Fl$p3y~iU`DX2n>%Y8W56Mi>S1sGl1sTl8PejZ1n!mm;T9TI30Q(NKvsj^_r%DlKQ|gPR6ju_wX~Y&4^yGcu3=*_gjCz'
+            'H#q2>^*<gtYuwr1X?!_4+xyTP0CK(WAN3B*u-'
+            'jV=2HoKJ6#l}qFi0h`2Q3K&{17XOj$cNGkq6Djhkg%s;}Ae}cm^FjHV`nTmyQSyD?P%)iVP97xTP5i-l~%-'
+            '%F}>Xt5OE^_|!P>eLWw1>h(W<I)~Yz*ualY`se$f=*g>pX`COQ4EjfBJ$~i&R^$Eg`T6nZ!Tw=y?-UTJN6!IW-XHGm{|bOSJpO{v'
+            '!WUujXXoDz380OA*j2=*L)Zq~VcdYm$?;jAx8(S+XS&<kX~2#QKKIYg`bQt((dN$f>wkUqX6Mbn?lef!8yJLjTEey+9)E;kPkVcx'
+            ';mJ`pi5m?#T0pd}!&{KuqU*T3vC-'
+            '@hNK+u>@K#>T)Nf6CKAk0#BE(;Tzoqm1rh7h{%in;mSwl#2gyV3R_@DW`eLn*kih2@1i;cfcHk!V-'
+            'XpFGg;HgfKWu?jA;{ouIkl2izFN{rJNyu=9lyVQPSH1}{BoffcFy=mRDOprBiR&ZTYA5+Pnc)0*4EljS!Y>1WKztp~!e(U<1Q)`G'
+            'Tk(S6vjikRZNtZ88uE{_9lit1hxde5N>p`_j0PYT0PS<u3MBe$J|*JTdllp&90HGq6W>4BjApZF(Il22yT+L_*x+|Tzvpcv@@qlu'
+            ';<6rQVKJYgB%Xp4*R)^(FNbNYwnw}Jbf#I9d$`!XEO(;&Q2%+`ZDG3vSIpaH4^9&RX}T-'
+            'a7|u_{Y|*I<0&*g7oOm=KI6_msg)mfgPTW0CIE0U$-^b-1-'
+            'wK2WzFZxgSpsg@{S0&jl+8dKKpA8j!{R~an9hrru>JxB5+zvqI^k)---}Im_|BzgO7B1sh|@e)J8WPvjHjUQ{Dvd-'
+            'X0r_V(mC)e`skVdG|F@R5Id~hibnMf{`G=>zLe(yu^k`scNEF)P(*`QO}ol2CTi2%-9WUZl@c0>f9eX0cvjcKgST-'
+            'PCZjMheJP-5K(vH`PYEa*Ao2upr}9)^#|50}97rmtV4%Lf0QqT-tV&_VPkf?*OS6^;d^*H~*%F|AlDYx7!8pNZS-kIkI6m!xTz8v'
+            '|VxjummAyenza{a#>IU><R6Eo3>?V#2{gmL7XCP2X98@Z84)Vx&jEWc?Mx_q{%a^mV7SPgz=Wsk<SYK$2rruBZh0GDEyCwU|#Hm}'
+            'Mh73O%ByU#soLc#|SJ7IDjMmon=pR_I+iaMD{4kNP8<NPInUlc<W))^vf3yVr;je~DOI-'
+            'm}=K_>z6tgv4xii#h5IR!l#VsKajiV$5(Oc7L2Qd1Kz=&;XLp;Zf-?T}wMLoG;iFVT7t1dxMZ~-'
+            '9K{2_vKYxjB+<tR?_$~QjZBsNM1VK|?WX3q1ZSHj9xsh2Eafe$MzNdDHubL%d!c5mHz%7-'
+            'YRG?wqR)0}rVlPco?H9TG?+CAjhr46ChaJUUj=v}$qmE&4`A1OpmM}MHi;Sj!ihmG!0uvpw8aL-'
+            '6*R#LM(o&LWLdLYzo6p8N3JQ)QOWMA-'
+            '86FAu`FM??4%6j&=kt3CX4cq9@20{<WPyt~c;0fU$J=>;d3+LI+W%KFJ056)w(OQ5zNkRP_?cwYH2ynf@@7ChQ+qyI6fG}-'
+            '|tCj#hgXiZqnuY|KmLPC--dt8D70!UsrF3?XxnDJ(u}x__E&%v2=EhZ46xl6&fzdZ+Xf=h;FpZ5Oo5H8!`FjGeN=EU3Y>FZLX|Z`'
+            'x?MsHjah>8~lU;0EArtWI!eH4Y5-'
+            '{rBe%L6>lkyE(^`+RPIl!(^Uk~u)t?q;Ya0&Veyi?bY1X;PKh0_y)Pxhm9nH<Et0Z)^0HV>yWpd9&4fq!`VM!Ugv8;;|9iBUTNne'
+            'G(L^tUXYgyW6<Y@Uv+4v-'
+            'O1Ths_1RWDC%se!RnrbHDOscnlRTGewTGPz0cjI~ElDaRW^keFc&fqVld!lQ2@flCE1UMnZN1Q_Cs%I?)a$jRarM<X>yLvm@70Jz'
+            'd58OHZfQVf8hGWrd8`A8qh#24RpiQ>1Eg=xSR#jdeL7+$_-`$=F86OgxH_Utg(WrOf-'
+            'l%Uh(4!Ad2;E<KeF_kyK(!Hel>wCfuiyS_(jD)g)daT}(zs<6&=oa7G=iikA2@l#uQlxPhz#KL`eik<QiVw<P6j&{d**pwzVYgY1'
+            '<{G2Z(_0`OB!9;hg$ytH+q4As?qd)Q*{Bi>(Iteo76xX}ae>Pegg+19Pcn>gL1!?J$@OoM)RMbyBOYr6#~wza7lIB=;;F&Ez+R)m'
+            'p5KH#4_6&U)W^mbvhAfy9G#!KT3m4DtqZln%PxQLzr$;WckBhW0Z&V^55e_6=LtSHfCh{&vSF5n!SA032ff4Id2jH0|LEZOcK~P_'
+            '-Cm8Nj$EgNvy!WEySsoT?GN}V#NJxdXoTka?)ER%OYLa{gc$uF-2h0}P0#|(5XhNj$H8t60gcj-TC~uf*bUfXUPdPIzyJL|qRuX7'
+            '{u_fJ-'
+            '3^1Y_&P&Vd(hh6X$9!Qg9Y%6)X}>SaNdh<xYgR;YA%^jsD}u)+d_IjkukubyUk{C+4tH0+axeecG}{E9hPW(6E7<slD2qH-XUI_I'
+            'VVmp@c(;&q_~R7qZE&f11V#-0v~^L>U{hB{`gQR(II!I^Qv8S(MVHpPOi6-'
+            'v!`V3bvt|Awmqu{$Ti2*R5?*{fKhUtfOKp1gA%LT&zrV5ji+%`5FrCxQNF=^mmR+Vwy*I2UOq(cPW+G*?VxG4{*QTHB;y5;Q((10'
+            'WuML7p2eWxMFlb|+FzI*OuZYxi^<;sbD~tWX1slnII_LNeXw-'
+            '|@ayEX_glaByEr~N{6?5Li4&go9GLWkH*0tkO|DTJYX?XiBr71(goCw#cBpNp$>h6s%>A>0?yexW^Gn3!m(uf0Ugls4;___k(f*f'
+            'ZSRcp(s61nxpyfGSTeXMFbbT6)l8oUZ2M|2MuW>xBc(LFJO;J)7p`^^s${ANG`z%3L;ZndBQ+126)+~RgWgq(5IeyOWVigDhsD~`'
+            'sigpm8cHyzx?#Ctzy$1E$^lwYI>6p-'
+            'tynEv;_4x&(LfBr)_8LP$cNUGO;q(vg`7l#^&(MQ6<jjEVq0gL%l*aHpXbrR5TjT>JHZ$edH7cPruTHcw=>RJj@Gf<|Lsm#zNC7C'
+            '#+Chi1LD2M!QJDwA>7g3}*4wyKoduDs5UACXfhAM5#~>}h7MiX=<_m+jrzC^E3tHTVh-'
+            ';^BxBB&DK#PBFJD7GfjlHdGL4cafr|1y{$rw6|^6$BnJs!HZ(F33py#s>lI2+`{SsYL9lTmRKHaD#w)T7s1R=?MA1`K|-'
+            '2*<(Cj}K2j|FY%7f%Z5X&T|m9mCW-Khz7vH?qZBah(;horwa~20>Q0diJaphh-HEpE5ndbTlgL?uCi!`b}{I+UDf8LggivAsxd`F'
+            'vo1fv1&z|QjXu^_I}~=4FDAoZ<HZ>eVngy3$>?5XAb>&paO+{~p!v^R55H_}Z5in;n%%~uE{c?@h5m^gH*ng+lJ*VS0_!@eMT>hW'
+            'Tf<x#RVq2F{TBeL$*Ngbq~ZHXM=qrz@aoyzEBBFED+k74yN;-$ZPh)XfQp^@91X^X;JOlOC3mT}U_eaxYO96dHpABaR&TJ-gSr+X'
+            '><6{EG|Q%z<nG$^3G)*QD=9S{#d$Hy7TRyAq(EhzN=Abr#?s(1wblM;IyD;SDV!B;AcaHm@k?K54YnnI@1K7<{&LRZ49a!R?`_s9'
+            '4#<3u9iWFvTc0^H%Dj!t=#T75niNoihMA-'
+            ')8ZV9S;*>oK6bcC142L68;DYo>pp9ON|Il1JAElRKl+0kHbkP>S$JmHEBRT+6fq{}jyf~9UdZ7kDiIfp;LP1FwbF(?cutQRjl?g)'
+            '<1*KP`c6JvJl+8i8x|R2VT?Ye-VFRHi43HpD6X_EPTFoUM39DOW@1^atx@}g?+?L5ub>K6@qn%J2b<lBDJ?qugIgKjsUjfDa{v+N'
+            'Fn00w9uSdURlPa}o8go#<P}at$j(DsLP#u$elp8oK$RR-IIbH^kdE+UNn)6Sv9>yU+Cq7`zV*Yc^k+T&1)Y5@6S|wwL0-'
+            '2Z6C@<QwHw>^E!=c8QB;5%6S|9}W4u9YKc1AHgo5P!Uh<X9Asffknk(NQ*GF&3NipgQ70Tu>u(gKXc1++ozQ+ThfSGEqd;_du-uL'
+            'E{FFB6ypNqp9r%Zm5&=Qb$M2dGX!RPfJ0=9sp1-'
+            'M81Da!tRr?^oWeSzS%PHE&z*HEpkKJhHv!sO@)!5y6o1rKqHkpR!e^f{dn1$eyIgUDwHF6TKgyF?`<k?lL^+$ly61IYM=lLTuy+n'
+            'w{jXO{ISz=94tG#0K(sm(fP^m~^2d+tE<OVe)M>W-*)E%!@^8PmPzIqudHA|135PEyOm0V<~<XGVDf%lFB%OhB1B_r?+&RH-'
+            'Y@)|CMhaK5i*Td1tl6r(M82LFouzDqkV+;F*V`DEv`@598pGQ01xpXl?M*BaZO|R2xH?pr__V=U?AkK6!+`${sIqMc2d-'
+            'xe+2|_dowrT5k#?*l6AD`U%dT8zhhG+Lr=po()#$r3}onm&G6yoNuY+`D2g_+eh9TplEp3JM8VFe@&eB_72|f?f=>_+M7sVwpLI^'
+            'Ji6$-eq-6mnS~3OCj74E3G+i&r*4BX%j-'
+            'AQM(uW6Ji2dgzJBv0&_2yxc12)ROo$nP0;6%gOPyS<;qE9iG(x+Va&aG1A^{Qrl}G>#T}Dt}&69N07J=K-'
+            '60@?n%4THDAnUTYipTgXWx*g3BmK70Uw@1-?3kaCqAI-'
+            '5^925Z;a*5S{F{Zq+%0#fqPJBBiV?}#T5AOSy_0@h936}OPkTonduQVF-'
+            'a)TzdUL#LImuZeLA`0a)|D1BjIP)YT(7!NM|+2dK%f(lol>(>W0&6*$@K(*rhfuOc~iQ{Shm{}qgizQ@+y0<)-ogpF-'
+            '+$pfH#no7DcO~QJaJ9Bi!mVRqR4_i2Z?Vhv3099#SbNy#?QcQy3R{TkI8p(oxP^UJ~hW-'
+            'y|a#xjF|^fahp=Y`0$ABH@|+(cY&F5~fis4@kyM`=}hmhRX1o+&H-$CFoM5T-9;BxNYH^C0eUa>Y2q_AK^71OqA__QBw(J8|d?-'
+            'c5hT7S{3U5Jz-%4r3NRchUOAzzb!`BVbW7TF%&`I#5e?M69SIGm{7Ms1E+2vZUttF{Gu_hMU9#(=BsSfXrzfF=?eG7<g~m2C-'
+            '$sUZ9eDtTGFhs(@MPUI&_UTIyftzBehY=O(d~ajr|e_EE6K49`7loZ-@*TeOH|&^uf>wjeR<9U-'
+            'y>)a}@;UK<RJrK+WUAJiLTAa3|nb{KvJ;2b8gZ(fMyRU7!Kqp;H-'
+            'MHQX<YPW*r+IrY%#?!^mSzj^lLu0rDnN2S<Yhksw6?TnG{lt~7Q;?Zpe8}q25fS(M-'
+            'gA>(12=iungRnD63+0i^K}K*e`=YbGbNN(ZG5eI5xs+p}t-'
+            '(qJ714E+Oe!6%;uaEq$Su(DC{5|&sw2WHce6L)J33R~BYYy8J%7ZXo3@QW^Sus3i^s45rWOM*v)Lg^SMa_AAiLS51WjnJ=vUhkgR'
+            'YRWls8@xM|s+=E;cZ(2u>VZpzwhSH+mBPMNbg1H!lBahTqFu`?Y(4uW$rXr~PXD)WYvF+=w1rRvLZdMk?IMG^5xeZe+wJ2N2bz^g'
+            'kXQpY{%Hu*5p;D&%aj?Ke#i${CSgN(&4vm9~&g=Tnt2(h@PA5)QKQ1>)6)z|@7o$c{lAaO|x>itLyeZH7f>Jjf6C<>xD-UPuEsgS'
+            'GRU?4H&_k@WO|3{$07&~wr($)a$;Ya%DYO4vjb%?MV;O-'
+            'p9Cc5&8?DjhD_nwM+exb=4DO0wgGNZ@SO1I(OL%#^~AIUg9+R?MOc2Lnvp8w{FlnT{KxqYP)*qBOfu<@U8noWGrp5@62FW%g99$;'
+            'z=_BE$v+nE^v=pdmIm%&yzTL*bqbinz$87;-6<${+$b#*<-2(J#Tg7;pX(tjb;RoA)h{9-k4-'
+            'Ult%<We|ahy^~48kr*Wr5S|?KTLI`ueRv~Kb{(Kyad3k+U0A4`Gkz_}dQx3d25c=lu{?zte&t8-'
+            '^&rlNvt%mM+&u2^z|Kjx8e1RFK;sz3HZ(cE$(8Ji2eP-~9P5J7p&22&&aF~;Q7(XK?TSZRZ#g6=KpNZrBTFVBCW*F@bO1-'
+            'nLu%b@0@?ay>(bI>2-'
+            'FXYkTWIifK=sofn$5N|Ec$R@4UYcy9|sonV=ZID@HN_IM3&|xSi7CJd4wa?Ax3s)==sOhQ)Bb0m?B<fhD8j0f+-'
+            's_Le08(pqv(>Eh%MCz_jejbk)vM?=CzK%yAX8(OP45cI6(umM+?;!KWi42!^IX3mdy&C=&L5xVp;biU@2(yD3zGSvvX&tGaE3le7'
+            'w46gd)vvMzuKyTH*=l{)qYJEmyJ&4lx$}mV-oby?%EO9WgyLckY8tAB<O;B!h^^CUF*%_w5*!BP}6hPJ~mYT?~psbM!RMJ>!dI~S'
+            'L+L)xK{@K`Y{yOGchA_KvI9S*coum#pWxlK_0I;-y3R`l>g0eEMwC8dNJcW)`lLt!H#Ah0Gl~D-'
+            '$@FxG^FO<VaMnCVb+v?ZKtkt>|NeHre!C8-'
+            'aHxNIgmuME6A!Khv0$!Js`Mjpp=mA<SkReeng6xU&7OY3xm;T(qF~|*00%`Q%ODjcdF+BAKB}pt`F<EQ^0N-'
+            '|DS|*xYMx<ao`Od0dSX{LFSy=s$Opd+O<RwbP(<=0KOM<8AwKa$R$tZp(Ck-yim8&pe&j!<mVlqW}2iMBRSb?jcH<nDdc#35C95_'
+            'eN;~Lg@>_uC72}QVv8Yry`8M|9I5ye=Q+{w$MhYjiIy<+D%d<A6n=2*$!nrJO&udE9&J&?wMtrmBPN0dJ7T)GKo&J13g8Eh|^!S;'
+            '{LU`Ng1)v_6sU;qNsCZI9&vE5ub($2Hiy0fysS1mOW-Lci*n2IPR*(@m*Edl2Y3%yv~bjrSg2ivT)u)k17kV|pAWN6{@xzxFDLN8'
+            '(Zi|Eq2WT{M&T!6W|qxdGR8)U<5iYP#_%vAP8{@(QDJsSUsBs22e6`3}y={?GIAP0ZysOm0g?-'
+            '$V(=uH@HZED<Xc)_G_VuNHuCFQlN!l8C(fUa(l&x_70v<)ro9PL%qy%dJX_lj{p@o3iy3|A#dIBq&8CxdcdkZ`LEC~9xY79n&Qb?'
+            'C3=nIN4M1GRTreUO}%Q#wd$9-?UU7|zg&7Qzm{1}@BB7Wk#fhsK;1wdEMsP1#`fI8V0IO7)LEtL-'
+            '1z)?3gK6JRyCIaHI(mXBBMDv8`m@@GW}J*(_^(NlvBge@{~AH}8or^nzS=-'
+            '9wRN);^JXFHcqCKnHj0LW}899z02q?yfCfk@V+m#B!0D!o-T#VG@&2&w)MRp&y#OjGANflkQ7;ch;y>-'
+            'zvL(s>2dTIU7CQRfY<ygILuVUM=ZW8Cw5NUW`Ht~An*H_jYGwTmf;$w;jtG&Nd9PD*KZoQ*1L^E54`q|d61&e%}J<xGkPYxS*ifg'
+            'hRM56Y3%8+P>qbX5v_e<9K=`#zuUqEiyRYBDa6x2ixTF%nnkE#s0!_zHR%>=G34>MW|tP!T($O3Skg-Zd-'
+            'y%<KWKq=kJnebqW(z&89v`mg#gExlO=Gga$wZ3Fnj&)l2!I>3`+#=3UZsgQ(8XMKgo+2%zjGKCc0m3SGgSHcAFOBJzTjSXeUu(>?'
+            'qW6c4PY1G<qlr^d3<5P7R0?MFKJtzT$OrvOOls_~p79FX3maJXwYIq|q;FU|o?H}32RFI1a+v1l621v=AKp{)h1lT8h#ebfx&}~J'
+            'AF02E336qh7xn}YWW$(8SbEs_oWmWyD*(nkI@rLE_0R)YJZ_9F${eyg$9UO9GctaOU%r{D?wjgOmG6&Vb-CcZ-tR6PlstBO+a;cc'
+            'tBfQgj`{s#!y)iGa^LBgdsfKxtH-6hY{L<?_nrLivL2Z$f<5U0WoPHt5!w>&P&s}z<;V=1-&XgU<f*$LXSwQ5ZT-'
+            '0j4h350iJeZ17THv9$oN~b>Oktt00g6c`&k^}rvG(Dd{j4&Pr$t3B0k*)ov)N3BV=GRmESAz-IlO77=voL_k{RC6PODl`(hp9BGE'
+            'i!dQqUSgvfOi+YL;4DSk@V(vX~fefz>*5j&b=9w?yZEw5@t_SiR0F!lp~9B~BBkpj%R^t5#|0eVePonV27dC%ww8-'
+            'RIRerHdEKvvFxXJ#VfLH|4r}s$86oM&AyU^n((s6n)HIV`g8C5Co);E9A}#Ohhc$ylavI-'
+            '<|VO7MP&}8=rGD2}nsi2<?ZCV?n$Ra<>|)3@+wEyf37swo(K(Y`%cju$R=+oC=&$bPq=o894y3h0CT2tdyHg;~5ugq)L#oimFV%a'
+            'qYKj$YN`XTH2i>rM#u0*A>ODTjX_>P*&lhK4B~{aS>Noa$r6&3HhTrom!*Yph(jWY<kO)vyZyy;KgOjtuIIq$SX=;p8mAh<F0g>='
+            ';P(z9PH=`ui>7w|3*dCIQ8dDhLR+MxcFL{=mz={fp(?XvKUtKt^qw{;1U~;h>c^P@MS{DodHP&&=Yg{{HY2nJx>6$MF>1GvRNAIs'
+            '+>VJR@CjPL=Wq`GpMjeWT<My=+dafa9-dGm&VkI0BU*zvuupkl}E*6#35Rk{Qro5krfA?pdlQm`-'
+            'p#^C|VA)7L;DEB$Do9QHnv8RSjU!OY+dprA^0I+H3%lpTQTl6;YZCQP>uN!q8T(GMpzM0u{O_FKFw<eH>5Vm~!$_Y@Jk!3NqC*I8'
+            '&EJd+7f{jd#f)wKaYD>S{&56mVhD5!v~Zj7m{GJ_!b?RUV*IiQ9O*2p>3Nq$S`3?$X93v-'
+            '<}!@Ns9JNS;%6vKw%eVokAvCdbP!fXh<~vAsRAV={Y=HNZ$Xx9ao6lN^iuaxS%X;8pbjKX3dDvzaAye8dZ?OYlN!ja*~Eu7X}JP%'
+            'fjiEf*;;l$2x{)?@)Qb+m6pJOb(H-e{z|AiH@O)RiCyDS*YdhK|La$x3OFNs^+c)#~Z?uVrPLe&Y-'
+            '_TB7#tmdlT8qfpDvUmM9n+9U)-'
+            'oDVslkmp!w1~MlJZIsZ2YNVP`CfS5bmXD$$`bV*FNgcZD%1i&h@OjJ3q7F#KhH0~UWl$L?W!4JjB%Z-'
+            'P@RTA<;UCBd%dQ(JgqCKvFK=|`Pap)U5KS3GYv!kFccXa?`FSLZ(|5#uOqLnIol<WJMlN7&|9M`ha006BAq(RJoiImEq7|jaVkL6'
+            '7glGj6K~UZz_mxskWEpS|4-aN1O{O4)J9R6ZLNSSWq-'
+            '#Apz~y!|Fojdi2M~SUAn_Ip0+)8t^NK209z>H;KNh2zu+H>ChH~=CUU1=cMbjjq;+USivNO3|pXFvo_Z?K|7f}X`I;RHxgZ6U4u;'
+            'ys|!0~7Y>-'
+            'fP(qqv^*`bwbtOKjAiDi%n;e*Nl6A@Yblohk&wN8da^25Oo#k4IVvJPUp>KWe?H*lNa0EZ<2E8R)P)?hldIf8Y^XFX-GwCQJ%YWJ'
+            'Z#*3aLRkXXKSd>oyJ1VWScgxgoQid;#pXY9)_UiU!D07U!~RK{lEXV|8l`2fX-'
+            't+Q&>@tyouUr~&9eSfa}<kkxT9r!!=Bp3X{lD)4nOGyu|fBfVqvpV+s&JHF2HOpGH=wpTeXxukj3>r09Z%eu5xW;Bzd)0mT&DR-'
+            'Z*14wRRa}pq3AbU$*DLEvHk%Fc3VuqZ>qLe?ez3KR~+T&SF#RUMsd{L08b*B@M2s>VCRCSXgNj;(%M$e@IWknei)RtpDsTh?6I!b'
+            'KwVZMBUbu>q_^GCyY2>~1g#&jc#T3mgijz`G|u<O}rz2h>r))ZLa(6-5SO6g@<8l)6-'
+            'G9{_3r%30mx1W)g>9aqOv)1SST9e&$Dw+{z4$9E^W!#AIaqtYo0<6I_T9bgQ=}AAf#D2WHM&6WBoisEu!>pb6x^#3uaAc88+|^w&'
+            'cl)%cu(=Kw2V9zFlN@Eb<?7Benc_NJ!_PT}Iv`rvA1c5IYPym@VhtJ?hGwuF!3v)%0=E_e^7(Lx2`@vcl1^Mg%G`V%mAnj%cv_uk'
+            '7=TbH*|)NpydbkGHl^!U5<6h`|NRlWi?ARMW;7Bx_9#6h+2N1RIbS{-'
+            '6p!7hD)&b4Qn&{@wd)lGqH=vbwjfNhdyv}HBt1FN6n?FKUry7d6?c7l4s3e_>MFW$WWYWP11e5tC7L>@O6Pf(a;@Uooojl&(>j0^'
+            'ezSxvP!Iqy)mN(W9o^W4AtEIsLO#C&7E#QLDs`>5RmxH-byxCPIm@)1Nuh$Qv9MN<*YpS4>@<zrmhNjtpmccFU)ex%6_X;1Zj_qt'
+            'DA|K|B(v;?vsfx?^!v4S{ha@<jCIMEpM=%I==r#zXuU0<?s{nb(hj{x4r_Og*%&vU<k2`bSb-GEH5IO_i&V<2uP~I<W_~#(*w@f4'
+            '{hr+ld%^-'
+            'j_5}P%&Y$_mm&qg|ra+J{l~wJKdpxE>7wrMLKL!K0`USea%hbtRXWdK7t)M`YA;Q9<CDGTgI1aj~y|qW0Z%QRMmPJQPQ#lo_|EDe'
+            '}JTi#XZBK!#n6tBnb#CwWD!HCx#W;@$%*vX=R*qbBRdhxW9@D8!z+olEizV|8K@~|c`cz`1mElJS4996=tk=I`GCR_CyIK?@fVLt'
+            'rYAEeU7g@vWRgp)a0oJm;c9&XS?E)J(69?`r2aJ<A1yKNjuU(J6)QYN2h}+W%4KCLYS(7o1p4PPyYY5ctlEd#i`wd%vgMnCpHbh2'
+            'M-Nq-SchRi)@bCaX62nIcMQ*yTO6YVdyQ=s%`K3vGPs0u-'
+            'aXgA)ncd2zCZ%EZC}AZ|1y>uKl@Xd;tjpp)H6XqHRcuN@bM;12trNy#D$`df51s2wK~?R9E1g(pO+^JQLkWu}bsw>JlIqF<PnwOP'
+            'gF|*iaaxy8-ACVMd3%8=qZvcB&>K>UCc=|cIsPhAn$Nv;?2Ct@yCjr!=@G3)^wkRQ-'
+            'm^x5B9Eqx*I8ktKqpGn0vh0~lf0<sA@{1>3NsB2x`)wK9=hFK1OU}deg>bK?>x5-'
+            'uEJ<vuM6Gl!r$xjaPQH+F7m>mmzPf!>?z8??ubWsf=_s@a=BUfsNo<}>-'
+            '7rgdy^736;3*!t;fqO9Sz3vdfdSTGb#r~Hn>Sf(m|fLOiWyvNqvI1xRAM)4`c~xeQ~wYps8ncT(|`@a?8bvmOFD}IHqu*?4BFbXe'
+            '7N)F>sxcrC?CSPR@Cy&Tg|2UMtE`-'
+            'UMr8Q<MU(d8drR#FO7L8LHXL#&O4c$>n#XPHOF4<ydk+2!fT@tmBSzj2kFdysPy{lJSwlQIbhbSSVfEu>HCPBa}<BC2YUP_9cg=B'
+            'p5O}*jkne8OE9Z8G{NFlLD1+CLt6RptBK5D4;yaX*A7il!zdb6V(OPNeST#-'
+            '}#p7ks}AidAr(E$x#7|Y)2y?mgS<PdhfhJy?pXJJb5dwR{>kHjVHTih!Dqz2ZC?26(7DFaosGY7BXN%588av7dF5t1ntd&Nf0tpT'
+            'bIBCx3oO_>h^aA!l+qNqVymtA_hIVicqT+QI?WNA(Gydt|(J@VHKvauR}t*%Z-'
+            'R;iB0i9mrHp_xGxpUZoZ)Ai<;&?5L8Rl5f{NLzyoaP8s)LW+D*2$u`H+nN;`Z+rp?b{DkPN6wAd|cLz<eD9I<{@&X5Z1d%Sd!K#%'
+            'g|k*)v%@VvDvonmv#<)>4iQYy*oup3TzGLM<LRc=%?+2f(+M9NBtY!s9?=v_XhPy94^Xf2$|q2=m3{@x5ml;8J{LT|LJu_Rs~oJz'
+            '$hK-'
+            '4B@40$42ZdU#pmp<wkQgzEC^jDva?ln>KtgOn5dJa#1udGkiDxKdNK>F@kt6!U1l7h}N*R`f}iRW)b!6A68sE#qaq?f0qu^>eELC'
+            'WdD!6g5q<<8y}`=5IIzXEC8@Yvngn_x#&&QoY@QFBGwqAB4xN6X>85i#x~w&}AmKK6Qz9cFr((XBnS)=*cNR+n1wzZg%T*kN8|fK'
+            'ys~T6ekg356dQSeMddb0S0uQBi<Y#dxTq^neP{4)}^}LO*q5th%on#b1AtgsBW`h$6RchE`PEN_<<gHX0pI68HNQK2pc9aSp1K5d'
+            '<%{l~c*-x>@Www{2!5!?LGl7k2iVL+)jnjoUcF()Bo#c4J9N*}B_J-'
+            '`YvOKeRf>&<b7Bm3gYde@zUOiXF9LCs~3f(cX7Ol$JPl8IKpp5%D1N<xPaF_6^=ulTc~QS{t36*Gkv(O)`+FCRlh`bGASw>>@K;V'
+            '*SzVmEWw94-9ec+6+S%<FDFOympa_cJ8&Pa3WEawpTgMT~{3!-'
+            'OeB4<Ox?oaUU(kv%4k=1(@ANNO$+vQ@+2#n5YJ@jaYYUdzQ%swsJ>o(>OKg(i&E~$*q`Ynq+91fLdsuX__KNo++0v-(3j-'
+            'W>j7F{JF;9ALIGdajhNS5(3sb8#<34DY!IgSL1{@0B1>f$Il|zRkf;k#<~z2rrs|GsO4(gRm(9TkiRVNk}#{O30Ftc9M2dF9G@y$'
+            'xLb5m<`cd~?s^tYZ<3*js9#|qTWRE0x4?|LTk>WUWUcaxbL8r6Z9bDYAS@fixnziI67<x@reS~X(zO_MMA>IEZ?4YceYVSfx#iEc'
+            '^YPSS!QCasu1d<MlnN;Mb|R`410txup@k<&lVTCHwo#2B6$u55pauNqU~qQ+?XcHu`CIR2X*Qq1n}>V*zYg|~50Af`He2-'
+            '5r<m$}w9b29&j+7+{g0o{>w4KsLAs;Zs@6W;xH#B5?0-DMgd1-Ok{U6{thdDykRNj#>s+;WS3M=|w4@A3O#ZpM-SDN)9vmO_RI0z'
+            '%V)<W6iVziRWGT596-L}T&p}7iO~v-)#Y@uDo`aUhXbn_WM4qDV!$Hv!hSu#%8O^p@0S-|%R0b6@h6Z(u&+QsDEXTpg-syRN?@)Z'
+            '$>mPnO?Ex{@-8{V{dk<MspM->?vU`py_0wUEX%bVgCM|}GoA5=xZPDj)8CZh+-b%00P&Lj6Ox-l)(Y-'
+            'E6Y43F|9=2{59*yWiJ__P1%YjPhS5fRmHXq)wW8V(@Sl=IsF`?1urIaqCG*t#bRmelRB&ZH7L8h%P+PnsuZi#MJYuD6J<$gQMYpg'
+            '6s!j)p^3MZtj>@3qm{t^DYztFc=1&X>p+jjVsU40g`c)N71B-u@im*1>9VNOnaaJG7;&~erIr-'
+            'L9dVB6zHc_itw1Zc`R3qlzNWfGd2fg*?I9#;3T2Wm<Or{Bcsmm><eh0|)+#IcSgmmeN;I5&#ZNDLSXKo0m0daSj5lqoB(wB<S%-'
+            '>SPG;7}C$&~0vxW{b_)e4?~?8GUU_f|jk=L}HgH-'
+            'j)=WV560wgvTfu$!*~R06620A8k9_c!h+6i6XX<T)}bw`11)~D@{Zbx_NTfVXXky$g6P5Y)8XcmggnNx=sfKv0S*?5P9k7Xk|NhA'
+            '3%zCW?2=uy%UCB+<t;1ppPBVACtn(y*TNwiN0mIB_|~ekB{i;<hax&aEBQ1<DHfIK+@j3>MWUbm)gI_YY__Trjq?QO*zX5ZCW%fD'
+            'z!yakcwlg+5sgf1<+<95H+PTP`YNdoEM4^Emef##3&FwqG@7>d|CcUw>p%(#FJ~K%3jE%g_$85Ak0)-'
+            '^pNt2s3+}~M0J_Vr%pI=9aDiZB4~C;mY+6PWSuU6{l40vp>Ws862~bBxuw8m939kri3bDZ+&tru2aYWqX7LR3UsJRwnH+}v*=dwS'
+            'mdH3D_D_3z<ZRkI>5KinlfC!-!~S`{cP2u-wuMYQO?Au8ZHxsh23$a-'
+            'D=!`_**e^m7QE`KRV~V#*IZ`ot=?Q^JnSMVKlJwqt*QD?sU!7_kAV7S6vq|a9c3fCQZ?OZ_SYBc(vbz#Dn7PB7K?XC>bJ4-'
+            'VvzbCOJcpUXxW?Y4@MM18!9&Teglbi@BLwKgUmHPNrDUASl1$Q$*$4HQ{c{kvVBpr@Y=Be2g*b$@M{|WS$L4wqkFiQPu3<WsH{_e'
+            'I4CZ}TWFW;I&9IVg&Mmr1t|h<WLZi{hD)+?wWxH1x7~KRez21~UMd?=9@P%0T%+p?9-'
+            'wI!U?$IV$Ell{yG6Ce!P`gK${4fW1+?LJ*bhzY@;M>jYIde;TAS(KB9`xhTC1U`#&?D)POK@q@5Cbw^ry2hSC6wYZ1<HLwo4_q5c'
+            '{~kmOmJz*{Dur&nf9e-'
+            'AHSrPFf&dfgJr7YXXqiOX+giSV&sPxr&%>K()##71%gTF=_;>@FhCcSa_2r_!0q*I#4%M4LD^ilz|5{FaAefm(ybXSYI+gZfL$T8'
+            '$(~5H!m)o8{hC{4itVyL5+=4K@ClefrPOH6hB0GNibbrBQMKi;8udQIKa@F;uDtVCd1~Vo?xZ^DXG~g0jgXCGSYC;03~gjNNmpUr'
+            'ZAyO5sp%))%d;2MM@j~i`H<K7y4oXG-'
+            '6;#tSZGZ8QuU4DHeoEoXL$;_bClztsLA&n0z4{bOZH5U?jFLGK)|bk<?)f1m3UT<UN|e5T_vVNn0JcQxTow95YE+YWo1}KpO~HNC'
+            'mv5vKN?d&vOy?l;y=m8sTM7$<0-'
+            '4uEgap4uN=PuZog+^um?}XKHYj;ne&q@}9L1fK&t*ijU<HpS<NJ9v0;&A9shXGT#p^Ho*+2M6T&Tg=g4L7FHD6Pcnlyze&be!V|%'
+            '-=Q^Ka0SMTXn?znX$O$~`SF|A;4j;tZN;!Ih#{mB9t&S9h4&GIZLqDenwf=YI;?Q-'
+            'S{3Y8g11(qWFEVFeVjJLXj?tS4Tp3eGx4r=-4<CmQ9AAniVp<!AmwMCEPh%b0kQ7|}2e)0-'
+            'OOo~>ya3AEyuQA(!b}orswWMB+_CTw^%bsc?_fg{_Q829_qf><FU3xyyoX))W!lLmVAT2X$)JC9);n)hMHSvZQzsvI@0ZE<3Cb)k'
+            '*?V-'
+            'p8vo&#P6!Pyr?DwQWD%c0Lj%G1_!R!)EVi5Cg&<ePN&kHR6YFfrB)Og6mS?Vtm*e{1AD^Eee;(`~_Vx(>6!}u)zSW&<dV=eIupSj'
+            '5slqH;FeZIk1nFDX!LCYCDoMx230<zrnS|KEqX9sty#o!W2`JmuqE>icIyT~gXr&UXmH45T{U|@s@0A)?pHb*3AGi5*DXy3M04>h'
+            'C;aO$OlRXjhj~Fq?=(plD_!3<iO$2P#r{hx$C$-V+$uW(6?V7{Qrt{J^wCJAsGR#WW8AJ4S-Aa-'
+            '`lw43L+wH`VvlS2pqb@6cSn9P^Z?x7$54epfgSVpHC}t^@$RW1m_}jrj@2vmvNYdoxU6e8nyL{Wvdcur$cN=l|9c`|vHfIuUMV@A'
+            'yx~rr<E|RGVbIQm#)`vZrmz<wU#YBLqPRt=|*)<<zi0y#^3vgHxF_rU4mDNC(4d%UCjdNYMQ{}G8(qK}=|49`Ll{HO3eSrVP31tJ'
+            'bb2u-T%9HEkn|MJnp>P7|av0Bw2rUz6MT>LRT(LVgyx>(&=sCry-$oORNv63mStEN7-'
+            '9vyCMu~Drfe(S4%NnC(<OjJF!NtOLaWji!>5g;7zgswhI2KlgH1eG=d>wJfq{NZUTcdc@+w4^8#Ft(C_B5~%SvD!7c2nOQ5aKNoa'
+            '>i|TAcRc{o8Cf7MW$`goGNdSs`R=n-'
+            'gsXX|12Ic>0o<nd+TXc{MHHI;1!Qv$`F47rQ{0=vXAnEb!m6$<W(&r<rkh;t*9bW$Qye@v%@WxF`9oNqc0(NOQ6#W);&-'
+            '~ldy0r|6dl;<@#1SV?@c}%kLcc!Af^@N)eEjeIXfL+LsPvb(<RHom;mm$3lm=8>NA>Vpeq|apJ;3e=KY(S+PaOY`bC_QEgv4^+n}'
+            'oa0zl*Js&{BBWc7grQFCDO?_AG1<|F0=_%bdn7a?3TRDhJ9{EcLm2kPHhL9|pRA)c*N9QT)koWQd>hZ#qyY+-'
+            '0(IslKlTz){KVOBVT7ZUUWK|`ot-|6=>`9kGX({Dc3T$Y^!MX!!r2q+2AZqWq>VS@r`dwvzd-AI!Q9+#S`~!+SNY*O>RhXnJ9+xU'
+            '{jh5Bx(8Zr#TD1VFI!CGIbomHy1zXZNqT-'
+            '^ksYK~qm^Xu(o$TnZTs7w@Xn5{Bl+ItOaF)mmbY!hDylHYocCV3L2?hD0V=GWGdU99PT1tf?r|}T0WsovP<l)-'
+            'zzzf;MrLi`aPJ?Pr7dCm0gT5*Y$+~>E27&aeGS5&>`{KdMJAAMgq6yh$jTv2So>~RWK@Z|@A@|T~5ExifaWA~kkgn`4L8w`+X6?e'
+            '~FQyhcxsYb11d59dnhw$ngBf|L_?(e)NshjXWtJ!?YVw4!;c#NTS*|5$bq6$<WP&zdhf2DhuBfkypV986@pUv@s4PewI&~A--IYg'
+            'b$$SCgow9;{rY~!iiC+`8$q%EvbOa0sT7C@Zy}`5ClFi-'
+            '9N5k&Ux?%6HM1UWzcmwRhnx0}WWM<DfeJ8U6mC52<Tknx8HA)LCaTcjvnfdJ!O4NjAv@6A0SW`jqV)emyYtdVGva)hnSVE6O)y&R'
+            '$C|ilGxztF_@6tyM?aS*thuzR4YkcRTwOXc9Y7xvQTH7`y2j%fnN3ObAS`asRzABa;^Lr`V7ugqlF?GCy)*9tAl+@(ja>k);>oiw'
+            '6#dc#iuXsgK{~xELl@eH`<D@FK)t;sg#>J%&0B^V$rcrY1?2j}DNs+APEXkW$7S@F1)nE&UjIYbzmER%CQF|aOoatG|TV)_rIHnj'
+            'j47ioL9OX@+&{eYfc7zV!3Ly^qXD5ey-^Azs*;)VS<1Tqt(PByY-'
+            '+2)&IHt^NIF|&3GbMPAr6?~h#LwJfHh1K?D%SX?X{4z~eOeVuRg}`_UC{UGj5xjSQ5{^(kAteax`v#Whu25HZVJnWw;DgW^@kPqS'
+            'eQewt4K|f0ODP+J_06H&ga&KSHPx}ehbydxB(d;%;%nQqpN;zD7&H7Y2kMWn45(u`v6*N=LX1fuN)6Uo%2A#OpgCncJ%{`#)i3gl'
+            '<mn6z@6@rg7?T@*e)N`xgGspX*a0H<D!=I*tOkQk;!B(EE)aaqh;#T3>dkoDr)T^@Q%sPi#4sXm2YHQ9w-'
+            '}0T1MD3F~3E*FLpgd9sgZ6w2%vGTw&A7+_B1TfQ0kcUhjm%6%)KfTU{oGGU$Zm3oC2^%d+?fljjGPf#$6>>xy!clI%d9dK6!fq1-'
+            '3Km|Q28*JK2%Da%qg92NYq=i$DB2D*|kU{(5HGj@mf!CddBy5lNROZYoi5wS<daw2xIsY(@*Wxe6Os(29SGF9U_Oq>(^RH^$@Z-'
+            'CT69;8YPq@90&%z7Yg@uB?JN(;%qt56Fr<%s3y?DCdcv57c-'
+            '2xh^zh?$DprA%QtMkPO2Cu$N=FTP_`E*1*Mlz4Ie9dpR@Ji3mrvIkytmLYLG|E_NSg70md4Q9*O&#XL{U=zsaZI)xWsJTM}<bST@'
+            ')35`Y0ZsKn-9pz~`R69O!)h#Q*;Z9`P$$}!AQ`AM9#i0#tGu!}^1k=s__U|?#q!u-'
+            '`AEAP`PrntQ2t^CoU|H~g(?a1?Zt+Ye#t6>N-&0P(l00m`<cCDxzfZ&FH7MU-j~Gy=qY`oqR4>-'
+            'RCP=0MSup<Z**Or)R@>qDkq^#cx|uz9UL9AF=H5~8s98(5UMPy>Xp&H6$RGCbSB%X*;eGjcjqI<Lxu(c+fn{~5$BVP3bg$1fB%oz'
+            'm-nA2lyOaN`C58~oZjCiGCh|-*lfuY)kS1(S}_HwJxxS(z{+BlEp$yv5DT%y4lJ}As06j3C7cW}$6-'
+            'qj&_<1Cmc64Dw<|wZVf@iFk^LHcT<%Z3PO~eF2Rr^aI6FV>?R{onN>tq7o|7ea05aqNpM;(bG7U+&#N0c06K`*XrN)zCh7_<H%!~'
+            '2nFD0=QA&vRa-2jN{FI%M_k9xmLNnU#3-|t~ig1{zdQ$q&Uo@79302}bj-vJWvCCM|!&5)`~09d*K7d6X+Qp!{C{!9PxfV-'
+            'rRgZ@G3jkDt~r&v|0f7s*q&>VMyuow)+Ng59Z&9?N<qo1!NcJEOss*ZSMG<ez-GKZ-9D6s$@$-'
+            'Udey?eAa5`OY}yvovj!0<6XQ_Mgiz@30l`MGxvpSIzdcJ0GwSuD$P)|WfAD__YnZ_$K_t~z5{p;HF9UGZjXYe(6juIJG#0wxkyYE'
+            '4@AcEP)+II+{-L0g<tB<}X>m+1VIX&W@6Q<qC+Y}I#aCN6Jlm9}h<u8K@Dl+0t)lDCIddafX-'
+            '<cgG)0w=pY1oFpze0pTus8hVQnVx|ZI~k%&qurwm*A8SJOBn2*xA&$TTk3k-'
+            'rZaR!LLbr<`S014<B8<xZTE`wGpy27c}p5W<rP;dO?4Pu@el05g|1pSn&-'
+            'M?x_f&0)$vXpRfEK(l!9ku8<oWE=iimXsb_&nR>CA5zJ^6n<M!VshuO6`*hspX-'
+            'h$3sPKjwwYQ{i0nfn{~sz9xo7_8T>7=!%Rz5`wtESB<%j+A1OkSi%hX9idD5wn>Se!;tu6iEc|ekhi^yjQxtS39u%QT1za<u!cX_'
+            '}^bTa+%HIu2-'
+            'KKTRYi&mUmefAGN~e{ukI1R9zlBes)uoEEhF)hIMQW)RA&G7FmWVB{MdPv(ca(RO>5LO$rt|KEsgUOB|N+@3Z4p9HK81jsa3ewNN'
+            '%is({uht!m{7SsozrqtOkTSTDI8$s5;T6SU>IQLF9%0WFNwAm7b~yUQ!EiGYn%iX*&a0$ok12>g?mH~9kZwSy^sY#EjdJ*v5$VZ~'
+            'awaO%F~E;0!MFYxii71pmP|G{l=3jW{{6hJmA*A&<o?n|lPrEFqv>bu8UE-'
+            'y+^)+x4{+v(L@Of{O#a0DwVz6=A&vQPLx$0N&FtoKG;woXQ=(zHEU{H#C|mw!a|{^WlpIIUZ+k`?swIC@hdY&%#XFR*NSboS-'
+            '6fArDNlFh^Z(XYJ&O;V7QpNWvIJXjQlXv8MnA+O5!*%aql*Y;YHMCHC7l~;BJn={(fndkk39Q2R$9=bw5B!;Z~Il1sh2{K#Nl(|e'
+            'tt(JrPyg||~a`_{stM@Bvj&FY}@p@4gT<vP@+C6VQDfhH2<obu?5V2M$b~*Z5@(I^m;CyQ}s<oc$3h#3*bI)r_uIDhG7p~0Q{gLw'
+            'NB@LX61_G1uze!Vb-X-s;M6)NE1Sy|#-'
+            'Jn**=Oxi^(~uz@+ap_+5VToxfR%o(x(9=gy`$b~e_!BEv9Xg1fx$rp)aZZcOWhugUB@TA)4lWKQ?Y-'
+            '1^r3(HnSW7wv`;RfVNs%3IuAV;K^hTdD$|Sp+GtBn*=2atjI@uE>fs^G+C<xo;$ccRZC35SiQ_J>jS)FIM$Yj2Y5!a$V0xIXWH$R'
+            '`*Gwrs-'
+            '@^yxm6ljr78s9mAJ1Ymb+zlu9&Xu+6UYCzWNA9q>Fr8?lEyLGyP~a4<$OM6RSN6u%l>}v?5tyk6Oa1ilT{RubwICQ*)5Br*d45#k'
+            'A^)JtC&v5f5)ry`cqq+VG_nqJ36MNUAfHQPF|zyvG3TGWIilkpjE;iZ^EWpHGY}EAp=6`GhBnFMo6fZpMgOE9ZFInAQ9i?K3O(&J'
+            'wVIAtDVmW47tWzU8C{Xs-x2}C2VAgS*@4!UhUTO^^9^hbzQ_<RKr`?W>?S+ZJ5RwO&0ez@vKf-'
+            '<7zf?1!nRTY5^jdmabKio9G&YjA~(Ykja=8T3#f^n2ACwlb6^cdBh|%%N%%sc_6ZS4EkEv5-'
+            'ZQpQb}3l`rco<g^@HGx~~=1;wdFp7cSyC(x^$;Sg+~?PW)%kLGaSO5W7xACCgAG%XU8UzfWr%!@6_S@yxYu&$U6zgKlWMw)f_pZ7'
+            'Qkj5c88Hc&<>Keu?V^G<qq9F?u#*e6-'
+            'cxc?18*bNh^KrpP9J!E<euujPddgWl;WrW7KtEoN{yC;^*6Hh`vKvs`b`>w5w=VL4%H13=9??O~eb_RX)34~MR<lh-'
+            ')F!3v|<^_^XEb{frclDOdq`rO`|UC(iEPUsg*pQ7Rk<o9|%Prn<~!*Wr|ZX^k{zLQ2*45MB!lwc6aj>AA}WI;<Pmm1pg<3TZ_l14'
+            'XiI_+AvUTG6r(J70!n=IZ!FYphrq`Ye<Dsi4ty}b|s6=AV>t4Zy<Jj*^Cx}>Px5tXudm3-'
+            'Jx4nieiu2dfEip5!erFEf(m0pI?G~zOzg6rY07>0P%CWU8kb&)RB;Za~=|0EC8lS#U6={3G3NWM=Vq!lA-'
+            'g=)=Fs}YFKh*VH*1@aksv)-6?8mMQHJKK7VFbrzNa$x!ghtBET$w|#HD-k_%(i8gO7-fF+>v<fQSORID-'
+            '*ioU#gg`G`ZcS4x@sa$xa~Zmm+o(%Ckpgfa@&Uyu)E?uN{Rtc1Zf}8KZVLQ64FRO3kE0(V3jNUZuy&<>pS{O2iU9fmM%`_Go+_=5'
+            '%80e71xE0{WjB?%jeZKm)mz%Rz&1g3+QHl7<!FR+ci!rqW^(+l>NiwGgQXVq>C0<qYte#bXBYBoA?L*$GEucZFE8)=m+z?x|^k_2'
+            'zuXrR&7%Wn&9C}Ppj?hsERV8Ewz+1e`trXoH45Jo(*NGOVzN#pb3<B&-'
+            'LXIb^2+GtK!Rp+i2jeHnJ!dVZva5Jbo~c$dE5EWGKPp1>pQ3e*9ktbjND'
+        ),
+    },
+    'signals': {
+        "title": 'Signal Mover',
+        "folder": 'Signal_Mover',
+        "filename": 'signal_mover.py',
+        "description": 'Relocate connection signals and format their text',
+        "sha256": '854493353513a76ec38bd12d9218d278d25e905fde6c5678742dbe4402780d3b',
+        "payload": (
+            'c-p;vdso{?_Tc|~iW+ieC3lPhB<Y@Y#=VDtlV+O$2b1o}G8`Y-mO&lc@<?{T!;i1EA7DS(-'
+            'dDXO*@pD&&Y9D}QmG!dZryj?yS=^Lc^wr=o+gFbQQgi-'
+            '=kQXUop#jOh5B@M(NTv7@86%C9sb&Fs`HCZx2rm*mz|5I`fzsf>EKdzk3XIsoOGkDtzXW5SC?n%bGNgl)Lx`67E?99O$${F@^m(j'
+            ')PX7{@p!D#X)(_igL#@w)m=IrW_K!^CDS5;@Af0ry-VkVTQ$#=omo5`sv;RDgSpD4iOO;{$@0X^P4%;UnB)a?0RIaQ=lOVNFir<w'
+            'RXiM~I8Z!R{c$$<S~T(FMUg<~L7^s#@jTt(o^d+!EE^XMoXG1)UEU_{Tnm*alQ^9!YBy7Nx9K=h%WR=|DDEG=z<H}r*|!9ipYW7w'
+            'mK+!95c(gfbgl-_I4`id?ghJ@Cdm-Nz|)Jkr}I213e}m;lbna51?9<nk>j+ekGjzSfHV6kcJ_u>$h)Hkw+W7WaB?E!!Pqhv{1&=R'
+            'b2WpWU(J*Id7<8SJ|K2X;;-rShNl)!m(Wc-y-6Z<noW1;bCvb~fZhl$I5!LH7&b7ynZiB}aXN1!^`6Ir{lBH55YpLnyd-'
+            '=~hBrwIAT^!J_XT_m+d5rL`Ut!U0X(xX&t|i%Nau+<KJ6YKaR>Edyg$4Ag<cme>9wZ2L&AGN&v=sT<N(rfGMc~2)0^A5`3Ui<NM>'
+            ';!!?2TdI0OV4$5TMyB4ZG8U*ou+K=WayrWt%aj}cB&mBfJe8MMpcu)sm-CxdJPD3OhaD(oin?tD2;!o5a=wxsi#JDbJhWDesEvT?'
+            'S^)f;MhNI$|i4MOH0p}!Gg4DJA60bsqF05Zfk@Yy&k5;zv~Dz+0&!ORKA<EiYO-'
+            'fWtv>c?<cBlQ_peuzDBM}l?#Amr>612`<nRE^SUTHNAxZvp1v_7?yE)wv%eV|Y2{gB?#7KqZzcK|}>CoWU$#$-cvT-'
+            'tTCO4g%nwoP~HXzs>UW-vDdI!2-'
+            '_~&SkVfP~tT41dPVKV~fE6j#nZ5;2fKJ0a@;?0kI&tPl13z({E|EC}481F*5)=9un+1F~nh%<&zk;0~dKV6Vj6>@o<MQd4^picP%'
+            'wr!hG@k_TDeXUwd7`px#9S=o!N@dxx_8Xtq>4JHvdrlP{*W$N6#w&;qKF0~Kiz8a%5*`hIVB_ouBb!Zbb=lSMICw=rNo^g5lVqcr'
+            'ZruE04_#c~38SiDp5q@Ug_01Eh+h=I!Prf>pp)7e%5gi+`i0bHnrr3?kKfy1*;3T6&)9xig+!sI>~Ea*@Zn$6Skcx#;CJm4(NQ&_'
+            'Kn6&g2@@Iu!qf_#?cxCcU8#@S7@b&>pQk;0y;-)a8<vu8`#%GdjVnLw)uSK#!-3g9^<{4rc+mS=wurQP1%-'
+            'WuiEMD=>31)PGU*Hh^P2ZL_`@nbq6Tl!Ic1Jf)L{Tn8FtN$*RrrA7?2T31}I(H4nRVZPh`yM8v7>?#J9n1k4vjt9;8xMh?%u}ERx'
+            '~2T)w=)=Uoc8t0b7%Z{GMVAY+S+19-8((_)ahM*Iq#^p`f=~4t@Gp4-'
+            's$I0?>iUz>HhBPt)tFw$A_KXQHQ>|JU%<sZ};}M4nAL=^`tv|+J(m<;!;!n)Yy7|c5>9~UVb^D)_T~(vy-#W7x3iG)@A1(m-'
+            'HQWe|T|xj@@G)4@6mhYN?<rq#a0Y(1ao3(Gi@RK>{EmT8m(VH!xLrbq?FlR6&KZg^i#|oxR!Hg$BO^KA09jqw^hrbUICj&<ue9O-'
+            '|sHj15bHaVuTn0-@nynE}D;$F0uM$4>9l!NtepQ&`AuwD;rI3-'
+            'vqFJcmm#yBQ1?Z~}=H;xJzn@RFwbnj|w}vYMgc2*OLCGn5wK*~khBAifOfOpjqH%+O+yu)d{5iU;>5o*|QmqXPdQCV(RecGrUb;s'
+            'U3S_}>RYPQ51gG00amtB`x{-8a>;q3*H;a3E$=^Sca=+b{uv4M~I|X&~BS?$|pyIPLU49-K1}-'
+            'fndf+b+(2?|tcAo}F|q4o(j{^ltY@{mH=zV8|!<8&OZG7jPb_QxyZHo=#wlmf9mQ!hXw&o9eY9m~MSK_(!k%OQ!=Eg=qDqcXZsnG'
+            '^4;alp6fQZLo(^JU{Cm6N3NNxj6oCd??uN&lcK|pxJ}})HT@KrGfA;5h|R0_|WZK(yJfeZe5<8mjJMr?7Z0mGT8fc-'
+            '0dEpeuPIm`+IMGdi{3)?N9q#Cubkw2wijzKEVqRrQrAi#v*+Sg>ARDw;L_OOWOT5>`t!VHR$;aDC<1Lw@oz~FN)jtWxkMiz!{w(h'
+            'zrkY9PSeTXWvJ6IY?2|lX|JP|2f@m)U~29!p0U)b&B+Q4D7fESRa0i$1rqDk4-;uSbs<nIB31n67U#Al6X2uxDQ-'
+            'P7SCA#LOL6z1xgijdCxECPk7Tqa(|QLVWTn#f(zlpU-5$AZviAfjo{C87V=B^4%-0V;yt0266x=y!ye03-'
+            'dcf=bQd!s#H4P710?EAb$qlF=XnfA3t6FbjWcJk!FxsTiwHT<lc08Wy&7iWd;!8r6Huj?Hyl_%<8Ykl?NLAD0mNC9d$`)WE_Y)3('
+            'EqFbZWq5xamBoC?%*_mVF3`=V|cIT`Lb0RB)OlFX3`@#!lz~nVW{eyxO<#%2!GbRAC-IjyFz$i<Lcn}zZbM&cX>RUA&Ew51tdD8g'
+            '(_RjXN&nOSpOVkBbrnZ)po+ug8yFa_`|oZYo_$G+Et(|BzlJ}ECvbaZQ*Y?QU|4}rn&^Fj{dBf{tPI-'
+            'd59gZ+={Jg3x0b=udn4ikQUL_(*glaeM3PEn%eIwyO`=t^LGQ$mR3q=r2f)Y4soomg$Ivt7pB87wS8%z7(g_Yg-'
+            ';161|V{RxKlaRH_05%bO9t4r0QW){QyGV0-2G<j2C>OKY~_9lJPM##)H{ZyA9L>QEe8S;InLGVNfkW@z?#mlir}C-#{_Y-'
+            '87o`1Vr=hZIaB*Q#OR4QYbj6&~QL9<S-'
+            'qLSh0u0I7hi}j(Zl$tegcj&EOy$hd($!XpDy0Pk2LmyY6nyzA|xYSEwPwj|M3kl|84g>b6(YT0ur<YdiE0tl0ky^g~b%q`4)DyqT'
+            '=G!mPrq|3_0S67bVf=_A&}CqOFVuV@>xaOKWWP(tV^61cm#B?O{ToQ^?1Fm&1jj5#APVnp8%&#~h-'
+            'TvF^%PyVn(J8AEAmmpdA0FX6*h~eD2z23$JY+ueR-~Nb`*e)G}!6MI-sh%e_2`gKr8#%%PA68h9ylddO^%uBuZ~b}7LljW9*6+3V'
+            'Iqz;JI&lvq_%W{&1$Y^|v?2609BvB}YAfsAIIhF@kwUOi+#?kmnuqYacG&n11&iebf!iJ2CX@I?f5NA;{=Xi2Ak<wHiSNoh83hw$'
+            'U+}5{oa}Wif*9$_dG@efAeDg)+iuYYLJ!DL0b%ap3E>|-'
+            '+oNYo@7ex!<MGb`FV2(rNq{>agZ?}`z~=ui!1We?JBwF;Uv<Vj5RRLw-&DY7@cc~TSxAs+DgsyQ?R8~RVGfLL%tlrCtKWFWHlY>-'
+            'z=tunL2H|56Ziq6Z<8(rf5SAk=h+PYnm>O}09K%5_DHu3;Xh4QGxfe?C>*a+f?TqT-'
+            '&V*3JiD@3c8vs#dUqdgmE}okL94!2J2VH_73%9Ap8VZ(!T`7i{RG;q>PJ9U?rG`ugy55Yv@TPCnAhWJiWMxJ<v=-'
+            '#+d2M+r*E|zGU*zQQ`d-5I|Z5U0wlb2!s1Cd+CC&j+jfAAh`vRQ;6eBD7>NePQkfQ2V5G<uM~tfHNo2A~@Qk%bP$@^-'
+            'N|Bi141s(DZL{=XXUx_S>e(nK?+7r&8O2lruL`muC-'
+            'G3v(UM%6Bmk~7Nro|6NKsYnvEgyP6c96wa9Q;Qv{dn6zJM9ctmOyy*&2!2z}{p~^0djQ11-'
+            'K`{~3ClsK+h}Qvl{X!6On6#$;m~CnyoInNMYtbWR2mG{)S3+;zJnh8Y+s_&@(UfHhNJW??9Pp2B$IVL@ASQH&NmVFcdv2HiJeV@('
+            'P+4fU6fkATc=`@64cVf15fpX?&<&~0GMM`%VTllv4UmUOfPNW+SNibfh>^e+Gbr89v3A%J?G@I23mQHPBcsJon0cc6|&eNADGtU3'
+            'G4n0g2*U<ru!27wtj(2hI=C3P1qP`VA*42o2yy^;&-'
+            'o`n{zH#E%e=N@n_0n8p~5HT6gnrcXf$ey@x+QNTC3qrGckB_Be%nga*7_oYulEvDbTV`)K=&`4GRyG9Y*~G6KYh>SA=^UmddKYv-'
+            'gTXw*M&o;gYj>Gf@W-'
+            '`Q!*F8m+;LD?X1KzZ+*BpgbE96P@G*)&5D2(}ij+zVZL3x0YhxU$w|N<!j(fY>6jU0MTN9I`zew_!`gl@rP4Jp%Fw!r7pk!>9R<_'
+            'qaaY<RfNb+w99@9G0T-~}X(pR{-^Xe~c(|7$Mox_HDu5}-'
+            'g?|mljCCBKE4f#k{Z5Vc3JM32NeAl0NEl~xAyag>w>Hx!#2Eilz2YzYN0#8sd^5zxLxJcDn9-'
+            'RmrS49Euyv;6k;d(VnEkP8;#raf+>_J3${C>z7k3AsK(T5bobLO$b#bnl-CUM?h_ON9STez}}j*ytd_dVb)us20}|E*=co%?wnJI'
+            '>5u8sAK_VxEeB7vzOJ`PU*T&?kqx3i~k17So~dTE|f%3qb=~pV;yUumZikY{me_2>qkmQP?vH^5Zc>lWiu&ZFYxW4q!8>4K0T~k|'
+            'KnlzhnZvL0{}EL}BIMNuCkI^*JO;Lcu?$r)N8#4lWOW!Ki`r&LPr{7W*Tpd-BS#5U3E8#ED@Q!xUX|0zsimPvE&5Igf0EwX@N#l4'
+            'TGdijy!j10n(!3G4+>uS9o(Oh-$03{>=*h7bL#KtB$ysZ}3e^CBJ{dd#iFNeolzmm4FB`n>_E(!Z==PZQCnjArr-'
+            '(b^$Rejm=NF+SjFGR#WeRsv)c52+XFz-#sd5v0V+<LNT2=vn=S1*Z$?r_Oe*__ay;@-'
+            '4h8WD;MPp!lD5*&gjkHlD(<R+^dD?#arPu5=7MNyw>_E~-GoX;}e7K(&(puNRy)FUFo`lBLv3^qJRyj^|54Mlua)3(#osw-ulur>'
+            'qDRqu>F$er!Fkqonob?e$;s$ExfU1{a;f&iUoR;Yp_=hXWjHM?!?219akiUZ4v)4A3XfaPyy|pFLnqC;5oi&@gKfN{6d*_)m3x@<'
+            'Ol9p3NpPYdlcWwN-Efr8>ZNhC>Xf)3jU(6~(#4IbgmGCq$c6(NYi2_Cyn4bny3N0>}IH+lB@pk+jO-bd<|0&{GkG^r1jK`@hr!eh'
+            'NDRf8Mtrv~i;qy&gTPz&~QaQW`9E1NfW<d<=Xgu5N4?`jj}|&N%(5Wh{n=W;4j!DddMEY6{_K43MZao!}5-'
+            '2BBR%cS9GU>6jv<K!KLP9F%V;l#5Jw%zOi_`VWD9=aY1r^pGxw@KQ*^J+j7hdbO>|>h?8(hF<c#qyhbq7h@3Ea-'
+            '@fGzX<Quj&DUm=ZF7XOh*QM_<B5q_xTWUaW~o}%OFfJ<gOd)XI10uUu)X&w{iQBqKNFu)k){W<*SS1kH1_JLOtNBJgM;dQEitxK>'
+            '>>!8VM9yg&Mo)jTLXN9~*{Us|Q|tK+oS*dj3cI;l35U89g>B?xL-m<B#B4-'
+            'Vof(EBYnxqEd(3fOR&0OTob%r^zs~jXX=yHo{_?6ssY?AGVUD-ED%-w%|-'
+            'JkMCH9)wm%JrvmA>l~^zHr6aGR@0J}>AmqYufSx#^3?`paP~CzK0q%emZLJU9^{Sb<he5@rA2ii^vwoxb+|Qr&Nu}{Q#=$<XnSQB'
+            '>+=4_5$JeVJqtEaW8h4oXzmPJ|9W}&7_`Md175=jofe&U)hKuOs@Rtn_BdMiEJR|Ef`ppDp1$!8@$m-'
+            'k90fCNDOrPb*WB>`pFU%3-'
+            '7!rzxKs*|X!v|g&qc6D|`w71Mhe1Tpp^6&MJIr7W^zkDj5|H=iTjTp2=Wb8d?_vPsOpU`OP|4H20Ry1>=CT<@5zyn1*W9eWl0I|;'
+            'c;2As+z|hY)Q9*R{7CMBoD9;r7|Lgeh`Cnokcxn8fitG~7B;8iPtvPve3|mD;VLk8`F4>8bLayMkfA^JuQ33iQ9Jk>JNVw3!S|j!'
+            '_`V+e^_sy;D~GMvgT_s@v)6d$^7dAYu)n#VUEL3MxbH+7U_{|P<M8w*!Kr}^i2s-'
+            'oV4l8dls|c?_9SSBT9v58ifPcNdMfneB~IwIIri1i77T=JQv5g?Ck7-S+3vlG-'
+            'D~p`qUzH9LGC|4YVE!*lx^8)Y$kW1$CN={iC*ubAM4&avou!*DB(*Os3J{ELw1e1-'
+            '7KAM=Gjbl(x@Zp2D%nLO@f#Q&<M>A;n!r@9><gZFvh^w7XHV?Zt1v<ki$+9?mg~^P=k88b{$4Ug725iNJ<p<LZa#vJFiI0)zn&FY'
+            '0-WpBLN_}y20BNxzK2_TybZzlVs~6e~|8O!17$*#?6D2yO<hV=Xi-'
+            '>?>GhOZ4zsHluALIFx}({8o2o0Nv!2_#|Wm)WUdu#F44U>{>>sO3JQmxi{}nL$?_pAZJw0OT_`|_$OM?aL7u8`eRRw-'
+            '$I<QT4nKCho?i-rS-X+mMi<lT&Y5S#y$@PWBS0r2G{Lg+7*2Vu78~%opuJvT0Mmn?uuC}w2wb)He%!r&+^Tn-ODunnBf@E=t|1H5'
+            'o@tYHeSKx4O^nkZ>qp!wV?`ufMPDj~W^;%?Itc0B!gwrO%U3V>c9jtgP!$mKE=JTpnujzxGSaHq5I2@wH8{_fXRL#-'
+            'nq(Tnw^w3czK(!MO^UD_Pv?ztMTVH=tU)#n9aZ^UixIvSe~PoRdZUNa;0nIGu9~RoT4~xfYq(Zmj1^aWx8dwmU39u<C%<)$(D|ae'
+            'Up~D*JL$F@{hy%3(V8+*3kT0`(5M;%$P$5uhSpos<~a}){$@J@JgL7g5doP(_%^r2`L6FYyrO$q+hm~Fvc_As?>)dK^5uc+itX2+'
+            'z++XOLtC-~xrWm*9qSba=@;tw)A`xO<-'
+            'zG?%fvD`hD9~Zp!?IaOEpc<MIPrVnd<p6BLN^0yN&e6Q$!<zw!(+SVsNYC!o3=Z+C|!5&{3K|`?<Du6b-ytS7g%LT|EBEl-'
+            '%!gcDpRn0huw_T3a&nYeSLH)F&AF**1dk<HPIwhw(pa&!Vw*nC<gl*`BW|B=!2r(f09F&`;NR<@f{)vaIt%vvs~=x~&Uo3B=SP@h'
+            'pXenV{thc@(M!xX+Pejzp$X8`)B^M)Mi!+CE##!7WB3*wqJ#@?vM0gtXwDwV|Q3&hU=VxR~L;=2PnqL4KbMwaWspdDwSydA9bYMr'
+            'P;Gc<;qOq8%G>=+-+(Foe|KgYwiW_T-gO9?x)(JkRe@8-'
+            'lU6|8>q1<$6oXxL+Va=g|AG@nmODdB>_Sd$Mn&Zi82`zbc}oRpeHxE3?YPIn>g73@Gn!_G7bRFV@tH?b~9YeJHQE=EKA@m!mAgHl'
+            'T-'
+            '^6>8h_3w6Xa4Yp=5UJMhtT1I|T*7AxOQ|Nd4?lWDp=9|RU$r{NG1Q5#m<AmMRXmoq<M5spz_^?l0ow`;;;A;(Zuqu}rMOP8YX^l%'
+            'ZPX-`UmtC^fQM)Ga2SMhMTZ;p0<9-'
+            'qf{Nb<vOz=<gABp~{@ckOsl?1Ga?B;J}#hptoEeD9y9~$4^wCX)(ZaXc&)p+ufI#=FR>%W)p3RPBUZ-UkIs5W~CWe1^~4WJyS)2|'
+            'ei;|NzQ+3{v$V41@i8T0gt9|8(nF--%64L(3|G$1kvzu@2Iio*bk4@gS!;5OmdON)&d=t5I_^u%J!4&jK#-'
+            'NS>^QxJ<oKJRFxlz7qPTQU|8-)cd*f=8aLYywZL(+}X}Zod(MJs_<Rta(%`UT+qx)wYqOOT-aAPVVKrKk#I(TKm_U4vJX9cZnS_+'
+            'S&$MB9ribf=nX7q5haM_(#UL8_iuM`cl+Sbg&}+AbCe~$Sk9KBlNq8k<9Jg$beH@Vm<TGjs!&0msg-rUstV2FR@M8hE%d2mHJtF{'
+            'g4^yr4v{k7ezKm(Ka9nG+4G_b=lRWn?@q<l~{gBkN%K~VF&FrGd3E{vMJw&Mj%s)4Y}sc(X>;*)tpTypl&8sm4+d-*u9#h*U9Sg-'
+            'BnnxY&Dhp9G^7GTIhT;4=S=Thw}*&T1@#ycT)1xpsG%X%>n185L5g{X10NTY4U*#hCW(FPp-'
+            'F0^j<eaZ|a^uid~8^EMn(Pj&D=_WSmWJ3e+D=2%$+?<D{wx8jX!cRDUMzc6lnuIraOi-Rl}DxN3*AyZby*c=fW;Wp5zu8#1ls5hn'
+            't4a+HjhK~2z0t>~-K$Z(V&ey~GgJYzNXQ3XY|$Op(-ym<wW8=(Dy?-&SgaFlfl1&mY|c<5kG>OUp$pd-APrvF+b6ls?fltIDikBz'
+            'wToH8i!6*Tx9mlEerbRI6H&?a7Tv+=P;$=F`dok$uN&uD}PC@lH(Pz2L|l2s1%5IOSohA~Y=>^EqOtSIv9aH?b!t)i25FO*q9<sQ'
+            '#QoOpqGx}2TjpysMY<lyw|@|Vtq4Vp=dQa?B!%t++tlY+fqF$%q&lK(1|?V^Q@@S{>!6fvUSXZNql8M`QD4QEkGfTqXL5wNR%MtN'
+            'lzwaQ>y#Y@&lP)j@ub_+N{q5;!L!V*?t9Q3UJ-'
+            '>RWW=&*=(b=}y|Q97#MYMO`U`MY~>8`pJaRc9@Dh$snweMa{<_YkA(GjtmMrEO2ZGveF~o3!{}{d%~Rh#d@XBDrA)38^7I*YvOom'
+            'Epbn-F@A6_jTW4NHw{*Rwoca$PDjm+SnW-^-vH}VyHL_^n-'
+            'e>UP5n8B&jethd}GrW$zd$`g1R<f$(Z+|5TQVpU~Ngg_shB73slVm_j1yYJ_89jxri?Y4$$=tmPp)S^(hs_ue&MoK(^7k56XlcNx'
+            'uZ2dI8*=?tCtroAoTPp+K2pr_$VcQEzj{w%9oe*_&q=#tA>p53RDbiULKQ43)hTM`#QvEU?Fa9p)szrC({1-'
+            'ic;pPz$fMa=$zM5}GQBKg=9y@ns*-'
+            '}JDop>VjUw4xu|*H^6{cQNu4ln<VX6ElcgZ6}4h{rYWnR#6nO;^H>lfu^9qEOMfNiz&l@=nC0k(ePBGgKqci@c4jZ>qQgd-'
+            '2qj|QJ9QGOa4%i1z@}0IqMw-<rzIXlL+mfd@lgFW#>2GT4;9~Hp)sBPeQa4Hkw(7C~PF%n6Uwh*2^pgw)<DhW;K72T-'
+            '=w)N^&*OW6T2~{^c{u4d>#%kau<Y%W=2FL7likbRUo7Wwwy?ke{cfsmlkAze2Q~c&w8F^28%`9#ep3p50LvLk0`#eLJsEL)@XoBt'
+            'v~~qo2ovuL%iL<QcJfs9>ukpozSqX~B0bUDvZ4y6H(lBv;6D{97L1rNjBHssuIY2u@L9w+vgv)_=!bHa{pQFW363x50ZiFp|$&3)'
+            '6wBX`ExWM|PDEN}C<jUW=ukbctO#H<O6Lqndo%qePQ|8+C&`tQ5}ivb5TUdZqTG-'
+            '7Wuq7WX=%z3ag&gX&cY4;*1RP1j2oLUq|1HiWX;Q}`74A+2Xrp#+)&PD+p&RpZea8`>(sfY4xNCW&x>!Mvq~QMAr$po{!`2fI-Cv'
+            'NVj-$IIG2_G}*<o?Gg~c0kR`InB)1mej6VR>>}7vE11qv#hgoN?X=ZJSlAA)3ORWm3!H9dm-'
+            '>hCpx@_a?<wVF%qt2j~%2vYqDEot1)IB@76Z;SG5l+89{Lnd75LEP{4{I=zA##KMRfgKvCHD$#922D9#Lye_?+^Q6fgK_+)UlR>C'
+            'p~=Ha=JawsW1b-owW6eVx$4jxpiY2R_i(z)DO(-Fb!XC4~iDpIFRVvAxi!N@-'
+            '6#v`jzj{PF0L+lYpVOQE;Z%r|tHOGROo%Ig1if7xa>ix>tCFcL5e*s~7!~)=7N?+7o%^n+G7kXA#VZRjTQ?`ADvu0(`K=gW7{Ch!'
+            '{>a+0>(TS56i~C-fQ^wI*CjT$(BWar>=N8KgBu9iwI?*x4XpN2G5HA<<?L;=J0Pfvj^28wr<e;?Um=9h63&-'
+            's=Y?SlhV&+~43Y4*R97~E+))~n>;r0VZ`uOzVL}|!2F$FI&dXr`q#TbiKNK@>oiaZukWjm5)Zm!?0W*#v29&@G@)QCpVoZ6DKt<{'
+            'dVemz0*Y4Y>1rZO6$5l!8}B6G^?&$h;{`BPkf-zX{Z^K7inDTZe55tpym7*01wg8nHB?n=AYO`a`ge39MmhjFggTe#>ORtx{X+qc'
+            ';0u_{5$Q>|Y_BbyTLD~X1uysp{+wUX)Kp3(+IyZc60cI+8TdHLpPW&_q}Wfp#_Fi$hDv0A%du2YExoBv}vv7;1^0()3orXN1gtR5'
+            'S|qblE~Wi9ifb9e?S8fd>xoTIA)t15{Z1$=GlYTKAJPyodT`f?P0NR(S95Nxn^v}z}(6>}}M2<NHHv1NS|)!7D~yTaq$a+R*&WHl'
+            'ys*H@oUE;<KCUv|z<4h~@|0<SNQQ<1=KLY=I%1&X*coxm7`w2nNYQUZF*U)f7rkuP0Z@dF6C8Bixg1?i$^dnrQOdQA{4I=|7fVM7'
+            'S-'
+            'uh^l@lFz*__84(`WdKO48j__0NlI}fTLuSY5?7e(`I=Kl$&;TPI{ZSt$G8@e4uB$ZNQcQ>K#`6K!L88ZAP7yEoCi6v>%myeGk`D~'
+            '*59GxojZy4-8Ah;|K#USk$<c6;M4o#kDt#zcNNC8>>PD2JBODoaVOKaxR9Ty-'
+            'U0>WU>yk5Udz`xyR&3~lUy+@srG1h;HVu}0j`Cz%|B3u?Yhmu1~q%K{v-26v2Nq-'
+            'l=vid#L4a^ctE!zEU#re@qRB9^Ra!36)8fAXTr`J+nS)@$EDj@?5+0^*pm;qfx&l)n(+tTz{h9ASGgOc-'
+            'q+8S??t?~=BX!%_%GD2oVh&p0&peEhe+Z!(K*KH(v=6t)a9b{z*&VgrdW5gP+bs8ON^IS!?x%B+M6!;xzCSz<?@YVkjD*lSR&5{S'
+            'm8b8W?`t&<pKfS)~eVVZ2*L(0^PuX7ul=+drc3tUizN?di2OJ&D1FD1TP?KQ@&~;w=1EElZ;xkQw>{A8&6jfr$~V$hZtp<#Tqw&n'
+            '~Q0|DXbHn#s$?c{Df~OFLI=TR6n7=)M|93KBPH1Z0SM}C`PDjS$<}(!gMPMG5MAsWi*S0fuU!B@6?#?4-{o3C-'
+            'Ly?a!ZZ`sv;zC*o<q7=@=tBV&MHrajP%)&`p|r!g|;=xihK&BjYg$b}|6w!6RcaE`n3b06G9p%*SwO=J^t5i6vnyH1cdb#yStaVq'
+            'Y()W7icyy*4-'
+            'CC5afe{Ubn~%c%et8eugggHMurPad~rkkWb5cb*WN&EI&m_%k|KP4h!rGyA4HA~HT%;mb4S3%)_O=DM=IH=2(0ch#&-'
+            'RX7Ax%>Wo|^7@i@1GaM%V`T`uN<fNjo_#}EpfYTvf_36+aGJR!j5hnu>^>#uLm~&PTC+XpLim+)l^QS@uTV3X2#WkCIxyjRJ>dP@'
+            '*o5~@>8PXv*Y|5zR&Kw3Jl;8~#!}*1ocjuIWj75<_nvj#n^K~>37}U-'
+            'oFZR<XMP7fDJP8y&IsLC7?=sI@lw`LyVvDZCKc9b^BdPFo}OM6uE=t{RmVxBt>!>xTS&{>R8?YQr%R{P<<mMX>9{XIk|sjsc%ook'
+            'ctvokYwA$44zZY`GbcpR6_lr>9Lo_;2e+siyB8>Jx4KTrn671G=5Xng7SJs9B{{Qg=mteENhu#d1fky1=6V2_=%<Tm(q$rY<}Bka'
+            'dH$b-cA6+Ll{5VM+RJ96t@<l+-'
+            'aXN6!m6u7*+s$46OQ#lQAq&FvKS!jg7k}EO@9L?i|kxGT+sgQmQ;Cwbw947h{3T)w?y_N@{Sma957Z3S*M21s#z38W&Zu(;uN#^i'
+            '<0cFlSnJC$s!X@oG(NSWt#O)8>9v$qc9R@bMJ@y#k;mt(Td49UZrJAKB@|oO<;(J9IKh(f}9Qyn8X>{_l`v(z;n8-'
+            'a7$O03eMXg#n7w_&>zF>#>;3mdDMi_Bdr@KWS(!lakcdn{4&Rw;Y@4}Z{d;nhjJEqtYu<!UP1V)HM<=C(mDK<ozxT<etb&R54#!='
+            'Z6@09n3%U8;Gf5LwLJ;tYd^>z(2RGo{Q&<`#wx+JJa;qfBefcCqU{?~@>GFD7Z&3If*<;?%Bj4t1|gZ2BFkYIHcZnTNwgRUlp~E|'
+            'i34m<KQ)t%D*YX580mFm9v+=>u^r0v?<piiek|cfqgeuFRrS9-<9L%y#ow}Yh^GY+doiUu>0;qBR-ifudJO<8Ky#G|BT=C$(O;zF'
+            ';Tmc*3M{A|ST2A?oSsQlIXLA*sn#g8%BGhBzLgaTD6uy^tdka6ZRnhp6Y(L9$fNWQu${^U@>Uef0&V*^H0$Y-'
+            'N+_~fBL~Loc7=u4!d?&St@V11Na9JtMg-gu)jX=q7V4605$Ph6*)Yw+M#IWo@S6;nl=Q&#zedo)Wuep0eD_KPrVOCAA&`IGDF=9x'
+            '-9&Ioe29}ah_zTl>=Q)y8060c6dt_W(GC{#(azt3O|@kl5{<o-'
+            'DcV_=FlJr(jvBFFu8|JNF9YI*lX?_(mQzX6HqtdK*e%{p2Mt)`>tXh(CCLdrDaM55HTB;bOX`Xd=!$x}h#(-^SL-'
+            'n$pP;<bbpW{>S3kSAbSTTnu<|v!{2Dgi(eDVMKFs4g^T4>3i!j&$o`ct7U?Xh(E-'
+            'y=o9VUv4ugj#EW+Cjqaw^ryT@<tXL9<N#*cC3tG3BbC1<YevF+xK!8p^O(3Ksk$h9Ncn9=wu&kI_G;Wioa);^cBdr1Ti^xX8HZEl'
+            'Pt-Iguy-b6V~q;5>HbzP63cVgD4_I+-'
+            '*KYd#+Zfc<DLm)(BECI^TZK%(#d2Y{LnY#Vo@;cZ@oHlI9OhLsQyDIc`{J{=isKYl*e=qN@Qz@^1B{sw#&L&V-'
+            ';B3)g?bO!2emQRpdV2#zC9YWx!8iL}MM44r?#Y~rjYYOkB2LCS+yZxU)>(R9BAT;Lq<w~Jg7>oWOM{=o2Ivr(B4}|`L^Td`M#8(C'
+            '?Pu=6yyGdkkOJBl@(>Ym4**9q-)I%xx>cJn_2k4fQY>1IAM7JrU3yK`16-hDKML{8hoF|NUn-rx@3nJ5Ab{bs;RhryoIfcjM+2ZC'
+            '_U4D%)Lc!KV^{eO72-FwmTBh5&2|7JV%Y#$NoqbDVAiX~rF8G7`nk;uP%?0|>fo+C>xHsdhA9L#N+iVUEU@<o-'
+            '091k*;7LD=$s7(N3rx9A@M{=%fSJMLX*yeQvgd|xMf-DzJ9pmuq<HH|>ft6aGOz_aaC>Z4Oy|NvwK#W08avG>+mBEHlx-sA=GxSY'
+            'Ds)<GpboYRM<rt`m6l=KPSqt{irGArFrpEf&#*FbNHLtQhmKOe!M0O6CEaP$^yJ!6^s~BrJ=U0S=Vb~%m8RxBr=$6=MT#yQGur{?'
+            '`x|eV>~~M`$y4#G7UA1@Iv*!Qh;|eUVLD<h#Damajfh2Kt~uQZN)!lAXZmkE`yuU4lQ*f<2zF|o4YF|<{QjwT)H&%~c6z@bpB|n4'
+            '4rGo2Q{$*9Rrx-6fA(9445}C)Wl~$QD-!G4Q#@77laD-on-fn_X3ba$Jy$#duDn8}?uf$0V`R99)VjX2!a{3KcYN~6tVDPLpK>*I'
+            'eQq2g2n#30oQPzhtKCK=V}P_0H!X0Yn;Wt(k)N2Z9g*L<s4ngq+$u-cRvQUR^a1}4@mu6ALlT+ycS~(S6&QRCLHr-LDJ%=+>-'
+            '!ljyX|+39iCt~TS%Yr?f-W0beT?vv%s+kgKlz@CF=7r7E{LXQIzb0MuR8AroDD>M{>__*$#KH=5k}xWJ;uOFH*-'
+            '?e!Qu@*XSZWyHKC7=%KkJ*3WVf%ZrLo7?5AdGB_Y>OS7}@X!mf(%<iF>NU~kEo5L|(cbP72aHqv0ZNfsOP)Dy%QAD5+pK5>mRP`M'
+            'T#G}0rWnK=7;5=MjSbqJYLT0cjf<}?Sm3TFops17v_l}LCMx}$-'
+            'kvbUZSbdTB<$`0=69|yq04CqSfv8U7O~kdRH92eY$!6M9E_V;2WgRB{0b)ryTDCcWuUUs#yH$+xaj2`SCTTp%@)YTI0Ik!1<6X0H'
+            '&~Q)4y++BsH?Dt{;!nfi{G#*Qap!kHw39DDWv3q3yh9q(XUjkoP^coyVI)9SLvlbkqD^RVN|Hgj%(t#k(qyFvAT}Y*u~~*TJ8sc|'
+            's-'
+            '3MsqVXE!oaQ%+$EfzJH&N|}XVb)sNp1OItnVs8t1#bmI0Wh!Y&x$9w`OS{pG*RP5YE}kVM!fzUTNa*pM8Ck_4@Ovbnu?qhVqG~ZX'
+            'ft)m5!AhA*|JosUeV7ii}e3oQFo}=;e7JsUMUNLD(q<?g+v@-'
+            '5xmxw#0+`aB9Nf?<|4;jNmIz&29GUd5_kzu_4SRo+Up!eB5uwcH3SG8$So7zX)AMPlXbFE>AZADV0Cp>cNm=Bb*vWngDrC2vLbXS'
+            'cXWKNSZ*j=-al|??CJ7(W?+GjP@C~bLMnUL5TN=RZg>FkSEDhI)DSrS5<b@+uagSbV;*t6uf-6e|-73-'
+            '3nesBtP^xz{eE?@V>F=M+jTW_l*(@YcwoWpqs@iR#x|MB?{4;s48!<oDP0XmR(YOU<ZVLv)qkVV^o;{lV)SAOfxsKh|?V^$Jt`8Z'
+            'qq*i!$=Xsa>7PA!f;o>4o(UUggzhc0PUOuPlM*5zOHdBh^{lBs3E^lNV4p)w$_%{xD&(iI6`sn^?p=doL`XZYmZ$~ZMA#9d*mAq<'
+            'Dv)P!Q<V}Kq56Gh5D<8`fu>r-*$I*%g!7Q=%L_V>1C@F4?ZI8lKTm3%#TLU*Bvyu+d8*iz1+V-{@+-'
+            '0<oniKirvOeS}Xl<8bF=`QtCx+(BOq-oRALj*Wg&)xmNb-=jZGyZOiu+KY5{!NdD(T@`}lC$-'
+            ')6^IP20bBgUh{X+`byily0s<A$vzp&o^)aQ|)7!Kj9hZfn|=lcgVM6+tqli)p)24IK_Xl2t_L1m542I62gkwB3&_d<><Fg|X+j1_'
+            'LyBm01wNahzqds!397*jnSqDAU#|Q<qyR+oXoWO5XM|f|Gg>gwRq+P8~V{^bZZ3M&xdSN_hFp+2>0Z&2WFc_hQ33GSRc>4>HxaK{'
+            '?7iH4x;3KeE1L+D9@;<s`(tM3K&%7nu_MNVFIFfKi#`itJRzbCOVwXCsftQ>oI<);PS!^?PD&!V<?YiRORMPL&_@02p7+%B$S3UC'
+            'gtc8H(7%5_C5I(mmLCfXSYFrZQLCCa$x&mMM0f^0i~yu><-'
+            '<YQhK2#u~4X)2$B2qV03KZB)yAJ4F<1I*Mu;a?B=Y%5$lo%Y~BbSLc0H%|s4F?CbZWq{CYnrLoq8ft&oLrEk0ddwOLO*0$6`Wq|6'
+            'KT%`nuHL)yxDmk)kGV#8E^)L<rI`IMH!X*D%Bosh7!l20}?AH{253C@}S)M5k<2Wwlt~Xmb&|OL1O8pV`MOo($PJTc5(xs^8odH@'
+            '8Il3m+cNVlx&b<LA=qKgUCUDY7QvE}!xXOG?_1?e>T3g$?cwTeB?rK0>AjIbhbJ@_oc<u+~`2f`khzkB0$nf2=r?!6jlvnh-vVEo'
+            'Hiq);?cSUQbofj_Y-=5>bGJdT>y2sf>tZ$a7AfxFTvL_VT61{RS-'
+            '<|gIg*u?nhy;C%vBdq57XynqOAM>IAj5(0`T!pvNg%S*TMgP69%Hg#7nBo;Z4VM!hiq!6m@mif)OguN(`3&w3@zkvJWfT+&l*~^k'
+            'irb!y+0k{8FHy0j96`$x<R}6=dP|F)Y=@O=hpl|k*X92`mCTlgFjA4D51(@^x$mp;{%T2$BF**wh|_~F8lB^O9|N=!5~@`sFq7r1'
+            'o^tAny-u2cyqRn;QYBkie%OIrL6eR1}pSZQ$DaZg+CWrs!MNNW&6fA-tC-'
+            'l;Z=qA+}<A?{_5rsHCN#Ew5g(DHCYYa#w(?`G2fuf@@8Fz8{2Z{&D%$X=6p^Bs|kz_fcER|(R!cZFFegGjgWdD$mH+PI&AWn>p&@'
+            't=~xvj6^M^XuF6i($XzzNixFDi7Vtd4mHv)(Vm5u}M$Z%N`;ug{ezOpm<q*GMi55^8Tm*YZB$voZBj6vLA5&!4;V%cLA3I(3>ENj'
+            '2dN<t*FmgkSpsqC-N=vS_m_giUBjRe+g*w8-'
+            'w&pgZ*%6aA=bcJ#rU*2fT_>CFh}EBEy94r3yaENyS<8SJ1n0u$gjSfAqEM0x8Y$gfG9GJop*xgIHVB?P5tU+5u=vJtz?iFG4k!)6'
+            'Ag4O@MLOI!VFbg{EtDbOgL}G`_tXjpw2w~K`zxnTW9eo=QB(9|MPB+!syTBJ*I})a`=4Eod><2KcYU7p?hQ9x6j)nGS3RYYF03NZ'
+            'n-J)Gd~O}pQi=r^X11a!>RkBIrUa%oLj>06T$7T&>Au0XexiQ9YR@XPbKjmitxZ?@w7BDL`5ftunxss5blMJm-xvq13jz(^<NahY'
+            'g^w{Td^LTrG{Q|x@ZeJ;F85A3v&~JJmYIitea0&V?{`B9IWPg--'
+            '+h+_+U*1MHF3WzI`IRR<n%+YyB~hQ_1kBUr4k<+Kb%|%a%jX8^o(d{jGrr!3>L-'
+            'XNd_D9pbHi}T8alJ>i8(c0xChJGogh#9uH&$53{dYd;8bbpyNYwLayalB@d}MI4kio8@PqQubg4A-'
+            '>Te|+UZN0>ZZ+AVv~+|>Af}IlWX@<viq^hJpg7k3F|xnxt~o-'
+            '(8N$np<j_B208UFs$z_sw!VqPmbxqOK(7|B0sI#|LB!s^<^sg!t^G&)3Y&24T&g(S#NSdgmmXYKKKjBRaZYgeGk~oA$cjxKAgW6_'
+            '{&;$ZxgZ>{X!csDkPIej?`@+7<*djr(gH)v5fhLl_tL2q7b>!XSBM=i&>~0Y9O7($MC(mP_3k+TAdxlnrOh)6fT&=Dhzl50kmTRk'
+            'JA}k=oap7nqht>1-vaA5bA~9Lau;J7iUioe&|ILV&djk1t;LAar8K-'
+            'uL6k^{i70#gZ?iE79Y|Y!A;H3<zFd)?QmPgcD_vZ9C(Weq>H7s{ALOXDKwKzy&h!x2aj#lTNeZ2jaAC}rW)9g@C-'
+            '}8>j>_}Xshiz894ss84>lF!(T2oEr9crT={Cg?fC);=N5GK7PRpaV`pCbloGNNnS<(uE<K|`9EV^m9ma-'
+            'F9a{?7Bs<k~;cw4D+|9Q#lJEX6bvmriQt#V`pr{<GuA88TFtMn>qjmpowf^4+~VAt$bsU}E8wy~#z#f(RP=PQMjq&b!gs~N3ArO$'
+            'Of2b*bB*DG>}(o4MmBR_y**J60hXbsoeunrB8RLVs#%=*LiHs(t?q-CcAr_g+6X)4aah9{$M=~E4%87Z%FRVh0t-c7r%J3-'
+            'w2)5~O$BthTQ<Scq#0?%`EpF--hg;YY`$)5xwLW85W3#>W0;<nZ(s8(gLSn+TrLWzYQ&;NSmWmJ9l#}@VDgnW_OtQItC)0FXu_4O'
+            'P|JLPY_&fd2s0sPwIQscOG`}vE>af?4!eueZxKC{JtclX}n6>*ai1^$*cP7z>e^psxRYQS#4ORry36&RXSkXeK3{|iQ1L|cWDRs('
+            'et)N-'
+            'KC7(H*$iNiiYn3VZ%#7dis*`{awUi>5}$g9@qq@jUTW8^NS+h{SK2oWcYOQ$6xORZQY&14`M#8Pw4pJ`KY&8~uB!k3!qG!WDM`!r'
+            '*x;@&=g@pIs$7KH)I@=rw@Awo|rAH7UKT7RqxKf~l(I!I)K*a7|F)r;EOukeYPBk-'
+            '~L&C&kuLHpaeujFiQs(Z?9LKucRU%mMWE5Z8N<ye8z_zJI#ZH-'
+            'l}x;xLjj5fA*;9S&eV_GA_)_T(0*L2;NRV?+T@@^^bf=U^IY8i&%VlwMtprF(t<Fr$bgnQL5rBnEBGmu6F%B}<Gq$^`_f^;tpdW|'
+            '&*_flt=qSR#jyRRFS)AnxNY12n0f^|~eC4;uwfhP@`b>fkzkQfNu>*Fn3UxCDA$x}hNvI2QN)(YgTEHY6=dpzw_$A$*Rn{79W?~6'
+            '#bKnX+so+?$|j+-'
+            'h~<ziIjT2yen`l(k|sz{QlW9apLx3y%)f`tM>0c>>;GgH!pspd4>=B;vQBgQVQskmj1V@+Kq{F>N^UD$t$ag_-H-'
+            't~0r8j#(Kl1ZQ{z!y<gv7G1f6L&pPJRG9&%PDj#8>`QN1+8o6dVg?v_=`Hf=<Iwr!Cd2Ia~J>7tQxp<_f(HTJS%45HB=u>i@v=^_'
+            'uwA4RVS@<!pJUT3q}xsM{`W&&^1+>V~x0kLw>OM5VG;ennIGPZ(pc6OM-mlAr6J#+((1BNbnYV*suvKeTG^fe<9>_7|vEbUY0bSJ'
+            'o!dPFPUCJqwDV=%LgWb^l-'
+            'rube#CQ%GF!}i@@Hh<xH9)JmBO?SdYSG<tR{E7Ly;ahR}OlKLRz4a<p(R&D6W|=v(~_SWuofl_iSjl1L}FwH5Pv_{hzG2(3)cS!!'
+            'A@G%cpI47cdc&vyPazbi9fnFgCE3g3yAG;Nk<>Y-'
+            'YHjITA7E#EVgeP%VXkB^Ez{iUSlG*$vkD8YPBA$4Ca1I|Guj^ql|0rQKuu!~1sEBJ%1##qkj-'
+            '<0@Rx%pxYs(AIaxQ%lMXP`eD3x{!{RKJ8$2w<%Vz8S-'
+            '*|C@f|9(XI#ZY&;DtXRpN*>veTw41kw)0=Z%Sb0L_7xba^Q++ZRTHY2r*)5&=CZt-'
+            '*EuWq=lb)*uBRI~mlxbae>LhxnLht5hrKOYh-EYZPFsDnOWMFEtYF<vArA#ZM>xy-O-q=0()ahNE{oeaxbCy+-'
+            'ZyP<DA?(5By5!f9Md&)}#bSa2fVVVrwA~;Xxj`mLynt})J5>z=xC0CZwyBeWIqOxJ={s7Dz+sdX7AYe>dVDBbM@vVvt!=jS((<?Q'
+            '!S;0ngnL2=?;SnCm!7IH3UGPt2mCL&cw8tw;w(_X&8E6m0h$nA@ueU<JwaW7g${x$kq|?#h;R_V8x5TgAzzeIA5b{Kc&UG^%mmE|'
+            '1k}md$6ojHqI2*`1Gy)OZYmjls#mb>$7t@sgf_bMs-!l4ijIFy1NBk`?LhsYetJ`SdD{71U3@-'
+            ';ox_@LKn9V|M$_yrY(#N^KmHA?38^gf2!DpbU%%}9b+Yr<q5A7Dt-pS1{k5z9`oDsTqoDIzz5jgjtKtMI>Y_t=?9VQA-'
+            '5&J;{=WSEY^QsC)Hz}=U$+61pcE`GS0rF5uMM*c+z&9oaz=SDgv)ZdKPd;7PG^gGB*8r}lopq|blEa0cZnsnzA!$&0t9=dYi;SU<'
+            'M*8pcnkR8^ozNliFBMo_pMvgbXNhpTxkMr==DBGh0$P~QeCZrA6d0-hG~%LS#$$ij9K)e&a_zM$x&L&P<#%9!^`Nv-WhPl22B^u-'
+            'Lsi^O8#foueeEyTfamEh2mFQ8UM+Xf{{Gy%<59d(%qAtmbP0*?|PcL>M$*;%Z!IE8<TU#t#RRu$#sCdGwo>GHeG!CDMg>x0AWR^-'
+            '&3y0uT<oxf5tt2avFR0?&U>7k@_fK3{y-F2tS-kcqYMrav$Rx6k@zeN6szI3V9|5g6F0H?4{JVx||k^IKZVb+a_nEyUU!uY#KLPA'
+            '}1ENGYS2ipN<nVm>gTCep}=w#DG1~$(dG5)aDKg)jL6mmI{U-KGx<CF6mVD<zMg`=>mkyiR8h3-Ef{P`ANyN>Q9`s11+NJN-'
+            '2(JtP9tn>IY3*<O`;xxXH3fKhkNrPc3|Jt+e&C2X{`sUh>yGy2_p%^?QP?j*Jp#udeTik<6_yfx-'
+            '!FQ|J`u)1L3E*5B&AFlEDorsqP-omv+}`1!U9&}Kp^v8201{spLVBy>~r<0Fa&#k=~V*m*_~U`_EL&x)cxX2AjNgIg)fV%{Uwv!('
+            'JL__MJQy0x%$Pca#y2qZ`(Hl&rVk5H<}8|N2iAY>w|Jv%*>h+2^Y0M?%lE-'
+            'x{MYOv~fVI9%k>uT}xNx2$;^>j^E`nj}`TN1WvV=Y%6wPi=?Z&O_K?b|h0>#AYl5or)xF7XBZg%)cbDkNh8&{oV|xuVbT0i9CT{L'
+            'MeL#k-+)eqQm}#QkXEeuBSj7WI{8`-'
+            'g2Q!D2EpcaF9xXYkdwaG>pLxe)g0?6=N#eaV`q%Wb+m4dE{pXWgxLOPKg|X^O>JcOUsYY0^JQ=cbC82<UF2gseviFxu*BQo=D)f%'
+            'wW4CUBfb8x7GLd4e|oRv1IcFg>Xrp3cP%+t9n8KYcp5_)<P7wN`0snbthNVuAMBPPLa!6ish-sG;{A`eO?1m1B5;()1*|D)&?dsR'
+            'fcVIlmVv%waO2NH%JUI04mtR<Z<m^VvkJ${`Y~*SWSvd5z{A)Yp5ex(6B1k0KA#Dj%FBSLz+hsdQocsOz{i9ecHa@{tm^yppsmd^'
+            'x2E%F5V3r)>Jx81>9BPsb8YSfE!U3Oos*Zna}iN^Gu(jj`hDqp_t+mvU}#oIJxj(?dREE4o?(iKyx<tU0ZmVp4iDP;q_eqWrNuI?'
+            'XV{r7=0zam-P$irb2JP;z;ea(C7z2lp%GGL@^jmhYwzqWolcaUm<#Hs;0?mR*kw<;}0n_+xft)dsTdeAAw-'
+            '>iRVE^9X()04e;2@}uh15`H>ecm7R>RaFw|dcZ$K1K`O?=O{wRuY-DJP8%yVYE5oP#?A4N{$QBVpSG)6qEmJf{ix_PWbSIItKFu;'
+            '|2tH#a^Z0uceBif?!vF&ajQ~Wxcs3$y~S;IM|yC56`*=j%>a7YR(tiiHcF7W((}jqj;lY@bR8w1qp}QXg+ATcBc&C6fce+m&|Fb9'
+            'r?$4`8j;?lC)e`;<(%`V+44EnYIo&|5H6F(gE0Bt`VcGg$p~(jidw9xXz}bzw9oZsS2E-'
+            'qHtm<05MN8V!o<1)5i6k}5a{9^=MZJ&Uib3LNvE;(r&j$0v~U-'
+            'NRO1PY5aLpM8rB@3y%h&&6HE??goU1_@Slgv*7st8aHWza^8_#&()?UN?ymr(rb41TKZz2xR>lwFE`y?0zr5h7DFwt)bZ~KbjB5S'
+            'C@yX{4jQ=M(EY(onao%<O&HuhzCG0Z59xdp^Oi~k{QFCpJFZoJ|7kew%sqLZ;(1(LaLD!CT)gDu4t1j)KThEeeT5u%=ptEDlENAP'
+            'o!E2$n#wb}~`iPfL)8Y*0t|CgEBBycV2tz_N5?J*^KHaqiYF4Wo1)OBPQ%&>f{<Yqgo%PO`QPBN-c-ZN7pQc`Tm{KFz`<O%X@v)>'
+            'lok(?K&U6DpCyGz*CTx&(HD)!RBIrUdGWV64HI4961Mu~0qfDFGiqlz>|G&0?0B4ZXQ=)`Uwt_%)J~b5t2$cGwdks82DRx7RfX>C'
+            'm*#&zT=Q)TNR8NpkOb<Q{8>QMd^(nqUXmLEDwONsTZ)r5ZY?zJ=?Kx5@J(Ui|N<kmZZ@#&nTS`oUxmVx?{T&_THw%;o&go6)79XW'
+            '@9kB3raE7VU-E@`jbP8ejZYX9yu=nxZOQEp!D+1;;My*TdN~E3Ax$2~?f=6%k-'
+            'tn?9fDUUk(R#vQXJ?o%cYr_!oJtB8LN$4Mu#6;FT`2oD8PD3mxg?|IvYV2GAH6R|4O(I$rS&r)<?H*#Kg=e8w`o5er}L%aJ6C!hI'
+            '^zRSb4tvcu<1RUC7i>5!>p)?ExX9tlsF9C5ADEnnNb~vdHgNT+rjC^$?B|GtIYA(HC9hv5Zlppi+?g@8Zo0yTThp>r{FWfUvm!?p'
+            'F~#4rJu0HJ=kKm;sf=Ou%AG7fZ7{;K$DIXdeQ-mfsT2?tbQh%x6j4K=?V<s`S}u{J>`syMFA=?#zwK1p_s<A;x?PpK1f%GpD!*z$'
+            'KYDiCOIDEil$wp%bwzg#!IVGD5;;!?=YkhCR*swDXvhRCzy|ela)%^Y#Kc%YEzWx6c*$Gp^iA0DyFGilb*>*`oFPYhPwsNEFJj*O'
+            'SoQs#muhBc%-)k13{=1R=z~@EBmJ?oiheyPlr?~maB|lLdB>Qa*6rtg2S`VCr4B)?d-'
+            'gBs*X>AI({a1O}9nK+y}L$i@l0DMF3G}7datE5Xs6eS;PoPHxrG`cD>nNQr?Fb`mDQWJe4g6<okw6<a}1IDD%G52ug;f?o48Jnh='
+            '$+v2mqelHwI|TofpLsJc-'
+            '??tbfFAw;JtdGKS0=(`mj`6pqEY%L1pouk@aG@=mdF~sW=<Va7eu~o~Rf__4QeFSx>T@_N~4Tm>6g~v=`uSTsbL%m&=>pBoK$rCC'
+            '=0+ay65+VbH{CIdN?R6CB;y`}&0glcTX}ziKr%kF$Wb(u`xk?~MUeL`AQ4ug_Q2N!`wig;9=b4S&bkmwjsfM_m>Yl)^NG8ENJ6mv'
+            'edgMRs^(Z2;*F!m^*OOFP0JJE%Pv;>?Cm<sIUl;@pLI'
+        ),
+    },
+    'pin': {
+        "title": 'Cable Pin Spacer',
+        "folder": 'Pin_Spacer',
+        "filename": 'main.py',
+        "description": 'Copy cable spacing, flip block pins, format labels',
+        "sha256": 'a9100c5a4a7c779e996593bcb2a5b9579ba892695e56f2320cd0c3f06ff92e1f',
+        "payload": (
+            'c-q{(>vr2lx+wTxPl2}A8W1r^OLCl~>A<rUiB5D{mb4_<iI27x7f6B<Vv1k`q$IYE{>}r;!_53Yk1|g(->nK&K!K#3o|(O-'
+            '*WR%RR2Ay-)px(Vc=4k5rc)$&niO8Vm}j@~JRN%b@nDj8?f2gP-Y>r#o$UX^%Vx8zNasmA8C@sdES-AAEFPxQYws2PnkNr)Z=B`O'
+            'e~wREpLceH&eqm>GD(JWZ`aFm?>5U5Z%9Ma0L$A!HYwhD1-'
+            'DV(dgq<y$z7V<zw`D^PmjKMd!H^&KJHx{?(ZEPed%oNjpEt7@a8v(mpr5eeeRb@HvH<H!l-'
+            '+B9#5|m_*yc&iKl6C+m$bM4&XcUq!qwCCzI?x8F_={)_$JE^W>aboDBYiiL`>w=_DQ|FxqFBMGL2Lcn}shNiq+4sPHbyi!_^t58*'
+            'P*vpH-'
+            'U{3wR;Bnfw5*%voy;T`mjdKbNOZ}0fPJL~PA_4e@B42K@!2DEWtwF{w#v%SW(z{1j8o_mJ}MQ7`9TFh{VVy}qruydaMNjr9O`o$Y'
+            '0W8Bw8fqm1t2YUeTM~flO2~Qv%C-Y_3n`GB1Ob|Dz^J_B4r5%n6?{-'
+            'l@pHVWMr{krUz`~YvIx_4C_Y4Q}J{1X0Z3|9#c!S>>X45Im0uFW@-'
+            '=>o#Oy~Hxw|{YR);~Qw_OA1Ib_1|9&a+!OtotngYMs@VI;+r|W^*r@j@rX`=H1148c*j%$LqcE3olRRi+qZ!=ADy`iKoUU-'
+            'o`Wd`+6&e8K=Bi*fN>LIUMd}+3^m?-2WC9DnkOmdj!<!T~cnhH(1QQQI-'
+            '^2I49T+*p|>czc@Md?$h~=H%jB{X$DX?EV|xt?{n|Wo5PmD(Il`Tqw*`S^Q4&L77ixqbOdwQ`ZOIT`8-'
+            'aiud~IxosHWA+KJoj4lmyz%jd8WcmgoNBK;R_x4spftrss|Y|&=+`{M;HAnEtL^mYc_U^AuygvFLTx*n>(WJA=?KZ|Ut{)V%>QGa'
+            'Izk3NHElXRelJ~f&Y_zhaRezF(<unm)<e6rMk&f&P{u$mYy>sKCJJyI>^UqiU4MG;>ogX}?f%wZ1)@$jpDklrRdzzEJ0f2k4FZ+<'
+            '(3i=7bQ7rH_6&qcDe1?O~rcyjDTo)0^E)N9kGwgFJv=cjx7hsVFRKkvM4|MyS-'
+            '=pDC@4uAdaqW$Zq!}jj>?hiXVyKnrhkB8^y&<X}<@9up6<D0j;Z-3m~>K**r>jPRk`F-'
+            'zrzXvb3J3qYjJntoJ?L&IIfC<Bf#c=SUH_GFCg#X1fox^>n2{QyBPTe{^IXu4TUz{A#DBC+Y42{GvnoR*J;t}qOH_s+Xj)UT5@4c'
+            '}{-'
+            'hwst|LE@@_4dy6q_%&6fiCVdyfTFc0GChTre#yOwf8s4)cfV+;y3RPx>R4(>#d`cUq2ik;Q$B(EdaZ80zemZ@FMh!#dw@PwEPYr7'
+            'C+cJJm?)?9A13sOBd<PZKv^V(o#=~d2$O>!|%gf`iyzz%MOAi3<HSr1kUO?!{l)B5N)X;wzfve7|~q|iBizr!fm9xtGZ^hWZLp$K'
+            'LngJ%to+vk-wOa+dugM0_&K&;Qz**`y8lVYwSNNNb5|qdms^MkukYz;X}M((F;Za#f#v{d&F-'
+            '){bxC!bX4^5$oq_ZT5x1CHMrNubnE9xir@_JNQc=1PzYYQ1%NW#nQOjC@HQhV1*ocn7y(B}#~uvl0nItirb#(_{*-'
+            'rlrCOyxBp4j=`=QsGFJ?fpya@nl5R@IE=_KJfdha8k-'
+            'Ut|W=gaM@5GNMUJH(Zh_dD>u1q}ewCs}L_PjiC_M;<loUg<Z<q)6;`FKIX8sai~nb_PB@>hI8hcSEn!=>*7NsCP&T0aDXZP#Fp*2'
+            '$#sq#=7k#9L!bF@eWcT-}#7euDrrU#l!g`7BXy(1v}I-x9H8<E#e1W6zQ#P?^r{s|6${JGHDru-'
+            'N`rrao!zXdfB(?rZ#UZZ?1W+(I)5WI8%IA|Eg>m!zS!JPodTfCO|Fm>pS#?vd4RGyYl33ktb-k>)a^?-'
+            '@3<Dt=UUB*c`7*D;*KM>;?wfn<ju3;9^a(>}vtH;A>)DzfSY?-'
+            '+MdT+qL<_vy~IYYt|a2!+8fW!PjJ2v|81T3xZ&)X`SWr?&8S;n1;xFW&%gI3amCTHQjrA_zs{jV9Hu|K?RJechu+tj98^h^V$KDp'
+            'kX<09>TSO^#z!Sg&~y(Q$Qp?O9+x}Ew_@<@^ylnUbJBUkrSEUWFy&+@f5ZfUV}iBo3BGcvVlUW&}<Ff#r4JcHKK8^)xwrx04u=%z'
+            'q|^~?FUA(f+Uk-F@ehhUuk`ZW7sF5p`b=ws9#V80&d@Jf-'
+            'lGZzeL6vQ6hYNLA>+55Fy}TV_@HbH%^g{TzWSknt;>*w`!Kn789VBqZ-PjZK&WCd`3uzfUya%9E-e^o>zhEo;IzudA-TQFqzH09{'
+            'mISmfd$27u@uvce(^_>&<SP@Ca<g3?v5H3lM}R6Xei%;nr~qJ33ne3<1+|TYW)8!t>5>lHxwYHs4!UdpwD+fo&|3WW<o9hw6O3=>'
+            'PKNtoOnDAD;E_^WNFv-tmP%Z0Otz^}h{<+dDhk`%-;)_&w0j8X>AdG7+}?8jkV4BhzXbD{|qy67-'
+            '>CusK`^@FPRu0+|kV{C5G(dca}o2u$u2<Pf9zA)R|K&$GPjprNdar(n1HjDLs=CWIw>PQPIvie%oJ5~xfOKt?H{tpL}BoXiwB<~W'
+            '}h$O*UnzAp&T2GZ#`gOQ+Hrw=j){M$!e!Nqcx9Kx$sxoL<Maqr=&YO#liGO%DaWpV^EehWKvh94HwVNrpVQBn+zp|HsTJZh!(5#c'
+            'iXh$D=)$FvnVK<75Ot@3-gaMh`PCbVsxcr<DiFmK%u5Q^+f^RZS>sepq_Ml?pD`2CFf#1orzFcR<9cV0$v(3`--'
+            '{LOQc0q~~l86?ww@}}kboFJX#4XggjW1Y=ld)4F4-'
+            'fT8Whoo3APWI1i0F9t&hm~jlEgLA!nJGa)Gd!ciQLD=O^HgDg5F3S_pMfYjOo7i<U-'
+            's^E<Ro(6xoSj?@T?pag}t#~?F{m8d>5w^)Hrs%N9gh73*C0&+^up4DsMU<9n4Vg)$;c*%w3W3*6oN~LFbO-aatta8E}ChM-'
+            'n<{`NtUw9;lZBUR1Pw9pB<$jNO|tJ@VDL5B_Y?3z%YZo#jBHvs7_4xAE5mFYcqy8ZW==`E?bjkE5p3^5tndRd4Kz<d2fObeNPa59'
+            'qfve!5h1xZ1Lix`K0>C(S8n1xAz3Ic*biaX5Et<=jFR%d6;5GJ#U~Eh~NL?Pt?*n%^?LL?&hd@ZlGw)>vsIwU+w^ghSXK(PJmM8Y'
+            'y|hyMw29KD<e8<0JJ!;^!Ry2~d6BVx=)^iBU#nwg5-IMGbbO*g?<zU&STXo(DC)QjKYV72<J)gJ4(SL~E1x6+$wvZB>-'
+            '7N()F=Nr()*pS?Hs&9>;AlMmnx@g72NNqBtT$`RuVFAqO<%pbc~HH=OJXf_|^WK?2y(qf!WQBz|I6fOLWQ$`kDf-#$*$_KVSBc-P'
+            'c8G1<H=+9uqg6k+4HC!4r;fDsz^XxY9#E4LM*Lc&@=_tKRN2qN;_4zQ%@=-'
+            'd4>r<dso(cOc0Djswj3*r#j|>j*f5egkn2$(T<el~Q4p7-qWQ%-'
+            'AR+r+PH_GUYQSGda0{EuWB&|FfJR6`8KC&?su7p55c>zIGy==gG-'
+            'r;520NUJKA?j@u#8sdTM{que!B+E;E*5elm~(L;2FwXYi~$=P*zm=R7iXyXVudqmL}JvD0r$O_AuU8SILPKVZ1G3|fPnJspL_&ZN'
+            'ax53Y|$_mh8;&^&EFVneo$Bw2+w3vcyQ2UM;q<IR9FFf@!MIiM+0RfGqFqwFqut8E*l;Xl+L;Lhm%id9q;p7f^y+$aHeB`?$EoxN'
+            'ryM2DNI2&$#IEr7mWQO&@S-e5ok>&Y%uAl{n-'
+            'HgUEpqBhWdf8zCpn{d|htfU%e%7H@GFmVu+?36EVN@CgC8==ixj<zUVfdwdlHpaCf?I-'
+            'BOeq#zxXJ8&QX?a^OH_o6p~~VGo|YAGog%vw948dw}1(yEL{z?Gd-'
+            '>sp}m@kCSfa&G^atC3+n2UuV%{KIcC#qDS}){p|;<ZmKy^=cUybH8ig830x%Dsr$7z7#C!$r(3x<qm;GlrT7UC2H9ddD)?5s2|W<'
+            'Ow?m}MZ_7JXVHZsVLFRUlSAhAFiAf{H6c)hFDa9DGn25Bc8*@U3qr$JiJ93OGd&1Rrbt9CtvLj&z>iV=*Sp*r8W*NY%^n(|n2ZAm'
+            'RM&v!Bn`UFd?~(^(;ZwvAYNYSPY+#aC+*ACiXn2VRncT)gSy>gNwLjh=aCasFN4xZG5*Ld+87Uht(qGY#@jA)&f1lMoCFE0iGD+!'
+            'CJOLyN10&Z!YHTzCW+KIrCH-NRflLttkmaaL8Y*{=()j>K<0ajsGaCi+ZkD>`A^|ya1_vWLhM;^}m`{Zj`H<!X@Ko`TE{ED(`sU$'
+            '*z$^gv#4CskKz9>kt4byWzKBQ|2DoI%x>}(q#nGcu@*&|R#3Ae(3+D*UYFt@OYXEzQP0^%ef)btsz9VWv=rtQ6Z}7Lsg1BIf0!X7'
+            '<GLtyiBe`L|b7BV0hXKS^gOm+M`#JI)76|?hVE}8-=$w_t9`1fRf=fta!v5jkGy0p><acGUE47IJgS10Kk-wB5yZ8ga9l;QueTXM'
+            'T@?<Yg0~u*#W)4*jOw6$~1%<50F}tl*8kE%J92krJp1>+LMR0nANdOfYl5Yjs-'
+            'b)>V2GYU+QiVIOEIX=hArpPJz_h%zAX~(CG;%tD+a(bHe+1tzy*<N$4EQQTeo@{*@<rm>wES}$=U<b&Q@3IDiB=eF?FMK0SkO7@i'
+            '43yQQh&BYvJM`=xhO$|idL1Jnh>|@q>%%|K4_ZSdG4gE@}Adv)Z;x7X#fTd7lH?7qS|Myh7jTi4JkNXS{_>X>iB}+isMxY)Uz5;H'
+            '-GKF9L8~@j&ijP7{`sM{tCvC^ObXNMmjH1%pz|ygRT-yon}H&HMbIqqaz4Vg)le50mx9|7pd79QWu;YAANb}-'
+            '6u*<upqy`lq8~2f{HU5+#|=B4e7OjPBX}?$AcSE_`<%PHJVzzp(FMVcpe!xNHF&|JSJqo_YH&?C+9GQUvjrA?-'
+            'ex)oM?pJATr(&de4`(k+?K79xG@Hj`?4lu6#QRR(q!q-'
+            'rpkkC4V0FV)ONXIi9J8;OwLQR%|6Whu9;9w$OiOF{`1fgJiT|Q;Eni>|l!e>Zx|*<x#V|cn5+_k$Lf5MyLX0oEgZa=+?`lp=>0M%'
+            '4w1pgmh4=U&OaC{LQjpO(vcaxtv1tQiNhWwV0;=TqKd<m@y-'
+            'VX))mO35OnB$!HSa4o0!}uddf>|LYRY1r7xMeeka;j&i8on9VQc$O)!0bSf&JWO?=cNfUCjoMm(B3WK(#&jWr3pDoL0@F#K)+Cj8'
+            'B8m@zy;!=2tm8--L73j|9mTG`sid=mgPk{sLvslZvbCIt39~oHPDt_ku?Cn+!TBRza<x3Di4A=pL;JJ74`-'
+            '#c!8G>%chMM!ek3I5=Wd~QK%b*R#tN%DFcb86)yxwUtPv-o%1K<1g69mXMrh+nihGz8fI3Xz-q--8fP3NWek#-Bj^-'
+            '+R24!uADI8kf4WKANfQ|APiInZGk4ly8q1TJL4P+834X>=Puv}Sbv)fENp+jQFWPOTQl02skhN=M@FNHf&g*$!4Leq64e)=hpq<*'
+            'NVC{>O#aDrU%%0G9$^Bh6XR@%(1w=I_t*Nn64@N(69n+$;A5w*gHQ<adc1qjopTM=*m?WZzBWYCd$^4}3Y)CdAWaD;^Xr>3W%7$v'
+            'slPU+rAUbplD*d7mm?3kXEgJ816&tM<`H_v*p{NVK8iQ;ksy-WN;ZVe9D>Sz#ryKQezPqN0|weWh<fMWu!$rF7Qs+$M1yfYh=oU6'
+            '<~z%MH4s$)TJriE4^+A$g<&ET>=TtPl@?Lm#zi(C{K(Bu}Qg4}h@GR730f<V3V0%9O*mYP?fq;{oyBV9ID3>S;KoKQ}nq>IgFjOK'
+            'LQ?=xtTo)5v7n3}&h0A)3j4vQB>rc(>KW1~)UoEB2>hj~elN@(`2F1@E_L8WCqQna6uoqI_bq=cu~`j8bqg*I+T9XVXsUF<%$=(P'
+            'OM`Cpj!gK`e`!FK2GkH_Zce_0sT0)SSNOcm4$6BtIa#AA0nVa?SVItc(v}9d4A@^2H^|uYR%ikRAj<XMuhyEeiwC8qxZM;2(NB^n'
+            'F@X<b6+bQK}3do6#ziQk<!FmdnQRB|!i(Zps>MQUkYd`LV#`mHsP0QY>*6_0zT)gCtT!U9bOm{Y9Zb#2@9i*?`G!M)ut)cq`e}1n'
+            '&-'
+            'ROZDx^{WQtTCPJ|fNn0M5>L4_lkLLi0vB$0~;`fh8a5{=7NU+&5$u8O*b0b=oBsj9fK)R@bjYY)NQNts=KC6koZ8lwCWeJl7>{XR'
+            'U9djtvITe&!5mHu3B7)lSAD8t8UX{0%j5Oq19V1iPXKkLCXV@Z9nqx2wv0V(a8PZH0P>3RebbBY}k^(Ke6!Qsy2CNxPUd%BkXniS'
+            'rYvaxRlwv$tO3+LW+eG-VU$Z?trT|K1jyW8&;%%n&C1N(mSVM$cW(^Y!Fk<VV&&ao@Nz7b7sZL}Rid977*75d?`Tlx#^68XhWLjy'
+            'ArXgVwS!a_@Z3|7FWpnp6=EYqSun6tJUC6E0;<8n?9#L!3(wI*wdO$tle$^Jlk{HFG0^Y*eh5T7tQj#X(EngS14Ft=$bYFcDNfzH'
+            '~x{B8Gx<^hqOTe!fw$)N}kY*rgU8GcXVCH(zKm_0hn?TmP{|A<8f1zQTrcR^$`j8cA);d>M#)j^rAJ()5;!sqX%CN>c1XZ=%iiHe'
+            'ai+HB;K_9kUH}7$Xng>yl4w8zNw4#o*=eNp&xRG|zy-Blmo3t_SSLgp`HUl_wa)9RCNEfuy64n^luqR>*hI0UgP9|gCU*ypMEhw)'
+            'txD6<=8Fq3-'
+            'GYL&<3dxv9g$GL0^5YGgNxd32RCO6~uwKi7?vR5}kBMqsX@8^0jL1=TIhHPE;8n3W#a}bStx}ej>QKEP7V9?DO!l=yC5%*yx#_xm'
+            'bclP2;j8UR2r~%A5BQ%L2>+|fJ2=WlVLt}0!7<j7$9hv8tHC+Wxjc8k*-P*DbbdpAWXiu0eoRsnKE-sw42XnaE0WJt+!@<vsO28o'
+            '>L^Gfx70sH8TZpO=3muUZ>p`1oYs7C_8ex5$q28f%c{!I_m0v*u<E^t$B8%39HXIqXEB|i6c&pvP!ShV^=hRny5iM04z~PjGO}Y4'
+            'O_II_6R-73)7!WaimupOM1{%5BaMGoBjCE@fiX%%n4?4>ng-N~KzC)p6>po?$u_NHeQ;3?kvm||VRGW{2WzY)jTY;F9G-'
+            'gmI4kDMs*&1jiAYs-unIP{Q^U<(V>T{I5#~Xpmu0ivr7rszwiePmeVd^KcSY_)WlIe9L<d!BnMClHbh(K+<UgN^XSUZO`@X!*DAk'
+            'KH;iAX@%_L5JnvIeo2q`5A@<q(3YPAbSlMwG%@wXC!0K44Xa$H@dg0*h&CJ}!d-'
+            '&mJpmeaQs8yXhGXakbj06(IpG_7`q{JZk%YDKA*k5_?{%XGK?RyV|$!9pzi)C1b59>hNNAk^yNl9q+;?4lSVt?C#tnD9)Yr;J@?S'
+            'V9BqWb+WW>1YHjV#M5o_lg*W;Pvj7m0>^`hA?@AtM3Yn1`N5v7NWkSCN?Nmj@4c{miKdM1gK`GsOmUBO^G$0XT(mxy;`Kj4XkxMX'
+            'V>NQ`ev?;8HU|a?!3*z)Q3ODu-+;oBkreU79;0;9KWDBB!C`nu?d-xY#V})v+~*LV#-'
+            'VZS?xWE^ghiN?jk?b!79VAeKfjhJ1CA#jY87=n4YwFvoG(;P#bX?#k3fA#wUe-CU{Y0S~LS`1K@#Cn<bpVSIS)?17JiC#XHG06us'
+            'WPvUKv+%oLo+H`_EWS%7So^hz1^wC;z@fGRr{8mqn-'
+            '#xPU@!5vJm7l4pCL<eOaHf}IlU6L2=U1>ex30+m~Rm<Ws#fibce^zW$E`!t(K^LF@Sw2r+?S!6sx!T-^6e)S)-'
+            '9=J!TV1a<s+Y^{c>64Gmw-1@h9KfCC(8;DDw<(otGlk(z7v}r{O_grnFvyQj6TEg*DN8hZ$JNk48nOrR!e2M)>fmcx#-'
+            '1<7o;=P1lVbf?s%M+X9{<-'
+            '(7uA`Kd3YB(3V9jz0obr`3@c~b4SyHPI}kO8PaH4Db2=YIf1h`O{)!F<EAm4&;*9>0QH~1MThg8VGc0|s$!QNqQ-'
+            '@3V>F?5X8AjCj}pD&+Ey)Ue}$FZHnD4d6h?e+Fr#dUb{oyHt=nXdZ!F(j8s)uZH2?1V(6cS(>#XL+j*}Jsk%#3d6Zq^O9dYn)GJ)'
+            'ewben-qE3j<@=E%jG)pwoIm$sm8@m*)|b#-'
+            'HtfNkup+ImaI(X!mnx^4bKu+|7HHekNqz+?8AyH*Y=(*!8lAj^%|4}N0@d{BHw7t;nLxsj@mT!lDvLnSFBya#MD>#kU1AXbLs(hj'
+            'khQuqWMKI-`gOSu8K&MqPf7<foj!}~)C;Ill-#;l4Od$-'
+            'B$AjvWGLWL&Vjsvf?cGp(?D`PD!@ltK`Rn5Ugp<rw#(HaUt(V8Q#I)pMe70ME2H1B|n+aiEe>hY#FGu?*vuP{BWz5<R7nU-'
+            '>Joz|hD3N380c!1J@txB)NJkS843VNVlKS$f$^$w(@RF9N2LbIXXEA*sJ3k7Cn&=v}9UkvLe$FO3;s44{DR!3ST!76_od$qUeC^X'
+            'G`@3*y~kG5$l`(76(__>mSMoI<~fa15o-'
+            '=ZC@*=WdVWWW@Q3Xz~H6vr7+@n9$hX=Ek9*66Ha!xBp|gqJGMQOYq8&r?0I1@b4@BXSrY#rF7|loFUZ>ZnHn*$UMl|IY~rZK>Y9N'
+            'qKf3UCv5Os^&-Bx!#c|s%+7goed6nM8@Q8$4&)5M?kRb9-5r}EPa=bzDw%+eMecEv-=Jr?3RV8*Yvlz8yKNm-'
+            'vUIDNipxMOqdZ42~CN&Xd2g0lmK&+{Bwamb?xB<<Jt_<9I_8$ouGA-'
+            'uNB7sP7C-NKAolW;Y}#RiC$Rf033QgNauM>$`aumOKU5A)H*!$;S*tE&9=0wi-wKXXJR=f(N}`^yN-'
+            '?HKO<Dz3Ca(Q=Oyk|E^?RlOhVq{D>vn}MtZ<O*02sWqO;|^CQLXVH4=CdvYV4K8P39ctnN*>^F44%M1m{2Gl7y9fLvZ&Jyit^+9)'
+            'Nv!pOq(({tId5ItvzFNgP*{5mh9>WVCma}Eq=Wauug;~9`Mc&xn&>2Kvx=#tZLjP_1&WhpFxdA>Gaf%=g#89%U&>nxd03tk;QhMK'
+            'u_xEh+9Xde0~g=42_paM(6Rry>@*YCnt8)fXRA{azJ=6TC_6?EW1I%@?{<on(#xqxIcWR1%t;h1hteH;@)m+7FVnK(U{$t_SbBJ+'
+            'l}lxSGHmC}1g237G1-H}blUsUHLLza)!o*|Lp?h&VpXj-I2UYw!fn~6qpStva>S$TA-'
+            '>gfWRM_1}!Lu#T7A67~Vo+hi5;4cFP|2^}$ru09!<A7KxfpJBqk<Aw-A5I!g$_Qbk-'
+            'L?QaP`QjGJOm{qlC7`vY%wcZqrz|@!o=h{rH^4^VA5a4ZkyR(tr&aZ@6ntnsSVkRh?cQb1O$Mrn`ANr;W;h}%9IXMdPhJgy1Eoom'
+            'H%^*=7t*)LLV=IN8!Nig2nl4vbdd!A-'
+            'xDC`)|sz3perHXe4fz1nsoF>GTd&Qm|ev%#aXi$8p235$seQ!I3;dvWi0ynN|EWwTFymT}ZD0%Vlf79P$HVM~Ad|C1fJJNh1`>9{'
+            '{_c!2M9V6yBumN%k`d^T5c2hA3`a6*~E7tw32taF47i>{9no6rcR-'
+            '2@{V^lQ!?MMryQUtp2t%*HO!O161ji`O{Q^n~GlQH_2Yzr0P9RM=hf@v-'
+            'e7vLfFHfQ7yV+g|v?K!@Q5yjPugNRAV_>cPamxN?`zpo6PSqnJ2Pe*U5ANAPxXr>S=h_#C}xSZ2Yg@Yx)QG8b;E4&9|E&s;^?eKp'
+            'blo`7p#I2q~zdj5gsA3zWL(6KeE8u}%11=R!)Xr~>xg6Q;u<Y_m#DqLATsFK%^!B)xA_#Bi2lBDk29p=5#2liQe-K64s{f-'
+            'qw^@q#Kb@K*&n@GcD>)-qYvb!|}U!xk}&3?D3YzK-De3b=9-Py2UoXghH?5j#Xa7WnW(QL->G^Zjy<Nxxf&D9;+5)d3HT*-'
+            'Db2oNC3ZQo>71qC_(n3FmK&nrc=%2hYRwy+WbQP}I_ib6vpBaVB&O-'
+            'Xleq{LgbUbVE!Ta3nB*PKTs8(=wA*N3bkXwHpxg96TuOewi$oX;%n*!eWT5MYMvrX@BTQ9|&O@wT```-'
+            '}k<pd&4|a&hxkhUHVg%YLNh{!n=z>V#2iO83hT?V=OcBdX}KF{aR%ZJE(|8)cIaKY&0`?on*HO8kf=G8hxhAOI>mPqWff-'
+            'a~%AhDk?+Q)vV7!bhIE7HXXY~uUmnfIH$qs(5Y&>%=IEE(3RH!JGJAeCNoj~s=1vKpiOWFu-'
+            'f5pF<TOtu=NkPMxKH~gWjGlo|9Rt0`YQM;GW)-'
+            '!wy!cfXBo+P{kKm<!xM=@E9hFh+*N9Z~YY>P&w}|YbhxgDliMGDPsYlx0tdhoJV*9QvYByzlrkpgtc>%Q6I*N>g<0NA<2Bi4Sy1j'
+            'auVNVfc7K^&7XOohsVW7CDIyAyq|$twGoym9HAXQAOo7}8<|Ev{+kbUS|oE~C1^VOlxc-'
+            '%QDHv9Vk0>Eq@cus)b910RcGH*+$5hdyG#&_i!xVI@hm;A*8o?9&YF3`VbxM*T}XA%)8xMY0KCB~npdE#oA$C>d7EDgB_Lil8PO5'
+            'Y0Bza%;JqEqrW7)&$0oN>;|t{fw27Op9~W0y<b+mvmB6oa$syp3IbWt)8LI?NPESwH4=;LTWc5Do9UtsnoSc2>;sHmG>XcOg%#-'
+            ')P4`D5=4k*J4$A0@gZddeJ>p^=!?ccdjn{7l=p#1ahO7kcOdsM!~$E&$_IQd6&NOE&(6@l?Z6!eMDzASw~u1NY4cU3Jh*Y4T|G*{'
+            'cs7-'
+            'x?XRO^zu%Pf*qHKRT1Z&$zh6#OkR7qn^$2Rf#^ydFliD!&$vDT8XoiT<s_F{=uZiXuhLYFz~8iJ<@~=XQgNTTIBMJ;vE!4Ir$n^}'
+            'eYNi-=8eDTPD{7g<|XM)>esOKX&k#|5JEOVKqcm1ot!#;*-'
+            '0h77iN8TrF(w&b|FD${x$&#+VzdWrcC!9#zTxRUSERofcWzq^>Gc&SUmPs8ws=GiP#M=0wN9^xNKGGi75@Og^fYZe!*YIX@KUQC$'
+            ')jygu-Un@2r_;Owc&ih~KOwCxHnqWFzMli27zbKzRM1&$N4ID<9DW~)nd5`Q|wL9BykakSjUl||1xq1Z;*V}<lIT^xKX(`dthj?P'
+            '-eE|fuWHaytoo5x9;7##YyO@pr%SV|U4H0^eGA;Ufr9Cpn>AZ@J)()*aJwzc(|L{Z=$CpeeFr1X5vn72aOSA1#N8Uz+UqW`PqX#p'
+            '7Af_O0<FW%)OhVI#&_{ysAbrRrgb$YTfNVi{y6|Ay?CMEPREa*n3j*Y}?<ThX>m5IMs$nl)Dj_fa+ErUUBK#!}*Woa!O0W)vohsm'
+            '&8;D*MyM`DeRpNAMuxtus_~hcZ-dTzG3a<rcStuG&B9J`0msHfGK(*~trU0spR75gll*hSAL*^z8DQ|9ywYgH2s=MM-'
+            'N@hy@aIHv<VdugT#JYvW%M2^nQoq$Z4=r4Ekm^?zq~fW{UqWN3J1aYkq9rSpOY#9kQ(D!1Gze?^U6k{D-'
+            'UYvl;<j(7G{`iXzy(lJ2)bLypA}1}LYvZ0F-'
+            'dwjsuhIlmGZKOG70mY5F)&Uh_t(g3CzgViNY#~t$r8&6Z)t>ftG~+Lti8lzsm<0`kIl%NAhQN@{HvBN@DiAgDjg6g5|WGFWIllkd'
+            '$=&Mu21`{DoeO^*xp0!I2c0{k=|)_V#-'
+            'pdvM{Tv|r@!_;@!?6zy?zMW@<?1!hUUEfG!g99^nU&wA&*v(LT$MemP`{`uj5??pRXA5ZYX$x*c3+1?c$OCQBTjaB+o_)}ttR7O>'
+            'K7nuR&SUD7(0?rgV61D@nlW&5f={di%75iq|UtN53o|Blvc36J6y2!vOSv0vNGNX&>*J*Y?)dGy>l7^(&mq=Eu(*#Fm*+tX>#4^I'
+            'a8VXi4PDQ$X^GuvZ4>cDuOYz_6E#jQS;gpl>&dSMDZoF0L6#+(|0hKp6mHs^IPtv=@N>V{Dbo~Vkc~&YVCx8-'
+            '1*Y&vmfgTw8>#C&_t6r&gMT9327MO4qv@MScJ4cw^8JZhK7Su<A##1xW2wS<4VLU8~O9CwZcyGj;tNj_EL^-'
+            '|g7gIp7H<@ydL?va2QWcS<P^nHGu3Mg}@hIjJ#u~tA-6d11gUQKu;QoF-Jo$94GEk2f6E9y(#lEvQM)Oqfjb~Q(4ZX6m14m>@Ish'
+            'f?#ol*Xqxc;elP1c#0=pj)W#WC*Os`6+kCP0{+JzvZ+C^;9YgnShv&Hp|XVm2d0emu{U>H&|b6G;lYOWN{1pK7!o?*S@Y*7d{$<x'
+            '`~N3{|_k5wGgy8)7dV<A^in=S}%uW4VY*ddK|P)Pv@hnLTXq!7&UMh=o;j4yFB*bIoDMP^dz@U&B%<%Y)OHN>h$Gpxz1;?C&mVMT'
+            '_yu`1yrsBi}gLVtV-WzWpCU$n1e_oEPUEV_&(ICr<-gym9Y+qqsbpB<Jo7Oe#hM2-'
+            'vX_XuR~g*KIml3CY?Wl&KvnxZnOQu9mQMuFuBBgZlKIr?KL__pyCKdd=gJw92Q)XAjvfQ*y6Ed=rO#J)96$o|lXC-USzVplpXQl9'
+            '8a&!!tNp$fdGmx{kB{eig|ous>28I;R@l#$(n)!HNNG6-uF-'
+            '|472lqHN)F*G;=ohra8JsWyf3E8?Yq3Q}mf(qKUf@i1X1uBq4c%eE#@J2;T4@qnRf?catShnWYM|hWp68}ot)zCu;;cpQ;l-'
+            '4uHd6izY{e2yc%$-H*u6J%p2y8VUqjON5D}V>ZHvA|E8nf>z3`~WUKkl7+6cP8RHwgdp)HQ50^r_dp_F&Vr!pB%Q9j8l&i3-'
+            'c%WPuh0sf&&QD_BwD^G_w=;FjzFX2-BfufFMysZ-FqqVvtIDm(i@ZClHi)mKhwRiDD8Iqa3}efj9$xc%jhZMyqZfj%;K06l_;!K%'
+            'dnDy12A5cOht#dR4Wer@VxziCOVqsP*$3aM?npuv(V>P3QZO;MGcY-oax@^KM*0OfiQXb?a2F{_if0yV|mPd!zmPrltyD5j<y5LE'
+            'x#%BpGj15v$sEJZVOEMC5KIlYSV%6&RTLj?xtYLYvSVSg!oS2jy>77@?|2HnhVQ=Co0rIPP~rKny{v6aM1&O>J(v6&AN7$QXt0Wl'
+            'Nz(@JTs&wsCs1whaxPZ*PF^N8z!=^>gIFEDZcV#(F}qf^a9&MA6`nS^8b4(9Y7bJ84?fyz$&42uAwscVx(#PGo>$HVKL#KRk@rNB'
+            '%YX0>7-MROde@DQ!T7kf@*-'
+            'E~n!!_cd>xniQ}qdPGLS=1}5CXPf81iO87&5;^M`~^`bJouqJ(256m#4UZ`s{xcH(5$=&SB~(15O~T@u>K|}RXydMulHrEq(tzwC'
+            'D6}xZK&b<?aq$WT6$>7XF1YG{rEXj(z<S^wtySzUuDaNfZ@sL!C@ZN{hghr$-S$Snw_%`^2X!>pzNv-'
+            'Z5+m!ptBoaLhjgV>8`Sc>=LfEW;kG5c9~xVF7BY7(9Rxrw|QLk$-uox3w~QH(#x{>pvu*_2SCHHF-CI|1UJ#>mXb#AO*>DpFb^w2'
+            'DJQFC09~y-ANwt|Q$Db^y!{@%neX{m@Q$%ZOr~S5%8HBo(&U3nB#DixF6vXcJ<g0jI-'
+            'W%b)66W!yAop`t<B=CSe#mRniVW5VKV>+4xMic26(TpBFg6SdRLjg%Gbe$)NkyU=@P^}Tx({zn2tAE<ecyT6Y&}fwrawvbW}uU_V'
+            'C7ZEOrPYwpTGS#F6nM1b$)BRNVdMORB9zSEjHM_BYgYP~vZ7rLNR4ArV!2mZ45isghbYvMQ5!kW3=cbBfD#U$HqHP16WyD!CC3K?'
+            'G1{2|S>B#D9oMK{%80Ir4IRFE-vtE%=YpBEHTO(j^;=(pcvOG&Z}t&QfMr%+yXl>eb{=p;9qKk2G<3<T#`}Qmhv>s?#@S+xibtl{'
+            '^PcO_!CXOTY0H%v7@SoshH<M6Ls^Gp@H=TJ1JI2~=_^Hd2gO3f(BHuE*Qu+AK^$rn?(zym&Ulc<mc<qM9VghnDFURpwd8X!pPyCh'
+            'Si=%aQTS7gNoV0l$c~+tWD~#hm(c_8r5W1HxUaU(XT!(WTlRC!<njsFt=^=-$Pp4$R9h&93gd#pGU)tqMlqlMM{4t4!P`-'
+            'E1WL?ESiI8F-'
+            'pUUM>TZtHJ|ZF7bk5o`GlGPC0W_HBB;7cGH>2QQzVQj5MUY)<Oo%+5skL8e=V<DTbByGbVEwpP@uDKm^d@fBqkS;9@Za-'
+            'I!xqnSdSXd`lF%dT5nfN6(miC-twtMfSJ9X-_S^rpQ1}iJm_th$x!XYHYzS3bH~S6#SAN!3OqKU$nPcR=`6QT|-'
+            'd`BN`Y9n@hzfscMpuiy6Wxg)@UPbkKfVv;t?96-AAk2~<&r%+@rpYgGm|R>%KbxwIEZCHgWMfl&37D6@-'
+            'OCiQbeCwk}ZCiWY%7d~<~Mt6D?n)D1q_0>?>fzU|yEI=eRjCOvn+7`53!4H}?Dzdqja&qqDGcTyLZRT$N7Cl4DGWLz4$jnp7g(}G'
+            'xt=3I*Wd{{-DK^ubqnLR7&GDz+Puj;v`G$#0;XcD3lpAQ>49l&pPEsF%QvE8p2rL%)`O`LclmkRJ-cpdL;v!mUVpTxvS}b*!Dzxw'
+            'y3o@>fKMhN$Z8#c)ifnSnd6<;D$kE~Fp2ET#^OTQjN>5(vKBoMtlr1hWyle9WjWsT=Qen$W=yDZ3`Z7nqD}RJ0vY{8og<qfE%tAV'
+            'S9oJ6-YjtOr(DM4hXv-Gtf#nk))>dvJZDkbppIp>PFEfauMnv79DgN9$JN$6iJCKBg<xo$r>4CDGH95=yY7_Rva6XVKDWqb?1G5#'
+            ';?;3{kSuM!cjz7MHhT)PbAt+0wWrZZLB>;p^4ZoIts*VB;dU0FdtU|}Ic~O#x#r2zVAa3|IGj&2~@)U=GA>6B}hFt<^u~{0f18zS'
+            '7^y^8aAQe#WS*kpVP+a)^<m?}Z$G<u}FT~(|`0@1Q>|*cuqFeI|Xa$@XnUkR|C0HyQrV1#qfCV{qpImH-'
+            'U5O&lB%{{h0rf}s;{^yaDa#+GTD#+&iP1df3b_Ie?2_>YT6Ie5(F!cfG#R`rj>3YEc*gUkZJ^eM<j8xpxTUUVh7*#0TDgN=@fFnx'
+            'UxiP@Ea*nPV1*|zh15!euSyZ!H}NqIro<tfn5IF7y}2RzeX{|Y6SpWkNlV-'
+            'h9C^|8*UZ_K9xb*xS&djYWV^=PG1=%Z<+tbk0epe`qX;)oB$V-'
+            'Gr_`}Ha=+56pftPN35vDxb8j+H*=!2!dwNdg)+m*V<ZXK`H5uB<ny6eN5KCmu?syUvX(rm|IluBQF{RCzlC6xC8WbmqkwhimLanW'
+            '+W><n?mpg>`PAAjFEt<C|<rBjIvry<+WN|I8OSdCVZGmO8SCe`SrB<=i_o#&+4~r6u3sUb(4!LcK)0*G(xz2=oq}r+Zspq3)u(-'
+            'C9n#*pvc0tsblJyspC{p$j!2%T^8vy$G+Ux)!UIfm<0;769bj^jBK&EPEICZZZksE;p1qWT;5QRF%zA6_mswLoUyrb2veieB;)&('
+            '|rXDSO{F0FF=&9k*eY0Q<Ypsk)Uca<z8%$~WkO4RTyS))lWp$2%S_-nvvZFx$~PO_7ccH5d53u?}U;di{dt7k^G+i0!t<*3n~L@H'
+            '|N&}>U;T)b!*LMfz*qd41ODpGaBi1?9*M>+}`CpB{ulZ|J!VXfAcmL94@u&R1xgW<<(V>gc3pd9&z0cfKkc8wvH_7K50?uYVp174'
+            '*Rkl5jMgjsH?A`-qbuG?DC#vvw=pA?T?%1NlNP`@@9)smMGyomBtB&3Qq3-'
+            'J*%W)zS{f0As7=PCQpyo=5%ULQXlT^ybs^(;!rm!9OGN{;gl1z#=x8gs<(CYj??2RLZ&pm)@}I6OJ-'
+            'H00(t*Qb}a)npO&_xFxZjt}?uj=ax@z26PVP|57C@PzPczS?S@vG;S^+KR^#RGvbW`D#Qzl-'
+            '>aUX7?g>{B<LdP&;$;8`P~UbBH^Mq(S<LJW{RJ2HjqTem1Strlm^d7wJ+efaf$@0T&v7TeSvQOguXImCgfmh8>-'
+            'p{NvN9i0RT+WOO~!lTO7DTCu^86`K8|_&9(llL|kXCs$O)D5;s<jFWnlWb_@g8qp*DV@dmCACrQTW=MzMMvt;P(6We8w)PS{U3fu'
+            'zec64hvzn1ow&n_~G~x{|^yERW9q5%l!{qt&5EW6Ki%&@Dol-'
+            'NhW&4<j53}Q7+qGkLEx;(WBkwM|JG+$}{j*4oO4oUVssib>qAk{jcL#qoip*m0t9c^2sa7TU6|4%w@u%an-ucPV=MtGvocdF!(w}'
+            'JlHbTSmj113VqsGY=@*}|@^7NPxi6D_iRg+;C<sb!7N=TVHRmF)M3sg>(wkYU3e(-HLrn(u5CM<N?eDTUKrsl|>>7qjWWb-'
+            '9nmECLD^lPH0_IpOS@UI<UVW~(~(x<VHz*^A@>L|cg5qOUpg#Ui^w1Mo$2*ecpBqdmp81FcD0;!O+vJrEpOC<H`uNdajTC4{}DWs'
+            'CBi-SVoW0Mic-QIb^kq=%?S%<uXaf%qxSIZ(WxYWE9M}ZDX=A(0m+Vi3nJW*2O1{u>OlACGwwcLyrM1UQgnR%WsIPe8v)fu%Qszj'
+            'bl8LdZnndJnSuq7kRLd8Cq3PtJwUy6+kKmu@8O&sTrs;UdExU4l^T3o!P**QxEfpCo%bf==f$e3Yq>YSRCU$Q5bV#jOVSkh`&x3Z'
+            'kF)|7WWEmJ<!oUq`EP_`ycpXi+>ZTY(%NnS_fauSzS#=NZYty`2JSg~T&(EJ9AVRlW8{X)jp{#d2Q!aOFm|2(ts&l=294s0(AV~R'
+            '1Ls1C%;N31q`)pw%0Nvv=+gb7T+*<^kxcj=|qd*c@sOp0M_g9Ke%z55$PEp#V260K_IGe*+1g$;2jQl9IZteA7;TInZ1DmRI9lSD'
+            'JhMq&&nlQFEFgx*Z+3Z4fgQY>nINPieE*u)zNyT%zm`3GGpTOq!+R!};pWi$iPEryn(xzIZ}{P3Z7);qpfFD>~-'
+            'pr;epZR`Q4xT6jH|JM8cS$kvG5howGNW-NTf3IvWKu3cO_V~2H7H480aUU$K6wvQB*y@JeWv=F|x4(CK@#(B*$c_Br(iPBw4(+dk'
+            'd_Z#24CBr@HFYDrltqJd9w&iRbYR;6P@Nn2xe+`|1g8MCVo6$q-'
+            ')d`jW3@{3bkr0@uhipl4wC>ph0gR*%^hpsdN1F=wEodr&#i`7da4Ov#?j*gbwf5Rcy9QXPBSw#68fUyE#}I=6;lAr#a=F<B)ro0V'
+            '_h&_XXCJQF!YWOfO?<$A^r8s$;HLVNBD7mdUSYE{=|3m2>#wbIX>>~U!0uvfdkY{ag3)8$fmj6#T4zDBr0+=mc5`y`!`&f3d=@m&'
+            'SyGaKB|+q(6h;B)W|J_jqX_5zpB<(Yw)f@g_m5Isy?(%^`HS<`ytj}5s*i61L|WD{F-1FR<42l(=i!M?4u?oAT%_J4qc>jM-'
+            '*Y!!Z4wF`4H)7AH`wncT4--(x^kH95dNbkyvq^_=CA|lwtBwQL^GacI}lA5so>_@~?P_>J~-'
+            '6pg<4U>VYLlh;<)1j?X_L7nj_EG(_1zMxI<6@3mK68cxETc;D&ieWxxm1$OYZQPHn^tf>U7ugaA~qMgVrlAv7GUeYs<RlWyFNll|'
+            'IINiW?0&oZyMwfuGD!WQfTM~wBuTS=Inq>E!2B7x_Cox#0AUh*36wfd(RgT^Y9!P)4l;g7mzzO;F(Gu1rp?a2|00JW_ye@tGO9Z~'
+            '0ll#z789o5f<JV4Jy2FM$fz)loU)bd<ThhOBK^S_1!#|ngCEKR|7VWGN7t;qpH0Cy>N%0QV$BOoJJ^vNfuWpGBi#`_^2J&c%(b_3'
+            'oD9b2bT2P})eEtenP(hWRdS0T_D=W!Cq?2Wsh3#FoSvZ+NvO0N(QyGTQ=kOis-Z_FFE%L|0D_cvC^KHe~^)TM~myf@I^muf#ci<@'
+            '%6o9~=wA2mFtK@u$Q?A6*s|}l~JP~y}v`}l+bTw=oXY?JCO};AtV<w~T+=zjWW+ivS;Dcu!yz*@}+`Gt8FCY+RR7N%R+|?ZfLP>l'
+            'el{v_6Z!xeISOf1-Ee-dT(wR&qrQcdUvh%vJ*DYzR-<9GQ4kT)&M+@K$YD?EQ85$SZ(l-'
+            'OCLyV^~3S32MS{0rc)%NAmF20=hgeS%^UMO;j%q4TV^w?lItIV-'
+            'p1GmI!zqq0h8{RH+d&1`4n&9#<>Zc4PVqm3_nIKLYHje+tm#D?Pi0r+P+<fJur92AigJ>aC4N>V%>C9C3O05%h2tr2DECE~0c^Z~'
+            '2!y9gssA6Y!W-'
+            '^nVp7lN)9sc^;MHlIZoxE`|jql=gf|u%@914|%(21AP0k5hS^~+>mRsc78!ZGr|@!Q$B&AFV*;p)Xo*!?S;!+;^?pp@*0p`=CJvf'
+            '?Hyj%&3nAUsaHv%UNFXVjrdF1epEi{vYOx`{-pbKhaA$C-'
+            'VCD23VyA2|={dSMhZKl1cc;zyX1O8Uq=4{&qoza&`}2E4(UkSw9{QDKBDeoPyQ$|Ua;%V=*7W?yK+qh%UGst+ZH;siie>2U&=#|L'
+            '2<yANfinx?ESn*5_psh*;?I$N<RN*;;Tlt5=k0+>_5XqYzJib@g26(eU@Q)%)Qg^|{n<OJo28m;wGEq8^}8&N<_@J`UKmFaXH$d*'
+            'Zir!rXAwcIi_uS#uTBnmSw6c5pfM<Yj+OtDE&u``%BsNS+l1aVzgU4{%dDyqw{;T2ly4W(2|MJ;gA(WOwOjKFoAPHpT%=cNqeE3F'
+            'A4#Lhs#Wca*PTX&^0p)Mn1DPa|=%JzY6bjhnm7mEj%{3^Ee)OacGD|yHYrBt$PEv8uz^*I8W8V9VC<<w-'
+            'hEZ=aZFW%|i`MKqp&m2zaU?RRO^P8M9qbY5>X?8K$A>@`$&JKS)Jl;DpDha6dDR%Ik)Np#F%l3kPAi|~$;^uhccnHVA2|y&{C2<V'
+            'gPv^j_X9bnD04k<ZK`5S{s_A?Ju*)%3NXtABL)JCQTNwqGB)6Hq$sv21i(B_=9bLPa4ksYb*}2<T)5LD*sJxd^0Dw@~v#GK!CWLe'
+            'Ac!!uw2dD@WULA@qY3MNh8%zVgu}nA#`Gav_8hR)>UMW**5(P2~n>5h8O0vJ^p!?)o=cwaqo-'
+            'E~m(gi9q!01b)h`l$!q*Hp_c}|5%FiSek0XS+9$T~(XRm)@8_Cl|uJKQL_;#M^R(ay1GeyJ(ZVoemQ=bGiZc0T6UOA0LZhfZhK*7'
+            '@XQf|*)DEP>I2lE9`TE3)sejP5H3N^wiuaID%+gk}BEt%_^iP?9#g45KivPU>7!_?8J)D`T30!QHib;!0;*_vYwdRY^bD>0+Jc6g'
+            '-m>$Q>y`mD59Eq=L}N7CEvdd6=^hxx4+Qv^zfoV6n<9!m9zT<fa;Mvee3DsAUIjyf%~~n*D!tz75)`3z%}nHamZq8#BfR>lGj}Z|'
+            'G{wd|uAn=^JWv!kNInwSpjuVDGw3(N$FJPuiot$dTi#c~fet5ObH5UKG>eXt;>OLCLVkW@*KN_77I0l-'
+            'ZzSvH`|=YVQX0U|`Qxx^Zr1E?y8v(Lhav?7~ZplL66(58*P@uxml<KKj?$F>B;#Gn*_5vsPpK@IdAMXPQukB+*cxrjzt5s%Aq~q1'
+            'DVDS}`G`E72`wR+@8CV3TuErB#&P7iWR8COf*(a1s$p$zUz&C;4?dX09-'
+            'f$v_QnI=2Hqtu(xQ7c{iSbXLY6Z_gB9VJikp)W{~2F*z3yt>RcQOm15eI8J_HYh$xPk>q#m(qsw{N~Nt+&i@oxqP-'
+            ')+nv^|mH;d9kFrro^<GC)PdCQDTSna-Gk8JluFpKaH(I3<CmuZFVrj(7-'
+            '#Zah`Xu)FdsGur@=*Ipg(1*T0nKnN+#<EYPoK<Ll<Z8>ITxFZ`7v8X%nhX`w!g<OOzuKuQ&(ta6nMLAO{iGugl)8yTFLXY9eCT%G'
+            'qS|Rm{|2@3)U<Iv<^ovd%jV}kPq<vH?bl4%ptU!8*{bqWB{&dDU-'
+            '7k|8HaZd;oUMS`&^douj;8eDQhi*t&%lWy0W{6_CqB_Tw^Y)yJdT6v~A9~S)L*J1-'
+            'P}HlHFvUt&R~N`^J81nHA$lNp)dpdNp!2k0>2It%wjdH;^Pu!>#6GWo#^<%py~MaA=|e1Phqg5+RMj&}j}WPFj=!lt&Z+Z=ocsv{'
+            '@FERY*WVOj~n9Qs}?^UhSSl_X76BE0N`Kjs`GT+a&2UK%foCjz^n7V*U{3%gFBc&Cr-'
+            'X0~+(S&^RM|^(scwBH<0teAc`8bavc3Ag_FtR=Hc2<2FI9%zZUe=Ab61)|jYj9UwPmgSKl;oI)%OAf47&CYl4&l+sq;5H;kwxdgQ'
+            'uVr9Xv3|@Oxc#BFCQMvY^d*gIKh&vjj7T8~QwaOSVIr#a<E=%jhBuQqi?at0y;qyrG<JLYHdJYE%WGf%E)}ea*9H|GrtVoL57NCy'
+            '6bl0XXqbw=3=D^_K%%MbG+j@KuBMFyM3W%q(DDI>A3r$_dIR5#?$>}Ma@9&2fzny%#@b-'
+            '?mOb!JY^}Lfa@2m%H&Uzj1P(0MR<__nj<)nwkcw|09b&@E`?h>8n8Pg3cJ4*3_uP{l#LT$S$nq=td$<&5BVlvyRLcKb-'
+            ')pDGa&C;zq=82L#RAID2{Y>R?*J7^2{ukB^$&w)UA&@_omHt{Rzmf+0E%bZAZ`Et8n1w`C3L`F-'
+            '<d!zE(RS6s3J8lLyBLEta8u}S>_9;l*r^x}Zf5L-m<Cr{7|oGN86av^S+3ACc`RIPi3nVJ8mDU8d3DR-'
+            '${V`I`dY(gvE$m2>Dy2s0z$Zt3#vht8=h=#T*RoXNw_3}Bv*pfmBfeZHY_=4!E=pbLwO1q8Ua1PIxjv+3y>$-'
+            'ESXjupdZyJPdaIlb8}03QKN;#Z5^?=1lvABue9&g3M+}#@VOrSZdg&7nhZ6wqUUJub-S-4N-'
+            '8=BbeJs{Way1}j*RHer084^e_AJt;Ea)tX9jDM!)`e)QedELG$7d+n+golf0v=@N)Q?OLO^`~u$Z8emNtj;1l#YeTTJ1GTDyT8iH'
+            'RMN7GXkmjHghFfR{uCsZtFQQ;hEtB?r!~{hrhlO}dVb_lZinB)ZPI*gfsqLSY&FLRK;5S5MWMgft>MtNiNK4T&^~v7HH(n7{r8o7'
+            '%|o_WmtWe{X^sT{pM%bWX6wZ}AQ@s-kSx(M3qsrW<o9E*dh8Z8+T{lQ*itCgvP70v^`kZplbyo@AM5thU}w;s<QitxDFhI-'
+            '#)lpViDG?oom$+L7{$ys-5F2pS%?${5#YMY_--wYFS|lm!dhkqZ*n&@5auTb@hEQz}o5Ppvqq+PUzuRzx{%qRe|%7}Po-'
+            'R2PSZ>e__=|3dC6@m^(~tdgDUc<1)o$#)?nn|@TCdsv;L?om32+ibJmGlQ5kP(Hh3WcFYi{YrMKZU>sO>%B`bG00qCPoRq9BOb-'
+            'w$h9MpF?Q9IWQ-+(fK#Nc*-e!`gQfgW$NRmri@n2ROm`w=mG@P|=%7h+$B7}(h+2tK-pqV!PvgVh;Ss4CTwfX`SaY2rqNOUE69-'
+            'Nk!(4dX(e@<<6$39Yi}QJk?%RrO71N0)>E~RwiBNe5q*xX!FXoo^?5}fXW`TomvIPiY*{xv~mB@JK3Ir2?<z1CUxtf8QT#kpkoD&'
+            '89fcFjhIC=}nhjzYNNkli;<p#@@1w_6L;?@70mloGp3C*|aeXka4&JHgy*+zE-'
+            '2aLj;Ku$bY6*x<#{}EUJ^lq~pFaA);QOv(qDgm8woVuihu4_<$nV?qy>CL9!D(*8eYNa7(M|Wa119JykjYp_4n;L8Dd8ciBWy_^>'
+            'CH>PusoifrC6df(IKd4xs3^wPBv8vU&dS%X`TDN`8Yu=f7q78~sbK=jvZXrubl%y-'
+            '<5gpHPLL82mJ9VL^3Ytt(+1=EXRN7X7(*m!fEn=AV;ma@O}^w>uMBqPS5|WoMkQlCe-'
+            '#qZtbGw2zAl5rh2U@2vPfw!G=9$uGvJ!<r*&tv)5#e6-'
+            '7vBhx3n^AOfAsrENPeN5Cs$9mKoU?Sdjb<>t20l)@&9tKD6dyrxd~j!@M3((wR}8OJ_r*0CFm~Mcx2K8PUrWNYyvT+M;CE!QA0ou'
+            'haDHB7+j8g+OzXHmi3ff1{Fb&0M>jNL~VkEh|*$st(GPy~^YdWr9<TGv~DCDhsSCaFI~GLEc|g-'
+            'b_c*?(hBb%hAdHKRObS25TQLrbET!o%Qw(+9$_HU!;E3k~2Y*B00Vtq}Pi~xmJ)a*>Vn;pu535x{h(f`?qoaHOb2pFFmg<$5QUJ#'
+            '(#8;8G-'
+            'LG9>2&ocWFU^Hf0rcuFVJF`)GXh$<xU}DvqE*Esy}~t}b!{C1F}n6wnt?UD|g_dFP}nqMjN@k5o0n66bWFZ{85%rsC6*@i*-'
+            'jtY9i-ZmS9A3y~<$e^GffDmnfe%d$G+KrT53<Vve*RGkIwfzHQL_hYQPf5TMGB1$!f@uHeDeyd(iNvbKiNRfL7?Ytu-Rck{MRVI`'
+            '&FoapmOJ7Zxu%=wn=GBtcD=RExs|dn41w*f(e$u}xvn?QS^@wuoRP$7>-'
+            'zVN6;lu{2#4_xTQiyatyQmSG3~Kd^EJt|Yf5w;C^lDYGfVE@_Xtv9#tSY8bnoqb83x`6x3#{lUYiX-PRGT`$_N$sJmA<ss`UXj<v'
+            'uAHO?o6pKx1)105gO}DRTXlsLf5gcMl0W3<+E1dQ_Z{S=&`l}MD7ZZx36~ajT<$|ig~>XITP1f<?ZS|sQ@-O-'
+            '!_&c{F!o=0{4x7NwvaP_@c50y5El3Z)x;<L;b#WQAX64UF^n_05?AW`r%KK@%$l@CB4hh@BTqm#@wn@Zb503SKFp;L1;YTu0ik~t'
+            '6#!O!qbz(V@&CA^xgM=VO3Pa2$+!4B*4qU2nlN)fT|crMCd~tT2(>IUrXNzaN%5ncdF(PQrHb?>MxqX(E3%ZK&0-'
+            'V6a<Xxe0oRcGe3|v-'
+            'YCVe2JZ~xQ`+y3dLJ(E*5beI_w*3B&UjjkG12;B%8^9mDv&3beoclGzX1)`v_Irvr9uUXt(zp*DTos6!^+82V=j*}HS99%sz5;~t'
+            ')z3^p%%L+1=94E(e9hh58K<yxz>AwuXwKNUC`MoeY`#c#DC#R3D=95*wZqaBOY+_j#!G|8VtUNRn*i#XUvh(D8Pp!as!x{#LT}?E'
+            '^O}?m^rQ^&AmUQ2<9zCV<g@X?!AmfyiY{=>FM}6^ghox?WEz}nwE~O$UIO#6YpS~Kg%}htDVr<jyR)mK!N7PWqK9zAAep|N?eBza'
+            'kz}hd~+FJy(<Rc!ysG^_`#s2VZz(DjN8jW@LpfG?q=1erT0VJei#HlN2iC!{XhEqN4>qXz2p5}lYVCde!P@{dl(T#EcgVr8U>AP$'
+            '`M}W4emCVKtU`Jm-&r~_~}1dj}Ni(4&Xo7k$mMC17nN<jWJMT43uY2Lq<zvjx}R!Ndd5$4LE*%0s>kpln)*4!yNH49AEf-'
+            'P+}z2vJxMC0jF|)h!OAmXD8?9?cTw!Jpk>Gdl&n^_0GM$qob4Gdk3Us{^Luz;X!qKUtzU}&Yv0KS+&EjJ+)6U1r#qSEUigNKwjT4'
+            'eJaMMrc2pXgTP8U5sD-;u2)P${QM9u8LaIxX7_OsAv01{frWWR*JayZN=pJ3`jzo5$_>x{7TuFIQW<j|+W33NVdh!Vo888cPgbA-'
+            'Gez~6&Uzotdgs5fn-3Qxd*m-6xbZgx<ak&C-'
+            'TD@feXQ(@4D^509AQj`___NN!M2#a4TI%X<cq>48EKoP?~W`a^^T6lXP*Rkg*i;PO{gmQ7{MAJQ6-`-'
+            '5n^^K)Hc<ErcCqoVydVoN=~fV`G9JThZ#^mL?0vI(e8nIaEcrbRc9JpNPsOF6W#&G3#642-r!@-OEblMrxSM9&F9KG0T-'
+            'OIqfSwDL!C&TB$)aksT601PS+~YHxVF;%>V$9nmUE1UUu?=R*@uLKVMAy$O{Cv-UM+05uCc@Pj*-'
+            'bORo2~?zRiW{HAlWoMm&oKg5yMKti$&v@5r#q#i>0U>8g>NHde!TESbep{;)!(~Kf((sG;rY0aaZOP%Hl&2ePwuXL7~%Oc9Vx#d7'
+            'n|1>tULWps7y6&ms#(K9i;Nk2;j}&VLP|}`fZOH-'
+            'QQP5CRSs7rS(7ulGKL~rTnd4@V&9i$3E{&nvI2o^)@vWd99V-C`XHy}t{F(s9jBf{{*vq>m(cM<G+<EE-ZX<7poier%TS`3mvxaC'
+            '(%LZU7lWyJTSpF5*54e`M6o$#H@(N|}DQ79<I~IHUCm&DAT~>mU-k||o<rZI3s$s<j!@eR?D#H*dyhi1z^C=;f-&MY(o-'
+            'cY|zl*+0<Rb<+vK4gFBIDG^EqsWMxslJ&$we8M=?k^z`gBUeKmzQq=sRSzWZAykpfn48PGuozyz49_rN`p7A|lt?j;yx0{zc(;ee'
+            'H*$aED*60(fS>d-<qTC|ws}v5HktleJmzDwRXKPGLUeN}*j7W7J0~OIcW2(@^beUT$TrudZj^tzg2ke0A3b-uf8M(!O1-'
+            '@~KwFsN!+Pq1*}${*el9=zlmo>UAjpf3X;k(}$M*h9AE2JM-'
+            'I_a&d+J9llejE^A@7?apX%J1bfo^@XAE(|NQTgb9dOL|XjCeBAy?xr-DXk*!)3SPJ6>n0M0tw4Fr?@5}iGa-JBPftkA5+ixTag=('
+            'qnuJ>q-'
+            '_EfqsDk@lBfA|K*jwx?Nm7v6xN5)DZG+nlAY9~oNgtUYuVsp}q+9}yFi!`N{zc)ek>Jq)`uBYgDG?moq(<HHk)OyAsDU|inJB4O3'
+            ')zvdf918MMZehwEIL{Wt8_p!aBtU^)WaZ%K8tXL{8k!ZnOY?NF+NPj-R1FKObG)dcx@L9`U_VAlsoeM-'
+            '!L(c}KuqlY())07)+0j5_1n<%Bwq|E+yf*j_KfMUaVjljBmjj3t|z7n#6gfSgj`jCR0&wVRI*HHGoTp%l~tIMt!x=}EtdTmKu>hm'
+            '+XsL+V>o4+Ax9FG=}rI5gkwEH@SZ~vo<|cX-'
+            '|(E;`DZM<F0(~mH&Y`wFkQ0nuJ!l=@uQA!jOU^tJi~7w8=DdiZxhO~f_8Wt5DydeGXYU|&UmrZFP82hEDFS(Ez%>XY30|;bQA6?z'
+            'T&%9SJO#v%_rTo4)=|sX=vX#uI6bq#WS5}i2PYMkjWpJtnBCb$Rd5~$e-NXwG?nA6}0BCah{abl|v{PtA_F^RVdKYbBP8!u-'
+            ')r44Wbm_grmIk<Gs`K-'
+            'vI6LWffd1$hS+r9_8e9jU*I`L6Cb_%8il>jC0Ty63=9v6FW&<<co^sk2Sg4N1t8JDHCn!XknxuAY9DzQ^Im(IOThRvNI}?I6)>=Z'
+            'a~V*Dft!I)Y^ZLp}Y@=XXh6kYq$-'
+            ')PAU#mC^$4r;7x8aHt$gvZ7a$bCl6B7<+9(JOsH!Y!X#w@9oVaAr`nNUyf^9hcW<7j!1cx72KQEJiwpLqLg7{WTno=f7A5l6BOlh'
+            'HrtU10*sj(V5iAC-op5EV-O$;gDqM>UuSEMc*~o5{Qp(fHFCu`hERbx1E@xDA^)#;Q-'
+            'lvNb@8A$_?S)4=+Yh}n6%*))2(%NHHfUVO6_Jek*^kJ%tFe2_>|o^nEFbFZpBU@DdK|02D|4vn(v5x`)ySo=yd#SG<s3y}5vU4S5'
+            'GJcAZ5;dWm2uTZ$l#;Q<>{R|ZDh0ej*gh07ycU)G8=5D<?4JgMUcr2e570$UMu@C)qGQ9NwEdWlxbDL{uWea!WYcBp1H1|P@OVlY'
+            'F^P}37jiG>}w!GPKR17jfiEaaIXW(;{gnRI=8dc=pADAf0iVeQU0|kNX>1lxz0XAA@uB=(Q1c&-'
+            '#a@#JpQ$7*0;hPDvS7GVE9lIXqu8YUQi-N#DTZ*%uydqsypf3X=Dy&d3qZI8Mfy5(v{o-7y(iXvg9JfkagpfDV_2-'
+            'iYp$?(il!Ct`%(tB>8oTzr>Ys0NXOcY(;<*Jt~c@-'
+            '5Sm5(JY8y6Giq$O4cjH8<FrO78;zW@+U=Ss|f)DYw~gL!c!6OOf)Re(jZ{U(a6Ra+vj#vMFd~>zEh+KYn`1{qvWgpx2{o@#AAAFq'
+            'E$hPOkxT3v=I5nJ2)W$^nCAguPM-eC3{#|C9H^!say@Z-'
+            's%+rP8r6iG+yntD+#A=nBi2Ou%nVWD{yNX43=xgCQg8T=h2smZ<eG1MoT{9MC}V~EN=_`_tI<syZ#4b?R~iDowdsp;HZ|ukbZ%>3'
+            '%LBy>LXQcV68hvTsGEiAgvWi6#e-<FkPizY-'
+            'fvEUc<*aTg=g_6A$n@NOeO>0huCPpt(xzOum?s2VLwP_kM?gPM7nWZ2B5bY5(LS?mcSFLb)555R-5Z49jj0F_I-XDuuQ>|JGfk6b'
+            'K*pjt@Wd&M&;kJ39HbR7a9Lrk()7xb<FnK5x)%JWa<yM5xdoKsl#UxY)b+bpDJ{STn80Kr7Js;jhPgM}5rZ4&(f=^P?#y9A$VR&('
+            'mx4YC)$x>T=MdPFSi}_1oE1T@JVc`$1A*uerD$usk8fEpWeSpyN*;f9aj6F?P4#7@t119JnbR3-'
+            '$T!@Svx9y!C9U=F{{ZbyDmXLyq2B%cje3SgZc6M}9Mrhj|NXYct;NZqwUe0QCQX5BS%~(E+ZV=Y{?NIH#YK&Xw;fJBpH~h;u)hDk'
+            'k-dRY;)@JnXZ_uMtgNBoiuVE$;Mw_Y$3S&9Q>3P^pA$4FjvG>@NJlfQ(P(6Sgv4if*0lsga~*1p&fXNA2?<QA{jVF}=OyubZi@op'
+            '_nAucx)oK#$DPwL4l|defItv-Y-`acM+C^;AoLX{=L;kL{joawym5h+wVeQ#yg-P-'
+            'X#5V>8$r`?;UdpK#>m50#pb8M^VZ1b)*^uX@haJ(Bs2IOAXQ297xNPqxnjroXg#GA-'
+            'G|QkgBJ70xN+>;<aj;emLgN$z3vFBa!ZqBU5KbKT0z8Jnw%YAdsnXyS{?6;G#ku=iQMG;X+^#JJ76b4t@t0M+NxuWBc>o3=hf5|9'
+            'iGSe6zAnco%d!QU*y04#WWN1mo3d5J1_)6n!YRSx>|0_y@i^Bi$ElPMhnCN#fGM+-'
+            'sQD)wiLN(&v#0JOEwUVx$xqbCK%7RUqGggi|g+4ARw9jGv?rnOUvU{WfZCuOMh_*Iv08!4=fk8`ZOjL)(1?ia6ZB%s%gv!E3Gmcz'
+            'WWT&x{MU<6*M%)?D#7As;b)*{`1L!iaF%o3YNS}@iBrceuZE6-&Jj<-'
+            '<H^xq0J2pIqRcB#l76j#{07e1z?x$Y(*k#=x~l$i|62n|_|9imaLfr~px&$7Yjp^x`Js<@B`@8E^tgo-P9Q1w2SAwtz-'
+            'b5HZNduUbFwB63#-sa*jBU5VYDg7KZIO2ZWL`Z#uwQJQCxAq(`b>yQ%wvY3Xx%{l=BH2yIE8AZc7t@f0yc!uJkc|V-'
+            'D=e)hUTOI3-?3a2dr-+R%&w>DzpAk;mTt*~jC6AEvKbbpQYgHV7#xSNCp}-'
+            'A2;8aGGK+d*e(!ot@UGJZTP7IIjeOv)28k{KLL)9`72W9S4B$-#(W<hK93_44-'
+            '*ktR_QX!QYDSAQjaAEg<c$0(3w&r8aMifl??;6PR#OSql@||w*Nz48m&Ow+hT`Fe6RHJ}tQd*G(C<2e!_cscJBQT=$YT$=2zn9(P'
+            'gdNktXVuRW@{@6xi^}_S{1j?COafixZPFZ<fV6hlie$xbz}*}=w(O#jhF+xw+GVWESoJ@$wxR(Ge2ZDfiJfh<Aj1(jM-'
+            '<?K6Z&@2U-b7C1WR9G|5SqyxCV#g#QMnTVv8~CwwH<g-'
+            'u5fp$sE&;w|}B(1rGC(T4>f&pdjF#G)yTvV2!3QH#GOwkD(GTa`3y3Bwf!C3+V%2-S_Fh_YDtNjJZ4u+C~~(W5U-'
+            '@6einR{Wi?>W=bPy-_xHXRNxVnDQ)#=2geE9aHM!o05r?z^Bu!*G4j~d_{zYX_0i%rC1(I-'
+            'oSUPijbW*obW9Dm*s?Kzj>Y$o;tX1_rtTk9@Lxx3^k``RLpxc(F(DEQ=`ICD&k^Amr*kSz4FZ1kjKQbO-'
+            '7HL799V6eBoW3oW9_@{DLpv3pu_QFP{9`tq&~O)mo#j{vfqR_;O;kS`aPSiG@W=wYOz?3ayJI+hOIVtS{sGNfOOyMTMc&RzrI-oI'
+            '<295zJEMyddsr8TTrvX*BS}c}R>ugdeK!rP=RlT~RHZJnxv&ZgRd3s#u(7<WQ)T{c0sE5m`A6>&jn+_S&rb9T>f=d;n}%p~z9Dxp'
+            'C0uKL$bYzO((~TNP1+5c4mPy{ubo3@g`q^X+ixtn3_krpjIIj7}T14ozp15!PNb{K~qsQcGYQCE}nf+v{>N67pYdMoc%pkZDLW?C'
+            '^|bYX;%97+8_?s-=sCx&(K#Kr78%zFmIs0TT()p<C;<1EU|zaxtcY<H5?dH&f)FU(lb`$PZ{EtQNOYKcv5+_w-KvsE%PslMgE1L`'
+            'h~UE``}Yd~XNAY$8L}HXMunncf`L^tB;#P{hu#)tfwui}`Y59D*Q8IRb?qLF5qANkSq;IDeRjx5@k_8-'
+            ';*6LrK!ASV>Dlfn$SnrZPg(C1~B5lDWdm`C`M|a_Vb}Z6EuDKp*F*fOzC@JhdM0NO2G}8q>Lekg7uj+rU}%aV+tMNNXPAMqPF**f'
+            '}okc_e4#i%C+1T>W7%L6a&%w<IXV3=^d;Q|B5<r;3$%w^|oQa<^&@;QJ1X!qRUAj4Gq+^_23c?@0V%5-D+=h$Z{Osog|3J-W0-'
+            '^!T>B9q#PHe}35c5&nx6qP86#l~U%7RL#GkvS&Y=WQ)9|O+mr89;l^Lx*<K%kjC~N_25tT$!;K#Hwxe1Sb|GS+z*?I+$e6>Yj8c!'
+            '*<>a7BPrdyC^=3ivJ8s$r+{kDim27{&oR43kq%OjIhTI89fZcDC+0|1yXa;E5`>}@NPuY#ucn&K9K}CyxK}bB1D_vi8)XpE^K-'
+            'n~^7!QFV1=ko&3~h6#oWGb2o0LnZJ3ZZT(V5hG3~9Ux$UVd?T7kyKWCM-'
+            '1zINH#<dx0n!mg@=VZ+fSCcy`xJ5m}C?k&tic~SZfpT;Tn=grx-'
+            'YPpHGP{ITT$x_0hy+T~MHUrYMa5HWV~V#@MmjtOvYbwB!mPX~3AYhe#y^vq|0UdO!0T888=Il`LBB-lkNQtXKP35+KKF?pWgh^QQ'
+            '?gZLm-~hiMmN~my>g62GiMuwY6#>2THd51;3LRK|E+%Y)-'
+            '?o&!Qf8LseUxci+Tf}4CGAd4)I9T+in>S<*}EI_OJ6_QR^~u0neav7q22LhiG|d(l7u<J;gUw4+youz!~An+UN^H+bKsNx<uxiOv'
+            '5rFFBGbbX;e`m&1K8!HEPTW2U<U`on4nc4dyi>H?d`vpQBl6sI8c8nT^!K0LLF_hUYlB7YPnshPo1lCVBjkpS0XFG1X~-'
+            '=2r^H;`}L!)zO+IQd*#wT+up(Z&kkBA$gFr8#Voflwb}?7y`Zu2w;RhW&Pw$%ZwXjSUEZSNAJv#N?VW82g`bh%x`KefqPT}(F;@d'
+            'G^$&OQXqPU%7Ajm==_Gr#!tw$t$eF^+-'
+            '#1Q)ya9i!*jDO!RQ`1Rg>vfa9&6^1LnAbtF<+p08`=AQ({}8GiLC#1cy#7hOOwpkjQ`V$AmRq+@j}Q^eCz?yy-GYs&`9RjOOBZd1'
+            'ypS6<XyRAZ<4W6crj6Nk2!7R2{^`PpaKp=w87_JV#m(%ut6YcagWFr%zjD78C=wpY_f^9bEtxGQ)s)^|roA9-'
+            '2X@1To4#IHwBY8>n#|vdDQnPC%~17*DG53FC5-qZ#0e<ehii`wZ|;iC%5j(lT~b-'
+            '_3FK7u3^r*}!nk>nx_2JHI97n11#(LSe6=$`OW>uqGsfjf3mmx-6CmY{_sjM`s`M*HTg?yn-'
+            'XmvwtO1KO~8+V!~oyE_(#hbrRy~_c4UO-$$H7#khbQzY4rp-lgAe({}R3_NmM5IFKtiiLXi6;5jS?%AeBThl_sE>mQ%=e?L4vIQb'
+            'oUWve!fZrcG!XvrGG;XNBgn<mx4C|>0CR+!I=`6ydhUpVM}KK^uc1alw3C3U@7F&w*tXH#A){WnAf1b$=Zr|pp94I*R9MIbT{o@<'
+            'S?)>UA*sOUdsmgqP;FALIi_(B0e0A5LF3-'
+            '#EWlTtCP%Pf3~j`;ULk;HHIPStnmc;`tXDeuK+R4y@(ZW1hWeQOC7RkNr}o?J4rxeU#^OpSLoQL`C4g`b56NzS$F@(iH+)@xZ;T%'
+            'x)P9Xk@Nal@c(FlWbw&q+5p_8*NmFDl6N1wcFJ()8p}s|X|vy5p}jD4^f8PPYLPEPsU<ph5zcim=XG>UJh=!S*$#ZDsEo#d)E5Wt'
+            '+iTH;_S`WY(Th`Ln37W!wvW)Q1y5d*0q`R^oQd7Uad`3Es}~G$E(n`*b?W?mON=8edN{thUa~7HsM@2A2?E-'
+            'JoG%u!Nb9V}!l3cGB-RaHC$69k)H0EHF(>o0tS|76WKtiH{ScA9rbi{%fKf)G_wtUH^IKd$!8{@@wS39Pf^Q91nRz&Oe=f*xT>H)'
+            '8y@VM?Kx&J3GLJ^gn)d^6BE}@E98o|2|3*d5X{gk9L1}GkUwrk3N37=wau#KmGXTr&u-HJAy|$fB$hj82H-'
+            'nS$o;X!y!WbU7V+g?B7vv5-'
+            '_m1UY_^SC;arz4?q1hlu!Tu+u=p8GD(p%;OXG|9|k)xBYI3!yq`|fdB5MntlMT@G5FcZvuqyCzjiLZwu1Vb&ODt@5{h{A{s(LhPL'
+            'V<a&S!96bKlkFI>~O4hPV8;KWsmI|7QEuo89eKJKNjN*0*p|(tjnbx8HAv-'
+            '>XV=b`uJJxdus~HMoxG@h`u++97#M2a9=9wEQ**Cbs}_e(06dTQ@KAVPuu4rl+G~?s$rUR*uJHyN7){pJQIi&vA}w;zbhq7;aNt='
+            '`5WOZ=9{GEd_(SnzFB~H^0v)z=q=M=sYN5E2aEeAW~uSN=n*Q`s9|QvsZXJ9cRu@U^r+wq$)R79fg^yRfCic)(u18ruGT8oJ0H`r'
+            '*t{UlY*9wQCiMHMwt42;@&X~M`3I3eTo5Hi4o>z6}!-'
+            'py7L<~<)XHE{3Rj=MKr?rK#&9<fFF;3+}?J!E&7ZAU9ct%5YIYZ_sMagzernVT;*B9l}|-'
+            '#_AsjehCfr1EQ;VlER3dDyiy#dHpW5(h?`L}m1h$p5Usp9oTR3ojsUC1#n;00=uDCk(9D~tY<-VM-_MhO-jHst6}<Z1a(j~=@8Rl'
+            'K$}`t-'
+            '#F&u8qw4e2ge%C0pymJa>G0?PSRZlda5n;;$jKd5+iB$t(mj=@^0f*r%%<eVuG4alGD?``ot*ZLy*&zNJMd1=PW~H4FYlk6e(5yK'
+            '8O5IYvdecWrcxFhvClw<Wg5)5zIWbu0mn5mNG3<1vG07Q%JepU&Wfs<V73EcD?oM)E%sn%H&o=F3M;VX;_XjOBVTBNjp@7;dEh+%'
+            '1tX=q#PqACOH|S!z|C{4HwI&dEFy#m|DlpA$lFr<Za@h2!~1kJzcFKKIJBQ=e_^DZ5w9GIqw~8hrV&6lL;8!zW$3@$2C_VOQ}yTZ'
+            'k<vc9Q#r|Q3mAy)@is6J(0q6M?dYc;@Gqe2Ka78>b^PZdMeiK!G#bAh4}AU{u@2B{G)xBLAI)B6&aA<8IKB>VFt9LEn{bJHX4Z&5'
+            '<y}Bbmt0fQR1Q0wqZJkXFep=;q#4S;dN&JpJR|fFo3*6|^C@E0U-'
+            ';0B^NP$vi`3x(ZKerEFvkXdJ*MPEsMO+_MYNWXAD0teF#=#dyoDp9vH$X?INllTVs*Vqnv5eKq(7khgHg2IG|Vg>Jw!X(0EDAu^f'
+            'nyB+9Oo;UuTK;>Cg}V9{K>iBfn9C9WL@B%Of8+%@KV02Jj%Usq>q3_!a0w0pFg-Utv*0pyoCQ0w|K;+QyBr+Xkb<fKUH5oWkJ_Az'
+            'z)h`a#XQhv<&RAQ^}<oKe|EpEG&-'
+            'UHb!YTD1B0=v05THhQh+z|hCx%K^Y(%m2BDb9?WHG)HHPBOD)E(06JkZfIyAi(#CPOjKdYn&~Y<=7*e0$}?ap)=-'
+            '%BkdK&8c*ofMDcLY|Zx~8<Mb=;X?FwjAJ9dEW{n`TQeG>V|Ex=+i-'
+            '|DDx#3~gm49@+GbrthuW}!fQ5E3sGB4G^~xvKkRFFV9t;o0&A$=;Z4%sD>zypYy*_=7<O2aCagS+65B@3(L$zS=BIC$r!iE(M5|v'
+            'XdzE=xr4_OOW|)$XtVYC_EjWH@oShYrfBC0aO3GHFZQsk>ZjFH_`O%Z3_(yUF~dsC}-'
+            ';;f9c0?J1{dSq23drqy!iGk_j)a=Jkc>!*D{2K8A7#!LtMuwSxe}rB0&U@INjb$6`TtJRRO3&bs#l8${O6L`kO+0cagE%84)?+ju'
+            '77pNj&c=VYS-'
+            'C+zN6$D)u09i_!w2*+HJax)MJ^YR2W4;q%jq+I&%1zQ*u{HXJWm;MHLI`d1^H*|@t+_K@GTEL#;XY{FXKZXqu$$h=+%&ZK|+t+kQ'
+            'S3wis&^PLa?p7wU*#*T(vW%p6LgwAH71a8hFO42S_NAtya9p6bD^QsM7S`>0&h@Fz=_7I0DsM3wURe+o@2X1WMc*+i*PV0Bl&{|g'
+            'Q)T=~w20w!CzPEdQ&?D47dYVwddyTN7}ZC_XEfs#PQ8JJz>Nv)hW-VY-cZ^D8L?D1teyl%t=qFOJW!p}F!&nIfb1&{(+^hCU7GVI'
+            'WcSCw0Uss3^>yB>)3e^^!`|-'
+            '>aQ$fov^pv7v(detk4E$rEsf(2?QAqFxHy~5N;d3GxEnlkf}%=slBMRU@lDx`EIEd`&*Rx7nO+0F{QifxtFIZ}?!Jp}VZiq>hX!Q'
+            '=IzPqo!>`1~AfQYcS3)h_Hjljl0LrCH=9F2upG*nVTNO*>Jj*7<CUlG%Zv0tUG<6D9pcYwQP^TcP6(0{(l!@)T6p3##bTwkJ`deo'
+            'SELlE~<KLl(;X$1hG)B^@Sl2!%u9isP-'
+            '+9?TRy%LNifa((9)cCvVz&|(j8{|p$~=Q+;{DT_+1OW3UaaB)*D#}M=PGy1xP7ay+s@nIxy-'
+            '^C_`S_oGj6#SVRAD$tlzWzD@Q*&GibT#xf2Z`C9j=$uravHto#GUh~8_|6AIju+mS+*tH57#)Mk$=Q~lz_i<4=4l%S|(s4BI=4>j'
+            '*pW&j-$knc%ES%`aDaEd*cTj^J>ON`Z&=gl?Cn?j2ngNV+$ZsD(~rz`y?>3HslGj3{5`W|$V872+ASbT9sB%={-'
+            'I3d%y!*^KunXncthRq|ZT?W_U4)3cHYl2EE!-'
+            '7}kjLD?8hsrlB$o9XODrdhoOlj5o;fJ>mZ+>|D3jcrS?RLHCYI~hD+T2)Iv88bTQZmT^r|OH%FYBV+Ze6s)jvGpL`r2b3x%7O;(2'
+            'yh>=#n$uJeNm;39sXj8dyqWY9Ffh1MQSN&(M~^Sc<}~QuGtK4mmL~$3@REpL}`ss1Dp{W0|B8udQE}NrxyQjy_ddTa}<$Z8to~Vn'
+            'BAnA*T+^Ti7*ZZ-odee~<)bV%LE~SHxej)JoX{T}E`Rp&^l6!BVq)q@iLzn-<w5E-cASk-{~UlhuzfJwtU~wzt*ZmTG&aK?A-'
+            'lXbY4IAC?JBk+q&C3cGT1jhnBA#-'
+            'Wy&Ln&Bc|Aa=?w|TKGKbgY*`TseUINO>PHh6_E?RghT!X1Nm_;VBajtdnvfSZZBxS?A|wQVV>EV3+xko*(OCaLb6NtV&a2tC5SiN'
+            '{r=@8d=FLqV@pEFxQO#ONZi$7_xbP=Ui@+ia`e$lh%reVJ9OMh$>pnrFjo((-'
+            '@**yk+o+9gq@R^?38rd3%JaqLsc6x}5MHYtkuIw63$$%r{15~+|mGfwEr0Dq9TUYTT4atL_KWZv;bi61%WuY=mV!m`lW6Xe)AN<I'
+            '-Fjdc2E*Y9RUhnzTgg-%npj(n+%0N`_vH6#oN%2V92)}@dCuyd#y?y5Rok+?cOjIP@&J8u*V#*Q=O8wl@=17!m<8AZr-'
+            '!>lj^7oDsU{G!<<Lj{<X9=^&G+I~`H5J>|4Ydj_n@q7-'
+            'Gde!ignCpTK`&+0I7g|Ayt9zHo@>{3tK&P9sv}<q+XOl(7WZs@+*$hSMC6+HMW<W}@2#%BuW`76{+`nCLLUiSnyP>m-'
+            '21Eu<0z`z+uG0^qcXoDi))f~MY-WSoJO}0)DYa5&K$BMB^z%Zp3**uLILA|vhKeo~G48lirJ{~U+*AG;$%s=UPdQ6`Lr*yb?u)*~'
+            'mH^2yXy|T+5RNOVBz&(RQ{F?Dz`@u9SLi^ShK01MpW^f2A2z0!hmI{V6=O}8tR(X2_F)-QR>k<OA79@J{DS{-G)@NN@5x-'
+            '_zx;9h_qXv|Q_vnxk~r_<NjN<;8ypZD)p&Yb^7q#6bJei{U9N~rlFvj+5r?4_POqS`_$6X6g!c$9p3JzVdK|m@EVMLsz%UwA=UKz'
+            'R#s~sG_Btz2o)05k6swOe!A4UVrrrYsDlrNKy~WuGGDVx%Aj?&s5Slse6LyCGcW_8W6Ypdkzhl7C`oY(8jdx`uN-'
+            '$k2=M_84hIoP9Pqk0wGFy0<yqV$)@qUN+a;j$KrSpz!WaSli^66~9hgi=_q%)($IWMRb@XV~A0YA#x8D;hj*y~H5a{m{)RDC76rr'
+            'pF$mTJc?d`1RCA{WT59J6z1cUXYaIo*Vgw?EG(?V|3DOAdaLIhzW1bLVO@L{jIVLvYxS=wE?Kg0q$ztkhlm*xLh{v3KBo>>V8L9e'
+            'byToWlB%2I5N8)j;|M;Mw{<I6$|w_R)#MX;5b=n&JJ=|I^dofl~mq56t_Nm*O`<?iv(aJ2Cp?d&ePR9ggVITEt~~#W_hTPhaiu^J'
+            '-Cg8oRv{T)BA>1(_gz>|ekh!~HnwdB5(RdZ&9A7rnFN8noW=j?;JU@H;rkAXqv4?|4V#29~+$DEnx_8Td7R3ccPRd;1qODtV3$vl'
+            '*5wX;DCsvHgMbrkOkjlVXK1FoKA{mkQcxd_q3ta*Hjis+EQCTR45KGD^t<(QbS_>|hZh&R|ia2^?#<jwq-'
+            's!h(al^((CwWH`7}UB&9wJ(Ikoqe#D#s6#hd8APs}>{xrf)>I`RFEg<_1JTaSv?Gnl*7f(x8{*7H?Zlk}8*{pXy!PhkHdrt!WXfP'
+            'Bl4ghJe=gG8jz=)EU8$7Nl;Y4p?Q)jJ6q-=CJ)?8l=Sn?BDqqgGt_IQ;kska-3O)9@a0VX>V@=-'
+            '57rc%aS5k+_UxDZ)z?;T+tzx?#VT=(`$8N)zYTMtb99|LjL7gOYT0xC5_ru}Ac{4d~al$72Gx(22%4`tkK_gkN<0g#Fq)1BWhq^*'
+            '8qcfvwuu8%!tJr{iH7$Ul>vWuF2;HcB*8lq$OMUs7xJpM@3IsZDnFD+28USuQMq&fSNE0u2_ok&j7^*LYI+BUvBZIIER^kV4%-'
+            'Ae3P_~1na>R9^2LICtlI?bzydpmCT^#OHa+0&2QOAb8Ww6T2s%yj~oVlb&s`mPVmWS{PlsmK@_Ca_B_<q+MZ>sMl_hNkV;!0hT(0'
+            '<V;(yqcmR}M?jWYW2;E6N!pvC5o1u6ofrIXyi&M``t)YH^#<tID2~>G-'
+            'MOtprF`^XJ!g&(qn`H6G}CgbAp+tBC=qs_O=I@yhCWRUERaI-ZRh3FgbX8ma(=M*-6sWcH4ZzGz&*v7qh^?kr}rByV9TaOT`--'
+            'GB;_O6fMru9qYeklxeb*J72Zb5;iTV5C;zDsP7Nl5AQQ+-V~&yw2m<4PZRH>6i&E+6G!ciG-'
+            'uqJ09DuYT6i8=aNnu!NI>`RdRt=cMRU1Ex9s)AFMoopP5h11)mH1Stk;-Wdc+$h$~m8*{;1q-n=|(%{?1jIwg9x;WPlI-Cg;T8wx'
+            'P=RgRK1kX=T8v8%>iiuF0CnF6YJXa~TEVk=h+*Onu<jxX4f5)?Xli5PJ9eWZ7$5#GH2>wo*-'
+            'z11M+ua)feXR1g?^I{;o5gXz?(!`!NllLiepr`adLU>RT@izvqb=4D8!i%y0X_}&HQMt%=YsmV|*g5UG63n(qI{6K(?y~H7do_-'
+            'NE?PCcEi$moir5V7=3K>U_R(bzA)mhn!<Ig-ZpFAH?+tBiTzp+7#WVvZ9S1acD8w%18vob2bssiKiW`<JJ+o$_;83K;sF_*Ht{Pt'
+            'CJi|IU@JY%PH)!}fRXGR#bNZjt^Z&cJYw2wo2*UUN3Uf-TMh1Fpl!KKxZKaA@O)L%wS%n11B~&r5s6^sN@C*4R?99%-'
+            '$M(7uxHV1U>|=Ijb{^knXp^yXS1N)uDeJYavT{nS;7bLB{MRdHGC{D}U%I%u$Uu-Xr-'
+            'xYfaH;}tR7HEot92dLsP5aw;AguJCWAhR-UAa-'
+            '7g8xVBclmhtSlC!W<?>4=%SoX^M$w^Sn(i0%1{*dX1<&7ju)H&WSsj*1kM2UBcZuY99=70V-'
+            'eDZM1;V=()OcWI8Y**YSE?|R1ns6cz<A%eF`M18w*Lf)pVV;Ua!n+X5G1&04us2{1d(G2mvEJJsOdVHey=a(?P@I{gCj&>PPUko`'
+            'HC2d6sQ2oM<7b3N0Y=7R-'
+            '%XbwKFR58Bx}K+EDL1gbWWU>~l9j6UMcKubKtb@rMS_VZiF7eedx9zb~2ZyaJ5lb5{c<qNQKyxg6R*qQh{Y#TKG`<2v<`|lhSJye'
+            '`Ibl;BxA+X3w6Duvq{eYJP{Cc|sV)k%a=8=O@gnK}>)VrbD4=ni+y56S$1pZfuhzfDT%8ay|w@F(ey{enq#6g=^HhRp>Wg&mTZ+J'
+            'kgqOs1Nsq~f0P#eq|r9#Ip0>D$T0g6%C0Rga!eE&3^_iy5@F>%Je0odRST1H8`P1-tX%rGJ5wC0S(>S3J3#NTvTqR<M>ZC-'
+            'F1nUGoD21$x@h9;m@b1vgdPm|dRqpeYPMt)YJgVxft{)Z$7cB8Oa|6UM97_q~}^c_qL?%_KeE)lC?9@ZqsrVx7r3Pt6(JM-IdkU='
+            'DUkBSjwAMZ!NYf=HEe337cUq5~((r1A=ZV|m!C8udX2)6=q1y!a)!~WvILt=JiU#GXb_g`#Y`?;9XhlEJCDHH|5kHp-'
+            '<LqJx<l|{#m(}0KaeBo(J41Bv<f19X5r1)~^4bwaSvK`Aq0aj0Vg-'
+            '<wn?j^Qu_(PtCi29kjNQexH06=qYJ`JBq&<ze0Q3f?mdukJd*-Ajb^X&2}pFy;(tD-D!ruP<JEZ%HK1eJKEs<ICKm*Mo-k})M-'
+            'M2;7VSThpoEMI2Ri+olUH`j341SHb$ZIGq;OZCy}{N}nWG;}E|ZedAlAB@$JncM5o1B^yP<uFQ*7+loNwgDEkH()9@Z&dGAJ_HR@'
+            'n%qu{h{CD%C^;`LldG(JF}>&((lL5Y7S{D-'
+            'GD#Mo?~;2$@j4{pe<WbS8=Pc!cf;ec_=^w%g)V~vP_UaDKr;k{@v0JEsVaD{ss?9L-yQu1^3(Yu'
+        ),
+    },
+}
 
-def log(message=""):
-    line = str(message)
-    print(line, flush=True)
-    if LOG_STREAM is not None:
-        LOG_STREAM.write(line + "\n")
-        LOG_STREAM.flush()
+
+def _unpack(tool_id: str) -> bytes:
+    item = TOOLS[tool_id]
+    content = zlib.decompress(base64.b85decode(item["payload"].encode("ascii")))
+    actual = hashlib.sha256(content).hexdigest()
+    if actual != item["sha256"]:
+        raise RuntimeError("Bundled tool failed integrity verification: " + tool_id)
+    compile(content.decode("utf-8"), item["filename"], "exec")
+    return content
 
 
-def normalize_pin(value):
-    if value is None:
-        return None
-    if isinstance(value, float) and math.isfinite(value) and value.is_integer():
-        return str(int(value))
-    val = str(value).strip()
-    return val or None
-
-
-def parse_id_result(value):
-    """Support E3's (count, ID-array) COM return and normal ID arrays."""
-    if value is None:
-        return []
-    if isinstance(value, (tuple, list)):
-        if (len(value) >= 2 and isinstance(value[1], (tuple, list))
-                and isinstance(value[0], (int, float))):
-            ids = value[1]
-            try:
-                expected_count = int(value[0])
-                ids = list(ids)
-                if expected_count < len(ids):
-                    # COM wrappers can prepend output/status values.
-                    ids = ids[-expected_count:] if expected_count > 0 else []
-            except (ValueError, TypeError):
-                pass
-        else:
-            ids = value
-    else:
-        ids = [value]
-    result = []
-    for v in ids:
-        try:
-            i = int(v)
-            if i > 0 and i != COM_MISSING:
-                result.append(i)
-        except (TypeError, ValueError):
+def get_runtime_folder() -> Path:
+    preferred = Path(__file__).resolve().parent / "E3_Tools_Runtime"
+    try:
+        preferred.mkdir(parents=True, exist_ok=True)
+        with tempfile.NamedTemporaryFile(dir=str(preferred), delete=True):
             pass
-    return result
+        return preferred
+    except OSError:
+        fallback = Path(os.environ.get("LOCALAPPDATA") or Path.home()) / "E3_Tools_Runtime"
+        fallback.mkdir(parents=True, exist_ok=True)
+        return fallback
 
 
-def get_ids(method, *arguments):
-    # E3's GetSymbolIds(None, 0) uses an output array BEFORE a mode argument;
-    # GetViewIds(None), GetAllSheetIds(None) and some wrapper versions differ.
-    attempts = ((None, *arguments), arguments, (*arguments, None))
-    for args in attempts:
-        try:
-            value = parse_id_result(method(*args))
-            if value:
-                return value
-        except Exception:
-            continue
-    return []
+def install_tool(tool_id: str, base: Path) -> Path:
+    item = TOOLS[tool_id]
+    directory = base / item["folder"]
+    directory.mkdir(parents=True, exist_ok=True)
+    destination = directory / item["filename"]
+    content = _unpack(tool_id)
+    if destination.exists():
+        existing = destination.read_bytes()
+        if existing == content:
+            return destination
+        # Don't silently discard user edits or scripts from an older version.
+        suffix = datetime.now().strftime("%Y%m%d_%H%M%S")
+        backup = directory / (destination.stem + ".backup_" + suffix + ".py")
+        index = 2
+        while backup.exists():
+            backup = directory / (destination.stem + ".backup_" + suffix + f"_{index}.py")
+            index += 1
+        shutil.copy2(destination, backup)
+    temporary = destination.with_suffix(".py.tmp")
+    temporary.write_bytes(content)
+    os.replace(temporary, destination)
+    return destination
 
 
-def select_id(obj, object_id):
-    """Do not mistake E3 versions returning None from SetId for failure."""
-    try:
-        result = obj.SetId(int(object_id))
-        if isinstance(result, (int, float)) and result == 0:
-            return False
-        if hasattr(obj, "GetId"):
-            current = obj.GetId()
-            if current is not None and int(current) != int(object_id):
-                return False
-        return True
-    except Exception:
-        return False
+def all_sources_ok() -> bool:
+    for key in TOOLS:
+        _unpack(key)
+    return True
 
 
-def optional_call(obj, name):
-    try:
-        return getattr(obj, name)()
-    except Exception:
-        return None
-
-
-def get_symbol_location(sym):
-    try:
-        raw = sym.GetSchemaLocation(None, None, None, None, None)
-        if not isinstance(raw, (tuple, list)) or len(raw) < 3:
-            return None
-        return {"sheet_id": int(raw[0]), "x": float(raw[1]), "y": float(raw[2])}
-    except Exception:
-        return None
-
-
-def get_symbol_area(sym):
-    try:
-        raw = sym.GetPlacedArea(None, None, None, None)
-        if not isinstance(raw, (tuple, list)) or len(raw) < 5 or int(raw[0]) <= 0:
-            return None
-        l, b, r, t = map(float, raw[1:5])
-        if not (r > l and t > b):
-            return None
-        return {"left": l, "bottom": b, "right": r, "top": t}
-    except Exception:
-        return None
-
-
-def inside_block(loc, block):
-    tol = BLOCK_LOCATION_TOLERANCE
-    return (loc is not None and loc["sheet_id"] == block["sheet_id"]
-            and block["left"] - tol <= loc["x"] <= block["right"] + tol
-            and block["bottom"] - tol <= loc["y"] <= block["top"] + tol)
-
-
-def scan_sheet_symbols(prj, sht, sheet_id):
-    if not select_id(sht, sheet_id):
-        raise RuntimeError(f"Could not select E3 sheet ID {sheet_id}.")
-    ids = get_ids(sht.GetSymbolIds)
-    if ids:
-        return ids
-    log(f"  Sheet {sheet_id} has no sheet-local symbol ID array; scanning project IDs instead.")
-    return get_ids(prj.GetSymbolIds)
-
-
-def read_pin_identity(prj, symbol_id):
-    """Read actual pin number and connector labels, not symbol name conventions.
-
-    Some E3 receptacle implementations omit the paragraph-separator '¶' in
-    GetSymbolTypeName. The successful pin arranger identifies pins by their
-    TYPE 203 and TYPE 12 text; do the same here, then verify geometry.
-    """
-    sym = prj.CreateSymbolObject()
-    if not select_id(sym, symbol_id):
-        return None
-    kind = str(optional_call(sym, 'GetSymbolTypeName') or '')
-    if 'CABBLOCK' in kind.upper():
-        return None
-    loc = get_symbol_location(sym)
-    if loc is None:
-        return None
-    txt = prj.CreateTextObject()
-    pin_number, device_labels = None, []
-    type_ids = defaultdict(list)
-    for tid in get_ids(sym.GetTextIds):
-        if not select_id(txt, tid):
-            continue
-        try:
-            typ = int(txt.GetType())
-        except Exception:
-            continue
-        type_ids[typ].append(tid)
-        if typ in (DEVICE_DESIGNATION_TYPE, PIN_NUMBER_TYPE):
-            value = optional_call(txt, 'GetText')
-            if typ == DEVICE_DESIGNATION_TYPE and value is not None:
-                label = str(value).strip()
-                if label and label not in device_labels:
-                    device_labels.append(label)
-            elif typ == PIN_NUMBER_TYPE and value is not None:
-                observed = normalize_pin(value)
-                if pin_number is not None and pin_number != observed:
-                    return None  # ambiguous multiple pin numbers on one symbol
-                pin_number = observed
-    if pin_number is None:
-        return None
-    return {'symbol_id': symbol_id, 'kind': kind, 'location': loc,
-            'pin_name': pin_number, 'designations': device_labels,
-            'designation': device_labels[0] if device_labels else None,
-            'texts': dict(type_ids)}
-
-
-def dump_nearby_text_types(prj, sht, blocks, max_samples=25):
-    """Extra read-only diagnostic when no requested pin is found.
-
-    Pin number labels can be configured differently in some E3 installations;
-    show concrete E3 types/text instead of merely reporting zero pins.
-    """
-    log('\nNO-MATCH INSPECTION: text types on symbols near the candidate blocks')
-    sym = prj.CreateSymbolObject()
-    txt = prj.CreateTextObject()
-    samples = []
-    type_counts = Counter()
-    symbol_seen = set()
-    for sheet_id in sorted({b['sheet_id'] for b in blocks}):
-        sheet_blocks = [b for b in blocks if b['sheet_id'] == sheet_id]
-        for symbol_id in scan_sheet_symbols(prj, sht, sheet_id):
-            if symbol_id in symbol_seen or not select_id(sym, symbol_id):
-                continue
-            symbol_seen.add(symbol_id)
-            loc = get_symbol_location(sym)
-            if not any(inside_block(loc,b) for b in sheet_blocks):
-                continue
-            kind = str(optional_call(sym,'GetSymbolTypeName') or '')
-            ids = get_ids(sym.GetTextIds)
-            texts = []
-            for tid in ids:
-                if not select_id(txt,tid):
-                    continue
-                try:
-                    typ = int(txt.GetType())
-                    value = str(optional_call(txt,'GetText') or '').strip()
-                except Exception:
-                    continue
-                type_counts[typ] += 1
-                if value and len(texts) < 8:
-                    texts.append(f'{typ}:{value[:45]!r}')
-            if ('RECEPTACLE' in kind.upper() or
-                    any(t.startswith('203:') or t.startswith('617:') for t in texts)) and len(samples) < max_samples:
-                samples.append((symbol_id,kind,loc,texts))
-    log(f'  Embedded text type counts in target CABBLOCK areas: {type_counts.most_common(35)}')
-    for sid,kind,loc,texts in samples:
-        log(f'  symbol {sid} | {kind!r} | x={loc["x"]:.3f} '
-            f'y={loc["y"]:.3f} | {texts}')
-    if not samples:
-        log('  No pin-like symbol text samples readable in these block areas. '
-            'Check that the blocks really contain the desired placed pins.')
-
-
-def determine_side(pin):
-    x = pin["location"]["x"]
-    block = pin["block"]
-    ld, rd = abs(x - block["left"]), abs(x - block["right"])
-    if abs(ld - rd) < 0.05 or min(ld, rd) > MAX_PIN_EDGE_OFFSET:
-        raise RuntimeError(
-            f"Cannot determine LEFT/RIGHT for {pin['designation']} "
-            f"pin {pin['pin_name']} (symbol {pin['symbol_id']}) in block {block['id']}; "
-            f"X={x:.4f}, left={block['left']:.4f}, right={block['right']:.4f}. "
-            "No formatting applied."
-        )
-    return "LEFT" if ld < rd else "RIGHT"
-
-
-def _raw_text_location_results(txt):
-    """Try read-only COM methods, retaining original tuples for diagnostics."""
-    attempts = (
-        ('GetSchemaLocation', (None, None, None, None, None)),
-        ('GetSchemaLocation', (None, None, None)),
-        ('GetSchemaLocation', (None, None)),
-        ('GetPosition', (None, None)),
-        ('GetPosition', ()),
-    )
-    found = []
-    for method, args in attempts:
-        try:
-            result = getattr(txt, method)(*args)
-        except Exception:
-            continue
-        if isinstance(result, (tuple, list)):
-            found.append((method, result))
-    return found
-
-
-def _candidate_text_positions(raw, sheet_id, block):
-    """Interpret COM output while preventing a status/sheet ID from being X."""
-    nums = []
-    for v in raw:
-        try:
-            nums.append(float(v))
-        except (TypeError, ValueError):
-            nums.append(None)
-    candidates = []
-    # COM can return (sheet_id,x,y,...), (status,sheet_id,x,y,...),
-    # (status,x,y), or (x,y). Favor explicit sheet patterns.
-    if len(nums) >= 3 and nums[0] is not None and int(nums[0]) == sheet_id:
-        candidates.append((nums[1], nums[2], 0))
-    if len(nums) >= 4 and nums[1] is not None and int(nums[1]) == sheet_id:
-        candidates.append((nums[2], nums[3], 0))
-    if len(nums) >= 3 and nums[0] in (1, 0, -1):
-        candidates.append((nums[1], nums[2], 1))
-    if len(nums) >= 2:
-        candidates.append((nums[0], nums[1], 2))
-    for index in range(1, max(1, len(nums)-1)):
-        if index + 1 < len(nums):
-            candidates.append((nums[index], nums[index+1], 3))
-    result = []
-    for x, y, preference in candidates:
-        if x is None or y is None or not (math.isfinite(x) and math.isfinite(y)):
-            continue
-        if (block['left'] - .30 <= x <= block['right'] + .30 and
-                block['bottom'] - .30 <= y <= block['top'] + .30):
-            result.append((preference, x, y))
-    result.sort(key=lambda row: row[0])
-    return [(x, y) for _, x, y in result]
-
-
-def read_text_xy(txt, block):
-    """Return a local text position and the actual original COM getter output.
-
-    Returns None when the position cannot be identified unambiguously. A text
-    may report its position relative to a symbol in some E3 configurations;
-    this is not guessed into sheet coordinates.
-    """
-    raw_results = _raw_text_location_results(txt)
-    for method, raw in raw_results:
-        candidates = _candidate_text_positions(raw, block['sheet_id'], block)
-        if candidates:
-            return {'x': candidates[0][0], 'y': candidates[0][1],
-                    'method': method, 'raw': repr(raw)[:160]}
-    return None
-
-
-def collect_signal_texts(prj, sht, plan, type_override=None):
-    """Get candidate text IDs both from pins and all sheet text objects."""
-    pin_by_text = {}
-    pin_type_stats = Counter()
-    for p in plan:
-        for typ, ids in p['texts'].items():
-            pin_type_stats[int(typ)] += len(ids)
-            for tid in ids:
-                if tid not in pin_by_text:
-                    pin_by_text[tid] = []
-                pin_by_text[tid].append(p)
-    log('\nTEXT TYPES ON RESOLVED PIN SYMBOLS:')
-    for typ, count in pin_type_stats.most_common():
-        log(f'  type {typ:5} | {count:5} texts | {TEXT_TYPE_DESCRIPTIONS.get(typ,"project-defined/other")}')
-
-    sheet_ids = {p['block']['sheet_id'] for p in plan}
-    candidates = set(pin_by_text)
-    sheet_text_counts = Counter()
-    # IMPORTANT: E3 sheet.GetTextIds does NOT necessarily return texts embedded
-    # in placed symbols (such as connection attribute template symbols). Also
-    # walk the placed symbols physically inside the candidate CABBLOCKs.
-    sym = prj.CreateSymbolObject()
-    blocks_by_sheet = defaultdict(dict)
-    for p in plan:
-        block = p['block']
-        blocks_by_sheet[block['sheet_id']][block['id']] = block
-    for sid in sorted(sheet_ids):
-        if not select_id(sht, sid):
-            raise RuntimeError(f'Cannot select sheet {sid} to scan text.')
-        raw_ids = get_ids(sht.GetTextIds)
-        log(f'Sheet {sid}: GetTextIds returned {len(raw_ids)} sheet-owned text IDs')
-        candidates.update(raw_ids)
-        scanned_symbols = 0
-        selected_symbols = 0
-        embedded_text_count = 0
-        for sym_id in set(scan_sheet_symbols(prj, sht, sid)):
-            scanned_symbols += 1
-            if not select_id(sym, sym_id):
-                continue
-            loc = get_symbol_location(sym)
-            if loc is None:
-                continue
-            if not any(inside_block(loc, b) for b in blocks_by_sheet[sid].values()):
-                continue
-            selected_symbols += 1
-            ids = get_ids(sym.GetTextIds)
-            embedded_text_count += len(ids)
-            candidates.update(ids)
-        log(f'  Symbols on sheet: scanned {scanned_symbols}, '
-            f'inside target blocks {selected_symbols}, '
-            f'embedded text IDs found {embedded_text_count}')
-    # Default include both types for inspection; do not move other text types.
-    eligible_types = ({type_override} if type_override is not None
-                      else set(AUTO_SIGNAL_TYPES))
-    text = prj.CreateTextObject()
-    records = []
-    type_samples = defaultdict(list)
-    for text_id in sorted(candidates):
-        if not select_id(text, text_id):
-            continue
-        try:
-            typ = int(text.GetType())
-        except Exception:
-            continue
-        sheet_text_counts[typ] += 1
-        if typ not in eligible_types:
-            if len(type_samples[typ]) < 4:
-                type_samples[typ].append(str(optional_call(text,'GetText') or '')[:90])
-            continue
-        val = str(optional_call(text, 'GetText') or '').strip()
-        if not val:
-            continue
-        linked = pin_by_text.get(text_id, [])
-        records.append({'id': text_id, 'type': typ, 'value': val,
-                        'attached_pin_candidates': linked})
-    log('\nALL TEXT TYPES SCANNED (including sheet-level texts):')
-    for typ, count in sheet_text_counts.most_common(25):
-        sample = type_samples.get(typ, [])
-        log(f'  type {typ:5} | count {count:5} | {TEXT_TYPE_DESCRIPTIONS.get(typ, "other")}'
-            f' | examples {sample[:2]}')
-    log(f'Signal candidates identified: {len(records)} for types {sorted(eligible_types)}')
-    return records
-
-
-def within_block_xy(point, block, tol=0.25):
-    return (block['left']-tol <= point['x'] <= block['right']+tol and
-            block['bottom']-tol <= point['y'] <= block['top']+tol)
-
-
-def associate_signals(prj, plan, signal_texts, physical_blocks_by_sheet=None):
-    """Find the one pin responsible for each signal text; never guess ties."""
-    by_block = defaultdict(list)
-    for p in plan:
-        by_block[(p['block']['sheet_id'], p['block']['id'])].append(p)
-    txt = prj.CreateTextObject()
-    resolved = []
-    unassigned = []
-    for item in signal_texts:
-        if not select_id(txt, item['id']):
-            continue
-        attached = item['attached_pin_candidates']
-        if len(attached) > 1:
-            unassigned.append((item, 'text belongs to multiple selected pin symbols'))
-            continue
-        if len(attached) == 1:
-            p = attached[0]
-            loc = read_text_xy(txt, p['block'])
-            if loc is None:
-                unassigned.append((item, 'pin-attached text position cannot be read safely'))
-                continue
-            resolved.append({**item, 'pin': p, 'location': loc, 'source': 'pin-attached'})
-            continue
-        # Sheet-level connection label. Strictly require one unique nearest pin
-        # and that it currently appears near the pin's originating block side.
-        matches = []
-        for (sheet_id, block_id), block_pins in by_block.items():
-            block = block_pins[0]['block']
-            loc = read_text_xy(txt, block)
-            if loc is None or not within_block_xy(loc, block):
-                continue
-            # A sheet-level label physically inside ANOTHER CABBLOCK is
-            # not our selected block's text, even if it is near one of our
-            # pins. Box/multi-selection must not steal a neighboring label.
-            if physical_blocks_by_sheet is not None:
-                containing = [other['id'] for other in
-                              physical_blocks_by_sheet.get(sheet_id, [])
-                              if within_block_xy(loc, other, tol=0.015)]
-                if containing and (len(containing) != 1 or containing[0] != block_id):
-                    continue
-            for p in block_pins:
-                dy = abs(loc['y'] - p['location']['y'])
-                dx = abs(loc['x'] - p['location']['x'])
-                if dy <= MAX_SHEET_TEXT_Y_DISTANCE and dx <= MAX_SHEET_TEXT_X_DISTANCE:
-                    matches.append((dy * 3 + dx, p, loc))
-        matches.sort(key=lambda t: t[0])
-        if not matches:
-            unassigned.append((item, 'not near a uniquely resolved connector pin'))
-        elif len(matches) > 1 and abs(matches[0][0] - matches[1][0]) < .06:
-            unassigned.append((item, 'two near-equal physical pins, ambiguous'))
-        else:
-            _, p, loc = matches[0]
-            resolved.append({**item, 'pin': p, 'location': loc,
-                             'source': 'sheet-level proximity'})
-    for item, reason in unassigned[:35]:
-        log(f'  SKIPPED text {item["id"]}, type {item["type"]}, '
-            f'value {item["value"][:60]!r}: {reason}')
-    if len(unassigned) > 35:
-        log(f'  ... {len(unassigned) - 35} further unmatched signal text(s)')
-    log(f'ASSOCIATION: {len(resolved)} candidates assigned to a unique pin; '
-        f'{len(unassigned)} unmatched (unmatched text is NEVER moved)')
-    return resolved
-
-
-def target_location_for_pin(pin):
-    """Return target x/y, E3 text alignment and readable placement mode.
-
-    Only physical pins within THIS selected block determine its layout.
-    Unselected neighboring CABBLOCKs never alter the target. Paired rows use
-    right-/left-aligned labels bracketing the centerline to prevent collisions.
-    """
-    block = pin['block']
-    side = pin['side']
-    width = block['right'] - block['left']
-    if width <= 2 * EDGE_MARGIN:
-        raise RuntimeError(f'Block {block["id"]}: too narrow for signal placement.')
-    y = pin['location']['y']
-    if pin.get('both_edges'):
-        cx = (block['left'] + block['right']) / 2.0
-        if pin.get('paired_row'):
-            if width <= 2 * (CENTER_LANE_GAP + EDGE_MARGIN):
-                raise RuntimeError(
-                    f'Block {block["id"]}: too narrow for two center-row signal lanes.')
-            if side == 'LEFT':
-                return (cx - CENTER_LANE_GAP, y, 3, 'CENTER-LEFT LANE')
-            return (cx + CENTER_LANE_GAP, y, 1, 'CENTER-RIGHT LANE')
-        return (cx, y, CENTER_ALIGNMENT, 'CENTER')
-    if side == 'LEFT':
-        return (block['right'] - EDGE_MARGIN, y, 3, 'OPPOSITE RIGHT EDGE')
-    return (block['left'] + EDGE_MARGIN, y, 1, 'OPPOSITE LEFT EDGE')
-
-
-def recover_already_placed_sheet_texts(prj, plan, signal_texts, associated):
-    """Recover sheet-level texts already at their final destination.
-
-    For mixed-side blocks this includes the centerline/paired-row lanes.
-    Recover the previous version's opposite-edge position where it can be
-    attributed uniquely. Never assume an ambiguous label belongs to a pin.
-    """
-    matched_ids = {item['id'] for item in associated}
-    destinations = defaultdict(list)
-    for p in plan:
-        b = p['block']
-        dest_x, dest_y, _align, _mode = target_location_for_pin(p)
-        destinations[(b['sheet_id'], b['id'])].append((p, dest_x, dest_y, 'current'))
-        # The older script placed labels on the opposite edge even for
-        # two-sided blocks. A lone pin row can be safely migrated from there.
-        # On a paired row, the old destination overlaps the other pin's
-        # ORIGINAL location, so its ownership is ambiguous if sheet-level.
-        if p.get('both_edges') and not p.get('paired_row'):
-            old_x = (b['right'] - EDGE_MARGIN if p['side'] == 'LEFT'
-                     else b['left'] + EDGE_MARGIN)
-            destinations[(b['sheet_id'], b['id'])].append(
-                (p, old_x, dest_y, 'previous opposite-edge position'))
-    txt = prj.CreateTextObject()
-    recovered = []
-    for item in signal_texts:
-        if item['id'] in matched_ids or item['attached_pin_candidates']:
-            continue
-        if not select_id(txt, item['id']):
-            continue
-        matches = []
-        for group in destinations.values():
-            block = group[0][0]['block']
-            loc = read_text_xy(txt, block)
-            if loc is None or not within_block_xy(loc, block, tol=BLOCK_LOCATION_TOLERANCE):
-                continue
-            for p, x, y, which in group:
-                if abs(loc['x'] - x) <= .02 and abs(loc['y'] - y) <= .04:
-                    matches.append((p, loc, which))
-        if len(matches) == 1:
-            p, loc, which = matches[0]
-            recovered.append({**item, 'pin': p, 'location': loc,
-                              'source': f'recovered sheet-level ({which})'} )
-            log(f'  RECOVERED sheet text {item["id"]} '
-                f'for {p["connector"]}:{p["pin_name"]} from {which}')
-        elif len(matches) > 1:
-            log(f'  SKIPPED already placed text {item["id"]}: multiple '
-                'selected pin destinations at the same coordinates')
-    log(f'ALREADY-PLACED RECOVERY: {len(recovered)} sheet-level text(s) '
-        'uniquely matched for relocation/formatting.')
-    return associated + recovered
-
-
-def plan_relocations(associated, type_override=None):
-    by_type = Counter(x['type'] for x in associated)
-    if type_override is not None:
-        selected_types = {type_override}
-    elif by_type[1007] and by_type[7]:
-        # Both can be valid in different E3 settings. Never modify both
-        # automatically; user can select --type 1007 or --type 7.
-        log('AMBIGUOUS AUTO-DETECT: types 1007 and 7 are both present. '
-            'Specify --type 1007 or --type 7 to permit movement.')
-        selected_types = set()
-    elif by_type[1007]:
-        selected_types = {1007}
-    elif by_type[7]:
-        selected_types = {7}
+def open_folder(path: Path):
+    path.mkdir(parents=True, exist_ok=True)
+    if sys.platform == "win32":
+        os.startfile(str(path))
+    elif sys.platform == "darwin":
+        subprocess.Popen(["open", str(path)])
     else:
-        selected_types = set()
-    log(f'Eligible text types to move: {sorted(selected_types) or "NONE (inspect log)"}')
-    moves = []
-    for record in associated:
-        if record['type'] not in selected_types:
-            continue
-        p = record['pin']
-        b = p['block']
-        dest_x, dest_y, align, placement = target_location_for_pin(p)
-        # Keep this connection number on the same Y row as its physical pin.
-        loc = record['location']
-        already = (abs(loc['x'] - dest_x) < .02 and
-                   abs(loc['y'] - dest_y) < .02)
-        moves.append({**record, 'x': dest_x, 'y': dest_y,
-                      'alignment': align, 'placement': placement,
-                      'already': already})
-    return moves
+        subprocess.Popen(["xdg-open", str(path)])
 
 
-def relocate_one_text(txt, move):
-    """Set text location with COM only; verify and stop if unsupported.
+class MegaApp:
+    def __init__(self):
+        self.root = tk.Tk()
+        self.root.title("E3 Tools")
+        self.root.configure(bg=COLOR["page"])
+        self.root.resizable(False, False)
+        self.root.geometry("558x428")
+        self.root.minsize(558, 428)
+        try: self.root.iconbitmap(default="")
+        except Exception: pass
+        self.root.attributes("-topmost", True)
+        self.runtime = get_runtime_folder()
+        self.running = None
+        self.running_id = None
+        self.buttons = {}
+        self.status = tk.StringVar(value="Ready to launch an E3 tool")
+        self.detail = tk.StringVar(value="Open your E3 project first · run one tool at a time")
+        self.build_ui()
+        self.root.after(650, self.watch_child)
+        self.root.protocol("WM_DELETE_WINDOW", self.on_close)
 
-    The COM signature varies by version. First prefer a two-coordinate text
-    SetSchemaLocation(x,y), then a sheet-qualified version. A write is NOT
-    considered successful unless a fresh getter confirms the new position.
-    If a write has moved a text incorrectly, try a same-signature rollback.
-    """
-    if not select_id(txt, move['id']):
-        raise RuntimeError(f"Text {move['id']} vanished before placement")
-    before = move['location']
-    original_x, original_y = before['x'], before['y']
-    b = move['pin']['block']
-    method = getattr(txt, 'SetSchemaLocation', None)
-    if method is None:
-        raise RuntimeError('This E3 e3Text interface does not provide SetSchemaLocation. '
-                           'No connection text was moved by this call.')
-    attempts = [
-        ('x,y', (move['x'], move['y']), (original_x, original_y)),
-        ('sheet,x,y', (b['sheet_id'], move['x'], move['y']),
-         (b['sheet_id'], original_x, original_y)),
-    ]
-    errors = []
-    for kind, args, rollback_args in attempts:
-        try:
-            ret = method(*args)
-        except Exception as exc:
-            errors.append(f'{kind}: {str(exc)[:170]}')
-            continue
-        current = read_text_xy(txt, b)
-        if (current is not None and
-                abs(current['x'] - move['x']) <= POSITION_VERIFICATION_TOLERANCE and
-                abs(current['y'] - move['y']) <= POSITION_VERIFICATION_TOLERANCE):
-            # Correct alignment is essential for real centering (E3 stores
-            # anchor position and alignment separately). For a center move,
-            # failure must not be reported as success.
-            try:
-                txt.SetAlignment(move['alignment'])
-            except Exception as exc:
-                if move['placement'].startswith('CENTER'):
-                    raise RuntimeError(
-                        f'Text {move["id"]} reached its center target, but E3 '
-                        f'could not set center-lane alignment: {exc}. '
-                        'Inspect this text before continuing.') from exc
-                log(f'  WARNING: text {move["id"]} moved, but alignment not updated: {exc}')
-            return kind
-        # The call returned, but may have moved somewhere else, or done nothing.
-        # Attempt rollback; stop rather than testing another signature blindly.
-        try:
-            method(*rollback_args)
-        except Exception as err:
-            raise RuntimeError(
-                f'Text {move["id"]} position update was NOT verified and rollback failed. '
-                f'CHECK THIS TEXT IN E3. Signature={kind}; error={err}; '
-                f'current={current}; return={ret!r}') from err
-        restored = read_text_xy(txt, b)
-        raise RuntimeError(
-            f'Text {move["id"]}: E3 accepted SetSchemaLocation({kind}) but the new '
-            f'position could not be verified. Attempted rollback to original. '
-            f'Current={restored}, requested=({move["x"]}, {move["y"]}), return={ret!r}. '
-            'STOPPED to avoid moving unrelated text.')
-    raise RuntimeError(f'Text {move["id"]}: SetSchemaLocation unsupported by this COM build. '
-                       f'Attempted {errors}. NO change made to this text.')
+    def build_ui(self):
+        bg = COLOR["page"]
+        header = tk.Frame(self.root, bg=bg)
+        header.pack(fill="x", padx=18, pady=(14, 7))
+        tk.Label(header, text="E3 Tools", bg=bg, fg=COLOR["text"],
+                 font=("Segoe UI", 16, "bold")).pack(side="left")
+        tk.Label(header, text="UTILITY HUB", bg=bg, fg=COLOR["accent"],
+                 font=("Segoe UI", 8, "bold")).pack(side="right", pady=(7,0))
+        tk.Frame(self.root, bg=COLOR["border"], height=1).pack(fill="x", padx=18)
+        tk.Label(self.root, text="Choose a tool to open", bg=bg, fg=COLOR["muted"],
+                 font=("Segoe UI", 9)).pack(anchor="w", padx=18, pady=(9,7))
+        for idx,(key,title,description) in enumerate([
+            ("header", "Block Header Formatter", "Location · Saber · Equipment · Designation"),
+            ("signals", "Signal Mover", "Connection signal positions, bolding & color"),
+            ("pin", "Cable Pin Spacer", "Match gaps · flip pins · format pin text"),
+        ]):
+            self.tool_card(key,title,description)
 
+        actions = tk.Frame(self.root,bg=bg)
+        actions.pack(fill="x",padx=18,pady=(10,2))
+        self.small_link(actions,"Tool files / logs",lambda:open_folder(self.runtime)).pack(side="left")
+        self.small_link(actions,"Import old pin data",self.import_pin_data).pack(side="left",padx=(15,0))
+        self.small_link(actions,"Close",self.on_close).pack(side="right")
 
-def choose_log_path():
-    """Prefer script folder; fall back to system temp if read-only."""
-    locations = [Path(__file__).resolve().parent, Path(tempfile.gettempdir())]
-    for directory in locations:
-        try:
-            path = directory / 'E3_Bulk_Selected_Block_Relocator_Log.txt'
-            with open(path, 'a', encoding='utf-8'):
-                pass
-            return path
-        except OSError:
-            continue
-    raise RuntimeError('Cannot create a diagnostic log in script or temp folder.')
+        statusframe = tk.Frame(self.root,bg=COLOR["soft"],height=46,
+                               highlightbackground=COLOR["border"], highlightthickness=1)
+        statusframe.pack(fill="both",padx=18,pady=(6,9))
+        tk.Label(statusframe,textvariable=self.status,bg=COLOR["soft"],fg=COLOR["text"],
+                 font=("Segoe UI",9,"bold"),anchor="w").pack(fill="x",padx=10,pady=(5,0))
+        tk.Label(statusframe,textvariable=self.detail,bg=COLOR["soft"],fg=COLOR["muted"],
+                 font=("Segoe UI",8),anchor="w").pack(fill="x",padx=10,pady=(0,5))
 
+    def tool_card(self, key, title, description):
+        panel = tk.Frame(self.root,bg=COLOR["panel"],height=72,
+                         highlightbackground=COLOR["border"],highlightthickness=1)
+        panel.pack(fill="x",padx=18,pady=(0,7))
+        panel.pack_propagate(False)
+        left=tk.Frame(panel,bg=COLOR["panel"])
+        left.pack(side="left",fill="both",expand=True,padx=12,pady=(10,6))
+        tk.Label(left,text=title,bg=COLOR["panel"],fg=COLOR["text"],
+                 font=("Segoe UI",10,"bold"),anchor="w").pack(fill="x")
+        tk.Label(left,text=description,bg=COLOR["panel"],fg=COLOR["muted"],
+                 font=("Segoe UI",8),anchor="w").pack(fill="x",pady=(2,0))
+        btn=tk.Button(panel,text="Launch",command=lambda:self.launch(key),bg=COLOR["accent"],
+                      fg="#FFFFFF",activebackground=COLOR["accent_hover"],
+                      activeforeground="#FFFFFF",borderwidth=0,relief="flat",
+                      font=("Segoe UI",9,"bold"),cursor="hand2",width=9)
+        btn.pack(side="right",padx=12,pady=16,ipady=5)
+        self.buttons[key]=btn
 
-def confirm_apply(move_count, bold_count, log_path):
-    try:
-        import tkinter as tk
-        from tkinter import messagebox
-        root = tk.Tk(); root.withdraw(); root.attributes('-topmost', True)
-        result = messagebox.askyesno('E3 Connection Signal Relocator',
-            f'The preflight found {bold_count} connection text(s) to make BOLD and COLOUR {SIGNAL_COLOUR}.\n'
-            f'Of these, {move_count} also need repositioning.\n\n'
-            'No pin symbols or signal values are changed.\n\n'
-            f'Log: {log_path}\n\nApply now?', parent=root)
-        root.destroy()
-        return result
-    except Exception:
-        log('GUI confirmation was unavailable; no changes performed. Use --apply.')
-        return False
+    def small_link(self,frame,label,command):
+        return tk.Button(frame,text=label,command=command,font=("Segoe UI",8),
+                         fg=COLOR["accent"],bg=COLOR["page"],
+                         activeforeground=COLOR["accent_hover"],activebackground=COLOR["page"],
+                         borderwidth=0,cursor="hand2",padx=0,pady=0)
 
+    def set_buttons(self, enabled):
+        for button in self.buttons.values():
+            button.configure(state="normal" if enabled else "disabled",
+                             bg=COLOR["accent"] if enabled else "#B4C5D5",
+                             cursor="hand2" if enabled else "arrow")
 
-def popup(message, error=False):
-    try:
-        import tkinter as tk
-        from tkinter import messagebox
-        root=tk.Tk(); root.withdraw(); root.attributes('-topmost', True)
-        fn=messagebox.showerror if error else messagebox.showinfo
-        fn('E3 Signal Text Relocator', message, parent=root)
-        root.destroy()
-    except Exception:
-        pass
-
-
-
-
-def wait_for_block_selection(preview=False):
-    """Nonmodal directions; E3 must remain usable while this window is open.
-
-    Return in the window works through Tk. On Windows, pressing Enter while
-    E3 is foreground also works via a *read-only* key-state poll (no global
-    hotkey registration, keyboard interception, or E3 focus manipulation).
-    """
-    try:
-        import tkinter as tk
-        from tkinter import ttk
-        root = tk.Tk()
-    except Exception as exc:
-        raise RuntimeError(
-            'Could not open the block-selection instruction window. '
-            'No E3 changes made. Check that tkinter is installed.'
-        ) from exc
-
-    accepted = False
-    finished = False
-
-    def proceed(event=None):
-        nonlocal accepted, finished
-        if finished:
+    def launch(self, tool_id):
+        if self.running is not None and self.running.poll() is None:
+            messagebox.showinfo("Tool already running",
+                "Close the open E3 utility before launching another. This prevents "
+                "two scripts changing E3 objects at the same time.",parent=self.root)
             return
-        accepted = True
-        finished = True
-        root.quit()
-
-    def cancel(event=None):
-        nonlocal finished
-        if finished:
-            return
-        finished = True
-        root.quit()
-
-    try:
-        root.title('E3 - Select blocks (repeat until Close)')
-        root.resizable(False, False)
-        root.protocol('WM_DELETE_WINDOW', cancel)
-        # Keep the instructions ABOVE E3 even when the user clicks on a block.
-        # This is only a topmost WINDOW, not a modal dialog: E3 can still take
-        # focus and accept mouse selection while this prompt remains visible.
-        # The prompt can be dragged aside if it covers a block.
-        root.attributes('-topmost', True)
-        frame = ttk.Frame(root, padding=20)
-        frame.pack(fill='both', expand=True)
-        ttk.Label(frame, text='Connection Signal Relocator',
-                  font=('Segoe UI', 13, 'bold')).pack(anchor='w', pady=(0, 12))
-        ttk.Label(frame, text=(
-            '1. In E3, select ONE OR MORE CABBLOCK borders.\n'
-            '   This window stays visible; drag it aside if needed.\n'
-            '   Clear any previous selection before choosing the next group.\n'
-            '2. Press ENTER to format all selected blocks.\n'
-            '   (Enter in E3 or return here and press Enter.)\n'
-            '3. After the result appears, this window opens again.\n'
-            '4. When finished, click Close or the window X.'),
-                  justify='left', font=('Segoe UI', 10)).pack(anchor='w')
-        ttk.Separator(frame, orient='horizontal').pack(fill='x', pady=14)
-        mode = ('PREVIEW ONLY - no E3 changes will be made.' if preview else
-                'On Enter: move connection signal numbers, make them bold,\n'
-                'and set text colour to E3 palette 4.\n'
-                'One-sided blocks: opposite edge; two-sided blocks: middle.')
-        ttk.Label(frame, text=mode, justify='left').pack(anchor='w', pady=(0, 12))
-        buttons = ttk.Frame(frame)
-        buttons.pack(fill='x')
-        go_btn = ttk.Button(buttons, text='Format selected blocks (Enter)', command=proceed)
-        go_btn.pack(side='left')
-        ttk.Button(buttons, text='Close (Esc)', command=cancel).pack(side='right')
-        root.bind('<Return>', proceed)
-        root.bind('<KP_Enter>', proceed)
-        root.bind('<Escape>', cancel)
-
-        root.update_idletasks()
-        # Place instructions near upper right so the block remains easier to click.
-        width, height = root.winfo_width(), root.winfo_height()
-        x = max(0, root.winfo_screenwidth() - width - 50)
-        root.geometry(f'+{x}+80')
-        go_btn.focus_set()
-
-        # Tk's Return binding only works while its window is foreground.
-        # Windows GetAsyncKeyState lets Enter from E3 also complete the prompt
-        # without hijacking E3's keyboard or needing a third-party package.
         try:
-            import ctypes
-            key_state = ctypes.windll.user32.GetAsyncKeyState
-            vk_enter = 0x0D
-            was_down = bool(key_state(vk_enter) & 0x8000)
-            ready = not was_down
+            script=install_tool(tool_id,self.runtime)
+            python=Path(sys.executable)
+            if sys.platform == "win32" and python.name.lower()=="python.exe":
+                candidate=python.with_name("pythonw.exe")
+                if candidate.is_file(): python=candidate
+            cmd=[str(python),str(script)]
+            # V15 normally exits after spawning a detached worker. Launch its
+            # worker directly so the hub can track the actual live E3 window.
+            if tool_id=="pin": cmd.append("--worker")
+            output_path=script.parent / "launcher_output.log"
+            flags=getattr(subprocess,"CREATE_NO_WINDOW",0) if sys.platform=="win32" else 0
+            with output_path.open("a",encoding="utf-8") as fd:
+                fd.write("\n--- Launch " + datetime.now().isoformat(timespec="seconds")
+                         + " [" + SUITE_VERSION + "] ---\n")
+            with output_path.open("a",encoding="utf-8") as fd:
+                self.running=subprocess.Popen(cmd,cwd=str(script.parent),
+                       stdin=subprocess.DEVNULL,stdout=fd,stderr=subprocess.STDOUT,
+                       creationflags=flags,close_fds=True)
+            self.running_id=tool_id
+            self.set_buttons(False)
+            self.status.set(TOOLS[tool_id]["title"]+" running")
+            self.detail.set("Its E3 window is open · close it to return here")
+            # Let the child window receive focus; keep hub behind it.
+            self.root.attributes("-topmost",False)
+        except Exception as exc:
+            self.running=None
+            self.running_id=None
+            self.set_buttons(True)
+            self.status.set("Could not launch tool")
+            self.detail.set(str(exc)[:90])
+            messagebox.showerror("Launch error",str(exc),parent=self.root)
 
-            def poll_enter():
-                nonlocal was_down, ready
-                if finished:
-                    return
-                try:
-                    down = bool(key_state(vk_enter) & 0x8000)
-                    if not down:
-                        ready = True
-                    if ready and down and not was_down:
-                        proceed()
-                    was_down = down
-                except Exception:
-                    # Dialog Enter/button remain usable if OS polling fails.
-                    pass
-                if not finished:
-                    root.after(25, poll_enter)
-
-            root.after(25, poll_enter)
-        except (AttributeError, OSError):
-            log('Global Enter detection not available. Use Enter/Run in the instruction box.')
-        root.mainloop()
-        return accepted
-    finally:
-        root.destroy()
-
-
-def selected_symbol_id_candidates(prj, sht, app):
-    """Read current E3 GUI selection, WITHOUT changing GUI selection.
-
-    Different COM versions expose selection at job, sheet or application level;
-    each getter may use an out parameter or return an array directly. We use
-    only explicit *Selected* getter names and never auto-pick from sheet IDs.
-    """
-    active_sheet_id = None
-    for method_name in ('GetActiveSheetId',):
+    def watch_child(self):
         try:
-            sheet_id = getattr(prj, method_name)()
-            if isinstance(sheet_id, (int, float)) and int(sheet_id) > 0:
-                active_sheet_id = int(sheet_id)
-                break
-        except Exception:
-            continue
-    if active_sheet_id is not None:
-        select_id(sht, active_sheet_id)
-    log(f'Active E3 sheet: {active_sheet_id if active_sheet_id else "not reported by COM"}')
+            if self.running is not None:
+                rc=self.running.poll()
+                if rc is not None:
+                    name=TOOLS[self.running_id]["title"]
+                    self.running=None
+                    self.running_id=None
+                    self.set_buttons(True)
+                    self.status.set(name + (" closed" if rc==0 else " exited with an error"))
+                    self.detail.set("Ready for another tool" if rc==0 else
+                         "See Tool files / logs → launcher_output.log for details")
+        finally:
+            self.root.after(650,self.watch_child)
 
-    # Explicitly symbol-only queries first, generic selected object IDs last.
-    # The fallback generic query is ALWAYS type-checked as a placed CABBLOCK.
-    probes = (
-        ('job', prj, 'GetSelectedSymbolIds'),
-        ('job', prj, 'GetSelectedSymbolsIds'),
-        ('job', prj, 'GetSelectedSymbolId'),
-        ('sheet', sht, 'GetSelectedSymbolIds'),
-        ('sheet', sht, 'GetSelectedSymbolsIds'),
-        ('sheet', sht, 'GetSelectedSymbolId'),
-        ('app', app, 'GetSelectedSymbolIds'),
-        ('job', prj, 'GetSelectedObjectIds'),
-        ('job', prj, 'GetSelectedIds'),
-        ('sheet', sht, 'GetSelectedObjectIds'),
-        ('sheet', sht, 'GetSelectedIds'),
-        ('app', app, 'GetSelectedObjectIds'),
-        ('app', app, 'GetSelectedIds'),
-    )
-    attempted = []
-    found = set()
-    for label, obj, method_name in probes:
-        try:
-            getter = getattr(obj, method_name)
-        except Exception:
-            continue
-        # Avoid evaluating an integer method return as the selected ID unless
-        # GetSelectedSymbolId explicitly returns one number. For array-style
-        # getters, require an array (or a count + array) in the result.
-        for args in ((None,), (), (None, 0), (0, None)):
+    def import_pin_data(self):
+        """Optional migration only; never overwrite current run's recovery files."""
+        previous=filedialog.askdirectory(title="Select your previous Block Pin Spacer script folder",
+                                          parent=self.root)
+        if not previous:return
+        destination=self.runtime / TOOLS["pin"]["folder"]
+        destination.mkdir(parents=True,exist_ok=True)
+        imported=[]
+        skipped=[]
+        for suffix in ("_recovery.json","_pin_identity.json"):
+            candidate=Path(previous) / ("main"+suffix)
+            # Earlier versions may have used the named V15 script rather than main.py.
+            if not candidate.is_file():
+                old=Path(previous) / ("E3_Cable_To_Block_Pin_Spacing_V15_ZUKEN_LIGHT_GUI"+suffix)
+                if old.is_file():candidate=old
+            newfile=destination / ("main"+suffix)
+            if not candidate.is_file():
+                skipped.append("not found: "+candidate.name)
+                continue
+            if newfile.exists():
+                skipped.append("already exists: "+newfile.name)
+                continue
             try:
-                result = getter(*args)
+                data=json.loads(candidate.read_text(encoding="utf-8-sig"))
+                if not isinstance(data,dict):
+                    raise ValueError("Expected a JSON object")
+                shutil.copy2(candidate,newfile)
+                imported.append(newfile.name)
             except Exception as exc:
-                attempted.append(f'{label}.{method_name}{args}: {str(exc)[:75]}')
-                continue
-            if isinstance(result, (tuple, list)):
-                ids = parse_id_result(result)
-            elif method_name == 'GetSelectedSymbolId':
-                ids = parse_id_result(result)
-            else:
-                ids = []
-            attempted.append(f'{label}.{method_name}{args}: {ids}')
-            if ids:
-                found.update(ids)
-                break
-    log('GUI SELECTION READBACK:')
-    for item in attempted[:45]:
-        log(f'  {item}')
-    if len(attempted) > 45:
-        log(f'  ... {len(attempted)-45} additional getter attempts')
-    if not found:
-        raise RuntimeError(
-            'No selected symbol IDs were returned by this E3 COM build. '
-            'Select one or more CABBLOCK borders in E3 before pressing Enter. '
-            'If it is already selected, send the GUI SELECTION READBACK log; '
-            'your E3 version may use another selection API. NO CHANGES MADE.'
-        )
-    return sorted(found)
+                skipped.append(f"{candidate.name}: {exc}")
+        messagebox.showinfo("Pin spacer data", "Imported: " + (", ".join(imported) or "none")
+                    + "\nSkipped: " + (", ".join(skipped) or "none")
+                    + "\n\nImported identities are still checked against live E3 before use.",
+                    parent=self.root)
+
+    def on_close(self):
+        if self.running is not None and self.running.poll() is None:
+            if not messagebox.askyesno("Close launcher?",
+                "An E3 utility is still open. Close only the launcher and let that utility finish?",
+                parent=self.root):return
+        self.root.destroy()
 
 
-def get_selected_cabblocks(prj, sht, app):
-    """Return ALL uniquely selected CABBLOCKs; ignore selected non-blocks.
+def main():
+    if "--self-test" in sys.argv:
+        print("Bundled sources valid:",all_sources_ok())
+        with tempfile.TemporaryDirectory() as temp:
+            for key in TOOLS:
+                path=install_tool(key,Path(temp))
+                assert hashlib.sha256(path.read_bytes()).hexdigest()==TOOLS[key]["sha256"]
+                assert path.read_text(encoding="utf-8").strip()
+                # A second extraction must be idempotent.
+                assert install_tool(key,Path(temp))==path
+        print("Extraction, checksums, Python syntax and idempotence: PASS")
+        return
+    if "--extract" in sys.argv:
+        folder=get_runtime_folder()
+        for key in TOOLS:
+            print(install_tool(key,folder))
+        return
+    MegaApp().root.mainloop()
 
-    A drag/box selection can include pins, lines or text as well as the blocks.
-    These are never used as targets. At least one placed CABBLOCK is required.
-    """
-    ids = selected_symbol_id_candidates(prj, sht, app)
-    sym = prj.CreateSymbolObject()
-    other_symbols = []
-    blocks = []
-    for sid in ids:
-        if not select_id(sym, sid):
-            log(f'  Selected ID {sid}: not a valid E3 symbol ID; ignored')
-            continue
-        kind = str(optional_call(sym, 'GetSymbolTypeName') or '')
-        if 'CABBLOCK' not in kind.upper():
-            other_symbols.append((sid, kind))
-            continue
-        location, area = get_symbol_location(sym), get_symbol_area(sym)
-        if location is None or area is None:
-            raise RuntimeError(
-                f'Selected CABBLOCK {sid}: missing placed location/area. '
-                'Batch cancelled: NO CHANGES MADE.'
-            )
-        block = {
-            'id': sid, 'sheet_id': location['sheet_id'], 'kind': kind,
-            'owner': '<selected block>', 'view_id': None, 'view_number': None,
-            **area,
-        }
-        blocks.append(block)
-    if not blocks:
-        raise RuntimeError(
-            f'No placed CABBLOCK found among {len(ids)} selected E3 ID(s). '
-            f'Non-block symbols: {other_symbols[:12]}. '
-            'Click one or more CABBLOCK borders and press Enter again. '
-            'NO CHANGES MADE.'
-        )
-    blocks.sort(key=lambda b: (b['sheet_id'], -b['top'], b['left'], b['id']))
-    log(f'SELECTION: {len(blocks)} selected CABBLOCK(s); '
-        f'{len(other_symbols)} selected non-block symbol(s) ignored.')
-    for b in blocks:
-        log(f'  BLOCK {b["id"]}: sheet {b["sheet_id"]} | {b["kind"]!r} | '
-            f'X=[{b["left"]:.3f},{b["right"]:.3f}] '
-            f'Y=[{b["bottom"]:.3f},{b["top"]:.3f}]')
-    if other_symbols:
-        log(f'  IGNORED non-block selections (first 15): {other_symbols[:15]}')
-    return blocks
-
-
-def get_pins_in_selected_blocks(prj, sht, blocks):
-    """Scan each sheet only once, assigning pins to ONE selected CABBLOCK.
-
-    Preserve the single-block safety rules: a pin inside any second physical
-    CABBLOCK (selected or not) is ambiguous, so cancel the whole batch.
-    """
-    selected_by_sheet = defaultdict(list)
-    for b in blocks:
-        selected_by_sheet[b['sheet_id']].append(b)
-    found = {b['id']: [] for b in blocks}
-    all_blocks_by_sheet = {}
-    for sheet_id, selected_on_sheet in sorted(selected_by_sheet.items()):
-        ids = sorted(set(scan_sheet_symbols(prj, sht, sheet_id)))
-        log(f'Scanning sheet {sheet_id} ONCE: {len(ids)} symbol(s); '
-            f'{len(selected_on_sheet)} selected CABBLOCK(s)')
-        sym = prj.CreateSymbolObject()
-        all_physical_blocks = []
-        for sid in ids:
-            if not select_id(sym, sid):
-                continue
-            kind = str(optional_call(sym, 'GetSymbolTypeName') or '')
-            if 'CABBLOCK' not in kind.upper():
-                continue
-            area, loc = get_symbol_area(sym), get_symbol_location(sym)
-            if area is not None and loc is not None and loc['sheet_id'] == sheet_id:
-                all_physical_blocks.append({'id': sid, 'sheet_id': sheet_id, **area})
-        all_blocks_by_sheet[sheet_id] = all_physical_blocks
-        log(f'  Physical CABBLOCKs on sheet (selected + unselected): '
-            f'{len(all_physical_blocks)}')
-        for sid in ids:
-            pin = read_pin_identity(prj, sid)
-            if pin is None:
-                continue
-            owners = [b for b in selected_on_sheet if inside_block(pin['location'], b)]
-            if not owners:
-                continue
-            if len(owners) > 1:
-                raise RuntimeError(
-                    f'Pin symbol {sid} ({pin["pin_name"]!r}) intersects '
-                    f'multiple selected CABBLOCKs {[b["id"] for b in owners]}. '
-                    'Cannot attribute safely. Batch cancelled: NO CHANGES MADE.')
-            block = owners[0]
-            loc = pin['location']
-            overlaps = [other['id'] for other in all_physical_blocks
-                        if other['id'] != block['id']
-                        and other['left'] - .015 <= loc['x'] <= other['right'] + .015
-                        and other['bottom'] - .015 <= loc['y'] <= other['top'] + .015]
-            if overlaps:
-                raise RuntimeError(
-                    f'Pin symbol {sid} ({pin["pin_name"]!r}) in selected '
-                    f'CABBLOCK {block["id"]} also lies in CABBLOCK(s) {overlaps}. '
-                    'Cannot determine ownership safely. Batch cancelled: NO CHANGES MADE.')
-            found[block['id']].append({**pin, 'block': block})
-    all_pins = []
-    for b in blocks:
-        pins = found[b['id']]
-        labels = Counter(p['designation'] or '<no type-12 label>' for p in pins)
-        log(f'BLOCK {b["id"]}: {len(pins)} physical pin symbols; '
-            f'device labels: {labels.most_common(12)}')
-        for p in sorted(pins, key=lambda x: (-x['location']['y'], x['pin_name'])):
-            log(f'  PIN {p["pin_name"]!r} | symbol {p["symbol_id"]} | '
-                f'labels={p["designations"]!r} | '
-                f'X={p["location"]["x"]:.3f}, Y={p["location"]["y"]:.3f}')
-        if not pins:
-            dump_nearby_text_types(prj, sht, [b])
-            raise RuntimeError(
-                f'Selected CABBLOCK {b["id"]} has no identifiable physical pins '
-                '(pin number type 203). Batch cancelled; NO CHANGES MADE.')
-        all_pins.extend(pins)
-    return all_pins, all_blocks_by_sheet
-
-
-def make_bulk_selected_block_plan(pins, blocks):
-    """Plan each physical CABBLOCK independently, allowing repeated pin numbers."""
-    by_block = defaultdict(list)
-    for p in pins:
-        by_block[p['block']['id']].append(p)
-    combined = []
-    seen_symbols = set()
-    for b in blocks:
-        block_plan = make_selected_block_plan(by_block[b['id']])
-        for p in block_plan:
-            key = (p['block']['sheet_id'], p['symbol_id'])
-            if key in seen_symbols:
-                raise RuntimeError(
-                    f'Pin symbol {p["symbol_id"]} was assigned to more than one block. '
-                    'Batch cancelled: NO CHANGES MADE.')
-            seen_symbols.add(key)
-        combined.extend(block_plan)
-    log(f'BATCH PRE-FLIGHT: {len(blocks)} blocks, '
-        f'{len(combined)} uniquely assigned physical pin symbol(s).')
-    return combined
-
-
-def make_selected_block_plan(pins):
-    """Plan only unique pins in ONE physical CABBLOCK, irrespective of owner."""
-    seen = {}
-    for p in pins:
-        key = (tuple(sorted(x.casefold() for x in p['designations'])), p['pin_name'])
-        if key in seen:
-            prev = seen[key]
-            raise RuntimeError(
-                f'Ambiguous duplicate pin {p["pin_name"]!r} in selected block: '
-                f'symbols {prev["symbol_id"]} and {p["symbol_id"]} have the same '
-                'device labels. Nothing modified.'
-            )
-        seen[key] = p
-    sides = defaultdict(list)
-    for p in pins:
-        p['side'] = determine_side(p)
-        p['connector'] = p['designation'] or '<unlabeled connector>'
-        sides[p['side']].append(p)
-    result = []
-    for side, group in sides.items():
-        group.sort(key=lambda p: (-p['location']['y'], p['pin_name']))
-        for row, p in enumerate(group):
-            result.append({**p, 'row': row})
-    # For each mixed-side block, detect opposing pins that share the same row.
-    # Those rows need two middle lanes, rather than two labels at one point.
-    both_edges = bool(sides['LEFT'] and sides['RIGHT'])
-    for record in result:
-        side = record['side']
-        opposite_side = 'RIGHT' if side == 'LEFT' else 'LEFT'
-        record['both_edges'] = both_edges
-        record['paired_row'] = both_edges and any(
-            abs(record['location']['y'] - other['location']['y'])
-            <= SAME_ROW_Y_TOLERANCE
-            for other in sides[opposite_side]
-        )
-    paired_count = sum(p['paired_row'] for p in result)
-    mode = 'CENTER (two-sided)' if both_edges else 'OPPOSITE EDGE (one-sided)'
-    log(f'PRE-FLIGHT: {len(result)} unique pins on selected block: '
-        f'LEFT={len(sides["LEFT"])}, RIGHT={len(sides["RIGHT"])} | '
-        f'mode={mode} | {paired_count} pin(s) on paired left/right rows')
-    return sorted(result, key=lambda p: (p['side'], p['row']))
-
-
-
-def run(preview=False, apply=False, type_override=None):
-    global LOG_STREAM
-    log_path = choose_log_path()
-    try:
-        LOG_STREAM = open(log_path, 'a', encoding='utf-8')
-        log('\n' + '=' * 74)
-        log('NEW RUN: ' + datetime.now().astimezone().strftime('%Y-%m-%d %H:%M:%S %Z'))
-        log(f'E3 BULK SIGNAL RELOCATOR (CENTER FOR TWO-SIDED BLOCKS) + BOLD + COLOUR {SIGNAL_COLOUR}')
-        log('No Excel, page, device or connector input. SELECTED CABBLOCKS ONLY.')
-        log('EVERY block/pin/text is checked BEFORE ANY changes are applied.')
-        log('=' * 74)
-        import win32com.client as win32
-        app = win32.gencache.EnsureDispatch('CT.Application')
-        prj = app.CreateJobObject()
-        sht = prj.CreateSheetObject()
-        blocks = get_selected_cabblocks(prj, sht, app)
-        pins, physical_blocks_by_sheet = get_pins_in_selected_blocks(prj, sht, blocks)
-        plan = make_bulk_selected_block_plan(pins, blocks)
-        signals = collect_signal_texts(prj, sht, plan, type_override)
-        associated = associate_signals(prj, plan, signals, physical_blocks_by_sheet)
-        associated = recover_already_placed_sheet_texts(prj, plan, signals, associated)
-        moves = plan_relocations(associated, type_override)
-        # Reject two distinct signal texts at the exact same destination.
-        # Paired left/right pins are split into center lanes above, but two
-        # unrelated labels on a single pin could still create a collision.
-        final_positions = defaultdict(list)
-        for m in moves:
-            b = m['pin']['block']
-            key = (b['sheet_id'], b['id'], round(m['x'], 3), round(m['y'], 3))
-            final_positions[key].append(m['id'])
-        collisions = {key: ids for key, ids in final_positions.items()
-                      if len(set(ids)) > 1}
-        if collisions:
-            raise RuntimeError(
-                f'Duplicate connection-number destinations: {list(collisions.items())[:8]}. '
-                'Batch cancelled BEFORE changes: multiple text objects would overlap.')
-        # No one text ID may be modified more than once across the whole batch.
-        if len({m['id'] for m in moves}) != len(moves):
-            raise RuntimeError('Duplicate connection signal text in batch plan. '
-                               'NO CHANGES MADE.')
-        log('\nPROPOSED CONNECTION SIGNAL FORMATTING:')
-        for m in moves[:350]:
-            p = m['pin']
-            loc = m['location']
-            log(f'  text {m["id"]} type {m["type"]} {m["value"][:55]!r} | '
-                f'pin {p["pin_name"]} on block {p["block"]["id"]} ({p["side"]}) | '
-                f'({loc["x"]:.3f},{loc["y"]:.3f}) -> '
-                f'({m["x"]:.3f},{m["y"]:.3f}) {m["placement"]} | '
-                f'{"ALREADY POSITIONED" if m["already"] else "MOVE"} '
-                f'+ BOLD + COLOUR {SIGNAL_COLOUR}')
-        if len(moves) > 350:
-            log(f'  ... {len(moves) - 350} more labels omitted from preview')
-        to_move = [m for m in moves if not m['already']]
-        by_block = defaultdict(list)
-        for m in moves:
-            by_block[m['pin']['block']['id']].append(m)
-        log('\nPER-BLOCK SUMMARY:')
-        for b in blocks:
-            block_moves = by_block[b['id']]
-            n_pins = sum(p['block']['id'] == b['id'] for p in plan)
-            count_moving = sum(not m['already'] for m in block_moves)
-            target_mode = ('CENTER' if any(p['both_edges'] for p in plan
-                                           if p['block']['id'] == b['id'])
-                           else 'OPPOSITE EDGE')
-            log(f'  BLOCK {b["id"]}: {n_pins} pins, mode {target_mode}, '
-                f'{count_moving} to move, {len(block_moves)} bold/colour updates')
-        log(f'\nBATCH SUMMARY: {len(blocks)} selected CABBLOCK(s); '
-            f'{len(plan)} pins, {len(signals)} candidate signal texts, '
-            f'{len(associated)} assigned, {len(to_move)} proposed moves, '
-            f'{len(moves)} bold/colour updates.')
-        if not moves:
-            popup(f'{len(blocks)} CABBLOCK(s) checked, but no unambiguous '
-                  f'connection signal text identified.\n\nLog: {log_path}')
-            return 0
-        if preview:
-            log('PREVIEW ONLY: E3 was not modified.')
-            popup(f'{len(blocks)} selected CABBLOCK(s); {len(plan)} pins.\n'
-                  f'{len(to_move)} proposed moves and {len(moves)} bold/colour updates.\n'
-                  f'No changes made.\n\nLog: {log_path}')
-            return 0
-        if not apply and not confirm_apply(len(to_move), len(moves), log_path):
-            log('CANCELLED. E3 not modified.')
-            return 0
-        txt = prj.CreateTextObject()
-        moved = bolded = coloured = 0
-        per_block_counts = defaultdict(lambda: [0, 0, 0])
-        try:
-            for m in moves:
-                block_id = m['pin']['block']['id']
-                if not m['already']:
-                    how = relocate_one_text(txt, m)
-                    moved += 1
-                    per_block_counts[block_id][0] += 1
-                    log(f'  MOVED text {m["id"]} on block {block_id} via {how}')
-                if not select_id(txt, m['id']):
-                    raise RuntimeError(f'Text {m["id"]} disappeared before formatting.')
-                if m['already'] and m['placement'].startswith('CENTER'):
-                    try:
-                        txt.SetAlignment(m['alignment'])
-                    except Exception as exc:
-                        raise RuntimeError(
-                            f'Text {m["id"]}: could not set middle alignment: {exc}') from exc
-                try:
-                    txt.SetStyle(BOLD_STYLE)
-                except Exception as exc:
-                    raise RuntimeError(f'Text {m["id"]}: could not bold: {exc}') from exc
-                bolded += 1
-                per_block_counts[block_id][1] += 1
-                try:
-                    txt.SetColour(SIGNAL_COLOUR)
-                except Exception as exc:
-                    raise RuntimeError(
-                        f'Text {m["id"]}: could not set colour {SIGNAL_COLOUR}: {exc}') from exc
-                coloured += 1
-                per_block_counts[block_id][2] += 1
-                log(f'  FORMATTED text {m["id"]} on block {block_id}: '
-                    f'bold + colour {SIGNAL_COLOUR}')
-        except Exception:
-            log(f'PARTIAL FAILURE: {moved} moved; {bolded} bolded; '
-                f'{coloured} coloured across {len(blocks)} block(s). '
-                'Inspect E3 before continuing. A runtime COM failure does not '
-                'automatically roll back earlier successfully formatted labels.')
-            raise
-        for b in blocks:
-            counts = per_block_counts[b['id']]
-            log(f'  DONE block {b["id"]}: {counts[0]} moved, '
-                f'{counts[1]} bolded, {counts[2]} colour-{SIGNAL_COLOUR}')
-        log(f'SUCCESS: {len(blocks)} selected CABBLOCK(s); {moved} moved, '
-            f'{bolded} bolded, {coloured} colour-{SIGNAL_COLOUR}. Save E3 project.')
-        popup(f'{len(blocks)} selected block(s), {len(plan)} pins.\n'
-              f'{moved} connection signal numbers relocated, '
-              f'{bolded} bolded, {coloured} set to colour {SIGNAL_COLOUR}.\n\n'
-              'No pin symbols or local signal names changed.\n'
-              f'Log: {log_path}\n\nSave your E3 project.')
-        return 0
-    except Exception:
-        log('ERROR: ' + traceback.format_exc())
-        raise
-    finally:
-        if LOG_STREAM is not None:
-            LOG_STREAM.close()
-        LOG_STREAM = None
-
-
-def main(argv=None):
-    parser = argparse.ArgumentParser(
-        description='Open instructions; select one or more E3 CABBLOCKs; press Enter to '
-                    'relocate connection signal numbers, bold them and set colour 4.')
-    parser.add_argument('--dry-run', action='store_true',
-                        help='Preview only; Enter will not modify E3.')
-    parser.add_argument('--apply', action='store_true',
-                        help='Compatibility option; Enter already authorizes the operation.')
-    parser.add_argument('--type', type=int, dest='type_override', metavar='N',
-                        help='Explicit connection signal text type; usually 1007 or 7.')
-    args = parser.parse_args(argv)
-    if args.apply and args.dry_run:
-        parser.error('--apply and --dry-run cannot be combined')
-    # Run repeated batches in one Python process. Each batch snapshots the
-    # CURRENT E3 selection after Enter, so blocks can change between runs.
-    # Never reuse the previous batch's selected symbol IDs or text plan.
-    while True:
-        try:
-            accepted = wait_for_block_selection(preview=args.dry_run)
-        except Exception as exc:
-            # If Tk itself cannot open, retrying would make an endless error loop.
-            print('COULD NOT OPEN INSTRUCTIONS:', exc)
-            return 1
-        if not accepted:
-            log('CLOSED from instructions. No additional E3 changes.')
-            return 0
-        try:
-            # Enter authorizes this batch. Every selected block is preflighted
-            # before changes; no duplicate Yes/No popup.
-            run(preview=args.dry_run, apply=True,
-                type_override=args.type_override)
-        except Exception as exc:
-            print('FAILED:', exc)
-            popup(f'{exc}\n\nSee E3_Bulk_Selected_Block_Relocator_Log.txt '
-                  'beside this script (or in the system temp directory).\n\n'
-                  'The instructions will reopen so you can retry or Close.', error=True)
-        # For success, preview, no candidates, and recoverable failures alike,
-        # return to the same instruction prompt after the result popup closes.
-
-
-if __name__ == '__main__':
-    sys.exit(main())
+if __name__=="__main__":main()
