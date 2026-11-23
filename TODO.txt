@@ -1,4 +1,4 @@
-"""E3.series CABBLOCK header formatter V11.
+"""E3.series CABBLOCK header formatter V12.
 
 Select any number of CABBLOCKs in E3, press Enter; the always-on-top
 window returns after each batch until you click Close/X or press Esc.
@@ -19,6 +19,10 @@ If E3 refuses to create its bound text, formats the OTHER THREE rows while
 leaving the reserved Saber slot empty. After manually inserting bound Saber
 Attribute Text in E3, rerun Complete Headers to format all four rows.
 Never inserts unbound/free-standing text or edits Function/combined values.
+V12 defaults to keeping Device Location at its CURRENT schematic position,
+using it as the X/Y anchor for the rows below (0.36 spacing). Optionally choose
+Block top in the UI for the previous top-aligned layout. Do not automatically
+shift a low Device Location text upward: warn if the four rows cannot fit.
 Test on a saved E3 project copy. The installed E3 COM API is not testable here.
 
 Test first on a saved copy of your E3 project.
@@ -34,7 +38,7 @@ from collections import defaultdict
 from datetime import datetime
 from pathlib import Path
 
-BUILD_ID = 'SABER-HEADER-V11-PARTIAL-FORMAT-2026-11-23'
+BUILD_ID = 'SABER-HEADER-V12-LOCATION-ANCHOR-2026-11-23'
 LOCATION_TYPE = 15
 SABER_ATTRIBUTE_NAME = 'saberParam1'
 SABER_TYPE = 5002        # type specified by user, may display as generic 1000
@@ -182,7 +186,7 @@ def scan_sheet_symbols(prj, sht, sheet_id):
     return get_ids(prj.GetSymbolIds)
 
 
-def wait_for_block_selection(preview=False):
+def wait_for_block_selection(preview=False, default_anchor='location'):
     """Always-on-top nonmodal window; E3 remains available for selecting blocks."""
     import tkinter as tk
     from tkinter import ttk
@@ -190,13 +194,15 @@ def wait_for_block_selection(preview=False):
     root.title('E3 - Saber Parameter 1 Header Formatter')
     root.attributes('-topmost', True)
     root.resizable(False,False)
-    result={'action':'close'}
+    result={'action':'close', 'anchor':default_anchor}
+    anchor_choice=tk.StringVar(value=default_anchor)
     done={'value':False}
 
     def finish(action):
         if not done['value']:
             done['value']=True
             result['action']=action
+            result['anchor']=anchor_choice.get()
             root.quit()
 
     root.protocol('WM_DELETE_WINDOW', lambda:finish('close'))
@@ -215,7 +221,13 @@ def wait_for_block_selection(preview=False):
     ttk.Separator(frame,orient='horizontal').pack(fill='x',pady=12)
     status=('PREVIEW ONLY — neither button will change E3.' if preview else
             'Attribute-linked Saber & Equipment; black/bold/center 0.25.')
-    ttk.Label(frame,text=status).pack(anchor='w',pady=(0,10))
+    ttk.Label(frame,text=status).pack(anchor='w',pady=(0,8))
+    ttk.Label(frame,text='Header position:', font=('Segoe UI',10,'bold')).pack(anchor='w')
+    ttk.Radiobutton(frame, text='Keep Device Location in place (default)',
+                    variable=anchor_choice,value='location').pack(anchor='w',pady=(2,0))
+    ttk.Radiobutton(frame, text='Move header to top of CABBLOCK (previous layout)',
+                    variable=anchor_choice,value='top').pack(anchor='w',pady=(0,9))
+    ttk.Label(frame,text='Other rows follow Device Location at 0.36 spacing.').pack(anchor='w',pady=(0,9))
     row=ttk.Frame(frame)
     row.pack(fill='x')
     ttk.Button(row,text='Prepare XXX Attributes',command=lambda:finish('prepare')).pack(side='left')
@@ -250,7 +262,7 @@ def wait_for_block_selection(preview=False):
         pass
     try:
         root.mainloop()
-        return result['action']
+        return result
     finally:
         root.destroy()
 
@@ -960,10 +972,50 @@ def _required_single(block, types, type_number, label):
     return hits[0]
 
 
+def compute_header_anchor(text_obj, block, location_text_id, layout_anchor='location'):
+    """Use the original Location text XY unless top alignment was requested.
+
+    Fails before text moves when a layout would extend below the block.
+    """
+    bid = block['id']
+    if layout_anchor == 'location':
+        if not select_id(text_obj, location_text_id):
+            raise RuntimeError(
+                f'CABBLOCK {bid}: cannot select Location text {location_text_id}.')
+        original_xy = get_text_xy(text_obj, block)
+        cx, first_y = original_xy['x'], original_xy['y']
+        # Never shift a low Location upward behind the user's back.
+        if (cx < block['left'] - BLOCK_LOCATION_TOLERANCE or
+                cx > block['right'] + BLOCK_LOCATION_TOLERANCE or
+                first_y > block['top'] + BLOCK_LOCATION_TOLERANCE):
+            raise RuntimeError(
+                f'CABBLOCK {bid}: Device Location text {location_text_id} is '
+                f'outside the header area at ({cx:.3f}, {first_y:.3f}). '
+                'Reposition it in E3, or choose "Block top". '
+                'No text formatting applied.')
+    elif layout_anchor == 'top':
+        cx = (float(block['left']) + float(block['right'])) / 2
+        first_y = float(block['top']) - TOP_INSET
+    else:
+        raise ValueError(f'Unknown layout_anchor={layout_anchor!r}')
+    final_y = first_y - (len(HEADER_ORDER) - 1) * TEXT_PITCH
+    minimum = float(block['bottom']) + BOTTOM_CLEARANCE
+    if final_y < minimum - POSITION_TOLERANCE:
+        raise RuntimeError(
+            f'CABBLOCK {bid}: header anchored at Location Y={first_y:.3f} '
+            f'cannot fit four rows at {TEXT_PITCH:.2f} pitch: '
+            f'last row Y={final_y:.3f}, required minimum {minimum:.3f}. '
+            'Move Device Location up in E3, or choose "Block top" '
+            'to explicitly use the previous layout. No text formatting applied.')
+    log(f'  BLOCK {bid} HEADER ANCHOR: {layout_anchor} '
+        f'X={cx:.3f}, first Y={first_y:.3f}, last Y={final_y:.3f}')
+    return cx, first_y
+
+
 def resolve_header_texts(prj, blocks, all_texts, saber_type=SABER_TYPE,
                          equipment_type=EQUIPMENT_TYPE,
                          designation_type=DEVICE_DESIGNATION_TYPE,
-                         attribute_links=None):
+                         attribute_links=None, layout_anchor='location'):
     """Use verified attribute->text links, reserving a slot for missing Saber.
 
     A failed Saber DisplayAttribute() must not prevent Location, Equipment and
@@ -981,8 +1033,11 @@ def resolve_header_texts(prj, blocks, all_texts, saber_type=SABER_TYPE,
         raise RuntimeError(f'Protected/overlapping header mapping {mapping}')
     if attribute_links is None:
         attribute_links = read_block_attribute_links(prj, blocks)
+    if layout_anchor not in ('location', 'top'):
+        raise ValueError(f'Unknown layout_anchor={layout_anchor!r}')
     plan, uncertain, pending_saber = [], [], []
     used = set()
+    text_obj = prj.CreateTextObject()
     for block in blocks:
         bid = block['id']
         fields = all_texts[bid]
@@ -1063,7 +1118,8 @@ def resolve_header_texts(prj, blocks, all_texts, saber_type=SABER_TYPE,
         needed = TOP_INSET + 3 * TEXT_PITCH + BOTTOM_CLEARANCE
         if height < needed:
             raise RuntimeError(f'CABBLOCK {bid}: needs {needed:.3f} height; has {height:.3f}.')
-        cx = (float(block['left']) + float(block['right'])) / 2
+        cx, first_y = compute_header_anchor(
+            text_obj, block, loc['id'], layout_anchor)
         slots = {'location': loc, 'saber': selected.get('saber'),
                  'equipment': selected['equipment'], 'designation': des}
         for i, field in enumerate(HEADER_ORDER):
@@ -1075,7 +1131,7 @@ def resolve_header_texts(prj, blocks, all_texts, saber_type=SABER_TYPE,
             used.add(record['id'])
             plan.append({'block': block, 'field': field, 'type': record['type'],
                          'id': record['id'], 'before_value': record['value'],
-                         'x': cx, 'y': float(block['top']) - TOP_INSET - i * TEXT_PITCH})
+                         'x': cx, 'y': first_y - i * TEXT_PITCH})
     return plan, uncertain, pending_saber
 
 
@@ -1106,7 +1162,8 @@ def confirm_generic_1000_matches(matches):
 
 
 def run(action='complete', preview=False, saber_type=None,
-        equipment_type=None, designation_type=None, inspect_api=False):
+        equipment_type=None, designation_type=None, inspect_api=False,
+        layout_anchor='location'):
     global LOG_STREAM
     path = choose_log_path()
     try:
@@ -1115,7 +1172,7 @@ def run(action='complete', preview=False, saber_type=None,
         log('NEW SABER HEADER BATCH: ' + datetime.now().astimezone().isoformat(timespec='seconds'))
         log('BUILD: ' + BUILD_ID)
         log('SOURCE FILE: ' + str(Path(__file__).resolve()))
-        log(f'ACTION: {action}; dry-run={preview}; inspect-api={inspect_api}')
+        log(f'ACTION: {action}; dry-run={preview}; inspect-api={inspect_api}; anchor={layout_anchor}')
         log('HEADER: LOCATION > SABER PARAMETER 1 > EQUIPMENT > DEVICE DESIGNATION')
         log('E3 attribute text can have generic display type 1000; 5002 is not guaranteed.')
         log('Equipment is REQUIRED. Types 14/1010 never have their values changed.')
@@ -1134,15 +1191,18 @@ def run(action='complete', preview=False, saber_type=None,
             return 0
         if action == 'prepare':
             return prepare_selected_saber_attributes(prj, blocks, preview=preview)
-        # Check essential geometry/known header fields BEFORE creating display text.
+        # Validate actual Location anchors BEFORE touching Saber attributes or labels.
+        initial_txt = prj.CreateTextObject()
         for block in blocks:
-            _required_single(block, all_texts[block['id']], LOCATION_TYPE, 'Location')
+            loc = _required_single(block, all_texts[block['id']],
+                                   LOCATION_TYPE, 'Location')
             _required_single(block, all_texts[block['id']],
                              designation_type if designation_type is not None else
                              DEVICE_DESIGNATION_TYPE, 'Device Designation')
             needed = TOP_INSET + 3 * TEXT_PITCH + BOTTOM_CLEARANCE
             if block['top'] - block['bottom'] < needed:
                 raise RuntimeError(f'CABBLOCK {block["id"]}: too short for header.')
+            compute_header_anchor(initial_txt, block, loc['id'], layout_anchor)
         if preview:
             links = read_block_attribute_links(prj, blocks)
             log('DRY RUN - ATTRIBUTE DISPLAY CHECK:')
@@ -1174,7 +1234,7 @@ def run(action='complete', preview=False, saber_type=None,
             saber_type if saber_type is not None else SABER_TYPE,
             equipment_type if equipment_type is not None else EQUIPMENT_TYPE,
             designation_type if designation_type is not None else DEVICE_DESIGNATION_TYPE,
-            attribute_links=links,
+            attribute_links=links, layout_anchor=layout_anchor,
         )
         preflight_positions(prj, plan)
         preflight_saber_attributes(prj, plan)
@@ -1225,6 +1285,9 @@ def run(action='complete', preview=False, saber_type=None,
 def main(argv=None):
     parser = argparse.ArgumentParser(description='Bulk selected E3 CABBLOCK header formatter.')
     parser.add_argument('--dry-run', action='store_true', help='Read-only preview.')
+    parser.add_argument('--layout-anchor', choices=('location','top'),
+                        default='location',
+                        help='Initial layout: preserve existing Device Location (default) or block top.')
     parser.add_argument('--inspect-api', action='store_true', help='Read-only COM capability report.')
     parser.add_argument('--saber-type', type=int, default=None, help='Explicit display text type, default 5002.')
     parser.add_argument('--equipment-type', type=int, default=None, help='Equipment display type, default 1000.')
@@ -1232,9 +1295,13 @@ def main(argv=None):
     args = parser.parse_args(argv)
     print('E3 HEADER FORMATTER BUILD: ' + BUILD_ID, flush=True)
     print('E3 HEADER FORMATTER FILE: ' + str(Path(__file__).resolve()), flush=True)
+    layout_anchor=args.layout_anchor
     while True:
         try:
-            action = wait_for_block_selection(preview=(args.dry_run or args.inspect_api))
+            selection = wait_for_block_selection(preview=(args.dry_run or args.inspect_api),
+                                                default_anchor=layout_anchor)
+            action=selection['action']
+            layout_anchor=selection['anchor']
         except Exception as exc:
             print('Selection window failed:', exc)
             return 1
@@ -1245,7 +1312,7 @@ def main(argv=None):
             run(action=action, preview=args.dry_run, saber_type=args.saber_type,
                 equipment_type=args.equipment_type,
                 designation_type=args.designation_type,
-                inspect_api=args.inspect_api)
+                inspect_api=args.inspect_api, layout_anchor=layout_anchor)
         except Exception as exc:
             print('FAILED:', exc)
             popup(str(exc) + '\n\nThe selection window will reopen.', error=True)
