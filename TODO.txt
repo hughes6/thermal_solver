@@ -1,4 +1,4 @@
-"""E3 Mega Tools V14 — a single readable Python launcher for nine tools.
+"""E3 Mega Tools V16 — a single readable Python launcher for nine tools.
 
 Includes the three previously working E3 diagram tools and six spreadsheet tools
 from the supplied source. The Block Maker is preserved as five independent files.
@@ -9,6 +9,8 @@ Open this `main.py` normally to use the GUI. Command-line options:
     python main.py --self-test       # compile/validate all embedded sources
     python main.py --extract         # extract all scripts WITHOUT running them
     python main.py --list-tools      # print tool names / paths
+    python main.py --list-templates  # show detected blank workbook templates
+    python main.py --verify-templates # validate all four templates
 
 Selected Excel paths are optional. Without one, the tool's own file picker opens.
 Test E3 / SQL changes in a saved project copy; check with DB admins before using
@@ -16,6 +18,7 @@ production database tools. This launcher has NOT been run against live E3/SQL.
 """
 from __future__ import annotations
 import hashlib
+import zipfile
 import json
 import os
 from pathlib import Path
@@ -27,7 +30,7 @@ import tkinter as tk
 from tkinter import filedialog, messagebox
 from datetime import datetime
 
-SUITE_VERSION = "E3-MEGA-TOOLS-V14-SEPARATE-WORKBOOKS-2026-11-24"
+SUITE_VERSION = "E3-MEGA-TOOLS-V16-AUTO-TEMPLATES-2026-11-24"
 PALETTE = {
     "white": "#FFFFFF", "pale": "#EAF4FF", "panel": "#F5FAFF",
     "border": "#D4E3F4", "blue": "#2381CF", "blue_hover": "#1466B2",
@@ -52,6 +55,18 @@ WORKBOOKS = {
     "block_maker": {"label": "Block Maker", "note": "Its own workbook"},
     "pin_arranger": {"label": "Pin Arranger / Formatter", "note": "Shared pin-layout workbook"},
     "signal": {"label": "Block Signal Adder", "note": "Its own workbook"},
+}
+
+# Original blank workbook templates live in ./templates, next to main.py.
+# build_exe.py passes these four files to PyInstaller as bundled data.
+# In a frozen exe they are read from sys._MEIPASS / templates.
+# Download always writes an exact byte copy, preserving formulas and VBA macros.
+# A user-imported template is an optional override, never a build requirement.
+TEMPLATE_GROUPS = {
+    "cable": {"title": "Cable Maker / Placer", "description": "Cable assembly and connector layout workbook", "filename": "Cable_Template.xlsx"},
+    "block_maker": {"title": "Block Maker", "description": "Block creation workbook", "filename": "Block_Maker_Template.xlsm"},
+    "pin_arranger": {"title": "Pin Arranger / Formatter", "description": "Block pin-layout workbook", "filename": "Block_Pin_Arranger_Template.xlsm"},
+    "signal": {"title": "Block Signal Adder", "description": "Local signal assignment workbook", "filename": "Block_Signal_Adder_Template.xlsm"},
 }
 
 # Below are FULL, UNCOMPRESSED original scripts, with only optional Excel
@@ -19497,6 +19512,142 @@ def write_prefs(data: dict) -> None:
     os.replace(tmp,dest)
 
 
+def template_directory() -> Path:
+    """User-writable master template store independent of generated tool files."""
+    root = Path(os.environ.get('LOCALAPPDATA') or Path.home()) / 'E3_Mega_Tools' / 'templates'
+    root.mkdir(parents=True, exist_ok=True)
+    return root
+
+
+def template_manifest_file() -> Path:
+    return template_directory() / 'templates.json'
+
+
+def read_template_manifest() -> dict:
+    try:
+        data = json.loads(template_manifest_file().read_text(encoding='utf-8'))
+        if isinstance(data, dict):
+            return {k:v for k,v in data.items() if k in TEMPLATE_GROUPS
+                    and isinstance(v, str) and v.lower().endswith(('.xlsx', '.xlsm'))
+                    and Path(v).name == v}
+    except (OSError, ValueError, TypeError):
+        pass
+    return {}
+
+
+def save_template_manifest(manifest: dict) -> None:
+    dest = template_manifest_file()
+    temp = dest.with_suffix('.tmp')
+    filtered = {k:v for k,v in manifest.items() if k in TEMPLATE_GROUPS
+                and isinstance(v,str) and Path(v).name == v}
+    try:
+        temp.write_text(json.dumps(filtered,indent=2)+'\n',encoding='utf-8')
+        os.replace(temp,dest)
+    finally:
+        if temp.exists():temp.unlink()
+
+
+def validate_excel_template(path: Path) -> None:
+    """Check the Excel container but NEVER recalculate or rewrite the workbook."""
+    if path.suffix.lower() not in ('.xlsx', '.xlsm'):
+        raise ValueError('Choose an Excel .xlsx or .xlsm template.')
+    if not path.is_file():
+        raise FileNotFoundError(str(path))
+    if not zipfile.is_zipfile(path):
+        raise ValueError('The selected file is not a valid Excel workbook (.xlsx/.xlsm).')
+    try:
+        with zipfile.ZipFile(path,'r') as archive:
+            required = {'[Content_Types].xml','xl/workbook.xml'}
+            if not required.issubset(archive.namelist()):
+                raise ValueError('Missing Excel workbook files; choose a genuine template.')
+            if archive.testzip() is not None:
+                raise ValueError('The selected Excel template is damaged.')
+    except zipfile.BadZipFile as exc:
+        raise ValueError('The selected Excel template is damaged.') from exc
+
+
+def import_template(key: str, original: Path) -> Path:
+    """Save a permanent byte-for-byte copy of an operator-supplied blank master."""
+    if key not in TEMPLATE_GROUPS:raise KeyError(key)
+    original = Path(original).resolve()
+    validate_excel_template(original)
+    expected_ext=Path(TEMPLATE_GROUPS[key]['filename']).suffix.lower()
+    if original.suffix.lower()!=expected_ext:
+        raise ValueError('The '+TEMPLATE_GROUPS[key]['title']+' template must be '+expected_ext+'.')
+    dest = template_directory() / (key + original.suffix.lower())
+    if original == dest.resolve():
+        return dest
+    temp = dest.with_name(dest.name + '.importing')
+    try:
+        shutil.copyfile(original,temp)
+        # Validate temporary content before changing the saved master.
+        # The temp suffix is not .xlsx; use the ZIP structure directly here.
+        with zipfile.ZipFile(temp,'r') as archive:
+            if not {'[Content_Types].xml','xl/workbook.xml'}.issubset(archive.namelist()):
+                raise ValueError('Invalid Excel file.')
+        os.replace(temp,dest)
+        manifest=read_template_manifest()
+        manifest[key]=dest.name
+        save_template_manifest(manifest)
+        # Remove the other possible extension only after a successful import.
+        other=template_directory() / (key + ('.xlsm' if dest.suffix=='.xlsx' else '.xlsx'))
+        if other.exists():other.unlink()
+        return dest
+    finally:
+        if temp.exists():temp.unlink()
+
+
+def template_source_directories() -> tuple[Path, ...]:
+    """Find ./templates during Python development and inside PyInstaller EXEs.
+
+    sys._MEIPASS is PyInstaller's read-only runtime data directory for --onefile.
+    The exe user's original templates folder is also allowed as a fallback.
+    No template is copied into the app's working directory.
+    """
+    locations = []
+    bundle_dir = getattr(sys, '_MEIPASS', None)
+    if bundle_dir:
+        locations.append(Path(bundle_dir) / 'templates')
+    if getattr(sys, 'frozen', False):
+        locations.append(Path(sys.executable).resolve().parent / 'templates')
+    else:
+        locations.append(Path(__file__).resolve().parent / 'templates')
+    return tuple(dict.fromkeys(locations))
+
+
+def get_template_path(key: str) -> Path | None:
+    """Use user-imported overrides first, then auto-discover shipped templates."""
+    if key not in TEMPLATE_GROUPS:raise KeyError(key)
+    manifest=read_template_manifest()
+    exact_filename=TEMPLATE_GROUPS[key]['filename']
+    local=manifest.get(key)
+    if local:
+        path=template_directory()/local
+        if path.is_file() and path.suffix.lower()==Path(exact_filename).suffix.lower():
+            return path
+    for directory in template_source_directories():
+        candidate=directory/exact_filename
+        if candidate.is_file():return candidate
+    return None
+
+
+def save_template_copy(key: str, output_path: Path) -> Path:
+    """Write an exact workbook copy, preserving formatting, formulas, macros."""
+    if key not in TEMPLATE_GROUPS:raise KeyError(key)
+    output_path=Path(output_path)
+    source=get_template_path(key)
+    if source is None:
+        raise FileNotFoundError('No original template found in the templates folder for '+TEMPLATE_GROUPS[key]['title'])
+    validate_excel_template(source)
+    if output_path.suffix.lower()!=source.suffix.lower():
+        raise ValueError('Keep the template extension '+source.suffix+' when saving.')
+    if output_path.resolve() == source.resolve():
+        raise ValueError('Choose another destination; the master template cannot be overwritten.')
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copyfile(source,output_path)
+    return output_path
+
+
 def install_one(relative_path: str, base: Path) -> tuple[Path,str]:
     """Materialize original source; keep local edits if any."""
     if relative_path not in SOURCE_FILES:
@@ -19566,6 +19717,7 @@ class MegaApp:
         self.buttons={}
         self.status=tk.StringVar(value='Choose a tool to open')
         self.path_labels={}
+        self.template_labels={}
         self.create_gui()
         self.root.after(500,self.poll_process)
         self.root.after(120,lambda:self.root.lift())
@@ -19583,7 +19735,7 @@ class MegaApp:
         nav=tk.Frame(self.root,bg=PALETTE['white'])
         nav.pack(fill='x',padx=14,pady=(11,5))
         self.nav_buttons={}
-        for tab,label in (('drawing','Drawing Tools  (3)'),('excel','Excel Tools  (6)')):
+        for tab,label in (('drawing','Drawing Tools  (3)'),('excel','Excel Tools  (6)'),('templates','Templates')):
             button=tk.Button(nav,text=label,font=('Segoe UI',10,'bold'),pady=7,
                 bd=0,relief='flat',cursor='hand2',command=lambda t=tab:self.set_tab(t))
             button.pack(side='left',padx=(0,8))
@@ -19613,11 +19765,13 @@ class MegaApp:
         if tab=='drawing':
             self.mk_label(self.page,'Formatting & layout',bold=True,size=12).pack(anchor='w',pady=(0,4))
             self.mk_label(self.page,'Uses the current E3 selection — no workbook required.',size=9,color='muted').pack(anchor='w',pady=(0,13))
-        else:
+        elif tab=='excel':
             self.mk_label(self.page,'Workbook selection',bold=True,size=12).pack(anchor='w',pady=(0,2))
             self.mk_label(self.page,'Optional: save a workbook for each workflow.',size=9,color='muted').pack(anchor='w',pady=(0,9))
             self.workbook_section()
             self.mk_label(self.page,'Spreadsheet tools',bold=True,size=12).pack(anchor='w',pady=(12,7))
+        else:
+            self.template_section()
         if tab=='excel':
             tool_grid=tk.Frame(self.page,bg=PALETTE['white'])
             tool_grid.pack(fill='x')
@@ -19626,7 +19780,7 @@ class MegaApp:
             excel_keys=[k for k,v in TOOLS.items() if v['tab']=='excel']
             for i,key in enumerate(excel_keys):
                 self.add_tool_card(key,TOOLS[key],parent=tool_grid,grid=(i//2,i%2))
-        else:
+        elif tab=='drawing':
             for key,tool in TOOLS.items():
                 if tool['tab']==tab:self.add_tool_card(key,tool)
         if tab=='drawing':
@@ -19641,6 +19795,93 @@ class MegaApp:
         tk.Button(actions,text='Close',command=self.close,fg=PALETTE['blue'],bg=PALETTE['white'],
                  font=('Segoe UI',8),bd=0,cursor='hand2').pack(side='right')
         self.disable_buttons(self.running is None)
+
+    def template_section(self):
+        self.mk_label(self.page,'Excel template library',bold=True,size=12).pack(anchor='w',pady=(0,4))
+        self.mk_label(self.page,'Templates load automatically from the templates folder or the built executable.',
+                      size=9,color='muted',wrap=560).pack(anchor='w',pady=(0,13))
+        self.template_labels={}
+        for key,item in TEMPLATE_GROUPS.items():
+            card=tk.Frame(self.page,bg=PALETTE['panel'],height=78,
+                     highlightbackground=PALETTE['border'],highlightthickness=1)
+            card.pack(fill='x',pady=(0,7));card.pack_propagate(False)
+            icon=tk.Canvas(card,width=40,height=44,bg=PALETTE['panel'],highlightthickness=0)
+            icon.pack(side='left',padx=(12,7),pady=8)
+            icon.create_rectangle(5,4,34,38,outline='#28846C',fill='#E9F6F0',width=2)
+            icon.create_line(5,15,34,15,fill='#28846C',width=1)
+            for xx in (15,25):icon.create_line(xx,15,xx,38,fill='#8BC5B3')
+            for yy in (24,31):icon.create_line(5,yy,34,yy,fill='#8BC5B3')
+            left=tk.Frame(card,bg=PALETTE['panel'])
+            left.pack(side='left',fill='both',expand=True,pady=(5,2))
+            self.mk_label(left,item['title'],bold=True,size=10,bg='panel').pack(anchor='w')
+            self.mk_label(left,item['description'],size=8,color='muted',bg='panel',wrap=265).pack(anchor='w',pady=(2,1))
+            state=tk.StringVar()
+            self.template_labels[key]=state
+            tk.Label(left,textvariable=state,bg=PALETTE['panel'],fg=PALETTE['blue'],
+                     font=('Segoe UI',8),anchor='w').pack(anchor='w',pady=(3,0))
+            controls=tk.Frame(card,bg=PALETTE['panel'])
+            controls.pack(side='right',padx=10,pady=4)
+            tk.Button(controls,text='Download...',width=13,command=lambda k=key:self.download_template(k),
+                      bg=PALETTE['blue'],fg='white',activebackground=PALETTE['blue_hover'],
+                      activeforeground='white',font=('Segoe UI',8,'bold'),bd=0,pady=4,
+                      cursor='hand2').pack(pady=(0,3))
+            tk.Button(controls,text='Import Template...',width=15,command=lambda k=key:self.choose_template(k),
+                      bg=PALETTE['pale'],fg=PALETTE['blue'],font=('Segoe UI',8),bd=0,pady=3,
+                      cursor='hand2').pack()
+            self.update_template_label(key)
+        self.mk_label(self.page,
+            'Template originals are separate from the filled-in workbooks selected on Excel Tools.',
+            size=8,color='muted',wrap=540).pack(anchor='w',pady=(5,0))
+
+    def update_template_label(self,key):
+        state=self.template_labels.get(key)
+        if state is not None:
+            path=get_template_path(key)
+            state.set(('Ready  ·  '+path.name) if path else 'Template missing: '+TEMPLATE_GROUPS[key]['filename'])
+
+    def choose_template(self,key):
+        if not messagebox.askokcancel('Import original template',
+                'Choose a BLANK original template for '+TEMPLATE_GROUPS[key]['title']+'.\n\n'
+                'The launcher will store a master copy for future downloads. '
+                'Avoid importing a workbook filled with project data.',parent=self.root):
+            return
+        result=filedialog.askopenfilename(parent=self.root,
+                title='Import blank Excel template — '+TEMPLATE_GROUPS[key]['title'],
+                filetypes=[('Excel workbook','*.xlsx *.xlsm'),('All files','*.*')])
+        if not result:return
+        try:
+            current=get_template_path(key)
+            if current is not None and not messagebox.askyesno('Replace original template?',
+                     'Replace the previously imported '+TEMPLATE_GROUPS[key]['title']+
+                     ' template? Existing copies you downloaded will not change.',parent=self.root):
+                return
+            path=import_template(key,Path(result))
+            self.update_template_label(key)
+            self.status.set('Template imported: '+TEMPLATE_GROUPS[key]['title'])
+        except (OSError,ValueError,zipfile.BadZipFile) as exc:
+            messagebox.showerror('Template import failed',str(exc),parent=self.root)
+
+    def download_template(self,key):
+        path=get_template_path(key)
+        if path is None:
+            messagebox.showinfo('Template missing',
+                'Could not find '+TEMPLATE_GROUPS[key]['filename']+'.\n\n'
+                'Place the original file in the templates folder next to main.py, '
+                'or import it manually. For the EXE, run build_exe.py to bundle it.',
+                parent=self.root)
+            return
+        proposed=Path(TEMPLATE_GROUPS[key]['filename']).stem+path.suffix.lower()
+        save_path=filedialog.asksaveasfilename(parent=self.root,
+            title='Save Excel template copy — '+TEMPLATE_GROUPS[key]['title'],
+            initialfile=proposed,defaultextension=path.suffix,
+            filetypes=[('Excel template','*'+path.suffix)])
+        if not save_path:return
+        try:
+            result=save_template_copy(key,Path(save_path))
+            self.status.set('Template saved: '+result.name)
+            messagebox.showinfo('Template saved','Saved a fresh copy to:\n'+str(result),parent=self.root)
+        except (OSError,ValueError) as exc:
+            messagebox.showerror('Could not save template',str(exc),parent=self.root)
 
     def workbook_section(self):
         for key,config in WORKBOOKS.items():
@@ -19815,6 +20056,20 @@ def main():
             print('OK:',filename,len(code.splitlines()),'lines',source_digest(code)[:14])
         print('PASS: 9 tool entries / 13 readable embedded Python files. No E3/SQL invoked.')
         return
+    if '--verify-templates' in sys.argv:
+        for key, info in TEMPLATE_GROUPS.items():
+            path=get_template_path(key)
+            if path is None:
+                raise FileNotFoundError('Missing '+info['filename']+' in templates folder')
+            validate_excel_template(path)
+            print('OK:',info['filename'],'('+str(path)+')')
+        print('PASS: all four templates found and verified. No E3/SQL invoked.')
+        return
+    if '--list-templates' in sys.argv:
+        for key,info in TEMPLATE_GROUPS.items():
+            path=get_template_path(key)
+            print(key+': '+(str(path) if path else 'not found'))
+        return
     if '--list-tools' in sys.argv:
         for key,info in TOOLS.items():print(key+': '+info['entry'])
         return
@@ -19829,3 +20084,4 @@ def main():
 
 if __name__=='__main__':
     main()
+
