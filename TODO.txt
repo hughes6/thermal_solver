@@ -1,4 +1,4 @@
-"""E3 Mega Tools V24 — a single readable Python launcher for nine tools.
+"""E3 Mega Tools V25 — a single readable Python launcher for nine tools.
 
 Includes the three previously working E3 diagram tools and six spreadsheet tools
 from the supplied source. The Block Maker is preserved as five independent files.
@@ -80,7 +80,7 @@ def _pyinstaller_discover_embedded_third_party_imports():
 
 from datetime import datetime
 
-SUITE_VERSION = "E3-MEGA-TOOLS-V24-TTK-STYLE-AND-ERROR-DEDUP-2026-11-24"
+SUITE_VERSION = "E3-MEGA-TOOLS-V25-GRACEFUL-WORKBOOK-CANCEL-2026-11-24"
 PALETTE = {
     "white": "#FFFFFF", "pale": "#EAF4FF", "panel": "#F5FAFF",
     "border": "#D4E3F4", "blue": "#2381CF", "blue_hover": "#1466B2",
@@ -111,7 +111,7 @@ def running_as_packaged_exe() -> bool:
 
 def diagnostics_directory() -> Path:
     """Fixed, discoverable location independent of EXE extraction folder."""
-    directory = Path(tempfile.gettempdir()) / 'E3_Mega_Tools_V24_Diagnostics'
+    directory = Path(tempfile.gettempdir()) / 'E3_Mega_Tools_V25_Diagnostics'
     directory.mkdir(parents=True, exist_ok=True)
     return directory
 
@@ -134,18 +134,19 @@ FROZEN_INPROCESS_TOOLS = frozenset({
 # These two workflows show their own final error dialog. If a worker fails,
 # the main Mega window must NOT present a second generic startup report after
 # the user has already closed the original error dialog.
-TOOLS_WITH_OWN_ERROR_DIALOG = frozenset({'block_maker', 'block_pin_arranger'})
+TOOLS_WITH_OWN_ERROR_DIALOG = frozenset({'block_maker', 'block_pin_arranger', 'block_pin_formatter'})
 
 
 def should_show_launcher_error(key, *, error, rc, windows_opened, elapsed):
     """Keep the original handled error; show a fallback only for unhandled failures."""
-    did_fail = error is not None or bool(rc) or windows_opened == 0 or elapsed < 0.35
-    if not did_fail:
+    # Closing a file picker (or exiting a quick one-shot script) is not a
+    # crash. No artificial elapsed-time or window-count threshold is valid.
+    if error is None and not rc:
         return False
-    # A child/tool UI was shown and the embedded tool returned a normal
-    # nonzero exit code. Its own error window already explained the failure.
-    if (key in TOOLS_WITH_OWN_ERROR_DIALOG and
-            error is None and windows_opened > 0):
+    # These tools catch operational errors and display their own dialog. Their
+    # nonzero return code is NOT a second failure requiring another popup.
+    # A Python exception escaping into the launcher still deserves a report.
+    if key in TOOLS_WITH_OWN_ERROR_DIALOG and error is None:
         return False
     return True
 
@@ -5943,6 +5944,10 @@ def ask_save_path(default_full_path=""):
 # PARSE EXCEL
 # ================================================
 output_path = ask_save_path()
+if not output_path:
+    # Closing/cancelling the file chooser is a normal user action.
+    # Do not invoke Excel, DBE or SQL, and do not open an error window.
+    raise SystemExit(0)
 wb = load_workbook(output_path, data_only=True)
 ws = wb.active
 
@@ -12100,6 +12105,29 @@ def run_stage(stage, command, environment, cwd, log_handle):
     emit(f"\n{stage.upper()} COMPLETE\n", log_handle)
 
 
+def choose_workbook_before_workers():
+    """Ask once, before spawning DB-writing stages; Cancel/X is success."""
+    chosen = os.environ.get('E3_MEGA_BLOCK_MAKER_WORKBOOK', '').strip()
+    if chosen:
+        if not Path(chosen).is_file():
+            raise FileNotFoundError('Selected Block Maker workbook not found: ' + chosen)
+        return str(Path(chosen).resolve())
+    import tkinter as tk
+    from tkinter import filedialog
+    chooser = tk.Tk()
+    chooser.withdraw()
+    try:
+        chooser.attributes('-topmost', True)
+        chooser.update()
+        chosen = filedialog.askopenfilename(
+            parent=chooser,
+            title='Select Block Maker Excel workbook',
+            filetypes=[('Excel workbooks', '*.xlsm *.xlsx'), ('All files', '*.*')])
+        return str(Path(chosen).resolve()) if chosen else None
+    finally:
+        chooser.destroy()
+
+
 def main():
     # Children should never create their own popups. One parent-level popup
     # handles exceptions from both stages, including those in utils.py.
@@ -12112,6 +12140,17 @@ def main():
         return 0
 
     from error_popup import show_error_dialog
+
+    # The user's Cancel/X must not be interpreted as a failed builder stage.
+    # No subprocess or E3/SQL connection is opened until a workbook is chosen.
+    try:
+        workbook = choose_workbook_before_workers()
+    except Exception as exc:
+        show_error_dialog('Workbook Selection', str(exc), '', 1)
+        return 1
+    if not workbook:
+        return 0
+    os.environ['E3_MEGA_BLOCK_MAKER_WORKBOOK'] = workbook
 
     app_dir = get_application_directory()
     command = get_child_command()
@@ -16257,6 +16296,13 @@ def gui_two_phase_launcher():
     """This PARENT never connects to E3, so E3 can accept manual settings."""
     import tkinter as tk
     from tkinter import messagebox
+    # Ask before creating workers: cancelling the picker must never produce a
+    # worker error or send a failure message to the mega launcher.
+    workbook = ask_save_path()
+    if not workbook:
+        return 0
+    previous_workbook = os.environ.get('E3_MEGA_PIN_ARRANGER_WORKBOOK')
+    os.environ['E3_MEGA_PIN_ARRANGER_WORKBOOK'] = workbook
     session_dir = tempfile.mkdtemp(prefix='zuken_pin_order_')
     manifest = os.path.join(session_dir, 'formatter_manifest.json')
     section('PHASE 1: ORDER PINS (SEPARATE COM SESSION)')
@@ -17431,8 +17477,8 @@ def main(argv=None):
     args = parser.parse_args(argv)
     path = args.excel or file_dialog()
     if not path:
-        log("No Excel workbook selected.")
-        return 1
+        log("Workbook selection cancelled; no formatting performed.")
+        return 0
     try:
         return run(path, dry_run=args.dry_run)
     except Exception as exc:
@@ -19646,7 +19692,7 @@ def runtime_directory() -> Path:
     """Use a stable, writable tool folder in EXE mode; preserve .py behavior."""
     if running_as_packaged_exe():
         home = Path(os.environ.get('LOCALAPPDATA') or Path.home())
-        target = home / 'E3_Mega_Runtime_V24'
+        target = home / 'E3_Mega_Runtime_V25'
         target.mkdir(parents=True, exist_ok=True)
         # Recover the previous pin-identity state automatically when upgrading.
         # Do not rewrite or delete anything from the previous installation.
@@ -19655,7 +19701,7 @@ def runtime_directory() -> Path:
             if dst.exists():
                 continue
             # Newest previous runtime first; never overwrite existing recovery data.
-            for old_version in ('V23', 'V22', 'V21', 'V20', 'V19', 'V18', 'V13'):
+            for old_version in ('V24', 'V23', 'V22', 'V21', 'V20', 'V19', 'V18', 'V13'):
                 src = home / ('E3_Mega_Runtime_' + old_version) / 'cable_pin_spacer' / filename
                 if src.is_file():
                     try:
@@ -19665,7 +19711,7 @@ def runtime_directory() -> Path:
                     except OSError:
                         continue
         return target
-    preferred = Path(__file__).resolve().parent / 'E3_Mega_Runtime_V24'
+    preferred = Path(__file__).resolve().parent / 'E3_Mega_Runtime_V25'
     try:
         preferred.mkdir(parents=True, exist_ok=True)
         with tempfile.NamedTemporaryFile(dir=str(preferred), delete=True):
@@ -19673,7 +19719,7 @@ def runtime_directory() -> Path:
         return preferred
     except OSError:
         home = Path(os.environ.get('LOCALAPPDATA') or Path.home())
-        fallback = home / 'E3_Mega_Runtime_V24'
+        fallback = home / 'E3_Mega_Runtime_V25'
         fallback.mkdir(parents=True, exist_ok=True)
         return fallback
 
@@ -19892,7 +19938,7 @@ def open_folder(folder: Path) -> None:
 class MegaApp:
     def __init__(self):
         self.root=tk.Tk()
-        self.root.title('E3 Mega Tools V24 | All-in-One')
+        self.root.title('E3 Mega Tools V25 | All-in-One')
         self.root.configure(bg=PALETTE['white'])
         self.root.geometry('608x702+70+70')
         self.root.resizable(False,False)
@@ -19920,7 +19966,7 @@ class MegaApp:
     def create_gui(self):
         top=tk.Frame(self.root,bg=PALETTE['pale'],height=60)
         top.pack(fill='x');top.pack_propagate(False)
-        self.mk_label(top,'E3 Mega Tools  ·  V24',bold=True,size=15,bg='pale').pack(side='left',padx=16,pady=10)
+        self.mk_label(top,'E3 Mega Tools  ·  V25',bold=True,size=15,bg='pale').pack(side='left',padx=16,pady=10)
         self.mk_label(top,'ALL-IN-ONE',size=9,color='blue',bg='pale',bold=True).pack(side='right',padx=17)
         nav=tk.Frame(self.root,bg=PALETTE['white'])
         nav.pack(fill='x',padx=14,pady=(11,5))
@@ -20301,7 +20347,7 @@ class MegaApp:
     def show_startup_failure(self, key, reason, script, elapsed, windows_opened, error):
         """Always show the underlying tool startup evidence instead of silently returning to the menu."""
         lines = [
-            'E3 Mega Tools V24 — tool startup report',
+            'E3 Mega Tools V25 — tool startup report',
             'Tool: ' + TOOLS[key]['name'],
             'Reason: ' + str(reason),
             'Tool GUI windows created: ' + str(windows_opened),
@@ -20575,7 +20621,7 @@ def acquire_main_window_lock():
     create = kernel32.CreateMutexW
     create.argtypes = (ctypes.c_void_p, ctypes.c_int, ctypes.c_wchar_p)
     create.restype = ctypes.c_void_p
-    handle = create(None, 0, 'Local\\E3MegaTools_MainWindow_Singleton_V24')
+    handle = create(None, 0, 'Local\\E3MegaTools_MainWindow_Singleton_V25')
     if not handle:
         raise ctypes.WinError(ctypes.get_last_error())
     if ctypes.get_last_error() == 183:  # ERROR_ALREADY_EXISTS
