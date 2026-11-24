@@ -1,4 +1,4 @@
-"""E3 Mega Tools V13 — a single readable Python launcher for nine tools.
+"""E3 Mega Tools V14 — a single readable Python launcher for nine tools.
 
 Includes the three previously working E3 diagram tools and six spreadsheet tools
 from the supplied source. The Block Maker is preserved as five independent files.
@@ -27,7 +27,7 @@ import tkinter as tk
 from tkinter import filedialog, messagebox
 from datetime import datetime
 
-SUITE_VERSION = "E3-MEGA-TOOLS-V13-2026-11-24"
+SUITE_VERSION = "E3-MEGA-TOOLS-V14-SEPARATE-WORKBOOKS-2026-11-24"
 PALETTE = {
     "white": "#FFFFFF", "pale": "#EAF4FF", "panel": "#F5FAFF",
     "border": "#D4E3F4", "blue": "#2381CF", "blue_hover": "#1466B2",
@@ -41,16 +41,17 @@ TOOLS = {
     "pin": {"name": "Cable Pin Spacer", "description": "Transfer pin spacing and format text", "entry": "cable_pin_spacer/main.py", "tab": "drawing", "workbook": None},
     "cable_maker": {"name": "Cable Maker", "description": "Create a cable component in the E3 library / SQL", "entry": "cable_maker/cable_maker.py", "tab": "excel", "workbook": "cable"},
     "cable_placer": {"name": "Cable Placer", "description": "Place cable views and optionally shields / twists", "entry": "cable_placer/cable_placer.py", "tab": "excel", "workbook": "cable"},
-    "block_maker": {"name": "Block Maker", "description": "Build blocks, then run its separate text formatter", "entry": "block_maker/launcher.py", "tab": "excel", "workbook": "block"},
-    "block_pin_arranger": {"name": "Block Pin Arranger", "description": "Arrange split block pins using the block workbook", "entry": "block_pin_arranger/block_pin_arranger.py", "tab": "excel", "workbook": "block"},
-    "block_pin_formatter": {"name": "Block Pin Formatter", "description": "Format existing pins without moving them", "entry": "block_pin_formatter/block_pin_formatter.py", "tab": "excel", "workbook": "block"},
+    "block_maker": {"name": "Block Maker", "description": "Build blocks, then run its separate text formatter", "entry": "block_maker/launcher.py", "tab": "excel", "workbook": "block_maker"},
+    "block_pin_arranger": {"name": "Block Pin Arranger", "description": "Arrange split block pins using its own workbook", "entry": "block_pin_arranger/block_pin_arranger.py", "tab": "excel", "workbook": "pin_arranger"},
+    "block_pin_formatter": {"name": "Block Pin Formatter", "description": "Format existing pins without moving them", "entry": "block_pin_formatter/block_pin_formatter.py", "tab": "excel", "workbook": "pin_arranger"},
     "block_signal_adder": {"name": "Block Signal Adder", "description": "Apply local signal names from its own workbook", "entry": "block_signal_adder/block_signal_adder.py", "tab": "excel", "workbook": "signal"},
 }
 
 WORKBOOKS = {
-    "cable": {"label": "Cable workbook", "note": "Cable Maker / Placer"},
-    "block": {"label": "Block workbook", "note": "Maker / Arranger / Formatter"},
-    "signal": {"label": "Signal workbook", "note": "Block Signal Adder"},
+    "cable": {"label": "Cable Maker / Placer", "note": "Shared cable workbook"},
+    "block_maker": {"label": "Block Maker", "note": "Its own workbook"},
+    "pin_arranger": {"label": "Pin Arranger / Formatter", "note": "Shared pin-layout workbook"},
+    "signal": {"label": "Block Signal Adder", "note": "Its own workbook"},
 }
 
 # Below are FULL, UNCOMPRESSED original scripts, with only optional Excel
@@ -10451,10 +10452,10 @@ import os
 def ask_save_path(default_full_path=""):
     # Optional E3 Mega Tools workbook selection. Fall back to this tool's own picker.
     import os as _mega_os
-    _mega_excel = _mega_os.environ.get("E3_MEGA_BLOCK_WORKBOOK", "").strip()
+    _mega_excel = _mega_os.environ.get("E3_MEGA_BLOCK_MAKER_WORKBOOK", "").strip()
     if _mega_excel:
         if not _mega_os.path.isfile(_mega_excel):
-            raise FileNotFoundError(f"Selected block workbook no longer exists: {_mega_excel}")
+            raise FileNotFoundError(f"Selected Block Maker workbook no longer exists: {_mega_excel}")
         return _mega_os.path.abspath(_mega_excel)
 
     import os
@@ -13544,10 +13545,10 @@ import gc
 def ask_save_path(default_full_path=""):
     # Optional E3 Mega Tools workbook selection. Fall back to this tool's own picker.
     import os as _mega_os
-    _mega_excel = _mega_os.environ.get("E3_MEGA_BLOCK_WORKBOOK", "").strip()
+    _mega_excel = _mega_os.environ.get("E3_MEGA_PIN_ARRANGER_WORKBOOK", "").strip()
     if _mega_excel:
         if not _mega_os.path.isfile(_mega_excel):
-            raise FileNotFoundError(f"Selected block workbook no longer exists: {_mega_excel}")
+            raise FileNotFoundError(f"Selected Pin Arranger workbook no longer exists: {_mega_excel}")
         return _mega_os.path.abspath(_mega_excel)
 
     import os
@@ -17123,10 +17124,10 @@ def apply_plan(prj, plan):
 def file_dialog():
     # Optional E3 Mega Tools workbook selection. Fall back to this tool's own picker.
     import os as _mega_os
-    _mega_excel = _mega_os.environ.get("E3_MEGA_BLOCK_WORKBOOK", "").strip()
+    _mega_excel = _mega_os.environ.get("E3_MEGA_PIN_ARRANGER_WORKBOOK", "").strip()
     if _mega_excel:
         if not _mega_os.path.isfile(_mega_excel):
-            raise FileNotFoundError(f"Selected block workbook no longer exists: {_mega_excel}")
+            raise FileNotFoundError(f"Selected Pin Arranger workbook no longer exists: {_mega_excel}")
         return _mega_os.path.abspath(_mega_excel)
 
     import tkinter as tk
@@ -19614,7 +19615,7 @@ class MegaApp:
             self.mk_label(self.page,'Uses the current E3 selection — no workbook required.',size=9,color='muted').pack(anchor='w',pady=(0,13))
         else:
             self.mk_label(self.page,'Workbook selection',bold=True,size=12).pack(anchor='w',pady=(0,2))
-            self.mk_label(self.page,'Optional: choose one workbook for each tool group.',size=9,color='muted').pack(anchor='w',pady=(0,9))
+            self.mk_label(self.page,'Optional: save a workbook for each workflow.',size=9,color='muted').pack(anchor='w',pady=(0,9))
             self.workbook_section()
             self.mk_label(self.page,'Spreadsheet tools',bold=True,size=12).pack(anchor='w',pady=(12,7))
         if tab=='excel':
