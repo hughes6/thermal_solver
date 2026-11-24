@@ -1,9 +1,9 @@
-"""E3 Mega Tools V23 — a single readable Python launcher for nine tools.
+"""E3 Mega Tools V24 — a single readable Python launcher for nine tools.
 
 Includes the three previously working E3 diagram tools and six spreadsheet tools
 from the supplied source. The Block Maker is preserved as five independent files.
 The launcher extracts files only when needed, never silently overwrites hand-edits,
-and opens ONE E3/SQL tool at a time in a separate Python process.
+and opens ONE E3/SQL tool at a time, with isolated workers when needed.
 
 Open this `main.py` normally to use the GUI. Command-line options:
     python main.py --self-test       # compile/validate all embedded sources
@@ -80,7 +80,7 @@ def _pyinstaller_discover_embedded_third_party_imports():
 
 from datetime import datetime
 
-SUITE_VERSION = "E3-MEGA-TOOLS-V23-PYINSTALLER-EMBEDDED-IMPORTS-2026-11-24"
+SUITE_VERSION = "E3-MEGA-TOOLS-V24-TTK-STYLE-AND-ERROR-DEDUP-2026-11-24"
 PALETTE = {
     "white": "#FFFFFF", "pale": "#EAF4FF", "panel": "#F5FAFF",
     "border": "#D4E3F4", "blue": "#2381CF", "blue_hover": "#1466B2",
@@ -111,7 +111,7 @@ def running_as_packaged_exe() -> bool:
 
 def diagnostics_directory() -> Path:
     """Fixed, discoverable location independent of EXE extraction folder."""
-    directory = Path(tempfile.gettempdir()) / 'E3_Mega_Tools_V23_Diagnostics'
+    directory = Path(tempfile.gettempdir()) / 'E3_Mega_Tools_V24_Diagnostics'
     directory.mkdir(parents=True, exist_ok=True)
     return directory
 
@@ -130,6 +130,24 @@ FROZEN_INPROCESS_TOOLS = frozenset({
     'block_maker', 'block_pin_arranger', 'block_pin_formatter',
     'block_signal_adder',
 })
+
+# These two workflows show their own final error dialog. If a worker fails,
+# the main Mega window must NOT present a second generic startup report after
+# the user has already closed the original error dialog.
+TOOLS_WITH_OWN_ERROR_DIALOG = frozenset({'block_maker', 'block_pin_arranger'})
+
+
+def should_show_launcher_error(key, *, error, rc, windows_opened, elapsed):
+    """Keep the original handled error; show a fallback only for unhandled failures."""
+    did_fail = error is not None or bool(rc) or windows_opened == 0 or elapsed < 0.35
+    if not did_fail:
+        return False
+    # A child/tool UI was shown and the embedded tool returned a normal
+    # nonzero exit code. Its own error window already explained the failure.
+    if (key in TOOLS_WITH_OWN_ERROR_DIALOG and
+            error is None and windows_opened > 0):
+        return False
+    return True
 
 
 def trace_exe_start(event: str, **details) -> None:
@@ -6770,7 +6788,10 @@ def choose_start_mode():
     root.geometry("600x540")
     root.resizable(False, False)
 
-    style = ttk.Style()
+    # ttk.Style() without a master attaches to the hidden Mega launcher
+    # in frozen in-process mode, so the original large button padding is
+    # applied to the WRONG Tcl interpreter. Bind each style to this GUI.
+    style = ttk.Style(root)
     try:
         style.theme_use("vista")
     except:
@@ -6881,7 +6902,10 @@ def create_gui():
     root.geometry("560x500")
     root.resizable(False, False)
 
-    style = ttk.Style()
+    # ttk.Style() without a master attaches to the hidden Mega launcher
+    # in frozen in-process mode, so the original large button padding is
+    # applied to the WRONG Tcl interpreter. Bind each style to this GUI.
+    style = ttk.Style(root)
     try:
         style.theme_use("vista")
     except:
@@ -7084,7 +7108,10 @@ def wait_for_connection_lines():
     root.geometry("560x360")
     root.resizable(False, False)
 
-    style = ttk.Style()
+    # ttk.Style() without a master attaches to the hidden Mega launcher
+    # in frozen in-process mode, so the original large button padding is
+    # applied to the WRONG Tcl interpreter. Bind each style to this GUI.
+    style = ttk.Style(root)
     try:
         style.theme_use("vista")
     except:
@@ -19619,7 +19646,7 @@ def runtime_directory() -> Path:
     """Use a stable, writable tool folder in EXE mode; preserve .py behavior."""
     if running_as_packaged_exe():
         home = Path(os.environ.get('LOCALAPPDATA') or Path.home())
-        target = home / 'E3_Mega_Runtime_V23'
+        target = home / 'E3_Mega_Runtime_V24'
         target.mkdir(parents=True, exist_ok=True)
         # Recover the previous pin-identity state automatically when upgrading.
         # Do not rewrite or delete anything from the previous installation.
@@ -19628,7 +19655,7 @@ def runtime_directory() -> Path:
             if dst.exists():
                 continue
             # Newest previous runtime first; never overwrite existing recovery data.
-            for old_version in ('V22', 'V21', 'V20', 'V19', 'V18', 'V13'):
+            for old_version in ('V23', 'V22', 'V21', 'V20', 'V19', 'V18', 'V13'):
                 src = home / ('E3_Mega_Runtime_' + old_version) / 'cable_pin_spacer' / filename
                 if src.is_file():
                     try:
@@ -19638,7 +19665,7 @@ def runtime_directory() -> Path:
                     except OSError:
                         continue
         return target
-    preferred = Path(__file__).resolve().parent / 'E3_Mega_Runtime_V23'
+    preferred = Path(__file__).resolve().parent / 'E3_Mega_Runtime_V24'
     try:
         preferred.mkdir(parents=True, exist_ok=True)
         with tempfile.NamedTemporaryFile(dir=str(preferred), delete=True):
@@ -19646,7 +19673,7 @@ def runtime_directory() -> Path:
         return preferred
     except OSError:
         home = Path(os.environ.get('LOCALAPPDATA') or Path.home())
-        fallback = home / 'E3_Mega_Runtime_V23'
+        fallback = home / 'E3_Mega_Runtime_V24'
         fallback.mkdir(parents=True, exist_ok=True)
         return fallback
 
@@ -19865,7 +19892,7 @@ def open_folder(folder: Path) -> None:
 class MegaApp:
     def __init__(self):
         self.root=tk.Tk()
-        self.root.title('E3 Mega Tools V23 | All-in-One')
+        self.root.title('E3 Mega Tools V24 | All-in-One')
         self.root.configure(bg=PALETTE['white'])
         self.root.geometry('608x702+70+70')
         self.root.resizable(False,False)
@@ -19893,7 +19920,7 @@ class MegaApp:
     def create_gui(self):
         top=tk.Frame(self.root,bg=PALETTE['pale'],height=60)
         top.pack(fill='x');top.pack_propagate(False)
-        self.mk_label(top,'E3 Mega Tools  ·  V23',bold=True,size=15,bg='pale').pack(side='left',padx=16,pady=10)
+        self.mk_label(top,'E3 Mega Tools  ·  V24',bold=True,size=15,bg='pale').pack(side='left',padx=16,pady=10)
         self.mk_label(top,'ALL-IN-ONE',size=9,color='blue',bg='pale',bold=True).pack(side='right',padx=17)
         nav=tk.Frame(self.root,bg=PALETTE['white'])
         nav.pack(fill='x',padx=14,pady=(11,5))
@@ -20255,20 +20282,26 @@ class MegaApp:
                 pass
             # A returned launcher is NOT necessarily a second EXE. Do not hide
             # an early failure; expose the actual tool log and dispatcher events.
-            if error is not None or rc or tool_windows[0] == 0 or elapsed < 0.35:
+            if should_show_launcher_error(key, error=error, rc=rc,
+                                          windows_opened=tool_windows[0], elapsed=elapsed):
                 why = ('Python exception' if error is not None else
                        'tool exited with status '+str(rc) if rc else
                        'tool never created a GUI window' if not tool_windows[0] else
                        'tool GUI closed immediately')
                 self.status.set(TOOLS[key]['name'] + ': '+why)
                 self.show_startup_failure(key,why,script,elapsed,tool_windows[0],error)
+            elif rc and key in TOOLS_WITH_OWN_ERROR_DIALOG:
+                # Diagnostic information stays available, but the user sees
+                # exactly the original tool's friendly error, not duplicates.
+                trace_exe_start('handled-error-dialog-used', selected=key, rc=rc)
+                self.status.set(TOOLS[key]['name'] + ' stopped — see tool error')
             else:
                 self.status.set(TOOLS[key]['name'] + ' closed')
 
     def show_startup_failure(self, key, reason, script, elapsed, windows_opened, error):
         """Always show the underlying tool startup evidence instead of silently returning to the menu."""
         lines = [
-            'E3 Mega Tools V23 — tool startup report',
+            'E3 Mega Tools V24 — tool startup report',
             'Tool: ' + TOOLS[key]['name'],
             'Reason: ' + str(reason),
             'Tool GUI windows created: ' + str(windows_opened),
@@ -20542,7 +20575,7 @@ def acquire_main_window_lock():
     create = kernel32.CreateMutexW
     create.argtypes = (ctypes.c_void_p, ctypes.c_int, ctypes.c_wchar_p)
     create.restype = ctypes.c_void_p
-    handle = create(None, 0, 'Local\\E3MegaTools_MainWindow_Singleton_V23')
+    handle = create(None, 0, 'Local\\E3MegaTools_MainWindow_Singleton_V24')
     if not handle:
         raise ctypes.WinError(ctypes.get_last_error())
     if ctypes.get_last_error() == 183:  # ERROR_ALREADY_EXISTS
@@ -20586,7 +20619,18 @@ def main():
         if tool_id not in TOOLS:
             trace_exe_start('unknown-tool', selected=tool_id)
             raise SystemExit('Unknown E3 child tool: '+str(tool_id))
-        run_embedded_tool(tool_id, tool_args)
+        try:
+            run_embedded_tool(tool_id, tool_args)
+        except Exception as exc:
+            # Worker errors must exit with status 1, not bubble to PyInstaller's
+            # generic "failed to execute script" popup. The parent Block Maker
+            # or Pin Arranger already has its own actionable error dialog.
+            import traceback as _traceback
+            trace_exe_start('worker-error-handled', selected=tool_id, error=repr(exc))
+            if sys.stderr is not None:
+                _traceback.print_exc(file=sys.stderr)
+                sys.stderr.flush()
+            raise SystemExit(1) from None
         return
     if '--self-test' in sys.argv or '--diagnose' in sys.argv:
         assert len(TOOLS)==9 and len(SOURCE_FILES)==13
