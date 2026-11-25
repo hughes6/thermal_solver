@@ -1,80 +1,25 @@
-"""Build the modular Zuken Mega Script as ONE Windows EXE.
-
-Place the four original Excel templates in ./templates before building.
-Run: py build_exe.py
-"""
-from __future__ import annotations
-
-from pathlib import Path
-import subprocess
-import sys
-import os
-from importlib.util import find_spec
-
-ROOT = Path(__file__).resolve().parent
-EXPECTED_TEMPLATES = (
-    "Cable_Template.xlsx",
-    "Block_Maker_Template.xlsm",
-    "Block_Pin_Arranger_Template.xlsm",
-    "Block_Signal_Adder_Template.xlsm",
-)
-
-
-def main() -> int:
-    if sys.platform != "win32":
-        print("This project's E3/COM executable must be built on Windows.", file=sys.stderr)
-        return 1
-    if not (ROOT / "Zuken_Mega_Script.py").is_file():
-        print("Missing launcher entry point.", file=sys.stderr)
-        return 1
-    # These imports are inside tool_scripts/ data files, not ordinary Python
-    # imports that PyInstaller can discover from the entry point. Refuse to
-    # silently build an EXE without the Runner's GUI/report dependencies.
-    missing_modules = [package for module, package in
-                       (("wx", "wxPython"), ("pandas", "pandas"))
-                       if find_spec(module) is None]
-    if missing_modules:
-        print("Missing Zuken Script Runner build dependencies: " +
-              ", ".join(missing_modules), file=sys.stderr)
-        print("Install with: py -m pip install " +
-              " ".join(missing_modules), file=sys.stderr)
-        return 1
-    missing = [p for p in EXPECTED_TEMPLATES if not (ROOT / "templates" / p).is_file()]
-    if missing:
-        print("WARNING: Missing original workbook templates:")
-        for name in missing:
-            print(" -", name)
-        print("Build can proceed, but Downloads for these templates won't be bundled.")
-        print("Copy your originals into templates/ before building to include them.\n")
-    sep = os.pathsep  # ';' for PyInstaller --add-data on Windows
-    args = [
-        sys.executable, "-m", "PyInstaller",
-        "--noconfirm", "--clean", "--onefile", "--windowed",
-        "--name", "Zuken_Mega_Script",
-        "--add-data", "templates" + sep + "templates",
-        "--add-data", "tool_scripts" + sep + "tool_scripts",
-        "--collect-all", "pdfplumber",
-        "--collect-submodules", "pdfminer",
-        # Zuken Script Runner source is bundled as data: PyInstaller cannot
-        # statically see its wxPython GUI or pandas report generators.
-        "--collect-all", "wx",
-        "--collect-all", "pandas",
-        "--hidden-import", "tkinter.ttk",
-        "--hidden-import", "tkinter.scrolledtext",
-        "--collect-submodules", "tkinter",
-        "--hidden-import", "pythoncom",
-        "--hidden-import", "pywintypes",
-        "--hidden-import", "pyodbc",
-        "--hidden-import", "win32timezone",
-        "--hidden-import", "win32com.client",
-        "--hidden-import", "e3series",
-        "--collect-submodules", "openpyxl",
-        "--collect-submodules", "win32com",
-        "--collect-submodules", "e3series",
-        "Zuken_Mega_Script.py",
-    ]
-    print("Building dist/Zuken_Mega_Script.exe from the separate tool .py files...")
-    return subprocess.call(args, cwd=str(ROOT))
-
-if __name__ == "__main__":
-    raise SystemExit(main())
+# SHA-256 of modular tool sources (15 tools, 24 Python modules, 2026-11-25).
+cf6394e6cf82daa945f40fc238eebfbea6f21c37339ca3602a684ac9042e4861  tool_scripts/header_formatter/header_formatter.py
+af56ac066fc7919b03942bfe5eb701a350188c706e2bff9ad18b7f90427b1e3b  tool_scripts/signal_mover/signal_mover.py
+ca9a85e6ee33595d978be8b01565d6b7442409ab037c92df44738e69a46fa5c4  tool_scripts/cable_pin_spacer/main.py
+549d52662e3d4fbdb870634b0fec4f4a305f983ba41515d8aa698da8aceca32a  tool_scripts/cable_maker/cable_maker.py
+8601f245a2f9ff8178d7e2f19135603b5d34178663e3480c6443ccd1beae1512  tool_scripts/cable_placer/cable_placer.py
+8213b0b823ae3ad3361e839fc13a91efc55ffa5b3745362a7ae4cda858d70034  tool_scripts/block_maker/main.py
+53e074788a31252898836e6cf9649afe3e1ae7a172d981cb7eb6a7c62154961c  tool_scripts/block_maker/launcher.py
+b4b4cb45fce096e7fba99dd0a704dd206b8ba3ea923e368535729d155a15d188  tool_scripts/block_maker/test.py
+e0bf5c69f37f9af63fe46253e84d4d86433d519980756ec6e94369aae9306a00  tool_scripts/block_maker/utils.py
+f1a61a98858636dfae9e191044bb6c61fdf7c306ef7ae60e3763278b298b56c0  tool_scripts/block_maker/error_popup.py
+56b51496262fa2b37ddb534cf904b16851b3417fd40714e692775694af4dfd1b  tool_scripts/block_pin_arranger/block_pin_arranger.py
+8f9061e9c82377fc515859e8cc7eb114646e4fd15d923ea67c26a656c8305d5a  tool_scripts/block_pin_formatter/block_pin_formatter.py
+91111e8a41d9b7c78709941b86e755ac0f1624bc20915396f2497e84a7d05459  tool_scripts/block_signal_adder/block_signal_adder.py
+ffd796aa0b5da869d3449fad1f17966df11b24726cc02e1712755598be2dfe31  tool_scripts/misc_tools/excel_formatter.py
+a6269b8519f0d3773b174a95fafdcefb64e7c29b4c96241f3423224cd71a3946  tool_scripts/misc_tools/excel_diff.py
+e9123b3de1ca31fb29c5fab514f57cc27c32250a4e60c70561cdb609c6a94001  tool_scripts/misc_tools/missing_number_finder.py
+d94a1a76a998262ed5e0ba13e1093770e9186d2e32e41d43faffc1bb9f50bde5  tool_scripts/misc_tools/eicd_to_excel.py
+d1126978439a3c7662910caccf4cd6359586f84b5ab15276e3d08b0f828ce1ea  tool_scripts/misc_tools/excel_to_pdf.py
+1bfc204485af86e984c4851a22f9f4a7c81c439a7bea7b50c4bdf1176b8732f6  tool_scripts/zuken_script_runner/appmain.py
+e0e89fdfbecc86ddc138279a8bad68e648077e657b336b4059b34534e63f7c40  tool_scripts/zuken_script_runner/AppGuiCode.py
+24fba1fbaef862cfcf6620b1dcd208da13e676a490a78f6c781f7c1f6e0d2b90  tool_scripts/zuken_script_runner/utils.py
+f9c6cf7fce7ff73c0628bb2f507fac02ea3019cf10bba06fd454ec9448d00c9f  tool_scripts/zuken_script_runner/cabletable.py
+4b7830444790ef4e4d8f56ea83e1abb5ecb6ae3815109b976dc3139d23369090  tool_scripts/zuken_script_runner/wirelist.py
+f9769e2ba578e36347b23099e41acfee05145315e8c6d5461c72b32e707e9347  tool_scripts/zuken_script_runner/endtoend.py
