@@ -5,36 +5,38 @@ from openpyxl import load_workbook
 from openpyxl.styles import Font, Border, Side, Alignment
 from openpyxl.utils import get_column_letter, column_index_from_string
 import os
-import math
+import sys
+import re
+import os
+import sys
+import subprocess
+import platform
 import utils
 
-
-
-class CableTable():
-    def __init__(self, printlabels):
-        self.printlabels = printlabels
+class EndtoEnd ():
+    def __init__(self):
+        pass
 
     def run(self):
         # set constants
         #====================================================================================================================================
-        s_Report_Title = "Cable_Table"
+        s_Report_Title = "End_to_End_Test"
         s_Default_Save_Path = "\\\\asdfiler2\\UserShares\\Zuken\\SimsLibrary\\Reports\\"
-        s_Print_Labels_Title = "PRINT LABELS"
         s_assy_attr_Assy_Num = "Additional Part ID"
         s_Row_Drawing_Name = 1
-        s_Col_Drawing_Name = 8
+        s_Col_Drawing_Name = 9
         s_Drawing_Name = "Ball Drawing Number"
         s_Drawing_Rev = "Ball Revision Number"
-        s_Col_Header_Names = "LINE NO.;CABLE CONNECTOR;FROM PART;FROM TYPE;MATES WITH;TO PART;TO TYPE;STATUS"
         s_Start_Row = 6
         s_Col_Line_No = 1
-        s_Col_CABLE_CONNECTOR = 2
-        s_Col_From_Part = 3
-        s_Col_From_Type = 4
-        s_Col_MATES_WITH = 5
-        s_Col_To_Part = 6
-        s_Col_To_Type = 7
-        s_Col_Status = 8
+        s_Col_Ref = 2
+        s_Col_Pin = 3
+        s_Col_Part = 4
+        s_Col_To_Ref = 5
+        s_Col_To_pin = 6
+        s_Col_To_Part = 7
+        s_Col_Signal = 8
+        s_Col_Status = 9
         #====================================================================================================================================
 
         # set objects
@@ -42,27 +44,33 @@ class CableTable():
         app = win32.Dispatch('CT.Application')
         prj = app.CreateJobObject()
         dev = prj.CreateDeviceObject()
-        dev2 = prj.CreateDeviceObject()
-        devassy2 = prj.CreateDeviceObject()
+        s_Drawing_Name = "Ball Drawing Number"
+        s_Drawing_Rev = "Ball Revision Number"
+        s_Col_Header_Names = "WIRE NO.;FROM REF;FROM PIN;FROM PART;TO REF;TO PIN;TO PART;SIGNAL;STATUS"
+        tar_dev = prj.CreateDeviceObject()
+        connFROM = prj.CreateDeviceObject()
         connA = prj.CreateDeviceObject()
+        blockA = prj.CreateDeviceObject()
         connB = prj.CreateDeviceObject()
-        conn_pin = prj.CreatePinObject()
-        mate_pin = prj.CreatePinObject()
-        mate_conn = prj.CreateDeviceObject()
-        mate_block = prj.CreateDeviceObject()
-        sym = prj.CreateSymbolObject()
-        sht = prj.CreateSheetObject()
+        blockB = prj.CreateDeviceObject()
+        mated_conn = prj.CreateDeviceObject()
+        pinFROM = prj.CreatePinObject()
+        pinA = prj.CreatePinObject()
+        pinB = prj.CreatePinObject()
+        mated_pin = prj.CreatePinObject()
+        core = prj.CreatePinObject()
+        sig = prj.CreateSignalObject()
         #====================================================================================================================================
 
         # more setup
         #====================================================================================================================================
-        s_Drawing_Num_Rev = prj.GetName()
         default_filename_full_path = s_Default_Save_Path + s_Report_Title + "_" + prj.GetName()
         output_file_name = default_filename_full_path + ".txt"
-        app.PutMessage("Extracting Cable Table data")
+        app.PutMessage("Extracting End to End data")
         app.PutMessage("Working......  0%")
         current_row = s_Start_Row
         #====================================================================================================================================
+
 
         devinfo = prj.GetAllDeviceIds(None)
         devcount = devinfo[0]
@@ -73,111 +81,74 @@ class CableTable():
         columns = s_Col_Header_Names.split(';')
         df = pd.DataFrame(columns=columns)
 
-        if devcount > 0:
-            # Assemblies first
-            for dev_index, devid in enumerate(devids):
-                dev.SetId(devid)
 
-                Number_of_statuses = 10
-                for fraction in range(1, Number_of_statuses):
-                    threshold = round(dev_total * fraction / Number_of_statuses)
-                    if dev_index == threshold:
-                        pct = round(100 * dev_index / dev_total)
-                        app.PutMessage(f"Working...... {pct}%")
+        reported_pins = []
+        sigInfo = prj.GetSignalIds(None)
+        sig_count = sigInfo[0]
+        sigids = sigInfo[1]
+        sigids = [x for x in sigids if x is not None]
 
-                if dev.IsAssembly():
-                    assyInfo = dev.GetDeviceIds(None)
-                    assyCount = assyInfo[0]
-                    assyIds = assyInfo[1]
-                    assyIds = [x for x in assyIds if x is not None]
+        for sig_index, sigid in enumerate(sigids):
+            sig.SetId(sigid)
 
-                    if assyCount > 0:
-                        for assyId in assyIds:
-                            dev2.SetId(assyId)
 
-                            if dev2.IsConnector():
+            Number_of_statuses = 10
+            for fraction in range(1, Number_of_statuses):
+                threshold = round(sig_count * fraction / Number_of_statuses)
+                if sig_index == threshold:
+                    pct = round(100 * sig_index / sig_count)
+                    app.PutMessage(f"Working...... {pct}%")
+            
+            pinInfo = sig.GetPinIds(None)
+            pin_count = pinInfo[0]
+            pinids = pinInfo[1]
+            pinids = [x for x in pinids if x is not None]
+
+            reported_pins = []
+            if pin_count > 1 and sig.GetName() != "SPARE":
+                for j in range(pin_count):
+                    pinA.SetId(pinids[j])
+
+                    if not (pinA.GetId() in reported_pins or pinA.GetOriginalId() in reported_pins):
+                        connA.SetId(pinA.GetId())
+                        blockA.SetId(connA.GetBlockId())
+                        pinB.SetId(pinA.GetConnectedPinId())
+                        connB.SetId(pinB.GetId())
+                        blockB.SetId(connB.GetBlockId())
+                        bool_IsConnector = connA.IsConnector() == 1
+                        bool_IsMatedToBox = blockB.IsBlock() == 1
+                        bool_MatedBoxNoSigEquiv = pinB.GetLogicalEquivalenceID() == 0
+                        bool_NoSigEquiv = pinA.GetLogicalEquivalenceID() == 0
+                        bool_IsStandardDevice = connA.IsDevice() == 1
+
+                        if (bool_IsConnector and bool_IsMatedToBox and bool_MatedBoxNoSigEquiv) or (bool_IsStandardDevice and bool_NoSigEquiv):
+                            if len(reported_pins) == 0:
+                                pinFROM.SetId(pinA.GetId())
+                                connFROM.SetId(connA.GetId())
+
+                            else:
                                 row = {
-                                "LINE NO.":  current_row - s_Start_Row + 1,
-                                "CABLE CONNECTOR": dev2.GetName(),
-                                "FROM PART": dev.GetAttributeValue(s_assy_attr_Assy_Num),
-                                "FROM TYPE": dev2.GetComponentName(),
-                                "MATES WITH":  "",
-                                "TO PART": "",
-                                "TO TYPE": "",
-                                "STATUS": ""
+                                "WIRE NO." : current_row - s_Start_Row + 1,
+                                "FROM REF" : f"{connFROM.GetLocation()}-{connFROM.GetName()}",
+                                "FROM PIN" : pinFROM.GetName(),
+                                "FROM PART" : connFROM.GetComponentName(),
+                                "TO REF" : f"{connA.GetLocation()}-{connA.GetName()}",
+                                "TO PIN" : pinA.GetName(),
+                                "TO PART" : connA.GetComponentName(),
+                                "SIGNAL" : sig.GetName(),
+                                "STATUS" : ""
                                 }
-                                MatedID = utils.MatedWith(dev2.GetId(), prj, app)
-                                mate_conn.SetId(MatedID)
-                            
-                                pinInfo = mate_conn.GetPinIds(None)
-                                pinCount = pinInfo[0]
-                                pinIds = pinInfo[1]
-                                pinIds = [x for x in pinIds if x is not None]
-
-                                mate_conn_pincount = mate_conn.GetPinIds(pinIds)
-                                if pinCount > 0:
-                                    mate_pin.SetId(pinIds[0])
-                    
-                                if mate_conn.IsConnector():
-                                    mate_block.SetId(mate_conn.GetBlockId())
-
-                                    if mate_conn.GetOriginalId() != 0:
-                                        pass
-                                    row["TO TYPE"] = mate_conn.GetComponentName()
-
-                                    if mate_block.GetId() != 0:
-                                        if mate_block.GetComponentName() == "":
-                                            row["MATES WITH"] = f"{mate_block.GetLocation()}-{mate_conn.GetName()}"
-                                            row["TO PART"] = mate_block.GetAttributeValue(s_assy_attr_Assy_Num)
-                                        else:
-                                            row["MATES WITH"] = f"{mate_block.GetLocation()}-{mate_pin.GetAttributeValue('Internal Device Designation')}"
-                                            row["TO PART"] = mate_block.GetAttributeValue(s_assy_attr_Assy_Num)
-                                    else:
-                                        devassy2.SetId(mate_conn.GetAssemblyId())
-                                        if mate_conn.GetAssemblyId() != 0:
-                                            row["MATES WITH"] = mate_conn.GetName()
-                                            row["TO PART"] = devassy2.GetAttributeValue(s_assy_attr_Assy_Num)
-                                        else:
-                                            row["MATES WITH"] = f"{mate_conn.GetLocation()}-{mate_conn.GetName()}"
-                                else:
-                                    row["MATES WITH"] = ""       
-
-                                if MatedID == 0:
-                                    row["MATES WITH"] = "COIL AND STOW"
                                 df.loc[len(df)] = row
                                 current_row += 1
-                elif dev.IsBlock():
-                    blockInfo = dev.GetBlockDeviceIds(None, 1)
-                    blockCount = blockInfo[0]
-                    blockIds = blockInfo[1]
-                    blockIds = [x for x in blockIds if x is not None]
+                            reported_pins.append(pinA.GetId())
+            if len(reported_pins) == 1 and 1 == 0:
+                row["FROM REF"] = f"{connFROM.GetLocation()}-{connFROM.GetName()}"
+                row["FROM PIN"] = pinFROM.GetName()
+                row["FROM PART"] = connFROM.GetComponentName()
+                row["SIGNAL"] = sig.GetName()
+                df.loc[len(df)] = row
+                current_row += 1
 
-                    if blockCount > 0:
-                        for blockId in blockIds:
-                            dev2.SetId(blockId)
-                            
-                            if dev2.IsConnector:
-                                pinInfo = dev2.GetPinIds(None)
-                                pinCount = pinInfo[0]
-                                pinIds = pinInfo[1]
-                                pinIds = [x for x in pinIds if x is not None]
-
-                                if pinCount > 0:
-                                    conn_pin.SetId(pinIds[0])
-
-                                    if conn_pin.GetConnectedPinId() == 0:
-                                        row = {
-                                        "LINE NO.":  current_row - s_Start_Row + 1,
-                                        "CABLE CONNECTOR": "UNUSED",
-                                        "FROM PART": "",
-                                        "FROM TYPE": "",
-                                        "MATES WITH":  f"{dev.GetLocation()}-{conn_pin.GetAttributeValue('Internal Device Designation')}",
-                                        "TO PART": dev.GetAttributeValue(s_assy_attr_Assy_Num),
-                                        "TO TYPE": dev2.GetComponentName(),
-                                        "STATUS": "This is a block connector that doesn't have a cable plugged into it."
-                                        }
-                                        df.loc[len(df)] = row
-                                        current_row += 1
 
         app.PutMessage(f"Working...... 100%")
         drawing_no = prj.GetAttributeValue(s_Drawing_Name)
@@ -191,11 +162,13 @@ class CableTable():
         del app
         #====================================================================================================================================
 
-
         #====================================================================================================================================
         #================================================Running csv to excel code===========================================================
         #====================================================================================================================================
+
         csv_path = output_file_name
+        drawing_no = drawing_no
+        revision_no = revision_no
         save_path = str(csv_path[:-4]) + ".xlsx"
         output_path = utils.ask_save_path(save_path)
 
@@ -204,7 +177,6 @@ class CableTable():
             print("Output file: ", output_path)
             print("Drawing number: ", drawing_no)
             print("Revision number: ", revision_no)
-
 
             df_csv = df
 
@@ -220,7 +192,7 @@ class CableTable():
             df_template.to_excel(output_path, index=False, header=False)
 
 
-            template_column_widths = {'A': 18.0, 'B': 20.0, 'C': 15.0, 'D': 35.0, 'E': 27.0, 'F': 15.0, 'G': 36.0, 'H': 68.0}
+            template_column_widths = {'A': 18.0, 'B': 15.0, 'C': 12.0, 'D': 35.0, 'E': 15.0, 'F': 10.0, 'G': 40.0, 'H': 12.0, 'I': 20.0}
 
             wb = load_workbook(output_path)
             ws = wb.active
@@ -238,18 +210,17 @@ class CableTable():
             ws["A1"].alignment = Alignment(vertical="center", horizontal="left", wrap_text=True)
             ws["A1"].font = Font(bold=True, size=8, name="Arial")
 
-            ws["B5"].value = "CABLE.CONNECTOR"
             # 2. B1:M4 merged + bold + size 18
-            ws.merge_cells("B1:G4")
-            ws["B1"].value = "Cable Table"
+            ws.merge_cells("B1:H4")
+            ws["B1"].value = "End-to-End Test"
             ws["B1"].alignment = Alignment(horizontal="center", vertical="center")
             ws["B1"].font = Font(bold=True, size=18, name="Arial")
 
             # 3. N1:N4 merged + bold + thick border
-            ws.merge_cells("H1:H4")
-            ws["H1"].value = f"Drawing No: {drawing_no} \n Revision: {revision_no}"
-            ws["H1"].alignment = Alignment(horizontal="right", vertical="center", wrap_text=True)
-            ws["H1"].font = Font(bold=True, size=8, name="Arial")
+            ws.merge_cells("I1:I4")
+            ws["I1"].value = f"Drawing No: {drawing_no} \n Revision: {revision_no}"
+            ws["I1"].alignment = Alignment(horizontal="right", vertical="center", wrap_text=True)
+            ws["I1"].font = Font(bold=True, size=8, name="Arial")
 
             # Left‑alignment object
             left_align = Alignment(horizontal="left", vertical="center")
@@ -270,39 +241,32 @@ class CableTable():
             for row in ws.iter_rows(min_row=1, max_row=4, min_col=2, max_col=8):
                 for cell in row:
                     cell.border = thick
-            for row in ws.iter_rows(min_row=1, max_row=4, min_col=8, max_col=8):
+            for row in ws.iter_rows(min_row=1, max_row=4, min_col=9, max_col=9):
                 for cell in row:
                     cell.border = thick
-            for row in ws.iter_rows(min_row=5, max_row=5, min_col=1, max_col=8):
+            for row in ws.iter_rows(min_row=5, max_row=5, min_col=1, max_col=9):
                 for cell in row:
                     cell.font = Font(bold=True)
                     cell.border = thin
+            for row in ws.iter_rows(min_row=6, max_row=end_row, min_col=3, max_col=3):
+                for cell in row:
+                    cell.alignment = Alignment(horizontal="center")
+            for row in ws.iter_rows(min_row=6, max_row=end_row, min_col=6, max_col=6):
+                for cell in row:
+                    cell.alignment = Alignment(horizontal="center")
             for row_idx in range(6, end_row + 1):
                 ws.row_dimensions[row_idx].height = 11.25
 
 
             #===================================================================================
-            #========BEGIN SORTING TERMS AT TOP, W MID (ASCENDING), UNUSED BOTTOM===============
+            #=====================BEGIN SORTING A-Z then ascending==============================
             #===================================================================================
-            last_column = "H"
-
-            last_non_unused = 0
-            for row in ws.iter_rows(
-                min_row=6,
-                max_row=ws.max_row - 5,
-                min_col=column_index_from_string(last_column),
-                max_col=column_index_from_string(last_column)
-            ):
-                for cell in row:
-                    if cell.value not in (None, "UNUSED"):
-                        last_non_unused = cell.row
-                if last_non_unused:
-                    break
+            last_column = "I"
 
             match_column_i = (column_index_from_string("B")) - 1 # minus one because cell iteration start at 0 in loops
 
             match_relationships = {}
-            for r in range(6, last_non_unused):
+            for r in range(6, ws.max_row + 1):
 
                 match_cell = ws[r][match_column_i].value # temporary key
                     
@@ -313,23 +277,27 @@ class CableTable():
                 else:
                     match_relationships[key].append(value)
 
-
-            # sort so TERM first, W last but ascending
-            sorted_dict = dict(sorted(match_relationships.items(), key=lambda x: utils.cabletable_sort_key(x[0])))
+            # sort alphabetical but ascending
+            sorted_dict = dict(sorted(match_relationships.items(), key=lambda x: utils.endtoend_sort_key(x[0])))
 
 
             swap_rows = []
             values = list(sorted_dict.values())
+            r = 5
+            
             for i in range(len(values)):
-                old_row = values[i][0]
-                row = i + 6
+                v = values[i]
+                for j in range(len(v)):
+                    old_row = v[j]
+                    r += 1
 
-                swap_rows.append([int(old_row), int(row)])
+                    swap_rows.append([int(old_row), int(r)])
+
 
             ws_copy = wb.copy_worksheet(ws)
 
             i = 0
-            for r in range(6, last_non_unused):
+            for r in range(6, ws.max_row + 1):
 
                 old = int(swap_rows[i][0])
                 new = int(swap_rows[i][1])
@@ -341,110 +309,23 @@ class CableTable():
                     del wb[name]
 
             ws.freeze_panes = "A6"   # Everything above A6 is frozen
-             
-            utils.configurePrintArea(ws)
 
+            utils.configurePrintArea(ws)
+            
             wb.save(output_path)
             print("Finished writing data into:", output_path)
-            utils.open_file_with_default_app(os.path.normpath(output_path))
+            print(output_path)
+            output_path_normalized = os.path.normpath(output_path)
+            utils.open_file_with_default_app(output_path_normalized)
             #===================================================================================
             #===================================END SORTING=====================================
             #===================================================================================
 
-            if not self.printlabels:
-                return output_path
-
-            if self.printlabels:
-                num_labels = len(df_csv)
-                num_rows_needed = math.ceil(num_labels / 24)
-
-                df_labels = pd.DataFrame(
-                    [[""] * 24] * num_rows_needed,   # 12 rows, 24 columns
-                    dtype=object
-                )
-
-                r = 0
-                c = 1
-
-                for i in range(len(df_csv)):
-
-                    if c == 24:     # finished the row → move to next row
-                        c = 0       # reset column index
-                        r += 1      # go to next row
-
-                    # Avoid writing outside df_labels bounds
-                    if r >= df_labels.shape[0]:
-                        break
-                    
-                    value1 = str(df_csv.iloc[i, 1])
-                    if value1 != "UNUSED":
-                        value2 = df_csv.iloc[i, 2]
-                        value3 = "M/W"
-                        value4 = str(df_csv.iloc[i, 4])
-
-                        label_text = f"{value1}\n{value2}\n{value3}\n{value4}"
-
-                        df_labels.iat[r, c] = label_text
-                        c += 1
-                df_labels.iat[0,0] = "PRINT LABELS"
-
-                # Save back to the copied template file
-                project_number = str(csv_path[11:-4])
-                project_number = project_number[-11:]
-                label_save_path =  "PRINT LABELS " + drawing_no + "_" + revision_no + ".xlsx"
-                label_path = utils.ask_save_path(label_save_path)
-                print(label_save_path)
-
-                if label_path != None:
-                    df_labels.to_excel(label_path, index=False, header=False)
-
-                        # W703.P2                   cable.connector     1
-                        # Vendor_Supplied           fron part           2
-                        # M/W                       M/W                 x
-                        # B1R1U10-AC IN             Mate with           4
-
-
-                    wb = load_workbook(label_path)
-                    ws = wb.active
-
-                    end_row = 5 + len(df_csv)   # df_csv is your pandas CSV DataFrame
-                    # Apply formatting to ALL label cells
-                    for row in ws.iter_rows(min_row=1, max_row=num_rows_needed, min_col=1, max_col=25):
-                        for cell in row:
-                            cell.alignment = Alignment(vertical="center", horizontal="center", wrap_text=True)
-                            cell.font = Font(bold=False, size=11, name="Aptos Narrow")
-
-                    # Set column width to 46 for label columns
-                    for col in range(1, 25):
-                        col_letter = get_column_letter(col)
-                        ws.column_dimensions[col_letter].width = 18.0
-
-                    # Set row height to 44 for the first 12 rows
-                    for row_idx in range(1, end_row):
-                        ws.row_dimensions[row_idx].height = 60.0
-
-                    for name in wb.sheetnames:
-                        if 'Copy' in name:
-                            del wb[name]
-
-                    utils.configurePrintArea(ws, True)
-
-                    wb.save(label_path)
-                    print("Finished writing data into:", label_path)
-                    utils.open_file_with_default_app(os.path.normpath(label_path))
-
-
-                #====================================================================================================================================
-                app = win32.Dispatch('CT.Application')
-                app.PutMessage("Cable Table Script Output Complete")
-                if label_path is not None:
-                    app.PutMessage("PRINT LABELS Output Complete")
-                else:
-                    app.PutMessage("No output file selected for PRINT LABELS, nothing was saved")
-                del app
-                #====================================================================================================================================
-                return output_path, label_path
+            app = win32.Dispatch('CT.Application')
+            app.PutMessage("End to End Script Output Complete")
+            del app
+            return output_path
         else:
             app = win32.Dispatch('CT.Application')
             app.PutMessage('No output file selected, nothing was saved')
-            del app   
+            del app
