@@ -685,14 +685,62 @@ def wait_for_connection_lines():
 
 
 
-def choose_cable_top_additional_part_id(dev, sym, text, connector_ids):
-    """Pick one real Additional Part ID text on the placed FULL cable symbols.
+def top_main_pin_symbol_id(dev, sym, view_id, connector_name, pin_locations):
+    """Identify the TOP main-pin symbol, not a spare pin, for one schematic view.
 
-    Previous code assumed the symbol's name was literally ``J1``. That no
-    longer holds for all Plug/Receptacle symbol variants. Prefer an existing
-    visible label, otherwise the old J1 owner, then the uppermost full symbol.
-    Returns the TEXT ID, not the symbol name, so other symbols cannot
-    accidentally suppress it while the formatter loops over connectors.
+    Connector main-pin X coordinates come from PINN_LOCS.  Leave existing
+    visibility alone if E3 cannot tell us where the symbols are; never
+    accidentally blank every designation in a view.
+    """
+    expected_x = None
+    connector_key = connector_designation_from_device_name(connector_name)
+    for position in pin_locations:
+        if connector_designation_from_device_name(position[0]) == connector_key:
+            expected_x = float(position[1])
+            break
+
+    dev.SetId(view_id)
+    candidates = []
+    for symbol_id in extract_e3_ids(dev.GetSymbolIds(None)):
+        sym.SetId(symbol_id)
+        try:
+            result = sym.GetSchemaLocation([0.0], [0.0], [""], [""], [""])
+            x, y = float(result[1]), float(result[2])
+        except Exception:
+            continue
+        candidates.append((symbol_id, x, y))
+
+    if not candidates:
+        print("WARNING: unable to find positioned main pin for", connector_name)
+        return None
+
+    if expected_x is not None:
+        # Main pin symbols share their connector's X.  Spares are placed at
+        # SPARE_X instead, so don't let a spare become the top label owner.
+        closest = min(abs(x - expected_x) for _, x, _ in candidates)
+        candidates = [
+            item for item in candidates
+            if abs(item[1] - expected_x) <= closest + 0.01
+        ]
+    elif "SPARE_X" in globals():
+        nonspares = [
+            item for item in candidates
+            if abs(item[1] - float(SPARE_X)) > 0.01
+        ]
+        if nonspares:
+            candidates = nonspares
+
+    chosen = max(candidates, key=lambda item: item[2])[0]
+    print("TOP MAIN PIN DEVICE DESIGNATION OWNER:", connector_name, chosen)
+    return chosen
+
+
+def choose_cable_top_additional_part_id(dev, sym, text, connector_ids):
+    """Select ONE full cable Additional Part ID, favoring the top-left view.
+
+    The old formatter owned the label on J1.  When Plug/Receptacle changes
+    that symbol name, choose the full symbol nearest the physical top-left
+    connector rather than whichever text happens to be visible already.
     """
     candidates = []
 
@@ -712,18 +760,16 @@ def choose_cable_top_additional_part_id(dev, sym, text, connector_ids):
                 symbol_name = str(sym.GetName()).strip().upper()
             except Exception:
                 symbol_name = ""
+            x_coord = y_coord = None
+            try:
+                result = sym.GetSchemaLocation([0.0], [0.0], [""], [""], [""])
+                x_coord, y_coord = float(result[1]), float(result[2])
+            except Exception:
+                pass
             try:
                 ids = extract_e3_ids(sym.GetTextIds(None))
             except Exception:
                 continue
-
-            y_coord = None
-            try:
-                result = sym.GetSchemaLocation([0.0], [0.0], [""], [""], [""])
-                if isinstance(result, tuple) and len(result) >= 3:
-                    y_coord = float(result[2])
-            except Exception:
-                pass
 
             for text_id in ids:
                 text.SetId(text_id)
@@ -732,17 +778,16 @@ def choose_cable_top_additional_part_id(dev, sym, text, connector_ids):
                         continue
                 except Exception:
                     continue
-
                 try:
                     visible = int(text.GetVisibility()) != 0
                 except Exception:
                     visible = False
-
                 candidates.append({
                     "text_id": text_id,
                     "symbol_id": symbol_id,
                     "symbol_name": symbol_name,
                     "visible": visible,
+                    "x": x_coord,
                     "y": y_coord,
                     "order": connector_order,
                 })
@@ -751,12 +796,28 @@ def choose_cable_top_additional_part_id(dev, sym, text, connector_ids):
         print("WARNING: no FULL cable Additional Part ID text found")
         return None
 
-    # A label that is already enabled must not be replaced by an arbitrary
-    # symbol selected from another connector.  Among visible labels, keep
-    # the historical J1 owner if that exists.
+    # Position of the top-left full cable connector that was actually placed.
+    positions = globals().get("MAIN_CONN_LOCS", [])
+    if positions:
+        top_y = max(float(item[2]) for item in positions)
+        top_connectors = [item for item in positions if abs(float(item[2]) - top_y) < 0.01]
+        top_left_x = min(float(item[1]) for item in top_connectors)
+        positioned = [c for c in candidates if c["x"] is not None and c["y"] is not None]
+        if positioned:
+            positioned.sort(key=lambda c: (
+                abs(c["x"] - top_left_x) + abs(c["y"] - top_y),
+                c["symbol_name"] != "J1",
+                not c["visible"],
+            ))
+            chosen = positioned[0]
+            print("FULL CABLE ADDITIONAL PART ID OWNER:", chosen)
+            return chosen["text_id"]
+
+    # In formatter-only mode there may be no new MAIN_CONN_LOCS.  Keep the
+    # historical J1 text when present, then prefer an already-visible label.
     candidates.sort(key=lambda c: (
-        not c["visible"],
         c["symbol_name"] != "J1",
+        not c["visible"],
         -(c["y"] if c["y"] is not None else -1e10),
         c["order"],
     ))
@@ -921,6 +982,11 @@ def run_ct_code():
                 print("WARNING: no connector mapping for view", new_dev_id)
                 continue
 
+            # Preserve Device Designation on the TOP main pin of each view.
+            # Lower pins and detached spares have it hidden.
+            top_pin_symbol = top_main_pin_symbol_id(
+                dev, sym, new_dev_id, connector, PINN_LOCS
+            )
             dev.SetId(new_dev_id)
             symbol_info = dev.GetSymbolIds(None)
             symbol_ids = [x for x in symbol_info[1] if x is not None]
@@ -945,11 +1011,12 @@ def run_ct_code():
                         text_type
                     )
 
-                    # Type 5 is Component Code. Type 12 is Device Designation.
-                    # Both are hidden on the split schematic cable pin views.
-                    if text_type in (5, 12):
-                        text.SetVisibility(0)
-
+                    if text_type == 5:
+                        text.SetVisibility(0)  # Component Code
+                    elif text_type == 12:
+                        text.SetStyle(1)       # Device Designation is bold
+                        if top_pin_symbol is not None:
+                            text.SetVisibility(1 if symbol_id == top_pin_symbol else 0)
                     elif text_type == 1000:
                         if (
                             symbol_id
@@ -1002,10 +1069,13 @@ def run_ct_code():
                     text.SetId(assydevsymboltext_id)
                     print("name:", sym.GetName(), "| text:", text.GetText(), "| type:", text.GetType())
                     text_type = text.GetType()
-                    # Hide Component Code and Device Designation on FULL cable
-                    # connector symbols as well as the split schematic views.
-                    if text_type in (5, 12):
+                    # FULL cable view: retain all Device Designations.
+                    # Only Component Code (type 5) should be hidden.
+                    if text_type == 5:
                         text.SetVisibility(0)
+                    elif text_type == 12:
+                        text.SetStyle(1)
+                        text.SetVisibility(1)
                     if (text_type == 1000 and
                             assydevsymboltext_id == full_cable_additional_part_text_id):
                         app.PutMessage("Configuring single FULL cable Additional Part ID")
@@ -1029,8 +1099,18 @@ def run_ct_code():
                             column = [""]
                             row = [""]
                             result = text.GetSchemaLocation(xloc, yloc, grid, column, row)
-                            new_x = result[1] + 1.5
-                            new_y = result[2] + 0.15
+                            # Absolute horizontal center of the FULL cable view.
+                            # The old relative +1.5 could place the label off
+                            # center if a different symbol became its owner.
+                            full_locations = globals().get("MAIN_CONN_LOCS", [])
+                            full_xs = sorted({float(item[1]) for item in full_locations})
+                            if len(full_xs) >= 2:
+                                new_x = (full_xs[0] + full_xs[-1]) / 2.0
+                            elif len(full_xs) == 1:
+                                new_x = full_xs[0] + 1.5
+                            else:
+                                new_x = float(result[1]) + 1.5
+                            new_y = float(result[2]) + 0.15
                             text.SetSchemaLocation(new_x, new_y)
                         else:
                             print(
@@ -4192,6 +4272,9 @@ for i, (connector, conn_id) in enumerate(CONNECTORS.items()):
 
 
 
+    top_pin_symbol = top_main_pin_symbol_id(
+        dev, sym, new_device_view_id, connector, PINN_LOCS
+    )
     dev.SetId(new_device_view_id)
     symbol_info = dev.GetSymbolIds(None)
     symbol_ids = [x for x in symbol_info[1] if x is not None]
@@ -4201,10 +4284,12 @@ for i, (connector, conn_id) in enumerate(CONNECTORS.items()):
         text_ids = [x for x in texinfo[1] if x is not None]
         for t_id in text_ids:
             text.SetId(t_id)
-            if text.GetType() in (5, 12):
-                # Hide component code and device designation, consistently
-                # with the formatter's final pass.
+            if text.GetType() == 5:
                 text.SetVisibility(0)
+            elif text.GetType() == 12:
+                text.SetStyle(1)
+                if top_pin_symbol is not None:
+                    text.SetVisibility(1 if id == top_pin_symbol else 0)
             
 
     dev.SetId(dev.GetAssemblyId())
@@ -4221,8 +4306,12 @@ for i, (connector, conn_id) in enumerate(CONNECTORS.items()):
                 assydevsymboltextids = [x for x in assydevsymboltextinfo[1] if x is not None]
                 for assydevsymboltext_id in assydevsymboltextids:
                     text.SetId(assydevsymboltext_id)
-                    if text.GetType() in (5, 12):
+                    if text.GetType() == 5:
                         text.SetVisibility(0)
+                    elif text.GetType() == 12:
+                        # Do not hide the main/full connector's designation.
+                        text.SetStyle(1)
+                        text.SetVisibility(1)
 
 
     j += 1
