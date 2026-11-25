@@ -1,1240 +1,1727 @@
-"""Zuken Mega Script — modular launcher for fourteen tools.
-
-The 18 original tool modules live independently in tool_scripts/. No E3/SQL
-workflows were rewritten for this refactor. On demand, the launcher copies
-source files to a stable runtime folder, preserves user edits and starts one
-tool at a time. The single-file Windows EXE bundles the tool_scripts/ data.
-
-Open `Zuken_Mega_Script.py` to use the GUI. Command-line options:
-    python Zuken_Mega_Script.py --self-test       # compile/validate all tool files
-    python Zuken_Mega_Script.py --extract         # extract scripts WITHOUT running them
-    python Zuken_Mega_Script.py --list-tools      # print tool names / paths
-    python Zuken_Mega_Script.py --list-templates  # show blank workbook templates
-    python Zuken_Mega_Script.py --verify-templates # validate original templates
-
-Selected Excel paths are optional. Without one, the tool's own file picker opens.
-Test E3 / SQL changes in a saved project copy; check with DB admins before using
-production database tools. This launcher has NOT been run against live E3/SQL.
-"""
-from __future__ import annotations
-import hashlib
-import zipfile
-import json
+appmain.py
+import AppGuiCode
+import wx
+import wirelist
+import endtoend
+import cabletable
+import win32com.client as win32
 import os
-from pathlib import Path
-import shutil
-import subprocess
-import sys
-import multiprocessing
-# PyInstaller requires this before GUI and third-party imports. It diverts
-# multiprocessing worker launches away from the application's main menu.
-if getattr(sys, 'frozen', False):
-    multiprocessing.freeze_support()
-import tempfile
-import tkinter as tk
-from tkinter import filedialog, messagebox
-
-# IMPORTANT FOR PYINSTALLER:
-# The 18 tool modules live in tool_scripts/ and are bundled as data files.
-# PyInstaller cannot inspect data-file imports, so modules imported only
-# by the tools are otherwise omitted from a --onefile executable.
-# In V22, this caused ImportError: cannot import name 'ttk' from 'tkinter'.
-# Keep these *real, static imports* in the launcher (do not move them into an
-# embedded string). They make the standard-library dependencies discoverable.
-import tkinter.ttk
-import tkinter.scrolledtext
-import tkinter.simpledialog
-from tkinter import ttk, scrolledtext
-import argparse
-import contextlib
-import posixpath
-import html
-import webbrowser
-import decimal
-import xml.etree.ElementTree
-import ctypes
-from ctypes import wintypes
-import dataclasses
-import difflib
-import gc
-import inspect
-import io
-import math
-import re
-import statistics
-import threading
-import time
-import traceback
-import warnings
-from collections import Counter, defaultdict, deque
 
 
-def _pyinstaller_discover_embedded_third_party_imports():
-    """PyInstaller discovers these imports statically; never call this helper.
+def on_generate(labels):
 
-    Importing the actual Windows E3/DB modules eagerly would break simple GUI
-    usage on machines where a particular tool is not installed. The functions
-    in tool_scripts/ import them when their respective tool runs.
-    """
-    import openpyxl
-    import openpyxl.utils
-    import pythoncom
-    import pyodbc
-    import win32com.client
-    import win32timezone
-    import e3series
-    import pdfplumber
-    import pdfminer.high_level
+    if "Wirelist" in labels:
+        objects["Wirelist"] = True
 
-from datetime import datetime
+    if "Cable Table" in labels:
+        objects["Cable Table"] = True
 
-SUITE_VERSION = "ZUKEN-MEGA-V29-SAVED-CABLE-WORKBOOK-2026-11-25"
-PALETTE = {
-    "white": "#FFFFFF", "pale": "#EAF4FF", "panel": "#F5FAFF",
-    "border": "#D4E3F4", "blue": "#2381CF", "blue_hover": "#1466B2",
-    "text": "#203B55", "muted": "#627E99", "disabled": "#B8CADE",
-}
+    if "Print Labels" in labels:
+        objects["Print Labels"] = True
 
-def running_as_packaged_exe() -> bool:
-    """Recognize the actual executable, not only the optional sys.frozen flag.
-
-    The previous menu loop happened when a packaged child was mistakenly
-    treated as a Python interpreter and launched as [sys.executable, file.py].
-    A onefile exe does not interpret file.py: it starts the menu again.
-    """
-    if bool(getattr(sys, 'frozen', False)) or bool(getattr(sys, '_MEIPASS', None)):
-        return True
-    if sys.platform != 'win32':
-        return False
-    # Normalize either Windows or POSIX-style separators for reliability.
-    basename = str(sys.executable).replace('\\', '/').rsplit('/', 1)[-1].casefold()
-    if not basename.endswith('.exe'):
-        return False
-    stem = basename[:-4]
-    # Python itself is also an .exe; only non-interpreter executables count.
-    return stem not in {
-        'python', 'pythonw', 'py', 'pyw', 'python3', 'python3w',
-    } and not stem.startswith(('python3.', 'python3_'))
+    if "End to End" in labels:
+        objects["End to End"] = True
 
 
-def diagnostics_directory() -> Path:
-    """Fixed, discoverable location independent of EXE extraction folder."""
-    directory = Path(tempfile.gettempdir()) / 'E3_Mega_Tools_V26_Diagnostics'
-    directory.mkdir(parents=True, exist_ok=True)
-    return directory
+#------------------------------------------------------------------------------
+# Get currently open Excel workbooks
+#------------------------------------------------------------------------------
 
+def get_open_excel_files():
+    open_files = set()
 
-# A frozen subprocess must identify its tool even if argv is dropped or
-# altered by a bootloader / wrapper. These keys are deliberately app-specific.
-EXE_TOOL_ENV = 'E3_MEGA_TOOLS_CHILD_ID'
-EXE_ARGS_ENV = 'E3_MEGA_TOOLS_CHILD_ARGS_JSON'
-
-# All fourteen TOP-LEVEL tool launches run in the current EXE. This prevents a
-# second launcher process from appearing when a PyInstaller child launch
-# loses its role. Internal two-stage workers remain separate where the
-# existing tool code explicitly requires a fresh E3/SQL process.
-FROZEN_INPROCESS_TOOLS = frozenset({
-    'header', 'signals', 'pin', 'cable_maker', 'cable_placer',
-    'block_maker', 'block_pin_arranger', 'block_pin_formatter',
-    'block_signal_adder',
-    'excel_formatter', 'excel_diff', 'missing_number_finder',
-    'eicd_to_excel', 'excel_to_pdf',
-})
-
-# These two workflows show their own final error dialog. If a worker fails,
-# the main Mega window must NOT present a second generic startup report after
-# the user has already closed the original error dialog.
-TOOLS_WITH_OWN_ERROR_DIALOG = frozenset({'block_maker', 'block_pin_arranger', 'block_pin_formatter'})
-
-
-def should_show_launcher_error(key, *, error, rc, windows_opened, elapsed):
-    """Keep the original handled error; show a fallback only for unhandled failures."""
-    # Closing a file picker (or exiting a quick one-shot script) is not a
-    # crash. No artificial elapsed-time or window-count threshold is valid.
-    if error is None and not rc:
-        return False
-    # These tools catch operational errors and display their own dialog. Their
-    # nonzero return code is NOT a second failure requiring another popup.
-    # A Python exception escaping into the launcher still deserves a report.
-    if key in TOOLS_WITH_OWN_ERROR_DIALOG and error is None:
-        return False
-    return True
-
-
-def trace_exe_start(event: str, **details) -> None:
-    """Write durable diagnostics to the Windows temporary directory.
-
-    Avoid resolving runtime_directory here: when the EXE was incorrectly
-    identified, old log locations moved and the user couldn't find the log.
-    """
     try:
-        root = diagnostics_directory()
-        with (root / 'launcher_debug.log').open('a', encoding='utf-8', errors='replace') as stream:
-            entry = {'at': datetime.now().isoformat(timespec='seconds'),
-                     'event': event, 'version': SUITE_VERSION,
-                     'pid': os.getpid(), 'sys_frozen': bool(getattr(sys,'frozen',False)),
-                     'packaged_exe': running_as_packaged_exe(),
-                     'argv': sys.argv[:12], 'tool_env': os.environ.get(EXE_TOOL_ENV),
-                     'exe': sys.executable,
-                     'meipass': str(getattr(sys, '_MEIPASS', ''))}
-            entry.update(details)
-            stream.write(json.dumps(entry, ensure_ascii=False, default=str) + '\n')
+        excel = win32.GetActiveObject("Excel.Application")
+
+        for workbook in excel.Workbooks:
+            if workbook.Path:
+                path = os.path.normcase(
+                    os.path.abspath(workbook.FullName)
+                )
+                open_files.add(path)
+
     except Exception:
-        # Do not block legitimate work due to a noncritical diagnostic failure.
         pass
 
-
-# Exactly fourteen launchable tools (plus Block Maker's supporting files).
-TOOLS = {
-    "header": {"name": "Header Formatter", "description": "Drag to order Location, Function, Agile and Designation", "entry": "header_formatter/header_formatter.py", "tab": "drawing", "workbook": None},
-    "signals": {"name": "Signal Mover", "description": "Center, edge, cable line and ±0.10 nudging", "entry": "signal_mover/signal_mover.py", "tab": "drawing", "workbook": None},
-    "pin": {"name": "Cable Pin Spacer", "description": "Transfer pin spacing and format text", "entry": "cable_pin_spacer/main.py", "tab": "drawing", "workbook": None},
-    "cable_maker": {"name": "Cable Maker", "description": "Create a cable component in the E3 library / SQL", "entry": "cable_maker/cable_maker.py", "tab": "excel", "workbook": "cable"},
-    "cable_placer": {"name": "Cable Placer", "description": "Place cable views and optionally shields / twists", "entry": "cable_placer/cable_placer.py", "tab": "excel", "workbook": "cable"},
-    "block_maker": {"name": "Block Maker", "description": "Build blocks, then run its separate text formatter", "entry": "block_maker/launcher.py", "tab": "excel", "workbook": "block_maker"},
-    "block_pin_arranger": {"name": "Block Pin Arranger", "description": "Arrange split block pins using its own workbook", "entry": "block_pin_arranger/block_pin_arranger.py", "tab": "excel", "workbook": "pin_arranger"},
-    "block_pin_formatter": {"name": "Block Pin Formatter", "description": "Format existing pins without moving them", "entry": "block_pin_formatter/block_pin_formatter.py", "tab": "excel", "workbook": "pin_arranger"},
-    "block_signal_adder": {"name": "Block Signal Adder", "description": "Apply local signal names from its own workbook", "entry": "block_signal_adder/block_signal_adder.py", "tab": "excel", "workbook": "signal"},
-    "excel_formatter": {"name": 'Excel Formatter', "description": 'Format pasted PDF/Excel tables and pin lists', "entry": "misc_tools/excel_formatter.py", "tab": "misc", "workbook": None},
-    "excel_diff": {"name": 'Excel Diff', "description": 'Compare two Excel or CSV files; HTML and CSV report', "entry": "misc_tools/excel_diff.py", "tab": "misc", "workbook": None},
-    "missing_number_finder": {"name": 'Missing Number Finder', "description": 'Find the first gap in a list of numbers', "entry": "misc_tools/missing_number_finder.py", "tab": "misc", "workbook": None},
-    "eicd_to_excel": {"name": 'EICD to Excel', "description": 'Fill a Block Maker workbook from an EICD PDF', "entry": "misc_tools/eicd_to_excel.py", "tab": "misc", "workbook": None},
-    "excel_to_pdf": {"name": 'Excel to PDF', "description": 'Export multiple Excel workbooks using Microsoft Excel', "entry": "misc_tools/excel_to_pdf.py", "tab": "misc", "workbook": None},
-}
-
-WORKBOOKS = {
-    "cable": {"label": "Cable Maker / Placer", "note": "Shared cable workbook"},
-    "block_maker": {"label": "Block Maker", "note": "Its own workbook"},
-    "pin_arranger": {"label": "Pin Arranger / Formatter", "note": "Shared pin-layout workbook"},
-    "signal": {"label": "Block Signal Adder", "note": "Its own workbook"},
-}
-
-# Original blank workbook templates live in ./templates, next to Zuken_Mega_Script.py.
-# build_exe.py passes these four files to PyInstaller as bundled data.
-# In a frozen exe they are read from sys._MEIPASS / templates.
-# Download always writes an exact byte copy, preserving formulas and VBA macros.
-# Bundled templates are the only source of truth; user imports are not supported.
-TEMPLATE_GROUPS = {
-    "cable": {"title": "Cable Maker / Placer", "description": "Cable assembly and connector layout workbook", "filename": "Cable_Template.xlsx"},
-    "block_maker": {"title": "Block Maker", "description": "Block creation workbook", "filename": "Block_Maker_Template.xlsm"},
-    "pin_arranger": {"title": "Pin Arranger / Formatter", "description": "Block pin-layout workbook", "filename": "Block_Pin_Arranger_Template.xlsm"},
-    "signal": {"title": "Block Signal Adder", "description": "Local signal assignment workbook", "filename": "Block_Signal_Adder_Template.xlsm"},
-}
-
-# Tool code now lives in individual, editable .py files under tool_scripts/.
-# Keep the original source hashes and runtime install behavior unchanged.
-from tool_sources import SOURCE_FILES
-
-def source_digest(source: str) -> str:
-    return hashlib.sha256(source.encode('utf-8')).hexdigest()
+    return open_files
 
 
-def runtime_directory() -> Path:
-    """Use a stable, writable tool folder in EXE mode; preserve .py behavior."""
-    if running_as_packaged_exe():
-        home = Path(os.environ.get('LOCALAPPDATA') or Path.home())
-        target = home / 'E3_Mega_Runtime_V26'
-        target.mkdir(parents=True, exist_ok=True)
-        # Recover the previous pin-identity state automatically when upgrading.
-        # Do not rewrite or delete anything from the previous installation.
-        for filename in ('main_recovery.json', 'main_pin_identity.json'):
-            dst = target / 'cable_pin_spacer' / filename
-            if dst.exists():
+#------------------------------------------------------------------------------
+# Convert Excel to PDF
+#------------------------------------------------------------------------------
+
+def excel_to_pdf(excel_path, pdf_path):
+    excel = None
+    workbook = None
+
+    try:
+        # Use a separate Excel instance so the user's Excel
+        # application is not accidentally closed
+        excel = win32.DispatchEx("Excel.Application")
+        excel.Visible = False
+        excel.DisplayAlerts = False
+
+        # Open the workbook
+        workbook = excel.Workbooks.Open(
+            os.path.abspath(excel_path),
+            UpdateLinks=0,
+            ReadOnly=True
+        )
+
+        # Export as PDF (0 = PDF)
+        workbook.ExportAsFixedFormat(
+            0,
+            os.path.abspath(pdf_path)
+        )
+
+    finally:
+        # Close the workbook and quit the temporary Excel instance
+        if workbook is not None:
+            workbook.Close(False)
+
+        if excel is not None:
+            excel.Quit()
+
+
+#------------------------------------------------------------------------------
+# Generate Sheets
+#------------------------------------------------------------------------------
+
+def generate_sheets(objects):
+
+    # Remember which Excel files were open before generation
+    previously_open = get_open_excel_files()
+
+    wsheet = None
+    esheet = None
+    csheet = None
+    psheet = None
+
+    try:
+
+        if objects["Wirelist"] == True:
+            w = wirelist.WireList()
+            wsheet = w.run()
+
+        if objects["End to End"] == True:
+            e = endtoend.EndtoEnd()
+            esheet = e.run()
+
+        if objects["Cable Table"] == True and objects["Print Labels"] == True:
+            c = cabletable.CableTable(True)
+            csheet, psheet = c.run()
+
+        elif objects["Cable Table"] == True:
+            c = cabletable.CableTable(False)
+            csheet = c.run()
+
+        # Automatically convert generated sheets to PDF
+        save = [wsheet, esheet, csheet, psheet]
+
+        for sheet in save:
+            if sheet is not None:
+                folder, filename = os.path.split(sheet)
+                pdf_name = os.path.splitext(filename)[0].replace("%", " ") + ".pdf"
+                pdf_sheet = os.path.join(folder, pdf_name)
+
+                excel_to_pdf(sheet, pdf_sheet)
+
+    finally:
+
+        # --------------------------------------------------------------
+        # Reopen Excel files that were originally open
+        # --------------------------------------------------------------
+
+        currently_open = get_open_excel_files()
+        save = [wsheet, esheet, csheet, psheet]
+        for sheet in save:
+            if sheet is None:
                 continue
-            # Newest previous runtime first; never overwrite existing recovery data.
-            for old_version in ('V25', 'V24', 'V23', 'V22', 'V21', 'V20', 'V19', 'V18', 'V13'):
-                src = home / ('E3_Mega_Runtime_' + old_version) / 'cable_pin_spacer' / filename
-                if src.is_file():
-                    try:
-                        dst.parent.mkdir(parents=True, exist_ok=True)
-                        shutil.copy2(src, dst)
-                        break
-                    except OSError:
-                        continue
-        return target
-    preferred = Path(__file__).resolve().parent / 'E3_Mega_Runtime_V26'
+
+            path = os.path.normcase(os.path.abspath(sheet))
+
+            # Only reopen if:
+            # 1. The file was open before generation
+            # 2. The file is now closed
+            # 3. The file still exists
+
+            if (
+                path in previously_open
+                and path not in currently_open
+                and os.path.exists(path)
+            ):
+                os.startfile(path)
+
+
+#------------------------------------------------------------------------------
+# GUI main
+#------------------------------------------------------------------------------
+
+if __name__ == "__main__":
+
     try:
-        preferred.mkdir(parents=True, exist_ok=True)
-        with tempfile.NamedTemporaryFile(dir=str(preferred), delete=True):
-            pass
-        return preferred
-    except OSError:
-        home = Path(os.environ.get('LOCALAPPDATA') or Path.home())
-        fallback = home / 'E3_Mega_Runtime_V26'
-        fallback.mkdir(parents=True, exist_ok=True)
-        return fallback
 
-
-def prefs_file() -> Path:
-    folder = Path(os.environ.get('LOCALAPPDATA') or Path.home()) / 'E3_Mega_Tools'
-    folder.mkdir(parents=True,exist_ok=True)
-    return folder / 'prefs.json'
-
-
-def read_prefs() -> dict:
-    try:
-        data=json.loads(prefs_file().read_text(encoding='utf-8'))
-        if isinstance(data,dict):
-            return {key:str(data.get(key,'')).strip() for key in WORKBOOKS}
-    except (OSError,ValueError,TypeError):
-        pass
-    return {key:'' for key in WORKBOOKS}
-
-
-def write_prefs(data: dict) -> None:
-    dest=prefs_file()
-    tmp=dest.with_suffix('.tmp')
-    tmp.write_text(json.dumps({k:data.get(k,'') for k in WORKBOOKS}, indent=2)+'\n',encoding='utf-8')
-    os.replace(tmp,dest)
-
-
-def validate_excel_template(path: Path) -> None:
-    """Check the Excel container but NEVER recalculate or rewrite the workbook."""
-    if path.suffix.lower() not in ('.xlsx', '.xlsm'):
-        raise ValueError('Choose an Excel .xlsx or .xlsm template.')
-    if not path.is_file():
-        raise FileNotFoundError(str(path))
-    if not zipfile.is_zipfile(path):
-        raise ValueError('The selected file is not a valid Excel workbook (.xlsx/.xlsm).')
-    try:
-        with zipfile.ZipFile(path,'r') as archive:
-            required = {'[Content_Types].xml','xl/workbook.xml'}
-            if not required.issubset(archive.namelist()):
-                raise ValueError('Missing Excel workbook files; choose a genuine template.')
-            if archive.testzip() is not None:
-                raise ValueError('The selected Excel template is damaged.')
-    except zipfile.BadZipFile as exc:
-        raise ValueError('The selected Excel template is damaged.') from exc
-
-
-def template_source_directories() -> tuple[Path, ...]:
-    """Read original templates only from the application source/bundle.
-
-    In a PyInstaller executable, only packaged templates under _MEIPASS are
-    accepted. This deliberately ignores old user-imported template overrides
-    and loose files beside the executable. In Python source mode, templates
-    are maintained in the project's templates/ folder.
-    """
-    if running_as_packaged_exe():
-        bundle_dir = getattr(sys, '_MEIPASS', None)
-        return (Path(bundle_dir) / 'templates',) if bundle_dir else ()
-    return (Path(__file__).resolve().parent / 'templates',)
-
-
-def get_template_path(key: str) -> Path | None:
-    """Return only the original template bundled with the application."""
-    if key not in TEMPLATE_GROUPS:
-        raise KeyError(key)
-    filename = TEMPLATE_GROUPS[key]['filename']
-    for directory in template_source_directories():
-        candidate = directory / filename
-        if candidate.is_file():
-            return candidate
-    return None
-
-
-def save_template_copy(key: str, output_path: Path) -> Path:
-    """Write an exact workbook copy, preserving formatting, formulas, macros."""
-    if key not in TEMPLATE_GROUPS:raise KeyError(key)
-    output_path=Path(output_path)
-    source=get_template_path(key)
-    if source is None:
-        raise FileNotFoundError('No original template found in the templates folder for '+TEMPLATE_GROUPS[key]['title'])
-    validate_excel_template(source)
-    if output_path.suffix.lower()!=source.suffix.lower():
-        raise ValueError('Keep the template extension '+source.suffix+' when saving.')
-    if output_path.resolve() == source.resolve():
-        raise ValueError('Choose another destination; the master template cannot be overwritten.')
-    output_path.parent.mkdir(parents=True, exist_ok=True)
-    shutil.copyfile(source,output_path)
-    return output_path
-
-
-def install_one(relative_path: str, base: Path) -> tuple[Path,str]:
-    """Materialize original source; keep local edits if any."""
-    if relative_path not in SOURCE_FILES:
-        raise KeyError(relative_path)
-    path=base / relative_path
-    path.parent.mkdir(parents=True,exist_ok=True)
-    raw=SOURCE_FILES[relative_path].encode('utf-8')
-    digest=hashlib.sha256(raw).hexdigest()
-    compile(SOURCE_FILES[relative_path],relative_path,'exec')
-    tracker=path.with_name(path.name+'.bundled.sha256')
-    if path.exists():
-        current=hashlib.sha256(path.read_bytes()).hexdigest()
-        if current==digest:
-            if not tracker.exists():tracker.write_text(digest+'\n',encoding='utf-8')
-            return path,'unchanged'
-        previous=tracker.read_text(encoding='utf-8').strip() if tracker.exists() else ''
-        if current!=previous:
-            return path,'kept user-edited file'
-        backup=path.with_name(path.name+'.backup.'+datetime.now().strftime('%Y%m%d_%H%M%S'))
-        shutil.copy2(path,backup)
-    tmp=path.with_name(path.name+'.updating')
-    try:
-        tmp.write_bytes(raw)
-        os.replace(tmp,path)
-        tracker.write_text(digest+'\n',encoding='utf-8')
-    finally:
-        if tmp.exists():tmp.unlink()
-    return path,'installed'
-
-
-def install_tool(tool_id: str, base: Path) -> tuple[Path,list[str]]:
-    tool=TOOLS[tool_id]
-    entry=tool['entry']
-    folder=entry.split('/')[0]+'/'
-    files=[k for k in SOURCE_FILES if k.startswith(folder)]
-    actions=[]
-    for relative in files:
-        _,action=install_one(relative,base)
-        actions.append(f'{relative}: {action}')
-    return base/entry,actions
-
-
-def open_folder(folder: Path) -> None:
-    folder.mkdir(parents=True,exist_ok=True)
-    if sys.platform=='win32':
-        os.startfile(str(folder))
-    elif sys.platform=='darwin':
-        subprocess.Popen(['open',str(folder)])
-    else:
-        subprocess.Popen(['xdg-open',str(folder)])
-
-
-class MegaApp:
-    def __init__(self):
-        self.root=tk.Tk()
-        self.root.title('Zuken Mega Script | V28')
-        self.root.configure(bg=PALETTE['white'])
-        self.root.geometry('608x702+70+70')
-        self.root.resizable(False,False)
-        self.root.attributes('-topmost',True)
-        self.root.protocol('WM_DELETE_WINDOW',self.close)
-        self.runtime=runtime_directory()
-        self.prefs=read_prefs()
-        self.running=None
-        self.running_id=None
-        self.running_local=None
-        self.active_tab='drawing'
-        self.buttons={}
-        self.status=tk.StringVar(value='Choose a tool to open')
-        self.path_labels={}
-        self.template_labels={}
-        self.create_gui()
-        self.root.after(500,self.poll_process)
-        self.root.after(120,lambda:self.root.lift())
-
-    def mk_label(self,parent,txt,*,bold=False,size=9,color='text',bg='white',wrap=0):
-        return tk.Label(parent,text=txt,bg=PALETTE[bg],fg=PALETTE[color],
-                font=('Segoe UI',size,'bold' if bold else 'normal'),
-                wraplength=wrap or 0,justify='left',anchor='w')
-
-    def create_gui(self):
-        top=tk.Frame(self.root,bg=PALETTE['pale'],height=60)
-        top.pack(fill='x');top.pack_propagate(False)
-        self.mk_label(top,'Zuken Mega Script  ·  V27',bold=True,size=15,bg='pale').pack(side='left',padx=16,pady=10)
-        self.mk_label(top,'ALL-IN-ONE',size=9,color='blue',bg='pale',bold=True).pack(side='right',padx=17)
-        nav=tk.Frame(self.root,bg=PALETTE['white'])
-        nav.pack(fill='x',padx=14,pady=(11,5))
-        self.nav_buttons={}
-        for tab,label in (('drawing','Drawing  (3)'),('excel','Excel  (6)'),('misc','Misc Tools  (5)'),('templates','Templates')):
-            button=tk.Button(nav,text=label,font=('Segoe UI',10,'bold'),pady=7,
-                bd=0,relief='flat',cursor='hand2',command=lambda t=tab:self.set_tab(t))
-            button.pack(side='left',padx=(0,8))
-            self.nav_buttons[tab]=button
-        tk.Frame(self.root,bg=PALETTE['border'],height=1).pack(fill='x',padx=14)
-        self.page=tk.Frame(self.root,bg=PALETTE['white'])
-        self.page.pack(fill='both',expand=True,padx=14,pady=(12,6))
-        self.footer=tk.Frame(self.root,bg=PALETTE['pale'])
-        self.footer.pack(fill='x',padx=14,pady=(0,12))
-        self.mk_label(self.footer,'',bg='pale',size=8).pack_forget()
-        self.mk_label(self.footer,'Select a tool to open; only one runs at a time.',bg='pale',size=8,color='muted').pack(anchor='w',padx=11,pady=(7,0))
-        self.mk_label(self.footer,'Test library/database changes on a saved E3 project copy.',bg='pale',size=8,color='muted').pack(anchor='w',padx=11,pady=(0,2))
-        tk.Label(self.footer,textvariable=self.status,bg=PALETTE['pale'],
-                 fg=PALETTE['text'],font=('Segoe UI',9,'bold'),anchor='w').pack(fill='x',padx=11,pady=(2,7))
-        self.set_tab('drawing')
-
-    def set_tab(self,tab):
-        self.active_tab=tab
-        for k,b in self.nav_buttons.items():
-            selected=k==tab
-            b.configure(bg=PALETTE['blue'] if selected else PALETTE['pale'],
-                fg='#FFFFFF' if selected else PALETTE['text'],
-                activebackground=PALETTE['blue_hover'] if selected else PALETTE['pale'],
-                activeforeground='#FFFFFF' if selected else PALETTE['text'])
-        for child in self.page.winfo_children():child.destroy()
-        self.buttons={}
-        if tab=='drawing':
-            self.mk_label(self.page,'Formatting & layout',bold=True,size=12).pack(anchor='w',pady=(0,4))
-            self.mk_label(self.page,'Uses the current E3 selection — no workbook required.',size=9,color='muted').pack(anchor='w',pady=(0,13))
-        elif tab=='excel':
-            self.mk_label(self.page,'Workbook selection',bold=True,size=12).pack(anchor='w',pady=(0,2))
-            self.mk_label(self.page,'Optional: save a workbook for each workflow.',size=9,color='muted').pack(anchor='w',pady=(0,9))
-            self.workbook_section()
-            self.mk_label(self.page,'Spreadsheet tools',bold=True,size=12).pack(anchor='w',pady=(12,7))
-        elif tab=='misc':
-            self.mk_label(self.page,'Miscellaneous tools',bold=True,size=12).pack(anchor='w',pady=(0,4))
-            self.mk_label(self.page,'Convert, compare, format and process Excel or PDF data.',
-                          size=9,color='muted').pack(anchor='w',pady=(0,13))
-        else:
-            self.template_section()
-        if tab=='misc':
-            misc_grid=tk.Frame(self.page,bg=PALETTE['white'])
-            misc_grid.pack(fill='x')
-            misc_grid.grid_columnconfigure(0,weight=1,uniform='misc_tools')
-            misc_grid.grid_columnconfigure(1,weight=1,uniform='misc_tools')
-            misc_keys=[k for k,v in TOOLS.items() if v['tab']=='misc']
-            for i,key in enumerate(misc_keys):
-                self.add_tool_card(key,TOOLS[key],parent=misc_grid,grid=(i//2,i%2))
-            self.mk_label(self.page,
-                'EICD to Excel uses an EICD PDF and a partly filled Block Maker workbook. '
-                'Excel to PDF requires Microsoft Excel installed.',
-                size=8,color='muted',wrap=560).pack(anchor='w',pady=(10,0))
-        if tab=='excel':
-            tool_grid=tk.Frame(self.page,bg=PALETTE['white'])
-            tool_grid.pack(fill='x')
-            tool_grid.grid_columnconfigure(0,weight=1,uniform='tool')
-            tool_grid.grid_columnconfigure(1,weight=1,uniform='tool')
-            excel_keys=[k for k,v in TOOLS.items() if v['tab']=='excel']
-            for i,key in enumerate(excel_keys):
-                self.add_tool_card(key,TOOLS[key],parent=tool_grid,grid=(i//2,i%2))
-        elif tab=='drawing':
-            for key,tool in TOOLS.items():
-                if tool['tab']==tab:self.add_tool_card(key,tool)
-        if tab=='drawing':
-            self.mk_label(self.page,'The existing Header Formatter, Signal Mover and Pin Spacer are unchanged.',
-                    size=9,color='muted',wrap=560).pack(anchor='w',pady=(10,0))
-        actions=tk.Frame(self.page,bg=PALETTE['white'])
-        actions.pack(fill='x',side='bottom',pady=(10,5))
-        for name,command in [('Open logs / files',lambda:open_folder(self.runtime)),
-                             ('Import pin data',self.import_pin_data),
-                             ('Diagnostics',self.show_diagnostics)]:
-            tk.Button(actions,text=name,command=command,fg=PALETTE['blue'],bg=PALETTE['white'],
-                     font=('Segoe UI',8),bd=0,cursor='hand2').pack(side='left',padx=(0,12))
-        tk.Button(actions,text='Close',command=self.close,fg=PALETTE['blue'],bg=PALETTE['white'],
-                 font=('Segoe UI',8),bd=0,cursor='hand2').pack(side='right')
-        self.disable_buttons(self.running is None)
-
-    def template_section(self):
-        self.mk_label(self.page,'Excel template library',bold=True,size=12).pack(anchor='w',pady=(0,4))
-        self.mk_label(self.page,'Original templates are included with the EXE. Download saves a separate copy.',
-                      size=9,color='muted',wrap=560).pack(anchor='w',pady=(0,13))
-        self.template_labels={}
-        for key,item in TEMPLATE_GROUPS.items():
-            card=tk.Frame(self.page,bg=PALETTE['panel'],height=78,
-                     highlightbackground=PALETTE['border'],highlightthickness=1)
-            card.pack(fill='x',pady=(0,7));card.pack_propagate(False)
-            icon=tk.Canvas(card,width=40,height=44,bg=PALETTE['panel'],highlightthickness=0)
-            icon.pack(side='left',padx=(12,7),pady=8)
-            icon.create_rectangle(5,4,34,38,outline='#28846C',fill='#E9F6F0',width=2)
-            icon.create_line(5,15,34,15,fill='#28846C',width=1)
-            for xx in (15,25):icon.create_line(xx,15,xx,38,fill='#8BC5B3')
-            for yy in (24,31):icon.create_line(5,yy,34,yy,fill='#8BC5B3')
-            left=tk.Frame(card,bg=PALETTE['panel'])
-            left.pack(side='left',fill='both',expand=True,pady=(5,2))
-            self.mk_label(left,item['title'],bold=True,size=10,bg='panel').pack(anchor='w')
-            self.mk_label(left,item['description'],size=8,color='muted',bg='panel',wrap=265).pack(anchor='w',pady=(2,1))
-            state=tk.StringVar()
-            self.template_labels[key]=state
-            tk.Label(left,textvariable=state,bg=PALETTE['panel'],fg=PALETTE['blue'],
-                     font=('Segoe UI',8),anchor='w').pack(anchor='w',pady=(3,0))
-            controls=tk.Frame(card,bg=PALETTE['panel'])
-            controls.pack(side='right',padx=10,pady=4)
-            tk.Button(controls,text='Download...',width=13,command=lambda k=key:self.download_template(k),
-                      bg=PALETTE['blue'],fg='white',activebackground=PALETTE['blue_hover'],
-                      activeforeground='white',font=('Segoe UI',8,'bold'),bd=0,pady=4,
-                      cursor='hand2').pack(pady=(0,3))
-            self.update_template_label(key)
-        self.mk_label(self.page,
-            'Original templates cannot be replaced here. Filled-in workbook selections are separate.',
-            size=8,color='muted',wrap=540).pack(anchor='w',pady=(5,0))
-
-    def update_template_label(self,key):
-        state=self.template_labels.get(key)
-        if state is not None:
-            path=get_template_path(key)
-            state.set(('Ready  ·  '+path.name) if path else 'Template missing: '+TEMPLATE_GROUPS[key]['filename'])
-
-    def download_template(self,key):
-        path=get_template_path(key)
-        if path is None:
-            messagebox.showinfo('Template missing',
-                'Could not find '+TEMPLATE_GROUPS[key]['filename']+'.\n\n'
-                'In Python mode, check the project templates folder. '
-                'In the EXE, rebuild with the original templates bundled.',
-                parent=self.root)
-            return
-        proposed=Path(TEMPLATE_GROUPS[key]['filename']).stem+path.suffix.lower()
-        save_path=filedialog.asksaveasfilename(parent=self.root,
-            title='Save Excel template copy — '+TEMPLATE_GROUPS[key]['title'],
-            initialfile=proposed,defaultextension=path.suffix,
-            filetypes=[('Excel template','*'+path.suffix)])
-        if not save_path:return
-        try:
-            result=save_template_copy(key,Path(save_path))
-            self.status.set('Template saved: '+result.name)
-            messagebox.showinfo('Template saved','Saved a fresh copy to:\n'+str(result),parent=self.root)
-        except (OSError,ValueError) as exc:
-            messagebox.showerror('Could not save template',str(exc),parent=self.root)
-
-    def workbook_section(self):
-        for key,config in WORKBOOKS.items():
-            line=tk.Frame(self.page,bg=PALETTE['panel'],height=36,
-                highlightbackground=PALETTE['border'],highlightthickness=1)
-            line.pack(fill='x',pady=(0,4));line.pack_propagate(False)
-            left=tk.Frame(line,bg=PALETTE['panel'])
-            left.pack(side='left',fill='both',expand=True,padx=(9,0),pady=4)
-            self.mk_label(left,config['label'],size=9,bold=True,bg='panel').pack(side='left')
-            text=tk.StringVar()
-            self.path_labels[key]=text
-            tk.Label(left,textvariable=text,bg=PALETTE['panel'],fg=PALETTE['muted'],
-                font=('Segoe UI',8),anchor='w').pack(side='left',padx=9,fill='x',expand=True)
-            for label,command in [('Choose',lambda k=key:self.choose_workbook(k)),
-                                  ('Clear',lambda k=key:self.clear_workbook(k))]:
-                tk.Button(line,text=label,command=command,bg=PALETTE['pale'],fg=PALETTE['blue'],
-                    font=('Segoe UI',8),bd=0,padx=7,pady=3,cursor='hand2').pack(side='right',padx=(0,6))
-            self.update_workbook_label(key)
-
-    def update_workbook_label(self,key):
-        if key in self.path_labels:
-            value=self.prefs.get(key,'')
-            if value:
-                label=Path(value).name
-                if len(label)>29:label=label[:26]+'...'
-                self.path_labels[key].set(label)
-            else:self.path_labels[key].set('Use tool picker')
-
-    def choose_workbook(self,key):
-        prior=self.prefs.get(key,'')
-        result=filedialog.askopenfilename(parent=self.root,
-            title='Choose '+WORKBOOKS[key]['label'],
-            initialdir=str(Path(prior).parent) if prior else str(Path.home()),
-            filetypes=[('Excel workbooks','*.xlsx *.xlsm'),('Excel files','*.xlsx'),('All files','*.*')])
-        if not result:return
-        self.prefs[key]=str(Path(result).resolve())
-        write_prefs(self.prefs)
-        self.update_workbook_label(key)
-        self.status.set(WORKBOOKS[key]['label']+' selected')
-
-    def clear_workbook(self,key):
-        self.prefs[key]=''
-        write_prefs(self.prefs)
-        self.update_workbook_label(key)
-        self.status.set(WORKBOOKS[key]['label']+' cleared; tool picker will open')
-
-    def add_tool_card(self,key,tool,parent=None,grid=None):
-        parent=parent or self.page
-        compact=grid is not None
-        box=tk.Frame(parent,bg=PALETTE['panel'],height=67 if compact else 57,
-                     highlightbackground=PALETTE['border'],highlightthickness=1)
-        if compact:
-            row,col=grid
-            box.grid(row=row,column=col,sticky='ew',pady=(0,6),padx=(0,6) if col==0 else (0,0))
-            box.grid_propagate(False)
-        else:
-            box.pack(fill='x',pady=(0,5));box.pack_propagate(False)
-        details=tk.Frame(box,bg=PALETTE['panel'])
-        details.pack(side='left',fill='both',expand=True,padx=(9 if compact else 12,4),pady=(9,0))
-        self.mk_label(details,tool['name'],bold=True,size=9 if compact else 10,bg='panel').pack(fill='x')
-        short={
-            'cable_maker':'Create a cable in DBE',
-            'cable_placer':'Place cable and symbols',
-            'block_maker':'Build and format blocks',
-            'block_pin_arranger':'Position pins from Excel',
-            'block_pin_formatter':'Format pin labels only',
-            'block_signal_adder':'Import local signal names',
-            'excel_formatter':'Clean pasted data / tables',
-            'excel_diff':'Compare two files',
-            'missing_number_finder':'Find gaps in number lists',
-            'eicd_to_excel':'Read EICD PDF into Excel',
-            'excel_to_pdf':'Convert multiple workbooks',
+        objects = {
+            "Wirelist": False,
+            "Cable Table": False,
+            "Print Labels": False,
+            "End to End": False,
         }
-        self.mk_label(details,short.get(key,tool['description']) if compact else tool['description'],
-                      size=8,color='muted',bg='panel',wrap=175 if compact else 0).pack(fill='x')
-        button=tk.Button(box,text='Open',font=('Segoe UI',9,'bold'),
-                   bg=PALETTE['blue'],fg='white',width=6 if compact else 8,bd=0,
-                   activebackground=PALETTE['blue_hover'],activeforeground='white',
-                   relief='flat',pady=5,cursor='hand2',command=lambda k=key:self.launch(k))
-        button.pack(side='right',padx=7 if compact else 11,pady=11)
-        self.buttons[key]=button
 
-    def disable_buttons(self,enabled):
-        for button in self.buttons.values():
-            button.configure(state='normal' if enabled else 'disabled',
-                bg=PALETTE['blue'] if enabled else PALETTE['disabled'])
+        app = wx.App(False)
 
-    def launch_local(self, key):
-        """Open any top-level tool directly in the frozen EXE (no subprocess).
+        frame = AppGuiCode.MainFrame(None, on_generate)
+        frame.Show(True)
 
-        This does not start a second copy of E3_Mega_Tools.exe. The launcher
-        is hidden during the selected operation and restored on close.
-        """
-        if self.running_local is not None:
-            messagebox.showinfo('One tool at a time',
-                'Close the running drawing tool first.', parent=self.root)
-            return
-        group = TOOLS[key]['workbook']
-        workbook = self.prefs.get(group, '') if group else ''
-        if workbook and not Path(workbook).is_file():
-            messagebox.showerror('Workbook not found',
-                'The saved workbook no longer exists:\n' + workbook +
-                '\n\nChoose a new workbook or clear this selection.', parent=self.root)
-            return
-        self.running_local = key
-        self.disable_buttons(False)
-        self.status.set('Opening ' + TOOLS[key]['name'])
-        self.root.attributes('-topmost', False)
-        self.root.withdraw()
-        trace_exe_start('inprocess-start-request', selected=key)
-        # Return from the launch button callback before entering the tool's
-        # own Tk event loop; both windows stay on the same UI thread.
-        self.root.after(20, lambda tool_id=key: self.run_local_tool(tool_id))
+        app.MainLoop()
+        generate_sheets(objects)
 
-    def run_local_tool(self, key):
-        import traceback
-        script = None
-        error = None
-        rc = 0
-        import time
-        started_at = time.monotonic()
-        tool_windows = [0]
-        trace_exe_start('real-tool-entry', selected=key)
-        env_names = ['E3_MEGA_' + name.upper() + '_WORKBOOK' for name in WORKBOOKS]
-        original_env = {name: os.environ.get(name) for name in env_names}
-        original_hook = sys.excepthook
-        try:
-            for name in env_names:
-                os.environ.pop(name, None)
-            group = TOOLS[key]['workbook']
-            if group:
-                workbook = self.prefs.get(group, '')
-                if workbook:
-                    os.environ['E3_MEGA_' + group.upper() + '_WORKBOOK'] = workbook
-            script, notes = install_tool(key, self.runtime)
-            output = script.parent / 'launcher_output.log'
-            with output.open('a', encoding='utf-8', errors='replace', buffering=1) as log:
-                log.write('\n===== IN-PROCESS ' + datetime.now().isoformat(timespec='seconds')
-                          + ' ' + key + ' (' + SUITE_VERSION + ') =====\n')
-                for note in notes:
-                    log.write('install: ' + note + '\n')
-                log.write('STARTUP: entering tool interpreter (not the launcher menu)\n')
-                log.flush()
-                trace_exe_start('tool-startup-after-install', selected=key, script=str(script))
-                original_stdout, original_stderr = sys.stdout, sys.stderr
-                try:
-                    # --windowed EXEs may have sys.stdout/sys.stderr = None.
-                    # Always supply valid streams for the extracted scripts.
-                    sys.stdout = log
-                    sys.stderr = log
-                    # The Pin Spacer must enter GUI worker mode directly;
-                    # otherwise its own main() starts an EXE subprocess.
-                    args = ['--worker'] if key == 'pin' else []
-                    # A second Tk() would normally call mainloop(0), which
-                    # cannot return after its window closes if the hidden
-                    # launcher Tk() still exists. Threshold 1 means the
-                    # tool's own Tk event loop exits on child.destroy(),
-                    # while root.quit() continues working as normal. This
-                    # changes Tk.mainloop ONLY during the embedded tool call.
-                    original_mainloop = tk.Tk.mainloop
-                    original_tk_init = tk.Tk.__init__
-                    def child_window_mainloop(window, n=0):
-                        return original_mainloop(window, max(1, n))
-                    def count_tool_window(window, *args, **kwargs):
-                        original_tk_init(window, *args, **kwargs)
-                        tool_windows[0] += 1
-                        trace_exe_start('tool-window-created', selected=key, count=tool_windows[0])
-                    tk.Tk.mainloop = child_window_mainloop
-                    tk.Tk.__init__ = count_tool_window
-                    try:
-                        try:
-                            run_embedded_tool(key, args)
-                        except SystemExit as exc:
-                            # Most old tools end with sys.exit(main()). Never
-                            # let that terminate the entire mega launcher.
-                            rc = int(exc.code) if isinstance(exc.code, int) else (0 if exc.code is None else 1)
-                            if rc:
-                                log.write('Tool exited with status ' + str(rc) + '\n')
-                    finally:
-                        tk.Tk.mainloop = original_mainloop
-                        tk.Tk.__init__ = original_tk_init
-                finally:
-                    sys.stdout, sys.stderr = original_stdout, original_stderr
-        except BaseException as exc:
-            if isinstance(exc, KeyboardInterrupt):
-                raise
-            error = exc
-            rc = 1
-            trace_exe_start('inprocess-tool-error', selected=key, error=repr(exc))
-            if script is not None:
-                try:
-                    with (script.parent / 'launcher_output.log').open('a', encoding='utf-8') as log:
-                        traceback.print_exception(type(exc), exc, exc.__traceback__, file=log)
-                except OSError:
-                    pass
-        finally:
-            sys.excepthook = original_hook
-            for name, previous in original_env.items():
-                if previous is None:
-                    os.environ.pop(name, None)
-                else:
-                    os.environ[name] = previous
-            elapsed = round(time.monotonic() - started_at, 2)
-            trace_exe_start('inprocess-tool-end', selected=key, returncode=rc, elapsed_sec=elapsed, windows_opened=tool_windows[0], error=repr(error))
-            self.running_local = None
-            self.disable_buttons(True)
-            try:
-                self.root.deiconify()
-                self.root.lift()
-                self.root.attributes('-topmost', True)
-            except tk.TclError:
-                pass
-            # A returned launcher is NOT necessarily a second EXE. Do not hide
-            # an early failure; expose the actual tool log and dispatcher events.
-            if should_show_launcher_error(key, error=error, rc=rc,
-                                          windows_opened=tool_windows[0], elapsed=elapsed):
-                why = ('Python exception' if error is not None else
-                       'tool exited with status '+str(rc) if rc else
-                       'tool never created a GUI window' if not tool_windows[0] else
-                       'tool GUI closed immediately')
-                self.status.set(TOOLS[key]['name'] + ': '+why)
-                self.show_startup_failure(key,why,script,elapsed,tool_windows[0],error)
-            elif rc and key in TOOLS_WITH_OWN_ERROR_DIALOG:
-                # Diagnostic information stays available, but the user sees
-                # exactly the original tool's friendly error, not duplicates.
-                trace_exe_start('handled-error-dialog-used', selected=key, rc=rc)
-                self.status.set(TOOLS[key]['name'] + ' stopped — see tool error')
-            else:
-                self.status.set(TOOLS[key]['name'] + ' closed')
-
-    def show_startup_failure(self, key, reason, script, elapsed, windows_opened, error):
-        """Always show the underlying tool startup evidence instead of silently returning to the menu."""
-        lines = [
-            'E3 Mega Tools V26 — tool startup report',
-            'Tool: ' + TOOLS[key]['name'],
-            'Reason: ' + str(reason),
-            'Tool GUI windows created: ' + str(windows_opened),
-            'Run duration: ' + str(round(elapsed, 3)) + ' seconds',
-            'Executable: ' + sys.executable,
-            'Packaged: ' + str(running_as_packaged_exe()),
-            'Source: ' + str(script),
-            'Exception: ' + repr(error),
-        ]
-        if script is not None:
-            try:
-                logpath = script.parent / 'launcher_output.log'
-                lines.append('Tool log: ' + str(logpath))
-                if logpath.exists():
-                    lines.extend(['', '--- LAST TOOL LOG LINES ---'])
-                    lines.extend(logpath.read_text(encoding='utf-8', errors='replace').splitlines()[-95:])
-            except Exception as exc:
-                lines.append('Could not read tool log: ' + repr(exc))
-        # Block Maker has two separate child stages. Their actionable tracebacks
-        # are in a second stage log, not necessarily in launcher_output.log.
-        if key == 'block_maker':
-            try:
-                stage_dir = Path(tempfile.gettempdir()) / 'E3_Block_Maker_Logs'
-                stage_files = sorted(stage_dir.glob('block_maker_*.log'),
-                                     key=lambda p: p.stat().st_mtime, reverse=True)
-                if stage_files:
-                    stage_log = stage_files[0]
-                    lines.extend(['', '--- BLOCK MAKER STAGE LOG ---', str(stage_log)])
-                    lines.extend(stage_log.read_text(
-                        encoding='utf-8', errors='replace').splitlines()[-125:])
-            except Exception as exc:
-                lines.append('Could not read Block Maker stage log: ' + repr(exc))
-        try:
-            diag = diagnostics_directory() / 'launcher_debug.log'
-            lines.extend(['', '--- LAUNCHER EVENTS ---', 'Diagnostic log: ' + str(diag)])
-            if diag.exists():
-                events = diag.read_text(encoding='utf-8', errors='replace').splitlines()[-16:]
-                lines.extend(events)
-        except Exception as exc:
-            lines.append('Could not read diagnostic log: ' + repr(exc))
-        report = '\n'.join(lines)
-        try:
-            report_path = diagnostics_directory() / 'last_tool_failure.txt'
-            report_path.write_text(report + '\n', encoding='utf-8')
-        except Exception:
-            pass
-        dialog = tk.Toplevel(self.root)
-        dialog.title('E3 Mega Tools — Startup issue')
-        dialog.geometry('800x560')
-        dialog.attributes('-topmost', True)
-        tk.Label(dialog, text='Tool did not stay open — startup details',
-                 font=('Segoe UI', 12, 'bold'), anchor='w').pack(fill='x', padx=13, pady=(12,5))
-        view = tk.Text(dialog, wrap='word', font=('Consolas', 9), height=24)
-        view.pack(fill='both', expand=True, padx=13, pady=(2,6))
-        view.insert('1.0', report)
-        view.configure(state='disabled')
-        buttons = tk.Frame(dialog)
-        buttons.pack(fill='x', padx=13, pady=(0,12))
-        def copy_report():
-            dialog.clipboard_clear()
-            dialog.clipboard_append(report)
-            dialog.update()
-        tk.Button(buttons,text='Copy failure report',command=copy_report).pack(side='left')
-        tk.Button(buttons,text='Open diagnostic folder',
-                  command=lambda:open_folder(diagnostics_directory())).pack(side='left',padx=(9,0))
-        tk.Button(buttons,text='Close',command=dialog.destroy).pack(side='right')
-
-    def launch(self,key):
-        trace_exe_start('button-click', selected=key, route='inprocess' if running_as_packaged_exe() else 'python-subprocess')
-        if self.running_local is not None:
-            messagebox.showinfo('One tool at a time',
-                'Close the running drawing tool first.', parent=self.root)
-            return
-        if self.running is not None and self.running.poll() is None:
-            messagebox.showinfo('One tool at a time','Close the running E3 tool first.',parent=self.root)
-            return
-        # Bypass the PyInstaller subprocess/bootloader for ALL top-level
-        # tools. Nested worker processes still use the explicit dispatcher.
-        if running_as_packaged_exe() and key in FROZEN_INPROCESS_TOOLS:
-            self.launch_local(key)
-            return
-        tool=TOOLS[key]
-        group=tool['workbook']
-        workbook=self.prefs.get(group,'') if group else ''
-        if workbook and not Path(workbook).is_file():
-            messagebox.showerror('Workbook not found',
-                'The saved workbook no longer exists:\n'+workbook+
-                '\n\nChoose a new workbook or clear this selection.',parent=self.root)
-            return
-        try:
-            script,notes=install_tool(key,self.runtime)
-            env=os.environ.copy()
-            # Clear stale inherited choices when a workbook is not selected.
-            for group_name in WORKBOOKS:
-                env.pop('E3_MEGA_'+group_name.upper()+'_WORKBOOK',None)
-            if workbook:
-                env['E3_MEGA_'+group.upper()+'_WORKBOOK']=workbook
-            # sys.executable is python.exe when running .py, but this launcher
-            # itself when PyInstaller-frozen. Explicitly route EXE children to
-            # the intended embedded tool instead of reopening this menu.
-            if running_as_packaged_exe():
-                # Double-route the worker: argv AND inherited environment.
-                # The parent menu is never a legitimate destination for this
-                # process. The child checks this marker BEFORE constructing Tk.
-                child_args = ['--worker'] if key == 'pin' else []
-                env[EXE_TOOL_ENV] = key
-                env[EXE_ARGS_ENV] = json.dumps(child_args)
-                cmd = [sys.executable, '--run-tool', key] + child_args
-                trace_exe_start('launch-worker', child=key, command=cmd)
-            else:
-                if key == 'cable_placer':
-                    # Route source-mode Cable Placer through the same saved-
-                    # workbook adapter as the EXE. Its own .py stays unchanged.
-                    entry = Path(__file__).resolve().parent / 'Zuken_Mega_Script.py'
-                    cmd = [sys.executable, str(entry), '--run-tool', key]
-                else:
-                    cmd=[sys.executable,str(script)]
-                    if key=='pin':cmd.append('--worker')
-            flags=getattr(subprocess,'CREATE_NO_WINDOW',0) if sys.platform=='win32' else 0
-            logfile=script.parent/'launcher_output.log'
-            with logfile.open('a',encoding='utf-8') as log:
-                log.write('\n===== '+datetime.now().isoformat(timespec='seconds')+' '+key+
-                         ' ('+SUITE_VERSION+') =====\n')
-                for note in notes:log.write('install: '+note+'\n')
-                if workbook:log.write('workbook: '+workbook+'\n')
-            with logfile.open('a',encoding='utf-8') as log:
-                self.running=subprocess.Popen(cmd,cwd=str(script.parent),env=env,
-                    stdin=subprocess.DEVNULL,stdout=log,stderr=subprocess.STDOUT,
-                    creationflags=flags,close_fds=True)
-            self.running_id=key
-            self.disable_buttons(False)
-            self.status.set(tool['name']+' is running')
-            self.root.attributes('-topmost',False)
-        except Exception as exc:
-            self.running=None;self.running_id=None
-            self.disable_buttons(True)
-            self.status.set('Failed to launch '+tool['name'])
-            messagebox.showerror('E3 Tools launcher error',str(exc),parent=self.root)
-
-    def poll_process(self):
-        try:
-            if self.running is not None:
-                returncode=self.running.poll()
-                if returncode is not None:
-                    name=TOOLS[self.running_id]['name']
-                    self.running=None;self.running_id=None
-                    self.disable_buttons(True)
-                    self.status.set(name+(' completed / closed' if returncode==0 else ' failed — see logs'))
-                    self.root.attributes('-topmost',True)
-        finally:
-            self.root.after(500,self.poll_process)
-
-    def show_diagnostics(self):
-        """One-click diagnostics even if Windows hides the runtime folder."""
-        details = [
-            'E3 Mega Tools version: ' + SUITE_VERSION,
-            'Mode: ' + ('Packaged EXE' if running_as_packaged_exe() else 'Python interpreter'),
-            'sys.frozen: ' + repr(getattr(sys, 'frozen', None)),
-            'sys._MEIPASS: ' + repr(getattr(sys, '_MEIPASS', None)),
-            'sys.executable: ' + str(sys.executable),
-            'sys.argv: ' + repr(sys.argv),
-            'Running tool: ' + repr(self.running_local or self.running_id),
-            'Runtime folder: ' + str(self.runtime),
-        ]
-        try:
-            folder = diagnostics_directory()
-            details.append('Diagnostic log: ' + str(folder / 'launcher_debug.log'))
-            logfile = folder / 'launcher_debug.log'
-            if logfile.exists():
-                lines = logfile.read_text(encoding='utf-8', errors='replace').splitlines()[-35:]
-                details.append('\nLast 35 diagnostic events:\n' + '\n'.join(lines))
-        except Exception as exc:
-            details.append('Log read error: ' + repr(exc))
-        msg = '\n'.join(details)
-        dialog = tk.Toplevel(self.root)
-        dialog.title('E3 Mega Tools — Diagnostics')
-        dialog.geometry('810x590')
-        dialog.attributes('-topmost', True)
-        view = tk.Text(dialog, wrap='word', font=('Consolas', 9))
-        view.pack(fill='both', expand=True, padx=12, pady=(12,4))
-        view.insert('1.0', msg)
-        view.configure(state='disabled')
-        buttons = tk.Frame(dialog)
-        buttons.pack(fill='x', padx=12, pady=(3,11))
-        def copy_all():
-            dialog.clipboard_clear()
-            dialog.clipboard_append(msg)
-            dialog.update()
-        tk.Button(buttons, text='Copy Diagnostics', command=copy_all).pack(side='left')
-        tk.Button(buttons, text='Open Log Folder',
-                  command=lambda:open_folder(diagnostics_directory())).pack(side='left',padx=(8,0))
-        tk.Button(buttons, text='Close', command=dialog.destroy).pack(side='right')
-
-    def import_pin_data(self):
-        directory=filedialog.askdirectory(parent=self.root,title='Locate previous pin spacer recovery files')
-        if not directory:return
-        destination=self.runtime/'cable_pin_spacer'
-        destination.mkdir(parents=True,exist_ok=True)
-        imported=[]
-        for suffix in ('_recovery.json','_pin_identity.json'):
-            for name in ('main'+suffix,'E3_Cable_To_Block_Pin_Spacing_V15_ZUKEN_LIGHT_GUI'+suffix):
-                original=Path(directory)/name
-                dest=destination/('main'+suffix)
-                if original.is_file() and not dest.exists():
-                    data=json.loads(original.read_text(encoding='utf-8-sig'))
-                    if not isinstance(data,dict):raise ValueError('Expected JSON object in '+name)
-                    shutil.copy2(original,dest)
-                    imported.append(dest.name)
-                    break
-        messagebox.showinfo('Pin Spacer recovery data',
-            'Imported: '+(', '.join(imported) or 'none')+'\nExisting files were left untouched.',
-            parent=self.root)
-
-    def close(self):
-        if self.running_local is not None:
-            messagebox.showinfo('Tool is open',
-                'Close the drawing tool first.', parent=self.root)
-            return
-        if self.running is not None and self.running.poll() is None:
-            if not messagebox.askyesno('Close launcher?',
-                'A tool is still running. Close only the launcher and let it finish?',parent=self.root):
-                return
-        self.root.destroy()
+    except Exception as err:
+        print(err)
 
 
-@contextlib.contextmanager
-def launcher_workbook_override(tool_id: str):
-    """Honor the saved Cable Maker/Placer workbook without modifying Cable Placer.
 
-    Both the EXE in-process route and the normal Python subprocess route carry
-    E3_MEGA_CABLE_WORKBOOK. Cable Placer's legacy ask_save_path() always calls
-    tkinter.filedialog.askopenfilename(), so supply that saved path to its FIRST
-    Excel-open dialog. All other dialogs and tools keep their original behavior.
-    """
-    saved = (os.environ.get('E3_MEGA_CABLE_WORKBOOK') or '').strip() if tool_id == 'cable_placer' else ''
-    if not saved:
-        yield
-        return
 
-    workbook = Path(saved).expanduser()
-    if not workbook.is_file():
-        raise FileNotFoundError('The saved Cable Maker / Placer workbook is missing: ' + str(workbook))
-    if workbook.suffix.lower() not in ('.xlsx', '.xlsm'):
-        raise ValueError('The saved Cable Maker / Placer workbook must be .xlsx or .xlsm: ' + str(workbook))
 
-    original_picker = filedialog.askopenfilename
-    supplied = False
 
-    def choose_workbook_or_prompt(*args, **kwargs):
-        nonlocal supplied
-        # Only intercept an Excel *open* dialog. Do not intercept a PDF picker,
-        # a save-as dialog, or subsequent requests for a different workbook.
-        filetypes = kwargs.get('filetypes') or ()
-        filetypes_text = ' '.join(map(str, filetypes)).lower()
-        if not supplied and ('.xls' in filetypes_text or 'excel' in filetypes_text):
-            supplied = True
-            print('Using Cable Maker / Placer workbook saved in Mega Tools:', workbook)
-            return str(workbook)
-        return original_picker(*args, **kwargs)
 
-    filedialog.askopenfilename = choose_workbook_or_prompt
+
+
+
+
+
+appguicode.py
+# -*- coding: utf-8 -*-
+
+###########################################################################
+## Python code generated with wxFormBuilder (version 4.2.1-115-g11c2dec8-dirty)
+## http://www.wxformbuilder.org/
+##
+## PLEASE DO *NOT* EDIT THIS FILE!
+###########################################################################
+
+import wx
+import wx.xrc
+import wirelist
+
+import gettext
+_ = gettext.gettext
+
+###########################################################################
+## Class MyFrame1
+###########################################################################
+
+class MainFrame ( wx.Frame ):
+
+    def __init__( self, parent, on_generate_callback ):
+        wx.Frame.__init__ ( self, parent, id = wx.ID_ANY, title = wx.EmptyString, pos = wx.DefaultPosition, size = wx.Size( 229,203 ), style = wx.DEFAULT_FRAME_STYLE|wx.TAB_TRAVERSAL )
+
+        self.SetSizeHints( wx.DefaultSize, wx.DefaultSize )
+
+        bSizer1 = wx.BoxSizer( wx.VERTICAL )
+
+        m_checkList1Choices = [_(u"Wirelist"), _(u"Cable Table"), _(u"Print Labels"), _(u"End to End"), _(u"All")]
+        self.m_checkList1 = wx.CheckListBox( self, wx.ID_ANY, wx.DefaultPosition, wx.Size( 150,125 ), m_checkList1Choices, 0 )
+        self.m_checkList1.SetFont( wx.Font( 14, wx.FONTFAMILY_SWISS, wx.FONTSTYLE_NORMAL, wx.FONTWEIGHT_BOLD, False, "Arial" ) )
+        self.m_checkList1.SetForegroundColour( wx.SystemSettings.GetColour( wx.SYS_COLOUR_BTNTEXT ) )
+        self.m_checkList1.SetBackgroundColour( wx.SystemSettings.GetColour( wx.SYS_COLOUR_BTNFACE ) )
+
+        bSizer1.Add( self.m_checkList1, 0, wx.ALL|wx.ALIGN_CENTER_HORIZONTAL, 5 )
+
+        self.m_button1 = wx.Button( self, wx.ID_ANY, _(u"Generate"), wx.DefaultPosition, wx.DefaultSize, 0 )
+        bSizer1.Add( self.m_button1, 0, wx.ALL|wx.ALIGN_CENTER_HORIZONTAL, 5 )
+
+        self.on_generate_callback = on_generate_callback
+        self.SetSizer( bSizer1 )
+        self.Layout()
+
+        self.Centre( wx.BOTH )
+
+        # Connect Events
+        self.m_checkList1.Bind(wx.EVT_CHECKLISTBOX, self.OnCheck)
+        self.Bind( wx.EVT_ACTIVATE, self.OnActivate_Main )
+        self.Bind( wx.EVT_CLOSE, self.OnClose_Main )
+        self.m_button1.Bind( wx.EVT_BUTTON, self.Generate )
+
+    def __del__( self ):
+        pass
+
+
+    # Virtual event handlers, override them in your derived class
+    def OnActivate_Main( self, event ):
+        event.Skip()
+
+    def OnClose_Main( self, event ):
+        event.Skip()
+
+    def Generate( self, event ):
+        checked = self.m_checkList1.GetCheckedItems()
+        labels = [self.m_checkList1.GetString(i) for i in checked]
+        # send labels checked back to main
+        self.on_generate_callback(labels)
+        self.Close()
+
+    def OnCheck(self, event):
+        idx = event.GetInt()                 # which item was clicked
+        label = self.m_checkList1.GetString(idx)
+
+        if label == "All":
+            is_checked = self.m_checkList1.IsChecked(idx)
+
+            # For all items *except* "All", set their check state to match
+            count = self.m_checkList1.GetCount()
+            for i in range(count - 1):       # last item is "All"
+                self.m_checkList1.Check(i, is_checked)
+
+        event.Skip() 
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+utils.py
+import os
+import sys
+import subprocess
+import platform
+import re
+import os
+import os
+import sys
+import re
+import platform
+import subprocess
+
+def open_file_with_default_app(path):
     try:
-        yield
-    finally:
-        # Always restore tkinter for the launcher and all other tools,
-        # including when the legacy script calls sys.exit() or raises.
-        filedialog.askopenfilename = original_picker
+        if sys.platform.startswith("win"):
+            os.startfile(path)
+        elif platform.system() == "Darwin":  # macOS
+            subprocess.run(['open', path], check=True)
+        else:  # Linux and other Unix-like systems
+            subprocess.run(['xdg-open', path], check=True)
+    except FileNotFoundError as e:
+        print(f"Error: Command not found - {e}")
+    except PermissionError as e:
+        print(f"Error: Permission denied - {e}")
+        
+    except subprocess.CalledProcessError as e:
+        print(f"Error: Failed to open file - {e}")
+    except Exception as e:
+        print(f"Unexpected error: {e}")
 
 
-def run_embedded_tool(tool_id: str, tool_args: list[str]) -> None:
-    """EXE subprocess entry. Execute a tool *in this process*, not the menu.
+def ask_save_path(default_full_path):
+    import os
+    import tkinter as tk
+    from tkinter import filedialog
 
-    Each tool still receives its normal __file__, import directory, cwd,
-    arguments and inherited workbook environment. The GUI remains in its
-    own parent process with independent E3 COM access.
-    """
-    if tool_id not in TOOLS:
-        trace_exe_start('invalid-worker-id', invalid_id=tool_id)
-        raise SystemExit('Unknown E3 tool: '+str(tool_id))
-    # Crucial: nested Pin Spacer / Block Maker workers launch new processes.
-    # They must not inherit this top-level role and be accidentally routed
-    # to the WRONG tool. Their own --run-tool arguments remain authoritative.
-    os.environ.pop(EXE_TOOL_ENV, None)
-    os.environ.pop(EXE_ARGS_ENV, None)
-    trace_exe_start('dispatch-start', selected=tool_id, args=tool_args)
-    import runpy
-    script, _actions = install_tool(tool_id, runtime_directory())
-    trace_exe_start('worker-file-ready', selected=tool_id, script=str(script), install=_actions)
-    # PyInstaller --windowed can leave sys.stdout/sys.stderr as None even
-    # when the parent has redirected OS-level handles. Many original tools
-    # use print() and traceback.print_exc(), so supply a writable log stream.
-    if sys.stdout is None:
-        sys.stdout = (script.parent / 'launcher_output.log').open(
-            'a', encoding='utf-8', errors='replace', buffering=1)
-    if sys.stderr is None:
-        sys.stderr = sys.stdout
-    tool_dir = str(script.parent)
-    prior_argv = sys.argv[:]
-    prior_cwd = os.getcwd()
-    sys.path.insert(0, tool_dir)
-    sys.argv = [str(script)] + list(tool_args)
+    default_folder = os.path.dirname(default_full_path)
+    default_filename = os.path.basename(default_full_path)
+
+    # Create Tk root
+    root = tk.Tk()
+    root.withdraw()
+
+    # Force window to front
+    root.attributes("-topmost", True)
+    root.update()
+
     try:
-        os.chdir(tool_dir)
-        trace_exe_start('executing-tool-source', selected=tool_id, real_file=str(script))
-        if sys.stdout is not None:
-            print('STARTUP: executing '+str(script), flush=True)
-        with launcher_workbook_override(tool_id):
-            runpy.run_path(str(script), run_name='__main__')
-    finally:
-        sys.argv = prior_argv
-        os.chdir(prior_cwd)
-        if sys.path and sys.path[0] == tool_dir:
-            sys.path.pop(0)
-
-
-def acquire_main_window_lock():
-    """Prevent any mistakenly-routed worker from opening another main menu."""
-    if sys.platform != 'win32' or not running_as_packaged_exe():
+        selected_path = filedialog.asksaveasfilename(
+            initialdir=default_folder,
+            initialfile=default_filename,
+            defaultextension=".xlsx",
+            filetypes=[("Excel Files", "*.xlsx"), ("All Files", "*.*")]
+        )
+    except Exception:
+        root.destroy()
         return None
-    import ctypes
-    kernel32 = ctypes.WinDLL('kernel32', use_last_error=True)
-    create = kernel32.CreateMutexW
-    create.argtypes = (ctypes.c_void_p, ctypes.c_int, ctypes.c_wchar_p)
-    create.restype = ctypes.c_void_p
-    handle = create(None, 0, 'Local\\E3MegaTools_MainWindow_Singleton_V26')
-    if not handle:
-        raise ctypes.WinError(ctypes.get_last_error())
-    if ctypes.get_last_error() == 183:  # ERROR_ALREADY_EXISTS
-        trace_exe_start('duplicate-menu-suppressed', reason='another main window is open')
-        kernel32.CloseHandle(ctypes.c_void_p(handle))
-        return False
-    return (kernel32, handle)
 
+    root.destroy()
 
-def main():
-    # Two independent dispatch channels: command line AND Windows process
-    # environment. The environment marker survives even when a frozen EXE
-    # is restarted with unexpected argv. Never allow a child to open MegaApp.
-    trace_exe_start('program-entry')
-    is_frozen = running_as_packaged_exe()
-    if is_frozen:
-        os.environ['E3_MEGA_PACKAGED_EXE'] = '1'
-    env_tool = os.environ.get(EXE_TOOL_ENV, '').strip()
-    cli_tool = None
-    cli_args = []
-    if '--run-tool' in sys.argv:
-        i = sys.argv.index('--run-tool')
-        if len(sys.argv) <= i+1:
-            trace_exe_start('bad-command-line', problem='missing-tool-id')
-            raise SystemExit('Missing tool ID after --run-tool')
-        cli_tool, cli_args = sys.argv[i+1], sys.argv[i+2:]
-    if cli_tool or env_tool:
-        # Prefer explicit CLI for nested worker commands. A bad environment
-        # marker fails CLOSED rather than accidentally reopening the menu.
-        if cli_tool:
-            tool_id, tool_args = cli_tool, cli_args
+    # Detect cancel or X
+    if not selected_path:
+        return None
+
+    return selected_path
+
+def write_row_from_copy(ws, ws_copy, src_row, dest_row):
+    if src_row == dest_row:
+        return   # nothing to do
+
+    # copy values
+    for col in range(1, ws_copy.max_column + 1):
+        ws.cell(row=dest_row, column=col).value = ws_copy.cell(row=src_row, column=col).value
+        
+def endtoend_sort_key(k):
+    # remove a single leading '-' if present
+    k = k.lstrip('-')
+
+    # break into alpha + numeric chunks
+    # example: "W414.P2" -> ['W', '414', '.', 'P', '2']
+    parts = re.split(r'(\d+)', k)
+
+    key_parts = []
+    for p in parts:
+        if p.isdigit():
+            key_parts.append((1, int(p)))      # numeric part
         else:
-            tool_id = env_tool
-            try:
-                tool_args = json.loads(os.environ.get(EXE_ARGS_ENV, '[]'))
-                if not isinstance(tool_args, list) or not all(isinstance(a, str) for a in tool_args):
-                    raise ValueError('Invalid worker arguments')
-            except (ValueError, TypeError) as exc:
-                trace_exe_start('bad-worker-args', error=str(exc))
-                raise SystemExit('Invalid E3 tool subprocess arguments') from exc
-        if tool_id not in TOOLS:
-            trace_exe_start('unknown-tool', selected=tool_id)
-            raise SystemExit('Unknown E3 child tool: '+str(tool_id))
-        try:
-            run_embedded_tool(tool_id, tool_args)
-        except Exception as exc:
-            # Worker errors must exit with status 1, not bubble to PyInstaller's
-            # generic "failed to execute script" popup. The parent Block Maker
-            # or Pin Arranger already has its own actionable error dialog.
-            import traceback as _traceback
-            trace_exe_start('worker-error-handled', selected=tool_id, error=repr(exc))
-            if sys.stderr is not None:
-                _traceback.print_exc(file=sys.stderr)
-                sys.stderr.flush()
-            raise SystemExit(1) from None
-        return
-    if '--self-test' in sys.argv or '--diagnose' in sys.argv:
-        assert len(TOOLS)==14 and len(SOURCE_FILES)==18
-        for filename,code in SOURCE_FILES.items():
-            compile(code,filename,'exec')
-            print('OK:',filename,len(code.splitlines()),'lines',source_digest(code)[:14])
-        print('PASS: 14 tool entries / 18 separate Python source files. No E3/SQL invoked.')
-        return
-    if '--verify-templates' in sys.argv:
-        for key, info in TEMPLATE_GROUPS.items():
-            path=get_template_path(key)
-            if path is None:
-                raise FileNotFoundError('Missing '+info['filename']+' in templates folder')
-            validate_excel_template(path)
-            print('OK:',info['filename'],'('+str(path)+')')
-        print('PASS: all four templates found and verified. No E3/SQL invoked.')
-        return
-    if '--list-templates' in sys.argv:
-        for key,info in TEMPLATE_GROUPS.items():
-            path=get_template_path(key)
-            print(key+': '+(str(path) if path else 'not found'))
-        return
-    if '--list-tools' in sys.argv:
-        for key,info in TOOLS.items():print(key+': '+info['entry'])
-        return
-    if '--extract' in sys.argv:
-        output=runtime_directory()
-        for key in TOOLS:
-            entry,notes=install_tool(key,output)
-            print(key+': '+str(entry))
-            for note in notes:print('  '+note)
-        return
-    # No worker marker means this process is deliberately the main menu.
-    # Only one main menu is permitted; a misrouted worker cannot duplicate it.
-    lock = acquire_main_window_lock()
-    if lock is False:
-        return
-    trace_exe_start('launcher-menu-open')
-    try:
-        MegaApp().root.mainloop()
-    finally:
-        if lock is not None:
-            kernel32, handle = lock
-            kernel32.CloseHandle(handle)
+            key_parts.append((0, p.lower()))   # alphabetic or punctuation
 
-if __name__=='__main__':
-    main()
+    return key_parts
+
+
+def cabletable_sort_key(k):
+    # TERM keys first → group = 0
+    if k.startswith("TERM"):
+        group = 0
+        term_num = int(re.search(r'TERM(\d+)', k).group(1))
+        p_num = int(re.search(r'\.P(\d+)', k).group(1))
+        return (group, term_num, p_num)
+
+    # W keys second → group = 1
+    if k.startswith("W"):
+        group = 1
+        # W404, W5-4 → grab the first number after W
+        m = re.search(r'W(\d+)', k)
+        first_num = int(m.group(1)) if m else 999999
+
+        # P number
+        m2 = re.search(r'\.P(\d+)', k)
+        p_num = int(m2.group(1)) if m2 else 999999
+
+        return (group, first_num, p_num)
+
+    # Fallback for unexpected keys
+    return (999, k)
+
+
+
+def MatedWith(conn_id, prj, app):
+    """
+    Equivalent of the VBS function MatedWith(conn_id).
+    Returns the device ID of the mated connector for PIN 1.
+    Checks all connector views to ensure there is not more than one possible mate.
+    """
+
+    # Create local COM objects
+    mw_dev1 = prj.CreateDeviceObject()
+    mw_dev2 = prj.CreateDeviceObject()
+    mw_mate_dev = prj.CreateDeviceObject()
+    mw_pin = prj.CreatePinObject()
+    mw_mate_pin = prj.CreatePinObject()
+
+    # Set initial device
+    mw_dev1.SetId(conn_id)
+
+    # Resolve original ID (VBS: If GetOriginalId <> 0 then SetId(GetOriginalId))
+    if mw_dev1.GetOriginalId() != 0:
+        mw_dev1.SetId(mw_dev1.GetOriginalId())
+
+    # -----------------------
+    # Get PIN 1 mate
+    # -----------------------
+    pinInfo = mw_dev1.GetPinIds(None)
+    pinCount = pinInfo[0]
+    pinIds = [x for x in pinInfo[1] if x is not None]
+
+    if pinCount > 0:
+        # Set pin 1
+        mw_pin.SetId(pinIds[0])
+        mw_mate_pin.SetId(mw_pin.GetConnectedPinId())
+        mw_mate_dev.SetId(mw_mate_pin.GetId())
+
+        # Return original ID if available
+        if mw_mate_dev.GetOriginalId() != 0:
+            mated_id = mw_mate_dev.GetOriginalId()
+        else:
+            mated_id = mw_mate_dev.GetId()
+    else:
+        mated_id = 0
+
+    # -----------------------
+    # Check all views (same as VBS logic)
+    # -----------------------
+    viewInfo = mw_dev1.GetViewIds(None)
+    viewCount = viewInfo[0]
+    viewIds = [x for x in viewInfo[1] if x is not None]
+
+    if viewCount > 0:
+        for viewId in viewIds:
+
+            mw_dev2.SetId(viewId)
+
+            pinInfo = mw_dev2.GetPinIds(None)
+            pinCount = pinInfo[0]
+            pinIds = [x for x in pinInfo[1] if x is not None]
+
+            if pinCount > 0:
+                mw_pin.SetId(pinIds[0])
+                mw_mate_pin.SetId(mw_pin.GetConnectedPinId())
+                mw_mate_dev.SetId(mw_mate_pin.GetId())
+
+                if mated_id == 0:
+                    # First mate found
+                    if mw_mate_dev.GetOriginalId() != 0:
+                        mated_id = mw_mate_dev.GetOriginalId()
+                    else:
+                        mated_id = mw_mate_dev.GetId()
+                else:
+                    # Detect conflicting mates
+                    mate_candidate = mw_mate_dev.GetId()
+                    mate_orig = mw_mate_dev.GetOriginalId()
+
+                    if mate_candidate != 0 and (mate_candidate != mated_id and mate_orig != mated_id):
+                        # VBS: e3.puterror 0, "Connector ... has two or more connectors mated..."
+                        app.PutError(
+                            0,
+                            f"Connector {mw_dev2.GetName()} has two or more connecors mated in different views. "
+                            f"{mated_id}, {mate_candidate}, {mate_orig}",
+                            mw_dev1.GetId()
+                        )
+
+    return mated_id
+
+def configurePrintArea(ws, is_print_labels = False):
+    ws.page_setup.orientation = ws.ORIENTATION_LANDSCAPE
+    ws.page_setup.fitToHeight = 0
+    ws.page_setup.fitToWidth = 1
+    if(not is_print_labels):
+        ws.print_title_rows = '5:5'
+    ws.print_options.gridLines = True
+    ws.sheet_properties.pageSetUpPr.fitToPage = True
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+cabletable.py
+import win32com.client as win32
+import pandas as pd
+import os
+from openpyxl import load_workbook
+from openpyxl.styles import Font, Border, Side, Alignment
+from openpyxl.utils import get_column_letter, column_index_from_string
+import os
+import math
+import utils
+
+
+
+class CableTable():
+    def __init__(self, printlabels):
+        self.printlabels = printlabels
+
+    def run(self):
+        # set constants
+        #====================================================================================================================================
+        s_Report_Title = "Cable_Table"
+        s_Default_Save_Path = "\\\\asdfiler2\\UserShares\\Zuken\\SimsLibrary\\Reports\\"
+        s_Print_Labels_Title = "PRINT LABELS"
+        s_assy_attr_Assy_Num = "Additional Part ID"
+        s_Row_Drawing_Name = 1
+        s_Col_Drawing_Name = 8
+        s_Drawing_Name = "Ball Drawing Number"
+        s_Drawing_Rev = "Ball Revision Number"
+        s_Col_Header_Names = "LINE NO.;CABLE CONNECTOR;FROM PART;FROM TYPE;MATES WITH;TO PART;TO TYPE;STATUS"
+        s_Start_Row = 6
+        s_Col_Line_No = 1
+        s_Col_CABLE_CONNECTOR = 2
+        s_Col_From_Part = 3
+        s_Col_From_Type = 4
+        s_Col_MATES_WITH = 5
+        s_Col_To_Part = 6
+        s_Col_To_Type = 7
+        s_Col_Status = 8
+        #====================================================================================================================================
+
+        # set objects
+        #====================================================================================================================================
+        app = win32.Dispatch('CT.Application')
+        prj = app.CreateJobObject()
+        dev = prj.CreateDeviceObject()
+        dev2 = prj.CreateDeviceObject()
+        devassy2 = prj.CreateDeviceObject()
+        connA = prj.CreateDeviceObject()
+        connB = prj.CreateDeviceObject()
+        conn_pin = prj.CreatePinObject()
+        mate_pin = prj.CreatePinObject()
+        mate_conn = prj.CreateDeviceObject()
+        mate_block = prj.CreateDeviceObject()
+        sym = prj.CreateSymbolObject()
+        sht = prj.CreateSheetObject()
+        #====================================================================================================================================
+
+        # more setup
+        #====================================================================================================================================
+        s_Drawing_Num_Rev = prj.GetName()
+        default_filename_full_path = s_Default_Save_Path + s_Report_Title + "_" + prj.GetName()
+        output_file_name = default_filename_full_path + ".txt"
+        app.PutMessage("Extracting Cable Table data")
+        app.PutMessage("Working......  0%")
+        current_row = s_Start_Row
+        #====================================================================================================================================
+
+        devinfo = prj.GetAllDeviceIds(None)
+        devcount = devinfo[0]
+        devids   = devinfo[1]
+        devids   = [x for x in devids if x is not None]
+        dev_total = len(devids)
+
+        columns = s_Col_Header_Names.split(';')
+        df = pd.DataFrame(columns=columns)
+
+        if devcount > 0:
+            # Assemblies first
+            for dev_index, devid in enumerate(devids):
+                dev.SetId(devid)
+
+                Number_of_statuses = 10
+                for fraction in range(1, Number_of_statuses):
+                    threshold = round(dev_total * fraction / Number_of_statuses)
+                    if dev_index == threshold:
+                        pct = round(100 * dev_index / dev_total)
+                        app.PutMessage(f"Working...... {pct}%")
+
+                if dev.IsAssembly():
+                    assyInfo = dev.GetDeviceIds(None)
+                    assyCount = assyInfo[0]
+                    assyIds = assyInfo[1]
+                    assyIds = [x for x in assyIds if x is not None]
+
+                    if assyCount > 0:
+                        for assyId in assyIds:
+                            dev2.SetId(assyId)
+
+                            if dev2.IsConnector():
+                                row = {
+                                "LINE NO.":  current_row - s_Start_Row + 1,
+                                "CABLE CONNECTOR": dev2.GetName(),
+                                "FROM PART": dev.GetAttributeValue(s_assy_attr_Assy_Num),
+                                "FROM TYPE": dev2.GetComponentName(),
+                                "MATES WITH":  "",
+                                "TO PART": "",
+                                "TO TYPE": "",
+                                "STATUS": ""
+                                }
+                                MatedID = utils.MatedWith(dev2.GetId(), prj, app)
+                                mate_conn.SetId(MatedID)
+                            
+                                pinInfo = mate_conn.GetPinIds(None)
+                                pinCount = pinInfo[0]
+                                pinIds = pinInfo[1]
+                                pinIds = [x for x in pinIds if x is not None]
+
+                                mate_conn_pincount = mate_conn.GetPinIds(pinIds)
+                                if pinCount > 0:
+                                    mate_pin.SetId(pinIds[0])
+                    
+                                if mate_conn.IsConnector():
+                                    mate_block.SetId(mate_conn.GetBlockId())
+
+                                    if mate_conn.GetOriginalId() != 0:
+                                        pass
+                                    row["TO TYPE"] = mate_conn.GetComponentName()
+
+                                    if mate_block.GetId() != 0:
+                                        if mate_block.GetComponentName() == "":
+                                            row["MATES WITH"] = f"{mate_block.GetLocation()}-{mate_conn.GetName()}"
+                                            row["TO PART"] = mate_block.GetAttributeValue(s_assy_attr_Assy_Num)
+                                        else:
+                                            row["MATES WITH"] = f"{mate_block.GetLocation()}-{mate_pin.GetAttributeValue('Internal Device Designation')}"
+                                            row["TO PART"] = mate_block.GetAttributeValue(s_assy_attr_Assy_Num)
+                                    else:
+                                        devassy2.SetId(mate_conn.GetAssemblyId())
+                                        if mate_conn.GetAssemblyId() != 0:
+                                            row["MATES WITH"] = mate_conn.GetName()
+                                            row["TO PART"] = devassy2.GetAttributeValue(s_assy_attr_Assy_Num)
+                                        else:
+                                            row["MATES WITH"] = f"{mate_conn.GetLocation()}-{mate_conn.GetName()}"
+                                else:
+                                    row["MATES WITH"] = ""       
+
+                                if MatedID == 0:
+                                    row["MATES WITH"] = "COIL AND STOW"
+                                df.loc[len(df)] = row
+                                current_row += 1
+                elif dev.IsBlock():
+                    blockInfo = dev.GetBlockDeviceIds(None, 1)
+                    blockCount = blockInfo[0]
+                    blockIds = blockInfo[1]
+                    blockIds = [x for x in blockIds if x is not None]
+
+                    if blockCount > 0:
+                        for blockId in blockIds:
+                            dev2.SetId(blockId)
+                            
+                            if dev2.IsConnector:
+                                pinInfo = dev2.GetPinIds(None)
+                                pinCount = pinInfo[0]
+                                pinIds = pinInfo[1]
+                                pinIds = [x for x in pinIds if x is not None]
+
+                                if pinCount > 0:
+                                    conn_pin.SetId(pinIds[0])
+
+                                    if conn_pin.GetConnectedPinId() == 0:
+                                        row = {
+                                        "LINE NO.":  current_row - s_Start_Row + 1,
+                                        "CABLE CONNECTOR": "UNUSED",
+                                        "FROM PART": "",
+                                        "FROM TYPE": "",
+                                        "MATES WITH":  f"{dev.GetLocation()}-{conn_pin.GetAttributeValue('Internal Device Designation')}",
+                                        "TO PART": dev.GetAttributeValue(s_assy_attr_Assy_Num),
+                                        "TO TYPE": dev2.GetComponentName(),
+                                        "STATUS": "This is a block connector that doesn't have a cable plugged into it."
+                                        }
+                                        df.loc[len(df)] = row
+                                        current_row += 1
+
+        app.PutMessage(f"Working...... 100%")
+        drawing_no = prj.GetAttributeValue(s_Drawing_Name)
+        revision_no = prj.GetAttributeValue(s_Drawing_Rev)
+        app.PutMessage("Converting data from csv to excel")
+
+        # unset objects
+        #====================================================================================================================================
+        del dev
+        del prj
+        del app
+        #====================================================================================================================================
+
+
+        #====================================================================================================================================
+        #================================================Running csv to excel code===========================================================
+        #====================================================================================================================================
+        csv_path = output_file_name
+        save_path = str(csv_path[:-4]) + ".xlsx"
+        output_path = utils.ask_save_path(save_path)
+
+        if output_path != None:
+            print("CSV file:", csv_path)
+            print("Output file: ", output_path)
+            print("Drawing number: ", drawing_no)
+            print("Revision number: ", revision_no)
+
+
+            df_csv = df
+
+            df_template = pd.DataFrame([[""] * len(df_csv.columns)] * (5 + len(df_csv)))
+
+            # Convert template to object dtype to avoid assignment errors
+            df_template = df_template.astype(object)
+
+            df_template.iloc[4, 0:len(df_csv.columns)] = df_csv.columns
+            df_template.iloc[5 : 5 + len(df_csv), 0:len(df_csv.columns)] = df_csv.values
+
+            # Save back to the copied template file
+            df_template.to_excel(output_path, index=False, header=False)
+
+
+            template_column_widths = {'A': 18.0, 'B': 20.0, 'C': 15.0, 'D': 35.0, 'E': 27.0, 'F': 15.0, 'G': 36.0, 'H': 68.0}
+
+            wb = load_workbook(output_path)
+            ws = wb.active
+            thick = Border(left=Side(style="thick"),right=Side(style="thick"),top=Side(style="thick"),bottom=Side(style="thick"))
+            thin = Border(left=Side(style="thin"),right=Side(style="thin"),top=Side(style="thin"),bottom=Side(style="thin"))
+
+            last_row = 5 + len(df_csv)       
+            last_col = len(df_csv.columns)       
+            last_col_letter = get_column_letter(last_col) # Convert last column number to Excel letters (A, B, C...)
+            # Apply in-place filtering across all header columns
+            ws.auto_filter.ref = f"A5:{last_col_letter}{last_row}"
+            # 1. A1:A4 merged + bold
+            ws.merge_cells("A1:A4")
+            ws["A1"].value = "BAE Systems \n SMS \n P.O. Box 1062 \n Boulder, CO 80306"
+            ws["A1"].alignment = Alignment(vertical="center", horizontal="left", wrap_text=True)
+            ws["A1"].font = Font(bold=True, size=8, name="Arial")
+
+            ws["B5"].value = "CABLE.CONNECTOR"
+            # 2. B1:M4 merged + bold + size 18
+            ws.merge_cells("B1:G4")
+            ws["B1"].value = "Cable Table"
+            ws["B1"].alignment = Alignment(horizontal="center", vertical="center")
+            ws["B1"].font = Font(bold=True, size=18, name="Arial")
+
+            # 3. N1:N4 merged + bold + thick border
+            ws.merge_cells("H1:H4")
+            ws["H1"].value = f"Drawing No: {drawing_no} \n Revision: {revision_no}"
+            ws["H1"].alignment = Alignment(horizontal="right", vertical="center", wrap_text=True)
+            ws["H1"].font = Font(bold=True, size=8, name="Arial")
+
+            # Left‑alignment object
+            left_align = Alignment(horizontal="left", vertical="center")
+            start_row = 5
+            end_row = 5 + len(df_csv)   # df_csv is your pandas CSV DataFrame
+            for row in ws.iter_rows(min_row=start_row, max_row=end_row):
+                for cell in row:
+                    cell.font = Font(name="Arial", size=8)
+                    cell.alignment = left_align
+
+            for col_letter, width in template_column_widths.items():
+                if width is not None:      # some widths may be None
+                    ws.column_dimensions[col_letter].width = width
+
+            for row in ws.iter_rows(min_row=1, max_row=4, min_col=1, max_col=1):
+                for cell in row:
+                    cell.border = thick
+            for row in ws.iter_rows(min_row=1, max_row=4, min_col=2, max_col=8):
+                for cell in row:
+                    cell.border = thick
+            for row in ws.iter_rows(min_row=1, max_row=4, min_col=8, max_col=8):
+                for cell in row:
+                    cell.border = thick
+            for row in ws.iter_rows(min_row=5, max_row=5, min_col=1, max_col=8):
+                for cell in row:
+                    cell.font = Font(bold=True)
+                    cell.border = thin
+            for row_idx in range(6, end_row + 1):
+                ws.row_dimensions[row_idx].height = 11.25
+
+
+            #===================================================================================
+            #========BEGIN SORTING TERMS AT TOP, W MID (ASCENDING), UNUSED BOTTOM===============
+            #===================================================================================
+            last_column = "H"
+
+            last_non_unused = 0
+            for row in ws.iter_rows(
+                min_row=6,
+                max_row=ws.max_row - 5,
+                min_col=column_index_from_string(last_column),
+                max_col=column_index_from_string(last_column)
+            ):
+                for cell in row:
+                    if cell.value not in (None, "UNUSED"):
+                        last_non_unused = cell.row
+                if last_non_unused:
+                    break
+
+            match_column_i = (column_index_from_string("B")) - 1 # minus one because cell iteration start at 0 in loops
+
+            match_relationships = {}
+            for r in range(6, last_non_unused):
+
+                match_cell = ws[r][match_column_i].value # temporary key
+                    
+                key = str(match_cell)
+                value = f"{str(r)}"
+                if key not in match_relationships and key:
+                    match_relationships[key] = [value]
+                else:
+                    match_relationships[key].append(value)
+
+
+            # sort so TERM first, W last but ascending
+            sorted_dict = dict(sorted(match_relationships.items(), key=lambda x: utils.cabletable_sort_key(x[0])))
+
+
+            swap_rows = []
+            values = list(sorted_dict.values())
+            for i in range(len(values)):
+                old_row = values[i][0]
+                row = i + 6
+
+                swap_rows.append([int(old_row), int(row)])
+
+            ws_copy = wb.copy_worksheet(ws)
+
+            i = 0
+            for r in range(6, last_non_unused):
+
+                old = int(swap_rows[i][0])
+                new = int(swap_rows[i][1])
+                utils.write_row_from_copy(ws, ws_copy, old, new) # src dest
+                i += 1
+                
+            for name in wb.sheetnames:
+                if 'Copy' in name:
+                    del wb[name]
+
+            ws.freeze_panes = "A6"   # Everything above A6 is frozen
+             
+            utils.configurePrintArea(ws)
+
+            wb.save(output_path)
+            print("Finished writing data into:", output_path)
+            utils.open_file_with_default_app(os.path.normpath(output_path))
+            #===================================================================================
+            #===================================END SORTING=====================================
+            #===================================================================================
+
+            if not self.printlabels:
+                return output_path
+
+            if self.printlabels:
+                num_labels = len(df_csv)
+                num_rows_needed = math.ceil(num_labels / 24)
+
+                df_labels = pd.DataFrame(
+                    [[""] * 24] * num_rows_needed,   # 12 rows, 24 columns
+                    dtype=object
+                )
+
+                r = 0
+                c = 1
+
+                for i in range(len(df_csv)):
+
+                    if c == 24:     # finished the row → move to next row
+                        c = 0       # reset column index
+                        r += 1      # go to next row
+
+                    # Avoid writing outside df_labels bounds
+                    if r >= df_labels.shape[0]:
+                        break
+                    
+                    value1 = str(df_csv.iloc[i, 1])
+                    if value1 != "UNUSED":
+                        value2 = df_csv.iloc[i, 2]
+                        value3 = "M/W"
+                        value4 = str(df_csv.iloc[i, 4])
+
+                        label_text = f"{value1}\n{value2}\n{value3}\n{value4}"
+
+                        df_labels.iat[r, c] = label_text
+                        c += 1
+                df_labels.iat[0,0] = "PRINT LABELS"
+
+                # Save back to the copied template file
+                project_number = str(csv_path[11:-4])
+                project_number = project_number[-11:]
+                label_save_path =  "PRINT LABELS " + drawing_no + "_" + revision_no + ".xlsx"
+                label_path = utils.ask_save_path(label_save_path)
+                print(label_save_path)
+
+                if label_path != None:
+                    df_labels.to_excel(label_path, index=False, header=False)
+
+                        # W703.P2                   cable.connector     1
+                        # Vendor_Supplied           fron part           2
+                        # M/W                       M/W                 x
+                        # B1R1U10-AC IN             Mate with           4
+
+
+                    wb = load_workbook(label_path)
+                    ws = wb.active
+
+                    end_row = 5 + len(df_csv)   # df_csv is your pandas CSV DataFrame
+                    # Apply formatting to ALL label cells
+                    for row in ws.iter_rows(min_row=1, max_row=num_rows_needed, min_col=1, max_col=25):
+                        for cell in row:
+                            cell.alignment = Alignment(vertical="center", horizontal="center", wrap_text=True)
+                            cell.font = Font(bold=False, size=11, name="Aptos Narrow")
+
+                    # Set column width to 46 for label columns
+                    for col in range(1, 25):
+                        col_letter = get_column_letter(col)
+                        ws.column_dimensions[col_letter].width = 18.0
+
+                    # Set row height to 44 for the first 12 rows
+                    for row_idx in range(1, end_row):
+                        ws.row_dimensions[row_idx].height = 60.0
+
+                    for name in wb.sheetnames:
+                        if 'Copy' in name:
+                            del wb[name]
+
+                    utils.configurePrintArea(ws, True)
+
+                    wb.save(label_path)
+                    print("Finished writing data into:", label_path)
+                    utils.open_file_with_default_app(os.path.normpath(label_path))
+
+
+                #====================================================================================================================================
+                app = win32.Dispatch('CT.Application')
+                app.PutMessage("Cable Table Script Output Complete")
+                if label_path is not None:
+                    app.PutMessage("PRINT LABELS Output Complete")
+                else:
+                    app.PutMessage("No output file selected for PRINT LABELS, nothing was saved")
+                del app
+                #====================================================================================================================================
+                return output_path, label_path
+        else:
+            app = win32.Dispatch('CT.Application')
+            app.PutMessage('No output file selected, nothing was saved')
+            del app   
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+wirelist.py
+import win32com.client as win32
+import pandas as pd
+import os
+from openpyxl import load_workbook
+from openpyxl.styles import Font, Border, Side, Alignment
+from openpyxl.utils import get_column_letter
+import os
+import utils
+
+class WireList ():
+    def __init__( self ):
+        pass
+
+    def run(self):
+        # set constants
+        #====================================================================================================================================
+        s_Report_Title = "Wire_List"
+        s_Default_Save_Path = "\\\\asdfiler2\\UserShares\\Zuken\\SimsLibrary\\Reports\\"
+        s_assy_attr_Assy_Num = "Additional Part ID"
+        s_dev_attr_Part_Num = "Additional Part ID"
+        s_wire_attr_Part_Num = "Additional Part ID"
+        s_Drawing_Name = "Ball Drawing Number"
+        s_Drawing_Rev = "Ball Revision Number"
+        s_Col_Header_Names = "WIRE NO.;FROM REF;FROM PIN;FROM PART;TO REF;TO PIN;TO PART;WIRE PART;SINGLE;TWIST;SHIELD;GAUGE;COLOR;STATUS"
+        s_Col_Line_No = 1
+        s_Col_From_Ref = 2
+        s_Col_From_Pin = 3
+        s_Col_From_Part = 4
+        s_Col_To_Ref = 5
+        s_Col_To_Pin = 6
+        s_Col_To_Part = 7
+        s_Col_Wire_Part = 8 
+        s_Col_Single = 9 
+        s_Col_Twist = 10
+        s_Col_Shield = 11
+        s_Col_Gauge = 12
+        s_Col_Color = 13
+        s_Col_Status = 14
+        s_Start_Row = 0
+        #====================================================================================================================================
+
+        # set objects
+        #====================================================================================================================================
+        app = win32.Dispatch('CT.Application')
+        app.PutMessage("Connected to E3.series - externally")
+        prj = app.CreateJobObject()
+        dev = prj.CreateDeviceObject()
+        dev2 = prj.CreateDeviceObject()
+        core = prj.CreatePinObject()
+        bundle = prj.CreateBundleObject()
+        pins_bundle = prj.CreateBundleObject()
+        pins_dev = prj.CreateDeviceObject()
+        parent_bundle = prj.CreateBundleObject()
+        devassy2 = prj.CreateDeviceObject()
+        connA = prj.CreateDeviceObject()
+        connB = prj.CreateDeviceObject()
+        pinA = prj.CreatePinObject()
+        pinB = prj.CreatePinObject()
+        mate_conn = prj.CreateDeviceObject()
+        mate_block = prj.CreateDeviceObject()
+        sym = prj.CreateSymbolObject()
+        sht = prj.CreateSheetObject()
+        #====================================================================================================================================
+
+        # more setup
+        #====================================================================================================================================
+        default_filename_full_path = s_Default_Save_Path + s_Report_Title + "_" + prj.GetName()
+        output_file_name = default_filename_full_path + ".txt"
+        app.PutMessage("Extracting Wire List data")
+        app.PutMessage("Working......  0%")
+        current_row = 0
+        #====================================================================================================================================
+
+        devinfo = prj.GetAllDeviceIds(None)
+        devcount = devinfo[0]
+        devids   = devinfo[1]
+        devids   = [x for x in devids if x is not None]
+        dev_total = len(devids)
+
+        columns = s_Col_Header_Names.split(';')
+        df = pd.DataFrame(columns=columns)
+
+
+        if devcount > 0:
+            # Assemblies first
+            for dev_index, devid in enumerate(devids):
+                dev.SetId(devid)
+
+                Number_of_statuses = 10
+                for fraction in range(1, Number_of_statuses):
+                    threshold = round(dev_total * fraction / Number_of_statuses)
+                    if dev_index == threshold:
+                        pct = round(100 * dev_index / dev_total)
+                        app.PutMessage(f"Working...... {pct}%")
+
+                if dev.IsCable() == 1 and dev.GetAssemblyId() == 0:
+                    coreInfo = dev.GetCoreIds(None)
+                    coreCount = coreInfo[0]
+                    coreIds   = coreInfo[1]
+                    # remove None entries if needed
+                    coreIds = [x for x in coreIds if x is not None]
+
+                    if coreCount > 0:
+                        for j in range(coreCount):
+                            coreId = coreIds[j]
+                            core.SetId(coreId)
+                            pinA.SetId(core.GetEndPinId(1))
+                            connA.SetId(pinA.GetId())
+                            pinB.SetId(core.GetEndPinId(2))
+                            connB.SetId(pinB.GetId())
+                            row = {
+                                "WIRE NO.":  current_row - s_Start_Row + 1,
+                                "FROM REF": f"{connA.GetLocation()}-{connA.GetName()}",
+                                "FROM PIN": pinA.GetName(),
+                                "FROM PART": connA.GetAttributeValue(s_dev_attr_Part_Num),
+                                "TO REF":  f"{connB.GetLocation()}-{connB.GetName()}",
+                                "TO PIN":  pinB.GetName(),
+                                "TO PART": connB.GetAttributeValue(s_dev_attr_Part_Num),
+                                "WIRE PART": dev.GetComponentAttributeValue(s_wire_attr_Part_Num),
+                                "SINGLE":    dev.GetName(),
+                                "TWIST":  "",
+                                "SHIELD": "",
+                                "GAUGE":  core.GetCrossSectionDescription(),
+                                "COLOR":  core.GetColourDescription(),
+                                "STATUS": ""
+                            }
+
+                            # Handle special "{4}" bundle condition for pinA
+                            if pinA.GetName() == "{4}":
+                                pins_bundle.SetId(pinA.GetId())
+                                pins_dev.SetId(pins_bundle.GetId())
+
+                                row["FROM REF"] = pins_dev.GetName()
+                                row["FROM PIN"] = pins_bundle.GetName()
+
+                            # Handle special "{4}" bundle condition for pinB
+                            if pinB.GetName() == "{4}":
+                                pins_bundle.SetId(pinB.GetId())
+                                pins_dev.SetId(pins_bundle.GetId())
+
+                                row["TO REF"] = pins_dev.GetName()
+                                row["TO PIN"] = pins_bundle.GetName()
+
+                            # Handle "wire not connected"
+                            if core.GetEndPinId(1) == 0 and core.GetEndPinId(2) == 0:
+                                row["STATUS"] = f"{dev.GetName()} - {core.GetName()}: Wire not connected"
+
+                            df.loc[len(df)] = row
+                            current_row += 1
+                    
+                    bundleInfo = dev.GetBundleIds(None)
+                    bundleCount = bundleInfo[0]
+                    bundleIds = bundleInfo[1]
+                    bundleIds   = [x for x in bundleInfo[1] if x is not None]
+
+                    if bundleCount > 0:
+                        for bundleId in bundleIds:
+
+                            # Select this bundle
+                            bundle.SetId(bundleId)
+
+                            # Get cores inside the bundle
+                            coreInfo = bundle.GetCoreIds(None)
+                            coreCount = coreInfo[0]
+                            coreIds = coreInfo[1]
+                            coreIds   = [x for x in coreInfo[1] if x is not None]
+
+                            if coreCount > 0:
+                                for coreId in coreIds:
+
+                                    core.SetId(coreId)
+
+                                    pinA_id = core.GetEndPinId(1)
+                                    pinA.SetId(pinA_id)
+                                    connA.SetId(pinA.GetId())
+
+                                    pinB_id = core.GetEndPinId(2)
+                                    pinB.SetId(pinB_id)
+                                    connB.SetId(pinB.GetId())
+                                    row = {
+                                        "WIRE NO.":  current_row - s_Start_Row + 1,
+                                        "FROM REF": f"{connA.GetLocation()}-{connA.GetName()}",
+                                        "FROM PIN": pinA.GetName(),
+                                        "FROM PART": connA.GetComponentAttributeValue(s_dev_attr_Part_Num),
+                                        "TO REF":  f"{connB.GetLocation()}-{connB.GetName()}",
+                                        "TO PIN":  pinB.GetName(),
+                                        "TO PART": connB.GetComponentAttributeValue(s_dev_attr_Part_Num),
+                                        "WIRE PART": dev.GetComponentAttributeValue(s_wire_attr_Part_Num),
+                                        "SINGLE":  "",
+                                        "TWIST":  "",
+                                        "SHIELD": "",
+                                        "GAUGE":  core.GetCrossSectionDescription(),
+                                        "COLOR":  core.GetColourDescription(),
+                                        "STATUS": ""
+                                    }
+
+                                    # Handle special "{4}" bundle condition for pinA
+                                    if pinA.GetName() == "{4}":
+                                        pins_bundle.SetId(pinA.GetId())
+                                        pins_dev.SetId(pins_bundle.GetId())
+
+                                        row["FROM REF"] = pins_dev.GetName()
+                                        row["FROM PIN"] = pins_bundle.GetName()
+
+                                    # Handle special "{4}" bundle condition for pinB
+                                    if pinB.GetName() == "{4}":
+                                        pins_bundle.SetId(pinB.GetId())
+                                        pins_dev.SetId(pins_bundle.GetId())
+
+                                        row["TO REF"] = pins_dev.GetName()
+                                        row["TO PIN"] = pins_bundle.GetName()
+
+                                    parent_id = bundle.GetParentBundleId()
+                                    parent_bundle.SetId(parent_id)
+                                    if parent_id > 0 and (parent_bundle.IsTwisted or parent_bundle.IsShield):
+
+                                        # Parent bundle is SHIELDED
+                                        if parent_bundle.IsShield():
+                                            if bundle.IsShield:
+                                                row["SHIELD"] = dev.GetName()
+                                            else:
+                                                row["SHIELD"] = dev.GetName()
+
+                                        # Parent bundle is TWISTED
+                                        elif parent_bundle.IsTwisted():
+
+                                            if bundle.IsShield:
+                                                row["SHIELD"] = dev.GetName()
+
+                                            elif bundle.IsTwisted:
+                                                row["TWIST"] = dev.GetName()
+
+                                            else:
+                                                row["SHIELD"] = dev.GetName()
+
+                                    # ----------------------------------------
+                                    # No parent bundle case
+                                    # ----------------------------------------
+                                    else:
+
+                                        if bundle.IsTwisted():
+                                            row["TWIST"] = dev.GetName()
+
+                                        if bundle.IsShield():
+                                            row["SHIELD"] = dev.GetName()
+
+
+                                    # ----------------------------------------
+                                    # Disconnected wire
+                                    # ----------------------------------------
+                                    if core.GetEndPinId(1) == 0 and core.GetEndPinId(2) == 0:
+                                        row["STATUS"] = f"{dev.GetName()} - {core.GetName()}: Wire not connected"
+                                    df.loc[len(df)] = row
+                                    current_row += 1
+
+
+        app.PutMessage(f"Working...... 100%")
+
+        drawing_no = prj.GetAttributeValue(s_Drawing_Name)
+        revision_no = prj.GetAttributeValue(s_Drawing_Rev)
+        app.PutMessage("Converting data from csv to excel")
+
+        # unset objects
+        #====================================================================================================================================
+        del dev
+        del prj
+        del app
+        #====================================================================================================================================
+
+
+
+        #====================================================================================================================================
+        #================================================Running csv to excel code===========================================================
+        #====================================================================================================================================
+        csv_path = output_file_name
+        drawing_no = drawing_no
+        revision_no = revision_no
+        save_path = str(csv_path[:-4]) + ".xlsx"
+        output_path = utils.ask_save_path(save_path)
+
+        if output_path != None:
+            print("CSV file:", csv_path)
+            print("Output file: ", output_path)
+            print("Drawing number: ", drawing_no)
+            print("Revision number: ", revision_no)
+
+            df_csv = df
+
+            df_template = pd.DataFrame([[""] * len(df_csv.columns)] * (5 + len(df_csv)))
+
+            # Convert template to object dtype to avoid assignment errors
+            df_template = df_template.astype(object)
+
+            df_template.iloc[4, 0:len(df_csv.columns)] = df_csv.columns
+            df_template.iloc[5 : 5 + len(df_csv), 0:len(df_csv.columns)] = df_csv.values
+
+            # Save back to the copied template file
+            df_template.to_excel(output_path, index=False, header=False)
+
+
+            template_column_widths = {'A': 16.0, 'B': 15.0, 'C': 12.0, 'D': 15.0, 'E': 15.0, 'F': 10.0, 'G': 15.0, 'H': 15.0, 'I': 10.0, 'J': 10.0, 'K': 10.0, 'L': 10.0, 'M': 12.0, 'N': 65.0}
+            wb = load_workbook(output_path)
+            ws = wb.active
+            thick = Border(left=Side(style="thick"),right=Side(style="thick"),top=Side(style="thick"),bottom=Side(style="thick"))
+            thin = Border(left=Side(style="thin"),right=Side(style="thin"),top=Side(style="thin"),bottom=Side(style="thin"))
+
+            last_row = 5 + len(df_csv)       
+            last_col = len(df_csv.columns)       
+            last_col_letter = get_column_letter(last_col) # Convert last column number to Excel letters (A, B, C...)
+            # Apply in-place filtering across all header columns
+            ws.auto_filter.ref = f"A5:{last_col_letter}{last_row}"
+            # 1. A1:A4 merged + bold
+            ws.merge_cells("A1:A4")
+            ws["A1"].value = "BAE Systems \n SMS \n P.O. Box 1062 \n Boulder, CO 80306"
+            ws["A1"].alignment = Alignment(vertical="center", horizontal="left", wrap_text=True)
+            ws["A1"].font = Font(bold=True, size=8, name="Arial")
+
+            # 2. B1:M4 merged + bold + size 18
+            ws.merge_cells("B1:M4")
+            ws["B1"].value = "Wirelist Table"
+            ws["B1"].alignment = Alignment(horizontal="center", vertical="center")
+            ws["B1"].font = Font(bold=True, size=18, name="Arial")
+
+            # 3. N1:N4 merged + bold + thick border
+            ws.merge_cells("N1:N4")
+            ws["N1"].value = f"Drawing No: {drawing_no} \n Revision: {revision_no}"
+            ws["N1"].alignment = Alignment(horizontal="right", vertical="center", wrap_text=True)
+            ws["N1"].font = Font(bold=True, size=8, name="Arial")
+
+            # Left‑alignment object
+            left_align = Alignment(horizontal="left", vertical="center")
+            start_row = 5
+            end_row = 5 + len(df_csv)   # df_csv is your pandas CSV DataFrame
+            for row in ws.iter_rows(min_row=start_row, max_row=end_row):
+                for cell in row:
+                    cell.font = Font(name="Arial", size=8)
+                    cell.alignment = left_align
+
+            for col_letter, width in template_column_widths.items():
+                if width is not None:      # some widths may be None
+                    ws.column_dimensions[col_letter].width = width
+
+            for row in ws.iter_rows(min_row=1, max_row=4, min_col=2, max_col=13):
+                for cell in row:
+                    cell.border = thick
+            for row in ws.iter_rows(min_row=1, max_row=4, min_col=14, max_col=14):
+                for cell in row:
+                    cell.border = thick
+            for row in ws.iter_rows(min_row=5, max_row=5, min_col=1, max_col=14):
+                for cell in row:
+                    cell.border = thin
+                    cell.font = Font(bold=True)
+            for row in ws.iter_rows(min_row=6, max_row=end_row, min_col=3, max_col=3):
+                for cell in row:
+                    cell.alignment = Alignment(horizontal="center")
+            for row in ws.iter_rows(min_row=6, max_row=end_row, min_col=6, max_col=6):
+                for cell in row:
+                    cell.alignment = Alignment(horizontal="center")
+            for row in ws.iter_rows(min_row=6, max_row=end_row, min_col=11, max_col=11):
+                for cell in row:
+                    cell.alignment = Alignment(horizontal="center")
+            for row in ws.iter_rows(min_row=6, max_row=end_row, min_col=12, max_col=12):
+                for cell in row:
+                    cell.alignment = Alignment(horizontal="center")
+            for row_idx in range(6, end_row + 1):
+                ws.row_dimensions[row_idx].height = 11.25 
+
+            ws.freeze_panes = "A6"   # Everything above A6 is frozen
+
+            utils.configurePrintArea(ws)
+            
+            wb.save(output_path)
+            print("Finished writing data into:", output_path)
+            utils.open_file_with_default_app(os.path.normpath(output_path))
+
+            #====================================================================================================================================
+            app = win32.Dispatch('CT.Application')
+            app.PutMessage("Wire List Script Output Complete")
+            del app
+            #====================================================================================================================================
+            return output_path
+        else:
+            app = win32.Dispatch('CT.Application')
+            app.PutMessage('No output file selected, nothing was saved')
+            del app
+
+
+
+
+
+
+
+
+endtoend.py
+import win32com.client as win32
+import pandas as pd
+import os
+from openpyxl import load_workbook
+from openpyxl.styles import Font, Border, Side, Alignment
+from openpyxl.utils import get_column_letter, column_index_from_string
+import os
+import sys
+import re
+import os
+import sys
+import subprocess
+import platform
+import utils
+
+class EndtoEnd ():
+    def __init__(self):
+        pass
+
+    def run(self):
+        # set constants
+        #====================================================================================================================================
+        s_Report_Title = "End_to_End_Test"
+        s_Default_Save_Path = "\\\\asdfiler2\\UserShares\\Zuken\\SimsLibrary\\Reports\\"
+        s_assy_attr_Assy_Num = "Additional Part ID"
+        s_Row_Drawing_Name = 1
+        s_Col_Drawing_Name = 9
+        s_Drawing_Name = "Ball Drawing Number"
+        s_Drawing_Rev = "Ball Revision Number"
+        s_Start_Row = 6
+        s_Col_Line_No = 1
+        s_Col_Ref = 2
+        s_Col_Pin = 3
+        s_Col_Part = 4
+        s_Col_To_Ref = 5
+        s_Col_To_pin = 6
+        s_Col_To_Part = 7
+        s_Col_Signal = 8
+        s_Col_Status = 9
+        #====================================================================================================================================
+
+        # set objects
+        #====================================================================================================================================
+        app = win32.Dispatch('CT.Application')
+        prj = app.CreateJobObject()
+        dev = prj.CreateDeviceObject()
+        s_Drawing_Name = "Ball Drawing Number"
+        s_Drawing_Rev = "Ball Revision Number"
+        s_Col_Header_Names = "WIRE NO.;FROM REF;FROM PIN;FROM PART;TO REF;TO PIN;TO PART;SIGNAL;STATUS"
+        tar_dev = prj.CreateDeviceObject()
+        connFROM = prj.CreateDeviceObject()
+        connA = prj.CreateDeviceObject()
+        blockA = prj.CreateDeviceObject()
+        connB = prj.CreateDeviceObject()
+        blockB = prj.CreateDeviceObject()
+        mated_conn = prj.CreateDeviceObject()
+        pinFROM = prj.CreatePinObject()
+        pinA = prj.CreatePinObject()
+        pinB = prj.CreatePinObject()
+        mated_pin = prj.CreatePinObject()
+        core = prj.CreatePinObject()
+        sig = prj.CreateSignalObject()
+        #====================================================================================================================================
+
+        # more setup
+        #====================================================================================================================================
+        default_filename_full_path = s_Default_Save_Path + s_Report_Title + "_" + prj.GetName()
+        output_file_name = default_filename_full_path + ".txt"
+        app.PutMessage("Extracting End to End data")
+        app.PutMessage("Working......  0%")
+        current_row = s_Start_Row
+        #====================================================================================================================================
+
+
+        devinfo = prj.GetAllDeviceIds(None)
+        devcount = devinfo[0]
+        devids   = devinfo[1]
+        devids   = [x for x in devids if x is not None]
+        dev_total = len(devids)
+
+        columns = s_Col_Header_Names.split(';')
+        df = pd.DataFrame(columns=columns)
+
+
+        reported_pins = []
+        sigInfo = prj.GetSignalIds(None)
+        sig_count = sigInfo[0]
+        sigids = sigInfo[1]
+        sigids = [x for x in sigids if x is not None]
+
+        for sig_index, sigid in enumerate(sigids):
+            sig.SetId(sigid)
+
+
+            Number_of_statuses = 10
+            for fraction in range(1, Number_of_statuses):
+                threshold = round(sig_count * fraction / Number_of_statuses)
+                if sig_index == threshold:
+                    pct = round(100 * sig_index / sig_count)
+                    app.PutMessage(f"Working...... {pct}%")
+            
+            pinInfo = sig.GetPinIds(None)
+            pin_count = pinInfo[0]
+            pinids = pinInfo[1]
+            pinids = [x for x in pinids if x is not None]
+
+            reported_pins = []
+            if pin_count > 1 and sig.GetName() != "SPARE":
+                for j in range(pin_count):
+                    pinA.SetId(pinids[j])
+
+                    if not (pinA.GetId() in reported_pins or pinA.GetOriginalId() in reported_pins):
+                        connA.SetId(pinA.GetId())
+                        blockA.SetId(connA.GetBlockId())
+                        pinB.SetId(pinA.GetConnectedPinId())
+                        connB.SetId(pinB.GetId())
+                        blockB.SetId(connB.GetBlockId())
+                        bool_IsConnector = connA.IsConnector() == 1
+                        bool_IsMatedToBox = blockB.IsBlock() == 1
+                        bool_MatedBoxNoSigEquiv = pinB.GetLogicalEquivalenceID() == 0
+                        bool_NoSigEquiv = pinA.GetLogicalEquivalenceID() == 0
+                        bool_IsStandardDevice = connA.IsDevice() == 1
+
+                        if (bool_IsConnector and bool_IsMatedToBox and bool_MatedBoxNoSigEquiv) or (bool_IsStandardDevice and bool_NoSigEquiv):
+                            if len(reported_pins) == 0:
+                                pinFROM.SetId(pinA.GetId())
+                                connFROM.SetId(connA.GetId())
+
+                            else:
+                                row = {
+                                "WIRE NO." : current_row - s_Start_Row + 1,
+                                "FROM REF" : f"{connFROM.GetLocation()}-{connFROM.GetName()}",
+                                "FROM PIN" : pinFROM.GetName(),
+                                "FROM PART" : connFROM.GetComponentName(),
+                                "TO REF" : f"{connA.GetLocation()}-{connA.GetName()}",
+                                "TO PIN" : pinA.GetName(),
+                                "TO PART" : connA.GetComponentName(),
+                                "SIGNAL" : sig.GetName(),
+                                "STATUS" : ""
+                                }
+                                df.loc[len(df)] = row
+                                current_row += 1
+                            reported_pins.append(pinA.GetId())
+            if len(reported_pins) == 1 and 1 == 0:
+                row["FROM REF"] = f"{connFROM.GetLocation()}-{connFROM.GetName()}"
+                row["FROM PIN"] = pinFROM.GetName()
+                row["FROM PART"] = connFROM.GetComponentName()
+                row["SIGNAL"] = sig.GetName()
+                df.loc[len(df)] = row
+                current_row += 1
+
+
+        app.PutMessage(f"Working...... 100%")
+        drawing_no = prj.GetAttributeValue(s_Drawing_Name)
+        revision_no = prj.GetAttributeValue(s_Drawing_Rev)
+        app.PutMessage("Converting data from csv to excel")
+
+        # unset objects
+        #====================================================================================================================================
+        del dev
+        del prj
+        del app
+        #====================================================================================================================================
+
+        #====================================================================================================================================
+        #================================================Running csv to excel code===========================================================
+        #====================================================================================================================================
+
+        csv_path = output_file_name
+        drawing_no = drawing_no
+        revision_no = revision_no
+        save_path = str(csv_path[:-4]) + ".xlsx"
+        output_path = utils.ask_save_path(save_path)
+
+        if output_path != None:
+            print("CSV file:", csv_path)
+            print("Output file: ", output_path)
+            print("Drawing number: ", drawing_no)
+            print("Revision number: ", revision_no)
+
+            df_csv = df
+
+            df_template = pd.DataFrame([[""] * len(df_csv.columns)] * (5 + len(df_csv)))
+
+            # Convert template to object dtype to avoid assignment errors
+            df_template = df_template.astype(object)
+
+            df_template.iloc[4, 0:len(df_csv.columns)] = df_csv.columns
+            df_template.iloc[5 : 5 + len(df_csv), 0:len(df_csv.columns)] = df_csv.values
+
+            # Save back to the copied template file
+            df_template.to_excel(output_path, index=False, header=False)
+
+
+            template_column_widths = {'A': 18.0, 'B': 15.0, 'C': 12.0, 'D': 35.0, 'E': 15.0, 'F': 10.0, 'G': 40.0, 'H': 12.0, 'I': 20.0}
+
+            wb = load_workbook(output_path)
+            ws = wb.active
+            thick = Border(left=Side(style="thick"),right=Side(style="thick"),top=Side(style="thick"),bottom=Side(style="thick"))
+            thin = Border(left=Side(style="thin"),right=Side(style="thin"),top=Side(style="thin"),bottom=Side(style="thin"))
+
+            last_row = 5 + len(df_csv)       
+            last_col = len(df_csv.columns)       
+            last_col_letter = get_column_letter(last_col) # Convert last column number to Excel letters (A, B, C...)
+            # Apply in-place filtering across all header columns
+            ws.auto_filter.ref = f"A5:{last_col_letter}{last_row}"
+            # 1. A1:A4 merged + bold
+            ws.merge_cells("A1:A4")
+            ws["A1"].value = "BAE Systems \n SMS \n P.O. Box 1062 \n Boulder, CO 80306"
+            ws["A1"].alignment = Alignment(vertical="center", horizontal="left", wrap_text=True)
+            ws["A1"].font = Font(bold=True, size=8, name="Arial")
+
+            # 2. B1:M4 merged + bold + size 18
+            ws.merge_cells("B1:H4")
+            ws["B1"].value = "End-to-End Test"
+            ws["B1"].alignment = Alignment(horizontal="center", vertical="center")
+            ws["B1"].font = Font(bold=True, size=18, name="Arial")
+
+            # 3. N1:N4 merged + bold + thick border
+            ws.merge_cells("I1:I4")
+            ws["I1"].value = f"Drawing No: {drawing_no} \n Revision: {revision_no}"
+            ws["I1"].alignment = Alignment(horizontal="right", vertical="center", wrap_text=True)
+            ws["I1"].font = Font(bold=True, size=8, name="Arial")
+
+            # Left‑alignment object
+            left_align = Alignment(horizontal="left", vertical="center")
+            start_row = 5
+            end_row = 5 + len(df_csv)   # df_csv is your pandas CSV DataFrame
+            for row in ws.iter_rows(min_row=start_row, max_row=end_row):
+                for cell in row:
+                    cell.font = Font(name="Arial", size=8)
+                    cell.alignment = left_align
+
+            for col_letter, width in template_column_widths.items():
+                if width is not None:      # some widths may be None
+                    ws.column_dimensions[col_letter].width = width
+
+            for row in ws.iter_rows(min_row=1, max_row=4, min_col=1, max_col=1):
+                for cell in row:
+                    cell.border = thick
+            for row in ws.iter_rows(min_row=1, max_row=4, min_col=2, max_col=8):
+                for cell in row:
+                    cell.border = thick
+            for row in ws.iter_rows(min_row=1, max_row=4, min_col=9, max_col=9):
+                for cell in row:
+                    cell.border = thick
+            for row in ws.iter_rows(min_row=5, max_row=5, min_col=1, max_col=9):
+                for cell in row:
+                    cell.font = Font(bold=True)
+                    cell.border = thin
+            for row in ws.iter_rows(min_row=6, max_row=end_row, min_col=3, max_col=3):
+                for cell in row:
+                    cell.alignment = Alignment(horizontal="center")
+            for row in ws.iter_rows(min_row=6, max_row=end_row, min_col=6, max_col=6):
+                for cell in row:
+                    cell.alignment = Alignment(horizontal="center")
+            for row_idx in range(6, end_row + 1):
+                ws.row_dimensions[row_idx].height = 11.25
+
+
+            #===================================================================================
+            #=====================BEGIN SORTING A-Z then ascending==============================
+            #===================================================================================
+            last_column = "I"
+
+            match_column_i = (column_index_from_string("B")) - 1 # minus one because cell iteration start at 0 in loops
+
+            match_relationships = {}
+            for r in range(6, ws.max_row + 1):
+
+                match_cell = ws[r][match_column_i].value # temporary key
+                    
+                key = str(match_cell)
+                value = f"{str(r)}"
+                if key not in match_relationships and key:
+                    match_relationships[key] = [value]
+                else:
+                    match_relationships[key].append(value)
+
+            # sort alphabetical but ascending
+            sorted_dict = dict(sorted(match_relationships.items(), key=lambda x: utils.endtoend_sort_key(x[0])))
+
+
+            swap_rows = []
+            values = list(sorted_dict.values())
+            r = 5
+            
+            for i in range(len(values)):
+                v = values[i]
+                for j in range(len(v)):
+                    old_row = v[j]
+                    r += 1
+
+                    swap_rows.append([int(old_row), int(r)])
+
+
+            ws_copy = wb.copy_worksheet(ws)
+
+            i = 0
+            for r in range(6, ws.max_row + 1):
+
+                old = int(swap_rows[i][0])
+                new = int(swap_rows[i][1])
+                utils.write_row_from_copy(ws, ws_copy, old, new) # src dest
+                i += 1
+                
+            for name in wb.sheetnames:
+                if 'Copy' in name:
+                    del wb[name]
+
+            ws.freeze_panes = "A6"   # Everything above A6 is frozen
+
+            utils.configurePrintArea(ws)
+            
+            wb.save(output_path)
+            print("Finished writing data into:", output_path)
+            print(output_path)
+            output_path_normalized = os.path.normpath(output_path)
+            utils.open_file_with_default_app(output_path_normalized)
+            #===================================================================================
+            #===================================END SORTING=====================================
+            #===================================================================================
+
+            app = win32.Dispatch('CT.Application')
+            app.PutMessage("End to End Script Output Complete")
+            del app
+            return output_path
+        else:
+            app = win32.Dispatch('CT.Application')
+            app.PutMessage('No output file selected, nothing was saved')
+            del app
