@@ -1,223 +1,1340 @@
-# Uses openpyxl to manipulate the Excel spreadsheets.
-# Note: This tool uses 1-based indexing, not 0-based.
-#
-# The spreadsheets that run through this depend on these requirements:
-#   1) The header row MUST always be row 5 in the spreadsheet!
-#   2) The individual cell values must be text and cannot contain spaces or commas.
-#   3) Cell A5 MUST contain "LINE NO." for the cable list files.
-#   4) Cell A5 MUST contain "WIRE NO." for the wire list files.
-#   5) Cell A5 MUST contain ? for the mistery files.
-#
-# Brad Brookes - (C) BAE Systems, March 2026
-import openpyxl
-import textwrap
-from wire_table import WireTable
-import logging
-LOGGER_NAME = "ZukenChangeAnalyzerLog"   # Just a name. When used with the getLogger() method,
-logger = logging.getLogger(LOGGER_NAME)
+"""Zuken Mega Script — modular launcher for sixteen tools.
 
-###############################################################################
-class WorkSheet:
-    """ WorkSheet class 'has a' openpyxl Worksheet object. """
-    HEADER_ROW = 5      # Sheet's header row. Sheets have 1-based index of rows.
-    MIN_COLUMNS = 8     # If less than this, then this sheet is invalid.
-    MAX_COLUMNS = 15    # Arbitrary number.
-    MAX_ROWS = 10000     # Arbitrary value to prevent runaway
+The original tool modules live independently in tool_scripts/. No E3/SQL
+workflows were rewritten for this refactor. On demand, the launcher copies
+source files to a stable runtime folder, preserves user edits and starts one
+tool at a time. The single-file Windows EXE bundles the tool_scripts/ data.
 
-    def __init__(self, cfg_tables, detection_mode="Default Detection"):
-        self.cfg_tables = cfg_tables
-        self.cols = 0
-        self.rows = 0
-        self.mode = detection_mode
-        self.table_type = ''
+Open `Zuken_Mega_Script.py` to use the GUI. Command-line options:
+    python Zuken_Mega_Script.py --self-test       # compile/validate all tool files
+    python Zuken_Mega_Script.py --extract         # extract scripts WITHOUT running them
+    python Zuken_Mega_Script.py --list-tools      # print tool names / paths
+    python Zuken_Mega_Script.py --list-templates  # show blank workbook templates
+    python Zuken_Mega_Script.py --verify-templates # validate original templates
 
-    def loadWorksheet(self, work_sheet, file_path):
-        """ Load the WorkSheet class object from an openpyxl Worksheet object that
-        was read from a file.
-        """
-        self.ws = work_sheet
-        self.file_path = file_path
+Selected Excel paths are optional. Without one, the tool's own file picker opens.
+Test E3 / SQL changes in a saved project copy; check with DB admins before using
+production database tools. This launcher has NOT been run against live E3/SQL.
+"""
+from __future__ import annotations
+import hashlib
+import zipfile
+import json
+import os
+from pathlib import Path
+import shutil
+import subprocess
+import sys
+import multiprocessing
+# PyInstaller requires this before GUI and third-party imports. It diverts
+# multiprocessing worker launches away from the application's main menu.
+if getattr(sys, 'frozen', False):
+    multiprocessing.freeze_support()
+import tempfile
+import tkinter as tk
+from tkinter import filedialog, messagebox
 
-    def generateRowTable(self):
-        """ This must be called after the initial load AND after any updates to a worksheet.
-        Get the worksheet from the workbook, determine its type, create a new
-        row table with sheet row 5 (headers) being the first row enter, dict[0].
-        The worksheet column and row  indexes are 1-based, not 0-based. Starting with
-        the header row, insert all the rows into the row table. """
-        self._getSheetType()
-        self._calcSheetSize()    # Scan and get number of rows in sheet.
-        self._loadRowTable()
+# IMPORTANT FOR PYINSTALLER:
+# The separate tool modules live in tool_scripts/ and are bundled as data files.
+# PyInstaller cannot inspect data-file imports, so modules imported only
+# by the tools are otherwise omitted from a --onefile executable.
+# In V22, this caused ImportError: cannot import name 'ttk' from 'tkinter'.
+# Keep these *real, static imports* in the launcher (do not move them into an
+# embedded string). They make the standard-library dependencies discoverable.
+import tkinter.ttk
+import tkinter.scrolledtext
+import tkinter.simpledialog
+from tkinter import ttk, scrolledtext
+import argparse
+import contextlib
+import posixpath
+import html
+import webbrowser
+import decimal
+import xml.etree.ElementTree
+import ctypes
+from ctypes import wintypes
+import dataclasses
+import difflib
+import gc
+import inspect
+import io
+import math
+import re
+import statistics
+import threading
+import time
+import traceback
+import warnings
+from collections import Counter, defaultdict, deque
 
-    def _getSheetType(self):
-        """ Base the sheet type on the text in 'B1' of the title row.
-            WARNING: This value may change! I was using A5, but it changed.
-            (They other way was to count columns.)
-        """
-        logging.info(f"Loading workbook: {self.file_path}")
-        # commented code below because manual sheet detection added for this reason
-        # if self.ws['B1'] == None or self.ws['B1'].value == None:
-        #     self.table_type = 'NONE'
-        #     logging.error('Value in cell B1 is None. Unknown type of spreadsheet!')
-        #     raise ValueError("Unknown type of List Spreadsheet!")
-        
-        if self.mode == "Default Detection":
-            # Print-label exports can have a blank B1. Treat titles as optional
-            # and use the existing print-label signature before checking B1.
-            title = str(self.ws['B1'].value or '')
-            print_title = str(self.ws['A1'].value or '')
-            if 'Cable' in title:
-                self.table_type = 'cable'
-            elif 'Wire' in title:
-                self.table_type = 'wire'
-            elif 'End' in title:
-                self.table_type = 'end2end'
-            elif 'PRINT' in print_title.upper() or self.ws['X1'].value is not None:
-                self.table_type = 'print'
-            else:
-                raise ValueError(
-                    "Cannot detect the Zuken report type from this workbook. "
-                    "Choose Wire List, Cable Table, Print Label, or End to End explicitly."
-                )
-        elif self.mode == "Wire List":
-            self.table_type = 'wire'
-        elif self.mode == "Cable Table":
-            self.table_type = 'cable'
-        elif self.mode == "Print Label":
-            self.table_type = 'print'
-        elif self.mode == "End to End":
-            self.table_type = 'end2end'
+
+def _pyinstaller_discover_embedded_third_party_imports():
+    """PyInstaller discovers these imports statically; never call this helper.
+
+    Importing the actual Windows E3/DB modules eagerly would break simple GUI
+    usage on machines where a particular tool is not installed. The functions
+    in tool_scripts/ import them when their respective tool runs.
+    """
+    import openpyxl
+    import openpyxl.utils
+    import pythoncom
+    import pyodbc
+    import win32com.client
+    import win32timezone
+    import e3series
+    import pdfplumber
+    import pdfminer.high_level
+
+from datetime import datetime
+
+SUITE_VERSION = "ZUKEN-MEGA-V32-CHANGE-ANALYZER-2026-11-25"
+PALETTE = {
+    "white": "#FFFFFF", "pale": "#EAF4FF", "panel": "#F5FAFF",
+    "border": "#D4E3F4", "blue": "#2381CF", "blue_hover": "#1466B2",
+    "text": "#203B55", "muted": "#627E99", "disabled": "#B8CADE",
+}
+
+def running_as_packaged_exe() -> bool:
+    """Recognize the actual executable, not only the optional sys.frozen flag.
+
+    The previous menu loop happened when a packaged child was mistakenly
+    treated as a Python interpreter and launched as [sys.executable, file.py].
+    A onefile exe does not interpret file.py: it starts the menu again.
+    """
+    if bool(getattr(sys, 'frozen', False)) or bool(getattr(sys, '_MEIPASS', None)):
+        return True
+    if sys.platform != 'win32':
+        return False
+    # Normalize either Windows or POSIX-style separators for reliability.
+    basename = str(sys.executable).replace('\\', '/').rsplit('/', 1)[-1].casefold()
+    if not basename.endswith('.exe'):
+        return False
+    stem = basename[:-4]
+    # Python itself is also an .exe; only non-interpreter executables count.
+    return stem not in {
+        'python', 'pythonw', 'py', 'pyw', 'python3', 'python3w',
+    } and not stem.startswith(('python3.', 'python3_'))
+
+
+def diagnostics_directory() -> Path:
+    """Fixed, discoverable location independent of EXE extraction folder."""
+    directory = Path(tempfile.gettempdir()) / 'E3_Mega_Tools_V26_Diagnostics'
+    directory.mkdir(parents=True, exist_ok=True)
+    return directory
+
+
+# A frozen subprocess must identify its tool even if argv is dropped or
+# altered by a bootloader / wrapper. These keys are deliberately app-specific.
+EXE_TOOL_ENV = 'E3_MEGA_TOOLS_CHILD_ID'
+EXE_ARGS_ENV = 'E3_MEGA_TOOLS_CHILD_ARGS_JSON'
+
+# Existing Tkinter TOP-LEVEL tools launch inside the current EXE. This prevents a
+# second launcher process from appearing when a PyInstaller child launch
+# loses its role. Internal two-stage workers remain separate where the
+# existing tool code explicitly requires a fresh E3/SQL process.
+# The wxPython-based Zuken Script Runner and Change Analyzer use separate dispatcher workers
+# instead of mixing wx.App.MainLoop() with Tkinter in one process.
+FROZEN_INPROCESS_TOOLS = frozenset({
+    'header', 'signals', 'pin', 'cable_maker', 'cable_placer',
+    'block_maker', 'block_pin_arranger', 'block_pin_formatter',
+    'block_signal_adder',
+    'excel_formatter', 'excel_diff', 'missing_number_finder',
+    'eicd_to_excel', 'excel_to_pdf',
+})
+
+# These two workflows show their own final error dialog. If a worker fails,
+# the main Mega window must NOT present a second generic startup report after
+# the user has already closed the original error dialog.
+TOOLS_WITH_OWN_ERROR_DIALOG = frozenset({'block_maker', 'block_pin_arranger', 'block_pin_formatter'})
+
+
+def should_show_launcher_error(key, *, error, rc, windows_opened, elapsed):
+    """Keep the original handled error; show a fallback only for unhandled failures."""
+    # Closing a file picker (or exiting a quick one-shot script) is not a
+    # crash. No artificial elapsed-time or window-count threshold is valid.
+    if error is None and not rc:
+        return False
+    # These tools catch operational errors and display their own dialog. Their
+    # nonzero return code is NOT a second failure requiring another popup.
+    # A Python exception escaping into the launcher still deserves a report.
+    if key in TOOLS_WITH_OWN_ERROR_DIALOG and error is None:
+        return False
+    return True
+
+
+def trace_exe_start(event: str, **details) -> None:
+    """Write durable diagnostics to the Windows temporary directory.
+
+    Avoid resolving runtime_directory here: when the EXE was incorrectly
+    identified, old log locations moved and the user couldn't find the log.
+    """
+    try:
+        root = diagnostics_directory()
+        with (root / 'launcher_debug.log').open('a', encoding='utf-8', errors='replace') as stream:
+            entry = {'at': datetime.now().isoformat(timespec='seconds'),
+                     'event': event, 'version': SUITE_VERSION,
+                     'pid': os.getpid(), 'sys_frozen': bool(getattr(sys,'frozen',False)),
+                     'packaged_exe': running_as_packaged_exe(),
+                     'argv': sys.argv[:12], 'tool_env': os.environ.get(EXE_TOOL_ENV),
+                     'exe': sys.executable,
+                     'meipass': str(getattr(sys, '_MEIPASS', ''))}
+            entry.update(details)
+            stream.write(json.dumps(entry, ensure_ascii=False, default=str) + '\n')
+    except Exception:
+        # Do not block legitimate work due to a noncritical diagnostic failure.
+        pass
+
+
+# Sixteen launchable tools, including two separate wxPython tools.
+TOOLS = {
+    "header": {"name": "Header Formatter", "description": "Drag to order Location, Function, Agile and Designation", "entry": "header_formatter/header_formatter.py", "tab": "drawing", "workbook": None},
+    "signals": {"name": "Signal Mover", "description": "Center, edge, cable line and ±0.10 nudging", "entry": "signal_mover/signal_mover.py", "tab": "drawing", "workbook": None},
+    "pin": {"name": "Cable Pin Spacer", "description": "Transfer pin spacing and format text", "entry": "cable_pin_spacer/main.py", "tab": "drawing", "workbook": None},
+    "cable_maker": {"name": "Cable Maker", "description": "Create a cable component in the E3 library / SQL", "entry": "cable_maker/cable_maker.py", "tab": "excel", "workbook": "cable"},
+    "cable_placer": {"name": "Cable Placer", "description": "Place cable views and optionally shields / twists", "entry": "cable_placer/cable_placer.py", "tab": "excel", "workbook": "cable"},
+    "block_maker": {"name": "Block Maker", "description": "Build blocks, then run its separate text formatter", "entry": "block_maker/launcher.py", "tab": "excel", "workbook": "block_maker"},
+    "block_pin_arranger": {"name": "Block Pin Arranger", "description": "Arrange split block pins using its own workbook", "entry": "block_pin_arranger/block_pin_arranger.py", "tab": "excel", "workbook": "pin_arranger"},
+    "block_pin_formatter": {"name": "Block Pin Formatter", "description": "Format existing pins without moving them", "entry": "block_pin_formatter/block_pin_formatter.py", "tab": "excel", "workbook": "pin_arranger"},
+    "block_signal_adder": {"name": "Block Signal Adder", "description": "Apply local signal names from its own workbook", "entry": "block_signal_adder/block_signal_adder.py", "tab": "excel", "workbook": "signal"},
+    "excel_formatter": {"name": 'Excel Formatter', "description": 'Format pasted PDF/Excel tables and pin lists', "entry": "misc_tools/excel_formatter.py", "tab": "misc", "workbook": None},
+    "excel_diff": {"name": 'Excel Diff', "description": 'Compare two Excel or CSV files; HTML and CSV report', "entry": "misc_tools/excel_diff.py", "tab": "misc", "workbook": None},
+    "missing_number_finder": {"name": 'Missing Number Finder', "description": 'Find the first gap in a list of numbers', "entry": "misc_tools/missing_number_finder.py", "tab": "misc", "workbook": None},
+    "eicd_to_excel": {"name": 'EICD to Excel', "description": 'Fill a Block Maker workbook from an EICD PDF', "entry": "misc_tools/eicd_to_excel.py", "tab": "misc", "workbook": None},
+    "excel_to_pdf": {"name": 'Excel to PDF', "description": 'Export multiple Excel workbooks using Microsoft Excel', "entry": "misc_tools/excel_to_pdf.py", "tab": "misc", "workbook": None},
+    "zuken_script_runner": {"name": "Zuken Script Runner", "description": "Generate standard reports from the open E3 project", "entry": "zuken_script_runner/appmain.py", "tab": "runner", "workbook": None},
+    "change_analyzer": {"name": "Change Analyzer", "description": "Compare old and new Zuken report workbooks", "entry": "change_analyzer/AppMain.py", "tab": "misc", "workbook": None},
+}
+
+WORKBOOKS = {
+    "cable": {"label": "Cable Maker / Placer", "note": "Shared cable workbook"},
+    "block_maker": {"label": "Block Maker", "note": "Its own workbook"},
+    "pin_arranger": {"label": "Pin Arranger / Formatter", "note": "Shared pin-layout workbook"},
+    "signal": {"label": "Block Signal Adder", "note": "Its own workbook"},
+}
+
+# Original blank workbook templates live in ./templates, next to Zuken_Mega_Script.py.
+# build_exe.py passes these four files to PyInstaller as bundled data.
+# In a frozen exe they are read from sys._MEIPASS / templates.
+# Download always writes an exact byte copy, preserving formulas and VBA macros.
+# Bundled templates are the only source of truth; user imports are not supported.
+TEMPLATE_GROUPS = {
+    "cable": {"title": "Cable Maker / Placer", "description": "Cable assembly and connector layout workbook", "filename": "Cable_Template.xlsx"},
+    "block_maker": {"title": "Block Maker", "description": "Block creation workbook", "filename": "Block_Maker_Template.xlsm"},
+    "pin_arranger": {"title": "Pin Arranger / Formatter", "description": "Block pin-layout workbook", "filename": "Block_Pin_Arranger_Template.xlsm"},
+    "signal": {"title": "Block Signal Adder", "description": "Local signal assignment workbook", "filename": "Block_Signal_Adder_Template.xlsm"},
+}
+
+# Tool code now lives in individual, editable .py files under tool_scripts/.
+# Keep the original source hashes and runtime install behavior unchanged.
+from tool_sources import SOURCE_FILES
+
+def source_digest(source: str) -> str:
+    return hashlib.sha256(source.encode('utf-8')).hexdigest()
+
+
+def runtime_directory() -> Path:
+    """Use a stable, writable tool folder in EXE mode; preserve .py behavior."""
+    if running_as_packaged_exe():
+        home = Path(os.environ.get('LOCALAPPDATA') or Path.home())
+        target = home / 'E3_Mega_Runtime_V26'
+        target.mkdir(parents=True, exist_ok=True)
+        # Recover the previous pin-identity state automatically when upgrading.
+        # Do not rewrite or delete anything from the previous installation.
+        for filename in ('main_recovery.json', 'main_pin_identity.json'):
+            dst = target / 'cable_pin_spacer' / filename
+            if dst.exists():
+                continue
+            # Newest previous runtime first; never overwrite existing recovery data.
+            for old_version in ('V25', 'V24', 'V23', 'V22', 'V21', 'V20', 'V19', 'V18', 'V13'):
+                src = home / ('E3_Mega_Runtime_' + old_version) / 'cable_pin_spacer' / filename
+                if src.is_file():
+                    try:
+                        dst.parent.mkdir(parents=True, exist_ok=True)
+                        shutil.copy2(src, dst)
+                        break
+                    except OSError:
+                        continue
+        return target
+    preferred = Path(__file__).resolve().parent / 'E3_Mega_Runtime_V26'
+    try:
+        preferred.mkdir(parents=True, exist_ok=True)
+        with tempfile.NamedTemporaryFile(dir=str(preferred), delete=True):
+            pass
+        return preferred
+    except OSError:
+        home = Path(os.environ.get('LOCALAPPDATA') or Path.home())
+        fallback = home / 'E3_Mega_Runtime_V26'
+        fallback.mkdir(parents=True, exist_ok=True)
+        return fallback
+
+
+def prefs_file() -> Path:
+    folder = Path(os.environ.get('LOCALAPPDATA') or Path.home()) / 'E3_Mega_Tools'
+    folder.mkdir(parents=True,exist_ok=True)
+    return folder / 'prefs.json'
+
+
+def read_prefs() -> dict:
+    try:
+        data=json.loads(prefs_file().read_text(encoding='utf-8'))
+        if isinstance(data,dict):
+            return {key:str(data.get(key,'')).strip() for key in WORKBOOKS}
+    except (OSError,ValueError,TypeError):
+        pass
+    return {key:'' for key in WORKBOOKS}
+
+
+def write_prefs(data: dict) -> None:
+    dest=prefs_file()
+    tmp=dest.with_suffix('.tmp')
+    tmp.write_text(json.dumps({k:data.get(k,'') for k in WORKBOOKS}, indent=2)+'\n',encoding='utf-8')
+    os.replace(tmp,dest)
+
+
+def validate_excel_template(path: Path) -> None:
+    """Check the Excel container but NEVER recalculate or rewrite the workbook."""
+    if path.suffix.lower() not in ('.xlsx', '.xlsm'):
+        raise ValueError('Choose an Excel .xlsx or .xlsm template.')
+    if not path.is_file():
+        raise FileNotFoundError(str(path))
+    if not zipfile.is_zipfile(path):
+        raise ValueError('The selected file is not a valid Excel workbook (.xlsx/.xlsm).')
+    try:
+        with zipfile.ZipFile(path,'r') as archive:
+            required = {'[Content_Types].xml','xl/workbook.xml'}
+            if not required.issubset(archive.namelist()):
+                raise ValueError('Missing Excel workbook files; choose a genuine template.')
+            if archive.testzip() is not None:
+                raise ValueError('The selected Excel template is damaged.')
+    except zipfile.BadZipFile as exc:
+        raise ValueError('The selected Excel template is damaged.') from exc
+
+
+def template_source_directories() -> tuple[Path, ...]:
+    """Read original templates only from the application source/bundle.
+
+    In a PyInstaller executable, only packaged templates under _MEIPASS are
+    accepted. This deliberately ignores old user-imported template overrides
+    and loose files beside the executable. In Python source mode, templates
+    are maintained in the project's templates/ folder.
+    """
+    if running_as_packaged_exe():
+        bundle_dir = getattr(sys, '_MEIPASS', None)
+        return (Path(bundle_dir) / 'templates',) if bundle_dir else ()
+    return (Path(__file__).resolve().parent / 'templates',)
+
+
+def get_template_path(key: str) -> Path | None:
+    """Return only the original template bundled with the application."""
+    if key not in TEMPLATE_GROUPS:
+        raise KeyError(key)
+    filename = TEMPLATE_GROUPS[key]['filename']
+    for directory in template_source_directories():
+        candidate = directory / filename
+        if candidate.is_file():
+            return candidate
+    return None
+
+
+def save_template_copy(key: str, output_path: Path) -> Path:
+    """Write an exact workbook copy, preserving formatting, formulas, macros."""
+    if key not in TEMPLATE_GROUPS:raise KeyError(key)
+    output_path=Path(output_path)
+    source=get_template_path(key)
+    if source is None:
+        raise FileNotFoundError('No original template found in the templates folder for '+TEMPLATE_GROUPS[key]['title'])
+    validate_excel_template(source)
+    if output_path.suffix.lower()!=source.suffix.lower():
+        raise ValueError('Keep the template extension '+source.suffix+' when saving.')
+    if output_path.resolve() == source.resolve():
+        raise ValueError('Choose another destination; the master template cannot be overwritten.')
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copyfile(source,output_path)
+    return output_path
+
+
+def install_one(relative_path: str, base: Path) -> tuple[Path,str]:
+    """Materialize original source; keep local edits if any."""
+    if relative_path not in SOURCE_FILES:
+        raise KeyError(relative_path)
+    path=base / relative_path
+    path.parent.mkdir(parents=True,exist_ok=True)
+    raw=SOURCE_FILES[relative_path].encode('utf-8')
+    digest=hashlib.sha256(raw).hexdigest()
+    if path.suffix.lower() == '.py':
+        compile(SOURCE_FILES[relative_path],relative_path,'exec')
+    elif path.suffix.lower() == '.json':
+        json.loads(SOURCE_FILES[relative_path])
+    tracker=path.with_name(path.name+'.bundled.sha256')
+    if path.exists():
+        current=hashlib.sha256(path.read_bytes()).hexdigest()
+        if current==digest:
+            if not tracker.exists():tracker.write_text(digest+'\n',encoding='utf-8')
+            return path,'unchanged'
+        previous=tracker.read_text(encoding='utf-8').strip() if tracker.exists() else ''
+        if current!=previous:
+            return path,'kept user-edited file'
+        backup=path.with_name(path.name+'.backup.'+datetime.now().strftime('%Y%m%d_%H%M%S'))
+        shutil.copy2(path,backup)
+    tmp=path.with_name(path.name+'.updating')
+    try:
+        tmp.write_bytes(raw)
+        os.replace(tmp,path)
+        tracker.write_text(digest+'\n',encoding='utf-8')
+    finally:
+        if tmp.exists():tmp.unlink()
+    return path,'installed'
+
+
+def install_tool(tool_id: str, base: Path) -> tuple[Path,list[str]]:
+    tool=TOOLS[tool_id]
+    entry=tool['entry']
+    folder=entry.split('/')[0]+'/'
+    files=[k for k in SOURCE_FILES if k.startswith(folder)]
+    actions=[]
+    for relative in files:
+        _,action=install_one(relative,base)
+        actions.append(f'{relative}: {action}')
+    return base/entry,actions
+
+
+def open_folder(folder: Path) -> None:
+    folder.mkdir(parents=True,exist_ok=True)
+    if sys.platform=='win32':
+        os.startfile(str(folder))
+    elif sys.platform=='darwin':
+        subprocess.Popen(['open',str(folder)])
+    else:
+        subprocess.Popen(['xdg-open',str(folder)])
+
+
+class MegaApp:
+    def __init__(self):
+        self.root=tk.Tk()
+        self.root.title('Zuken Mega Script | V32')
+        self.root.configure(bg=PALETTE['white'])
+        self.root.geometry('580x620+70+70')
+        self.root.resizable(False,False)
+        self.root.attributes('-topmost',True)
+        self.root.protocol('WM_DELETE_WINDOW',self.close)
+        self.runtime=runtime_directory()
+        self.prefs=read_prefs()
+        self.running=None
+        self.running_id=None
+        self.running_local=None
+        self.active_tab='drawing'
+        self.buttons={}
+        self.status=tk.StringVar(value='Ready')
+        self.path_labels={}
+        self.template_labels={}
+        self.instructions_dialog=None
+        self.create_gui()
+        self.root.after(500,self.poll_process)
+        self.root.after(120,lambda:self.root.lift())
+
+    def mk_label(self,parent,txt,*,bold=False,size=9,color='text',bg='white',wrap=0):
+        return tk.Label(parent,text=txt,bg=PALETTE[bg],fg=PALETTE[color],
+                font=('Segoe UI',size,'bold' if bold else 'normal'),
+                wraplength=wrap or 0,justify='left',anchor='w')
+
+    def create_gui(self):
+        top=tk.Frame(self.root,bg=PALETTE['pale'],height=60)
+        top.pack(fill='x');top.pack_propagate(False)
+        self.mk_label(top,'Zuken Mega Script  ·  V32',bold=True,size=15,bg='pale').pack(side='left',padx=16,pady=10)
+        nav=tk.Frame(self.root,bg=PALETTE['white'])
+        nav.pack(fill='x',padx=14,pady=(11,5))
+        self.nav_buttons={}
+        for tab,label in (('drawing','Drawing (3)'),('excel','Excel (6)'),('misc','Misc (6)'),('runner','Zuken Script Runner'),('templates','Templates')):
+            button=tk.Button(nav,text=label,font=('Segoe UI',10,'bold'),pady=7,
+                bd=0,relief='flat',cursor='hand2',command=lambda t=tab:self.set_tab(t))
+            button.pack(side='left',padx=(0,5))
+            self.nav_buttons[tab]=button
+        tk.Frame(self.root,bg=PALETTE['border'],height=1).pack(fill='x',padx=14)
+        self.page=tk.Frame(self.root,bg=PALETTE['white'])
+        self.page.pack(fill='both',expand=True,padx=14,pady=(12,6))
+        self.footer=tk.Frame(self.root,bg=PALETTE['pale'])
+        self.footer.pack(fill='x',padx=14,pady=(0,12))
+        tk.Label(self.footer,textvariable=self.status,bg=PALETTE['pale'],
+                 fg=PALETTE['text'],font=('Segoe UI',9,'bold'),anchor='w').pack(fill='x',padx=11,pady=(7,7))
+        self.set_tab('drawing')
+
+    def set_tab(self,tab):
+        self.active_tab=tab
+        for k,b in self.nav_buttons.items():
+            selected=k==tab
+            b.configure(bg=PALETTE['blue'] if selected else PALETTE['pale'],
+                fg='#FFFFFF' if selected else PALETTE['text'],
+                activebackground=PALETTE['blue_hover'] if selected else PALETTE['pale'],
+                activeforeground='#FFFFFF' if selected else PALETTE['text'])
+        for child in self.page.winfo_children():child.destroy()
+        self.buttons={}
+        if tab=='drawing':
+            self.mk_label(self.page,'Formatting & layout',bold=True,size=12).pack(anchor='w',pady=(0,10))
+        elif tab=='excel':
+            self.mk_label(self.page,'Workbook selection',bold=True,size=12).pack(anchor='w',pady=(0,8))
+            self.workbook_section()
+            self.mk_label(self.page,'Spreadsheet tools',bold=True,size=12).pack(anchor='w',pady=(12,7))
+        elif tab=='misc':
+            self.mk_label(self.page,'Miscellaneous tools',bold=True,size=12).pack(anchor='w',pady=(0,10))
+        elif tab=='runner':
+            self.add_tool_card('zuken_script_runner',TOOLS['zuken_script_runner'])
         else:
-            print(self.mode)
-            self.table_type = 'UNKNOWN'
-            raise ValueError("Value in cell [B1] does not match search strings. Unknown type of List Spreadsheet!")
-        logging.info(f"Table type: {self.table_type}")
+            self.template_section()
+        if tab=='misc':
+            misc_grid=tk.Frame(self.page,bg=PALETTE['white'])
+            misc_grid.pack(fill='x')
+            misc_grid.grid_columnconfigure(0,weight=1,uniform='misc_tools')
+            misc_grid.grid_columnconfigure(1,weight=1,uniform='misc_tools')
+            misc_keys=[k for k,v in TOOLS.items() if v['tab']=='misc']
+            for i,key in enumerate(misc_keys):
+                self.add_tool_card(key,TOOLS[key],parent=misc_grid,grid=(i//2,i%2))
+        if tab=='excel':
+            tool_grid=tk.Frame(self.page,bg=PALETTE['white'])
+            tool_grid.pack(fill='x')
+            tool_grid.grid_columnconfigure(0,weight=1,uniform='tool')
+            tool_grid.grid_columnconfigure(1,weight=1,uniform='tool')
+            excel_keys=[k for k,v in TOOLS.items() if v['tab']=='excel']
+            for i,key in enumerate(excel_keys):
+                self.add_tool_card(key,TOOLS[key],parent=tool_grid,grid=(i//2,i%2))
+        elif tab=='drawing':
+            for key,tool in TOOLS.items():
+                if tool['tab']==tab:self.add_tool_card(key,tool)
+        actions=tk.Frame(self.page,bg=PALETTE['white'])
+        actions.pack(fill='x',side='bottom',pady=(10,5))
+        for name,command in [('Open logs / files',lambda:open_folder(self.runtime)),
+                             ('Import pin data',self.import_pin_data),
+                             ('Diagnostics',self.show_diagnostics),
+                             ('Instructions',self.show_instructions)]:
+            tk.Button(actions,text=name,command=command,fg=PALETTE['blue'],bg=PALETTE['white'],
+                     font=('Segoe UI',8),bd=0,cursor='hand2').pack(side='left',padx=(0,12))
+        tk.Button(actions,text='Close',command=self.close,fg=PALETTE['blue'],bg=PALETTE['white'],
+                 font=('Segoe UI',8),bd=0,cursor='hand2').pack(side='right')
+        self.disable_buttons(self.running is None)
 
-    def _calcSheetSize(self):
-        """ Instead of calculating the size, we will get the max dimenstion from the openpyxl.Worksheet class."""
-        self.cols = self.ws.max_column
-        self.rows = self.ws.max_row
+    def template_section(self):
+        self.mk_label(self.page,'Excel template library',bold=True,size=12).pack(anchor='w',pady=(0,4))
+        self.template_labels={}
+        for key,item in TEMPLATE_GROUPS.items():
+            card=tk.Frame(self.page,bg=PALETTE['panel'],height=62,
+                     highlightbackground=PALETTE['border'],highlightthickness=1)
+            card.pack(fill='x',pady=(0,7));card.pack_propagate(False)
+            icon=tk.Canvas(card,width=40,height=44,bg=PALETTE['panel'],highlightthickness=0)
+            icon.pack(side='left',padx=(12,7),pady=8)
+            icon.create_rectangle(5,4,34,38,outline='#28846C',fill='#E9F6F0',width=2)
+            icon.create_line(5,15,34,15,fill='#28846C',width=1)
+            for xx in (15,25):icon.create_line(xx,15,xx,38,fill='#8BC5B3')
+            for yy in (24,31):icon.create_line(5,yy,34,yy,fill='#8BC5B3')
+            left=tk.Frame(card,bg=PALETTE['panel'])
+            left.pack(side='left',fill='both',expand=True,pady=(5,2))
+            self.mk_label(left,item['title'],bold=True,size=10,bg='panel').pack(anchor='w')
+            state=tk.StringVar()
+            self.template_labels[key]=state
+            tk.Label(left,textvariable=state,bg=PALETTE['panel'],fg=PALETTE['blue'],
+                     font=('Segoe UI',8),anchor='w').pack(anchor='w',pady=(3,0))
+            controls=tk.Frame(card,bg=PALETTE['panel'])
+            controls.pack(side='right',padx=10,pady=4)
+            tk.Button(controls,text='Download...',width=13,command=lambda k=key:self.download_template(k),
+                      bg=PALETTE['blue'],fg='white',activebackground=PALETTE['blue_hover'],
+                      activeforeground='white',font=('Segoe UI',8,'bold'),bd=0,pady=4,
+                      cursor='hand2').pack(pady=(0,3))
+            self.update_template_label(key)
 
-    def _loadRowTable(self):
-        """ Starting with the header row, insert all the rows into the row table. """
-        logging.info(f"  |--> Processing workbook {self.file_path}, which has {self.rows} rows.")
-        # self.table = WireTable(self.cfg_tables[self.table_type], self.table_type)
-        self.table = WireTable(self.cfg_tables, self.table_type)
-        # print('==============')
-        # print(self.cfg_tables[self.table_type])
-        for row in self.ws.iter_rows(min_row=WorkSheet.HEADER_ROW,
-                                     max_row=self.rows,
-                                     max_col=self.cols,
-                                     values_only=True):
-            self.table.insert_wire(row) # Treat everything like a wire.
-        # self.table.print_table_info()
+    def update_template_label(self,key):
+        state=self.template_labels.get(key)
+        if state is not None:
+            path=get_template_path(key)
+            state.set('' if path else 'Template missing: '+TEMPLATE_GROUPS[key]['filename'])
 
-    def col_row_to_string(self, col, row):
-        # Convert the col and row 0-based index to the Excel A1 to Z99 format.
-        if not (0 <= col <= 25):
-            raise ValueError("Index must be between 0 and 25 for the A to Z conversion.")
-        return chr(ord('A') + col) + chr(ord('1') + row)
+    def download_template(self,key):
+        path=get_template_path(key)
+        if path is None:
+            messagebox.showinfo('Template missing',
+                'Could not find '+TEMPLATE_GROUPS[key]['filename']+'.\n\n'
+                'In Python mode, check the project templates folder. '
+                'In the EXE, rebuild with the original templates bundled.',
+                parent=self.root)
+            return
+        proposed=Path(TEMPLATE_GROUPS[key]['filename']).stem+path.suffix.lower()
+        save_path=filedialog.asksaveasfilename(parent=self.root,
+            title='Save Excel template copy — '+TEMPLATE_GROUPS[key]['title'],
+            initialfile=proposed,defaultextension=path.suffix,
+            filetypes=[('Excel template','*'+path.suffix)])
+        if not save_path:return
+        try:
+            result=save_template_copy(key,Path(save_path))
+            self.status.set('Template saved: '+result.name)
+            messagebox.showinfo('Template saved','Saved a fresh copy to:\n'+str(result),parent=self.root)
+        except (OSError,ValueError) as exc:
+            messagebox.showerror('Could not save template',str(exc),parent=self.root)
 
-    def addSheetRow(self, row_data):
-        self.ws.append(row_data)
+    def workbook_section(self):
+        for key,config in WORKBOOKS.items():
+            line=tk.Frame(self.page,bg=PALETTE['panel'],height=36,
+                highlightbackground=PALETTE['border'],highlightthickness=1)
+            line.pack(fill='x',pady=(0,4));line.pack_propagate(False)
+            left=tk.Frame(line,bg=PALETTE['panel'])
+            left.pack(side='left',fill='both',expand=True,padx=(9,0),pady=4)
+            self.mk_label(left,config['label'],size=9,bold=True,bg='panel').pack(side='left')
+            text=tk.StringVar()
+            self.path_labels[key]=text
+            tk.Label(left,textvariable=text,bg=PALETTE['panel'],fg=PALETTE['muted'],
+                font=('Segoe UI',8),anchor='w').pack(side='left',padx=9,fill='x',expand=True)
+            for label,command in [('Choose',lambda k=key:self.choose_workbook(k)),
+                                  ('Clear',lambda k=key:self.clear_workbook(k))]:
+                tk.Button(line,text=label,command=command,bg=PALETTE['pale'],fg=PALETTE['blue'],
+                    font=('Segoe UI',8),bd=0,padx=7,pady=3,cursor='hand2').pack(side='right',padx=(0,6))
+            self.update_workbook_label(key)
 
-    def clearOutSheet(self):
-        # Use this to start a diff sheet using the first 5 rows with header formatting
-        # and other information from the rev-2 sheet being compared to the old rev-1 sheet.
-        # That gives me a copy of the rev-2 to use as a template.
-        # Then clear the data out so that we can then write in the difference data.
-        self.ws.delete_rows(WorkSheet.HEADER_ROW+1, self.rows)
-        self._calcSheetSize()
-        data = self.ws['B1'].value
-        if data == None:    # If there is not a sheet Title,
-            data = 'No Title'
-        data = data + ' - CHANGE LOG'
-        self.ws['B1'].value = data
-        cell_index_str = self.col_row_to_string(self.cols-1, WorkSheet.HEADER_ROW)
+    def update_workbook_label(self,key):
+        if key in self.path_labels:
+            value=self.prefs.get(key,'')
+            if value:
+                label=Path(value).name
+                if len(label)>29:label=label[:26]+'...'
+                self.path_labels[key].set(label)
+            else:self.path_labels[key].set('—')
 
-    def getSheetRow(self, row_num):
-        return self.ws[row_num]
-    
-    def getOpenpyxlWs(self):
-        return self.ws
+    def choose_workbook(self,key):
+        prior=self.prefs.get(key,'')
+        result=filedialog.askopenfilename(parent=self.root,
+            title='Choose '+WORKBOOKS[key]['label'],
+            initialdir=str(Path(prior).parent) if prior else str(Path.home()),
+            filetypes=[('Excel workbooks','*.xlsx *.xlsm'),('Excel files','*.xlsx'),('All files','*.*')])
+        if not result:return
+        self.prefs[key]=str(Path(result).resolve())
+        write_prefs(self.prefs)
+        self.update_workbook_label(key)
+        self.status.set(WORKBOOKS[key]['label']+' selected')
 
-    def getSheetRowValues(self, row_num):
-        return self.ws[row_num].values
+    def clear_workbook(self,key):
+        self.prefs[key]=''
+        write_prefs(self.prefs)
+        self.update_workbook_label(key)
+        self.status.set(WORKBOOKS[key]['label']+' cleared')
 
-    def getRowTable(self):
-        return self.table
+    def add_tool_card(self,key,tool,parent=None,grid=None):
+        parent=parent or self.page
+        compact=grid is not None
+        box=tk.Frame(parent,bg=PALETTE['panel'],height=49,
+                     highlightbackground=PALETTE['border'],highlightthickness=1)
+        if compact:
+            row,col=grid
+            box.grid(row=row,column=col,sticky='ew',pady=(0,6),padx=(0,6) if col==0 else (0,0))
+            box.grid_propagate(False)
+        else:
+            box.pack(fill='x',pady=(0,6));box.pack_propagate(False)
+        details=tk.Frame(box,bg=PALETTE['panel'])
+        details.pack(side='left',fill='both',expand=True,padx=(10 if compact else 12,4),pady=(13,0))
+        self.mk_label(details,tool['name'],bold=True,size=9 if compact else 10,bg='panel').pack(fill='x')
+        button=tk.Button(box,text='Open',font=('Segoe UI',9,'bold'),
+                   bg=PALETTE['blue'],fg='white',width=6 if compact else 8,bd=0,
+                   activebackground=PALETTE['blue_hover'],activeforeground='white',
+                   relief='flat',pady=5,cursor='hand2',command=lambda k=key:self.launch(k))
+        button.pack(side='right',padx=7 if compact else 11,pady=8)
+        self.buttons[key]=button
 
-    def getTitle(self):
-        return self.ws.title
+    def disable_buttons(self,enabled):
+        for button in self.buttons.values():
+            button.configure(state='normal' if enabled else 'disabled',
+                bg=PALETTE['blue'] if enabled else PALETTE['disabled'])
 
-    def setTitle(self, title):
-        self.ws.title = title
+    def launch_local(self, key):
+        """Open any top-level tool directly in the frozen EXE (no subprocess).
 
-    def printColumnCountError(self):
-        err_string = textwrap.dedent('''\
-            ===========================================================================
-            ERROR: Invalid Excel Spreadsheet for comparison!
-            ===========================================================================
-            Each spreadsheet MUST have a header row in the fifth row (1-based index) of
-            the spreadsheet that defines the number of columns of data it contains. If
-            it is not in that location, this tool is unable to determine the column
-            count correctly. If the header row must be moved, please call Brad Brookes
-            to update the tool to work with the new format.
-            ---------------------------------------------------------------------------
-            ''')
-        print(err_string)
+        This does not start a second copy of E3_Mega_Tools.exe. The launcher
+        is hidden during the selected operation and restored on close.
+        """
+        if self.running_local is not None:
+            messagebox.showinfo('One tool at a time',
+                'Close the running drawing tool first.', parent=self.root)
+            return
+        group = TOOLS[key]['workbook']
+        workbook = self.prefs.get(group, '') if group else ''
+        if workbook and not Path(workbook).is_file():
+            messagebox.showerror('Workbook not found',
+                'The saved workbook no longer exists:\n' + workbook +
+                '\n\nChoose a new workbook or clear this selection.', parent=self.root)
+            return
+        self.running_local = key
+        self.disable_buttons(False)
+        self.status.set('Opening ' + TOOLS[key]['name'])
+        self.root.attributes('-topmost', False)
+        self.root.withdraw()
+        trace_exe_start('inprocess-start-request', selected=key)
+        # Return from the launch button callback before entering the tool's
+        # own Tk event loop; both windows stay on the same UI thread.
+        self.root.after(20, lambda tool_id=key: self.run_local_tool(tool_id))
 
-    #--------------------------------------------------------------------------
-    def saveWorksheet(self):
-        """ Write the workbook to the file."""
-        self.workbook.save(self.filename)
-
-
-    # -=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=--==--=-=-=
-    #
-    # Debugging stuff:
-    #
-    #
-    #--------------------------------------------------------------------------
-    def print_table(self):
-        # self.table.printTable()
-        self.table.print_table_info()
-
-    #--------------------------------------------------------------------------
-    def print_table_row(self, row_key ):
-        row = self.table.getRow(row_key)
-        print(f'Table row[{row_key:>30}] = {row}')
-
-    #--------------------------------------------------------------------------
-    def print_sheet_row(self, row_key ):
-        """ Only use this for debugging. This prints the Speadsheet row info. """
-        print(f'\n============= Sheet row {row_key + WorkSheet.HEADER_ROW} =========')
-        row = self.ws[row_key + WorkSheet.HEADER_ROW]
-        # print(row)
-        self.print_sheet_row_details(row)
-
-    #--------------------------------------------------------------------------
-    def print_sheet_row_details(self, row_data):
-        # print('-----------  ROW %d  -----------' % row_data[0].row)
-        # format_str = 'Cell: Coord = {:<8}, type = {:20}, data_type = {}, cell_encoding = {}, cell_value = {}'
-        format_str = '{:5} {:^8}, {:15}, {:10}, {:10}, {:20}'
-        # print('row type: ', type(row_data))
-        # print('row_data raw =', row_data)
-        print(format_str.format(' ', 'Coord','Type','Data type', 'Encoding', 'Value'))
-        print(format_str.format('', '------', '------', '------', '------', '------', '------'))
-        for cell in row_data:
-            cell_coord = cell.coordinate
-            cell_encoding = 'none'
-            if type(cell) == openpyxl.cell.cell.MergedCell:
-                cell_type = 'Merged cell'
-            elif type(cell) == openpyxl.cell.cell.Cell:
-                cell_type = 'Cell'
-                cell_encoding = cell.encoding
+    def run_local_tool(self, key):
+        import traceback
+        script = None
+        error = None
+        rc = 0
+        import time
+        started_at = time.monotonic()
+        tool_windows = [0]
+        trace_exe_start('real-tool-entry', selected=key)
+        env_names = ['E3_MEGA_' + name.upper() + '_WORKBOOK' for name in WORKBOOKS]
+        original_env = {name: os.environ.get(name) for name in env_names}
+        original_hook = sys.excepthook
+        try:
+            for name in env_names:
+                os.environ.pop(name, None)
+            group = TOOLS[key]['workbook']
+            if group:
+                workbook = self.prefs.get(group, '')
+                if workbook:
+                    os.environ['E3_MEGA_' + group.upper() + '_WORKBOOK'] = workbook
+            script, notes = install_tool(key, self.runtime)
+            output = script.parent / 'launcher_output.log'
+            with output.open('a', encoding='utf-8', errors='replace', buffering=1) as log:
+                log.write('\n===== IN-PROCESS ' + datetime.now().isoformat(timespec='seconds')
+                          + ' ' + key + ' (' + SUITE_VERSION + ') =====\n')
+                for note in notes:
+                    log.write('install: ' + note + '\n')
+                log.write('STARTUP: entering tool interpreter (not the launcher menu)\n')
+                log.flush()
+                trace_exe_start('tool-startup-after-install', selected=key, script=str(script))
+                original_stdout, original_stderr = sys.stdout, sys.stderr
+                try:
+                    # --windowed EXEs may have sys.stdout/sys.stderr = None.
+                    # Always supply valid streams for the extracted scripts.
+                    sys.stdout = log
+                    sys.stderr = log
+                    # The Pin Spacer must enter GUI worker mode directly;
+                    # otherwise its own main() starts an EXE subprocess.
+                    args = ['--worker'] if key == 'pin' else []
+                    # A second Tk() would normally call mainloop(0), which
+                    # cannot return after its window closes if the hidden
+                    # launcher Tk() still exists. Threshold 1 means the
+                    # tool's own Tk event loop exits on child.destroy(),
+                    # while root.quit() continues working as normal. This
+                    # changes Tk.mainloop ONLY during the embedded tool call.
+                    original_mainloop = tk.Tk.mainloop
+                    original_tk_init = tk.Tk.__init__
+                    def child_window_mainloop(window, n=0):
+                        return original_mainloop(window, max(1, n))
+                    def count_tool_window(window, *args, **kwargs):
+                        original_tk_init(window, *args, **kwargs)
+                        tool_windows[0] += 1
+                        trace_exe_start('tool-window-created', selected=key, count=tool_windows[0])
+                    tk.Tk.mainloop = child_window_mainloop
+                    tk.Tk.__init__ = count_tool_window
+                    try:
+                        try:
+                            run_embedded_tool(key, args)
+                        except SystemExit as exc:
+                            # Most old tools end with sys.exit(main()). Never
+                            # let that terminate the entire mega launcher.
+                            rc = int(exc.code) if isinstance(exc.code, int) else (0 if exc.code is None else 1)
+                            if rc:
+                                log.write('Tool exited with status ' + str(rc) + '\n')
+                    finally:
+                        tk.Tk.mainloop = original_mainloop
+                        tk.Tk.__init__ = original_tk_init
+                finally:
+                    sys.stdout, sys.stderr = original_stdout, original_stderr
+        except BaseException as exc:
+            if isinstance(exc, KeyboardInterrupt):
+                raise
+            error = exc
+            rc = 1
+            trace_exe_start('inprocess-tool-error', selected=key, error=repr(exc))
+            if script is not None:
+                try:
+                    with (script.parent / 'launcher_output.log').open('a', encoding='utf-8') as log:
+                        traceback.print_exception(type(exc), exc, exc.__traceback__, file=log)
+                except OSError:
+                    pass
+        finally:
+            sys.excepthook = original_hook
+            for name, previous in original_env.items():
+                if previous is None:
+                    os.environ.pop(name, None)
+                else:
+                    os.environ[name] = previous
+            elapsed = round(time.monotonic() - started_at, 2)
+            trace_exe_start('inprocess-tool-end', selected=key, returncode=rc, elapsed_sec=elapsed, windows_opened=tool_windows[0], error=repr(error))
+            self.running_local = None
+            self.disable_buttons(True)
+            try:
+                self.root.deiconify()
+                self.root.lift()
+                self.root.attributes('-topmost', True)
+            except tk.TclError:
+                pass
+            # A returned launcher is NOT necessarily a second EXE. Do not hide
+            # an early failure; expose the actual tool log and dispatcher events.
+            if should_show_launcher_error(key, error=error, rc=rc,
+                                          windows_opened=tool_windows[0], elapsed=elapsed):
+                why = ('Python exception' if error is not None else
+                       'tool exited with status '+str(rc) if rc else
+                       'tool never created a GUI window' if not tool_windows[0] else
+                       'tool GUI closed immediately')
+                self.status.set(TOOLS[key]['name'] + ': '+why)
+                self.show_startup_failure(key,why,script,elapsed,tool_windows[0],error)
+            elif rc and key in TOOLS_WITH_OWN_ERROR_DIALOG:
+                # Diagnostic information stays available, but the user sees
+                # exactly the original tool's friendly error, not duplicates.
+                trace_exe_start('handled-error-dialog-used', selected=key, rc=rc)
+                self.status.set(TOOLS[key]['name'] + ' stopped — see tool error')
             else:
-                cell_type = 'Unknown'
-            cell_data_type = cell.data_type
-            if cell.value == None:
-                cell_value = 'none'
+                self.status.set(TOOLS[key]['name'] + ' closed')
+
+    def show_startup_failure(self, key, reason, script, elapsed, windows_opened, error):
+        """Always show the underlying tool startup evidence instead of silently returning to the menu."""
+        lines = [
+            'E3 Mega Tools V26 — tool startup report',
+            'Tool: ' + TOOLS[key]['name'],
+            'Reason: ' + str(reason),
+            'Tool GUI windows created: ' + str(windows_opened),
+            'Run duration: ' + str(round(elapsed, 3)) + ' seconds',
+            'Executable: ' + sys.executable,
+            'Packaged: ' + str(running_as_packaged_exe()),
+            'Source: ' + str(script),
+            'Exception: ' + repr(error),
+        ]
+        if script is not None:
+            try:
+                logpath = script.parent / 'launcher_output.log'
+                lines.append('Tool log: ' + str(logpath))
+                if logpath.exists():
+                    lines.extend(['', '--- LAST TOOL LOG LINES ---'])
+                    lines.extend(logpath.read_text(encoding='utf-8', errors='replace').splitlines()[-95:])
+            except Exception as exc:
+                lines.append('Could not read tool log: ' + repr(exc))
+        # Block Maker has two separate child stages. Their actionable tracebacks
+        # are in a second stage log, not necessarily in launcher_output.log.
+        if key == 'block_maker':
+            try:
+                stage_dir = Path(tempfile.gettempdir()) / 'E3_Block_Maker_Logs'
+                stage_files = sorted(stage_dir.glob('block_maker_*.log'),
+                                     key=lambda p: p.stat().st_mtime, reverse=True)
+                if stage_files:
+                    stage_log = stage_files[0]
+                    lines.extend(['', '--- BLOCK MAKER STAGE LOG ---', str(stage_log)])
+                    lines.extend(stage_log.read_text(
+                        encoding='utf-8', errors='replace').splitlines()[-125:])
+            except Exception as exc:
+                lines.append('Could not read Block Maker stage log: ' + repr(exc))
+        try:
+            diag = diagnostics_directory() / 'launcher_debug.log'
+            lines.extend(['', '--- LAUNCHER EVENTS ---', 'Diagnostic log: ' + str(diag)])
+            if diag.exists():
+                events = diag.read_text(encoding='utf-8', errors='replace').splitlines()[-16:]
+                lines.extend(events)
+        except Exception as exc:
+            lines.append('Could not read diagnostic log: ' + repr(exc))
+        report = '\n'.join(lines)
+        try:
+            report_path = diagnostics_directory() / 'last_tool_failure.txt'
+            report_path.write_text(report + '\n', encoding='utf-8')
+        except Exception:
+            pass
+        dialog = tk.Toplevel(self.root)
+        dialog.title('E3 Mega Tools — Startup issue')
+        dialog.geometry('800x560')
+        dialog.attributes('-topmost', True)
+        tk.Label(dialog, text='Tool did not stay open — startup details',
+                 font=('Segoe UI', 12, 'bold'), anchor='w').pack(fill='x', padx=13, pady=(12,5))
+        view = tk.Text(dialog, wrap='word', font=('Consolas', 9), height=24)
+        view.pack(fill='both', expand=True, padx=13, pady=(2,6))
+        view.insert('1.0', report)
+        view.configure(state='disabled')
+        buttons = tk.Frame(dialog)
+        buttons.pack(fill='x', padx=13, pady=(0,12))
+        def copy_report():
+            dialog.clipboard_clear()
+            dialog.clipboard_append(report)
+            dialog.update()
+        tk.Button(buttons,text='Copy failure report',command=copy_report).pack(side='left')
+        tk.Button(buttons,text='Open diagnostic folder',
+                  command=lambda:open_folder(diagnostics_directory())).pack(side='left',padx=(9,0))
+        tk.Button(buttons,text='Close',command=dialog.destroy).pack(side='right')
+
+    def launch(self,key):
+        trace_exe_start('button-click', selected=key, route='inprocess' if running_as_packaged_exe() else 'python-subprocess')
+        if self.running_local is not None:
+            messagebox.showinfo('One tool at a time',
+                'Close the running drawing tool first.', parent=self.root)
+            return
+        if self.running is not None and self.running.poll() is None:
+            messagebox.showinfo('One tool at a time','Close the running E3 tool first.',parent=self.root)
+            return
+        # Bypass the PyInstaller subprocess/bootloader for ALL top-level
+        # tools. Nested worker processes still use the explicit dispatcher.
+        if running_as_packaged_exe() and key in FROZEN_INPROCESS_TOOLS:
+            self.launch_local(key)
+            return
+        tool=TOOLS[key]
+        group=tool['workbook']
+        workbook=self.prefs.get(group,'') if group else ''
+        if workbook and not Path(workbook).is_file():
+            messagebox.showerror('Workbook not found',
+                'The saved workbook no longer exists:\n'+workbook+
+                '\n\nChoose a new workbook or clear this selection.',parent=self.root)
+            return
+        try:
+            script,notes=install_tool(key,self.runtime)
+            env=os.environ.copy()
+            # Clear stale inherited choices when a workbook is not selected.
+            for group_name in WORKBOOKS:
+                env.pop('E3_MEGA_'+group_name.upper()+'_WORKBOOK',None)
+            if workbook:
+                env['E3_MEGA_'+group.upper()+'_WORKBOOK']=workbook
+            # sys.executable is python.exe when running .py, but this launcher
+            # itself when PyInstaller-frozen. Explicitly route EXE children to
+            # the intended embedded tool instead of reopening this menu.
+            if running_as_packaged_exe():
+                # Double-route the worker: argv AND inherited environment.
+                # The parent menu is never a legitimate destination for this
+                # process. The child checks this marker BEFORE constructing Tk.
+                child_args = ['--worker'] if key == 'pin' else []
+                env[EXE_TOOL_ENV] = key
+                env[EXE_ARGS_ENV] = json.dumps(child_args)
+                cmd = [sys.executable, '--run-tool', key] + child_args
+                trace_exe_start('launch-worker', child=key, command=cmd)
             else:
-                cell_value = cell.value
-            # print('Cell: Coord = {0:<8}, type = {1:20}, data_type = {2}, cell_encoding = {3}, cell_value = {4}'.format(
-            print(format_str.format( 'Cell:', cell_coord, cell_type, cell_data_type, cell_encoding, cell_value ))
+                if key == 'cable_placer':
+                    # Route source-mode Cable Placer through the same saved-
+                    # workbook adapter as the EXE. Its own .py stays unchanged.
+                    entry = Path(__file__).resolve().parent / 'Zuken_Mega_Script.py'
+                    cmd = [sys.executable, str(entry), '--run-tool', key]
+                else:
+                    cmd=[sys.executable,str(script)]
+                    if key=='pin':cmd.append('--worker')
+            flags=getattr(subprocess,'CREATE_NO_WINDOW',0) if sys.platform=='win32' else 0
+            logfile=script.parent/'launcher_output.log'
+            with logfile.open('a',encoding='utf-8') as log:
+                log.write('\n===== '+datetime.now().isoformat(timespec='seconds')+' '+key+
+                         ' ('+SUITE_VERSION+') =====\n')
+                for note in notes:log.write('install: '+note+'\n')
+                if workbook:log.write('workbook: '+workbook+'\n')
+            with logfile.open('a',encoding='utf-8') as log:
+                self.running=subprocess.Popen(cmd,cwd=str(script.parent),env=env,
+                    stdin=subprocess.DEVNULL,stdout=log,stderr=subprocess.STDOUT,
+                    creationflags=flags,close_fds=True)
+            self.running_id=key
+            self.disable_buttons(False)
+            self.status.set(tool['name']+' is running')
+            self.root.attributes('-topmost',False)
+        except Exception as exc:
+            self.running=None;self.running_id=None
+            self.disable_buttons(True)
+            self.status.set('Failed to launch '+tool['name'])
+            messagebox.showerror('E3 Tools launcher error',str(exc),parent=self.root)
+
+    def poll_process(self):
+        try:
+            if self.running is not None:
+                returncode=self.running.poll()
+                if returncode is not None:
+                    name=TOOLS[self.running_id]['name']
+                    self.running=None;self.running_id=None
+                    self.disable_buttons(True)
+                    self.status.set(name+(' completed / closed' if returncode==0 else ' failed — see logs'))
+                    self.root.attributes('-topmost',True)
+        finally:
+            self.root.after(500,self.poll_process)
+
+    def show_instructions(self):
+        """Short, contextual help separated from the uncluttered tool pages."""
+        if self.instructions_dialog is not None:
+            try:
+                if self.instructions_dialog.winfo_exists():
+                    self.instructions_dialog.lift()
+                    self.instructions_dialog.focus_force()
+                    return
+            except tk.TclError:
+                pass
+
+        help_sections = {
+            'drawing': ('Drawing', [
+                ('Before starting', 'Open the correct E3 project and select the objects requested by the tool.'),
+                ('Header Formatter', 'Choose the header order, then apply it to the selected block text.'),
+                ('Signal Mover', 'Choose the signal-label position or use the nudge controls.'),
+                ('Cable Pin Spacer', 'Select the source and target pin views as prompted; check spacing before applying.'),
+            ]),
+            'excel': ('Excel', [
+                ('Saved workbooks', 'Choose a workbook for a workflow. Cable Maker / Placer share one; Pin Arranger / Formatter share another. Clear removes the saved choice.'),
+                ('Cable Maker', 'Use a filled cable workbook. Requires access to the E3 library and database.'),
+                ('Cable Placer', 'Place a cable from the workbook, or use Simple Formatter Run on an open cable.'),
+                ('Block Maker', 'Use its .xlsm workbook. When prompted, activate Saber Parameter 1 and optionally Equipment Identification in E3.'),
+                ('Block Pin Arranger / Formatter', 'Arranger uses the pin-layout workbook; Formatter adjusts existing pin labels.'),
+                ('Block Signal Adder', 'Use the signal-assignment workbook to apply local signal names.'),
+            ]),
+            'misc': ('Misc', [
+                ('Excel Formatter', 'Paste copied data or pin tables, format, then copy the result.'),
+                ('Excel Diff', 'Choose two Excel/CSV files; review the generated difference report.'),
+                ('Missing Number Finder', 'Paste the number list to identify gaps.'),
+                ('EICD to Excel', 'Choose an EICD PDF and a partly filled Block Maker workbook.'),
+                ('Excel to PDF', 'Choose one or more workbooks. Microsoft Excel must be installed.'),
+                ('Change Analyzer', 'Compare old and new Zuken report spreadsheets, choose a comparison mode, and save the change log.'),
+            ]),
+            'runner': ('Zuken Script Runner', [
+                ('Before starting', 'Open the target project in Zuken E3.'),
+                ('Reports', 'Choose Wirelist, Cable Table, End to End, or All in the runner window.'),
+                ('Print Labels', 'Select Cable Table too when generating Print Labels.'),
+                ('Output', 'Choose the save locations when prompted. Generated spreadsheets are exported to PDF using Microsoft Excel.'),
+            ]),
+            'templates': ('Templates', [
+                ('Download', 'Save a fresh copy of the original Excel template; .xlsm macros are preserved.'),
+                ('Fill in your copy', 'Edit the downloaded workbook, not the master template.'),
+                ('Use a workbook', 'In the Excel tab, choose your filled-in copy for the matching workflow.'),
+                ('Source of truth', 'The original bundled templates cannot be imported over or replaced in the launcher.'),
+            ]),
+            'general': ('General', [
+                ('Tool windows', 'Finish or close a running tool before starting another.'),
+                ('E3 / database', 'Test library or database changes on a saved project copy first.'),
+                ('Diagnostics', 'Use Diagnostics to copy a startup or error report; Open logs / files shows the runtime files.'),
+            ]),
+        }
+        dialog=tk.Toplevel(self.root)
+        self.instructions_dialog=dialog
+        dialog.title('Zuken Mega Script — Instructions')
+        dialog.geometry('770x525')
+        dialog.minsize(680,450)
+        dialog.configure(bg=PALETTE['white'])
+        dialog.transient(self.root)
+        dialog.attributes('-topmost',True)
+
+        top=tk.Frame(dialog,bg=PALETTE['pale'],height=54)
+        top.pack(fill='x');top.pack_propagate(False)
+        self.mk_label(top,'Instructions',size=15,bold=True,bg='pale').pack(anchor='w',padx=17,pady=12)
+        body=tk.Frame(dialog,bg=PALETTE['white'])
+        sidebar=tk.Frame(body,bg=PALETTE['pale'],width=165)
+        sidebar.pack(side='left',fill='y',padx=(0,14))
+        sidebar.pack_propagate(False)
+        content=tk.Frame(body,bg=PALETTE['white'])
+        content.pack(side='left',fill='both',expand=True)
+        content_title=self.mk_label(content,'',bold=True,size=12)
+        content_title.pack(anchor='w',pady=(0,8))
+        reader=tk.Frame(content,bg=PALETTE['white'])
+        reader.pack(fill='both',expand=True)
+        scrollbar=tk.Scrollbar(reader)
+        scrollbar.pack(side='right',fill='y')
+        instructions=tk.Text(reader,wrap='word',font=('Segoe UI',10),
+                             bg=PALETTE['white'],fg=PALETTE['text'],
+                             relief='flat',borderwidth=0,highlightthickness=0,
+                             padx=3,pady=3,cursor='arrow',
+                             yscrollcommand=scrollbar.set)
+        instructions.pack(side='left',fill='both',expand=True)
+        scrollbar.configure(command=instructions.yview)
+        instructions.tag_configure('heading',font=('Segoe UI',10,'bold'),spacing1=9,spacing3=2)
+        instructions.tag_configure('detail',font=('Segoe UI',10),lmargin1=0,lmargin2=0,spacing3=5)
+        buttons={}
+        def select_section(section):
+            title,entries=help_sections[section]
+            content_title.configure(text=title)
+            instructions.configure(state='normal')
+            instructions.delete('1.0','end')
+            for heading,detail in entries:
+                instructions.insert('end',heading+'\n','heading')
+                instructions.insert('end',detail+'\n','detail')
+            instructions.configure(state='disabled')
+            instructions.yview_moveto(0)
+            for name,btn in buttons.items():
+                current=(name==section)
+                btn.configure(bg=PALETTE['blue'] if current else PALETTE['pale'],
+                              fg='white' if current else PALETTE['text'])
+        for section in ('drawing','excel','misc','runner','templates','general'):
+            label=help_sections[section][0]
+            btn=tk.Button(sidebar,text=label,anchor='w',font=('Segoe UI',10),
+                          relief='flat',bd=0,padx=12,pady=8,cursor='hand2',
+                          bg=PALETTE['pale'],fg=PALETTE['text'],
+                          activebackground=PALETTE['blue_hover'],activeforeground='white',
+                          command=lambda key=section:select_section(key))
+            btn.pack(fill='x',padx=5,pady=(5,0))
+            buttons[section]=btn
+        def close_dialog():
+            self.instructions_dialog=None
+            dialog.destroy()
+        controls=tk.Frame(dialog,bg=PALETTE['white'])
+        controls.pack(side='bottom',fill='x',padx=15,pady=(0,11))
+        body.pack(fill='both',expand=True,padx=13,pady=13)
+        tk.Button(controls,text='Close',font=('Segoe UI',9),command=close_dialog,
+                  bg=PALETTE['pale'],fg=PALETTE['blue'],bd=0,padx=18,pady=6).pack(side='right')
+        dialog.protocol('WM_DELETE_WINDOW',close_dialog)
+        dialog.bind('<Escape>',lambda event:close_dialog())
+        select_section(self.active_tab if self.active_tab in help_sections else 'general')
+        dialog.focus_set()
+
+    def show_diagnostics(self):
+        """One-click diagnostics even if Windows hides the runtime folder."""
+        details = [
+            'E3 Mega Tools version: ' + SUITE_VERSION,
+            'Mode: ' + ('Packaged EXE' if running_as_packaged_exe() else 'Python interpreter'),
+            'sys.frozen: ' + repr(getattr(sys, 'frozen', None)),
+            'sys._MEIPASS: ' + repr(getattr(sys, '_MEIPASS', None)),
+            'sys.executable: ' + str(sys.executable),
+            'sys.argv: ' + repr(sys.argv),
+            'Running tool: ' + repr(self.running_local or self.running_id),
+            'Runtime folder: ' + str(self.runtime),
+        ]
+        try:
+            folder = diagnostics_directory()
+            details.append('Diagnostic log: ' + str(folder / 'launcher_debug.log'))
+            logfile = folder / 'launcher_debug.log'
+            if logfile.exists():
+                lines = logfile.read_text(encoding='utf-8', errors='replace').splitlines()[-35:]
+                details.append('\nLast 35 diagnostic events:\n' + '\n'.join(lines))
+        except Exception as exc:
+            details.append('Log read error: ' + repr(exc))
+        msg = '\n'.join(details)
+        dialog = tk.Toplevel(self.root)
+        dialog.title('E3 Mega Tools — Diagnostics')
+        dialog.geometry('810x590')
+        dialog.attributes('-topmost', True)
+        view = tk.Text(dialog, wrap='word', font=('Consolas', 9))
+        view.pack(fill='both', expand=True, padx=12, pady=(12,4))
+        view.insert('1.0', msg)
+        view.configure(state='disabled')
+        buttons = tk.Frame(dialog)
+        buttons.pack(fill='x', padx=12, pady=(3,11))
+        def copy_all():
+            dialog.clipboard_clear()
+            dialog.clipboard_append(msg)
+            dialog.update()
+        tk.Button(buttons, text='Copy Diagnostics', command=copy_all).pack(side='left')
+        tk.Button(buttons, text='Open Log Folder',
+                  command=lambda:open_folder(diagnostics_directory())).pack(side='left',padx=(8,0))
+        tk.Button(buttons, text='Close', command=dialog.destroy).pack(side='right')
+
+    def import_pin_data(self):
+        directory=filedialog.askdirectory(parent=self.root,title='Locate previous pin spacer recovery files')
+        if not directory:return
+        destination=self.runtime/'cable_pin_spacer'
+        destination.mkdir(parents=True,exist_ok=True)
+        imported=[]
+        for suffix in ('_recovery.json','_pin_identity.json'):
+            for name in ('main'+suffix,'E3_Cable_To_Block_Pin_Spacing_V15_ZUKEN_LIGHT_GUI'+suffix):
+                original=Path(directory)/name
+                dest=destination/('main'+suffix)
+                if original.is_file() and not dest.exists():
+                    data=json.loads(original.read_text(encoding='utf-8-sig'))
+                    if not isinstance(data,dict):raise ValueError('Expected JSON object in '+name)
+                    shutil.copy2(original,dest)
+                    imported.append(dest.name)
+                    break
+        messagebox.showinfo('Pin Spacer recovery data',
+            'Imported: '+(', '.join(imported) or 'none')+'\nExisting files were left untouched.',
+            parent=self.root)
+
+    def close(self):
+        if self.running_local is not None:
+            messagebox.showinfo('Tool is open',
+                'Close the drawing tool first.', parent=self.root)
+            return
+        if self.running is not None and self.running.poll() is None:
+            if not messagebox.askyesno('Close launcher?',
+                'A tool is still running. Close only the launcher and let it finish?',parent=self.root):
+                return
+        self.root.destroy()
+
+
+@contextlib.contextmanager
+def launcher_workbook_override(tool_id: str):
+    """Honor the saved Cable Maker/Placer workbook without modifying Cable Placer.
+
+    Both the EXE in-process route and the normal Python subprocess route carry
+    E3_MEGA_CABLE_WORKBOOK. Cable Placer's legacy ask_save_path() always calls
+    tkinter.filedialog.askopenfilename(), so supply that saved path to its FIRST
+    Excel-open dialog. All other dialogs and tools keep their original behavior.
+    """
+    saved = (os.environ.get('E3_MEGA_CABLE_WORKBOOK') or '').strip() if tool_id == 'cable_placer' else ''
+    if not saved:
+        yield
+        return
+
+    workbook = Path(saved).expanduser()
+    if not workbook.is_file():
+        raise FileNotFoundError('The saved Cable Maker / Placer workbook is missing: ' + str(workbook))
+    if workbook.suffix.lower() not in ('.xlsx', '.xlsm'):
+        raise ValueError('The saved Cable Maker / Placer workbook must be .xlsx or .xlsm: ' + str(workbook))
+
+    original_picker = filedialog.askopenfilename
+    supplied = False
+
+    def choose_workbook_or_prompt(*args, **kwargs):
+        nonlocal supplied
+        # Only intercept an Excel *open* dialog. Do not intercept a PDF picker,
+        # a save-as dialog, or subsequent requests for a different workbook.
+        filetypes = kwargs.get('filetypes') or ()
+        filetypes_text = ' '.join(map(str, filetypes)).lower()
+        if not supplied and ('.xls' in filetypes_text or 'excel' in filetypes_text):
+            supplied = True
+            print('Using Cable Maker / Placer workbook saved in Mega Tools:', workbook)
+            return str(workbook)
+        return original_picker(*args, **kwargs)
+
+    filedialog.askopenfilename = choose_workbook_or_prompt
+    try:
+        yield
+    finally:
+        # Always restore tkinter for the launcher and all other tools,
+        # including when the legacy script calls sys.exit() or raises.
+        filedialog.askopenfilename = original_picker
+
+
+def run_embedded_tool(tool_id: str, tool_args: list[str]) -> None:
+    """EXE subprocess entry. Execute a tool *in this process*, not the menu.
+
+    Each tool still receives its normal __file__, import directory, cwd,
+    arguments and inherited workbook environment. The GUI remains in its
+    own parent process with independent E3 COM access.
+    """
+    if tool_id not in TOOLS:
+        trace_exe_start('invalid-worker-id', invalid_id=tool_id)
+        raise SystemExit('Unknown E3 tool: '+str(tool_id))
+    # Crucial: nested Pin Spacer / Block Maker workers launch new processes.
+    # They must not inherit this top-level role and be accidentally routed
+    # to the WRONG tool. Their own --run-tool arguments remain authoritative.
+    os.environ.pop(EXE_TOOL_ENV, None)
+    os.environ.pop(EXE_ARGS_ENV, None)
+    trace_exe_start('dispatch-start', selected=tool_id, args=tool_args)
+    import runpy
+    script, _actions = install_tool(tool_id, runtime_directory())
+    trace_exe_start('worker-file-ready', selected=tool_id, script=str(script), install=_actions)
+    # PyInstaller --windowed can leave sys.stdout/sys.stderr as None even
+    # when the parent has redirected OS-level handles. Many original tools
+    # use print() and traceback.print_exc(), so supply a writable log stream.
+    if sys.stdout is None:
+        sys.stdout = (script.parent / 'launcher_output.log').open(
+            'a', encoding='utf-8', errors='replace', buffering=1)
+    if sys.stderr is None:
+        sys.stderr = sys.stdout
+    tool_dir = str(script.parent)
+    prior_argv = sys.argv[:]
+    prior_cwd = os.getcwd()
+    sys.path.insert(0, tool_dir)
+    sys.argv = [str(script)] + list(tool_args)
+    try:
+        os.chdir(tool_dir)
+        trace_exe_start('executing-tool-source', selected=tool_id, real_file=str(script))
+        if sys.stdout is not None:
+            print('STARTUP: executing '+str(script), flush=True)
+        with launcher_workbook_override(tool_id):
+            runpy.run_path(str(script), run_name='__main__')
+    finally:
+        sys.argv = prior_argv
+        os.chdir(prior_cwd)
+        if sys.path and sys.path[0] == tool_dir:
+            sys.path.pop(0)
+
+
+def acquire_main_window_lock():
+    """Prevent any mistakenly-routed worker from opening another main menu."""
+    if sys.platform != 'win32' or not running_as_packaged_exe():
+        return None
+    import ctypes
+    kernel32 = ctypes.WinDLL('kernel32', use_last_error=True)
+    create = kernel32.CreateMutexW
+    create.argtypes = (ctypes.c_void_p, ctypes.c_int, ctypes.c_wchar_p)
+    create.restype = ctypes.c_void_p
+    handle = create(None, 0, 'Local\\E3MegaTools_MainWindow_Singleton_V26')
+    if not handle:
+        raise ctypes.WinError(ctypes.get_last_error())
+    if ctypes.get_last_error() == 183:  # ERROR_ALREADY_EXISTS
+        trace_exe_start('duplicate-menu-suppressed', reason='another main window is open')
+        kernel32.CloseHandle(ctypes.c_void_p(handle))
+        return False
+    return (kernel32, handle)
+
+
+def main():
+    # Two independent dispatch channels: command line AND Windows process
+    # environment. The environment marker survives even when a frozen EXE
+    # is restarted with unexpected argv. Never allow a child to open MegaApp.
+    trace_exe_start('program-entry')
+    is_frozen = running_as_packaged_exe()
+    if is_frozen:
+        os.environ['E3_MEGA_PACKAGED_EXE'] = '1'
+    env_tool = os.environ.get(EXE_TOOL_ENV, '').strip()
+    cli_tool = None
+    cli_args = []
+    if '--run-tool' in sys.argv:
+        i = sys.argv.index('--run-tool')
+        if len(sys.argv) <= i+1:
+            trace_exe_start('bad-command-line', problem='missing-tool-id')
+            raise SystemExit('Missing tool ID after --run-tool')
+        cli_tool, cli_args = sys.argv[i+1], sys.argv[i+2:]
+    if cli_tool or env_tool:
+        # Prefer explicit CLI for nested worker commands. A bad environment
+        # marker fails CLOSED rather than accidentally reopening the menu.
+        if cli_tool:
+            tool_id, tool_args = cli_tool, cli_args
+        else:
+            tool_id = env_tool
+            try:
+                tool_args = json.loads(os.environ.get(EXE_ARGS_ENV, '[]'))
+                if not isinstance(tool_args, list) or not all(isinstance(a, str) for a in tool_args):
+                    raise ValueError('Invalid worker arguments')
+            except (ValueError, TypeError) as exc:
+                trace_exe_start('bad-worker-args', error=str(exc))
+                raise SystemExit('Invalid E3 tool subprocess arguments') from exc
+        if tool_id not in TOOLS:
+            trace_exe_start('unknown-tool', selected=tool_id)
+            raise SystemExit('Unknown E3 child tool: '+str(tool_id))
+        try:
+            run_embedded_tool(tool_id, tool_args)
+        except Exception as exc:
+            # Worker errors must exit with status 1, not bubble to PyInstaller's
+            # generic "failed to execute script" popup. The parent Block Maker
+            # or Pin Arranger already has its own actionable error dialog.
+            import traceback as _traceback
+            trace_exe_start('worker-error-handled', selected=tool_id, error=repr(exc))
+            if sys.stderr is not None:
+                _traceback.print_exc(file=sys.stderr)
+                sys.stderr.flush()
+            raise SystemExit(1) from None
+        return
+    if '--self-test' in sys.argv or '--diagnose' in sys.argv:
+        assert len(TOOLS)==16 and len(SOURCE_FILES)==36
+        for filename,code in SOURCE_FILES.items():
+            if filename.endswith('.py'):
+                compile(code,filename,'exec')
+            elif filename.endswith('.json'):
+                json.loads(code)
+            print('OK:',filename,len(code.splitlines()),'lines',source_digest(code)[:14])
+        print('PASS: 16 tool entries / 35 Python modules + 1 JSON config. No E3/SQL invoked.')
+        return
+    if '--verify-templates' in sys.argv:
+        for key, info in TEMPLATE_GROUPS.items():
+            path=get_template_path(key)
+            if path is None:
+                raise FileNotFoundError('Missing '+info['filename']+' in templates folder')
+            validate_excel_template(path)
+            print('OK:',info['filename'],'('+str(path)+')')
+        print('PASS: all four templates found and verified. No E3/SQL invoked.')
+        return
+    if '--list-templates' in sys.argv:
+        for key,info in TEMPLATE_GROUPS.items():
+            path=get_template_path(key)
+            print(key+': '+(str(path) if path else 'not found'))
+        return
+    if '--list-tools' in sys.argv:
+        for key,info in TOOLS.items():print(key+': '+info['entry'])
+        return
+    if '--extract' in sys.argv:
+        output=runtime_directory()
+        for key in TOOLS:
+            entry,notes=install_tool(key,output)
+            print(key+': '+str(entry))
+            for note in notes:print('  '+note)
+        return
+    # No worker marker means this process is deliberately the main menu.
+    # Only one main menu is permitted; a misrouted worker cannot duplicate it.
+    lock = acquire_main_window_lock()
+    if lock is False:
+        return
+    trace_exe_start('launcher-menu-open')
+    try:
+        MegaApp().root.mainloop()
+    finally:
+        if lock is not None:
+            kernel32, handle = lock
+            kernel32.CloseHandle(handle)
+
+if __name__=='__main__':
+    main()
