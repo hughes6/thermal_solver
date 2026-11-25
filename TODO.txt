@@ -1,211 +1,385 @@
+import win32com.client as win32
+import pandas as pd
 import os
-import sys
-import subprocess
-import platform
-import re
+from openpyxl import load_workbook
+from openpyxl.styles import Font, Border, Side, Alignment
+from openpyxl.utils import get_column_letter
 import os
-import os
-import sys
-import re
-import platform
-import subprocess
+import utils
 
-def open_file_with_default_app(path):
-    try:
-        if sys.platform.startswith("win"):
-            os.startfile(path)
-        elif platform.system() == "Darwin":  # macOS
-            subprocess.run(['open', path], check=True)
-        else:  # Linux and other Unix-like systems
-            subprocess.run(['xdg-open', path], check=True)
-    except FileNotFoundError as e:
-        print(f"Error: Command not found - {e}")
-    except PermissionError as e:
-        print(f"Error: Permission denied - {e}")
-        
-    except subprocess.CalledProcessError as e:
-        print(f"Error: Failed to open file - {e}")
-    except Exception as e:
-        print(f"Unexpected error: {e}")
+class WireList ():
+    def __init__( self ):
+        pass
+
+    def run(self):
+        # set constants
+        #====================================================================================================================================
+        s_Report_Title = "Wire_List"
+        s_Default_Save_Path = "\\\\asdfiler2\\UserShares\\Zuken\\SimsLibrary\\Reports\\"
+        s_assy_attr_Assy_Num = "Additional Part ID"
+        s_dev_attr_Part_Num = "Additional Part ID"
+        s_wire_attr_Part_Num = "Additional Part ID"
+        s_Drawing_Name = "Ball Drawing Number"
+        s_Drawing_Rev = "Ball Revision Number"
+        s_Col_Header_Names = "WIRE NO.;FROM REF;FROM PIN;FROM PART;TO REF;TO PIN;TO PART;WIRE PART;SINGLE;TWIST;SHIELD;GAUGE;COLOR;STATUS"
+        s_Col_Line_No = 1
+        s_Col_From_Ref = 2
+        s_Col_From_Pin = 3
+        s_Col_From_Part = 4
+        s_Col_To_Ref = 5
+        s_Col_To_Pin = 6
+        s_Col_To_Part = 7
+        s_Col_Wire_Part = 8 
+        s_Col_Single = 9 
+        s_Col_Twist = 10
+        s_Col_Shield = 11
+        s_Col_Gauge = 12
+        s_Col_Color = 13
+        s_Col_Status = 14
+        s_Start_Row = 0
+        #====================================================================================================================================
+
+        # set objects
+        #====================================================================================================================================
+        app = win32.Dispatch('CT.Application')
+        app.PutMessage("Connected to E3.series - externally")
+        prj = app.CreateJobObject()
+        dev = prj.CreateDeviceObject()
+        dev2 = prj.CreateDeviceObject()
+        core = prj.CreatePinObject()
+        bundle = prj.CreateBundleObject()
+        pins_bundle = prj.CreateBundleObject()
+        pins_dev = prj.CreateDeviceObject()
+        parent_bundle = prj.CreateBundleObject()
+        devassy2 = prj.CreateDeviceObject()
+        connA = prj.CreateDeviceObject()
+        connB = prj.CreateDeviceObject()
+        pinA = prj.CreatePinObject()
+        pinB = prj.CreatePinObject()
+        mate_conn = prj.CreateDeviceObject()
+        mate_block = prj.CreateDeviceObject()
+        sym = prj.CreateSymbolObject()
+        sht = prj.CreateSheetObject()
+        #====================================================================================================================================
+
+        # more setup
+        #====================================================================================================================================
+        default_filename_full_path = s_Default_Save_Path + s_Report_Title + "_" + prj.GetName()
+        output_file_name = default_filename_full_path + ".txt"
+        app.PutMessage("Extracting Wire List data")
+        app.PutMessage("Working......  0%")
+        current_row = 0
+        #====================================================================================================================================
+
+        devinfo = prj.GetAllDeviceIds(None)
+        devcount = devinfo[0]
+        devids   = devinfo[1]
+        devids   = [x for x in devids if x is not None]
+        dev_total = len(devids)
+
+        columns = s_Col_Header_Names.split(';')
+        df = pd.DataFrame(columns=columns)
 
 
-def ask_save_path(default_full_path):
-    import os
-    import tkinter as tk
-    from tkinter import filedialog
+        if devcount > 0:
+            # Assemblies first
+            for dev_index, devid in enumerate(devids):
+                dev.SetId(devid)
 
-    default_folder = os.path.dirname(default_full_path)
-    default_filename = os.path.basename(default_full_path)
+                Number_of_statuses = 10
+                for fraction in range(1, Number_of_statuses):
+                    threshold = round(dev_total * fraction / Number_of_statuses)
+                    if dev_index == threshold:
+                        pct = round(100 * dev_index / dev_total)
+                        app.PutMessage(f"Working...... {pct}%")
 
-    # Create Tk root
-    root = tk.Tk()
-    root.withdraw()
+                if dev.IsCable() == 1 and dev.GetAssemblyId() == 0:
+                    coreInfo = dev.GetCoreIds(None)
+                    coreCount = coreInfo[0]
+                    coreIds   = coreInfo[1]
+                    # remove None entries if needed
+                    coreIds = [x for x in coreIds if x is not None]
 
-    # Force window to front
-    root.attributes("-topmost", True)
-    root.update()
+                    if coreCount > 0:
+                        for j in range(coreCount):
+                            coreId = coreIds[j]
+                            core.SetId(coreId)
+                            pinA.SetId(core.GetEndPinId(1))
+                            connA.SetId(pinA.GetId())
+                            pinB.SetId(core.GetEndPinId(2))
+                            connB.SetId(pinB.GetId())
+                            row = {
+                                "WIRE NO.":  current_row - s_Start_Row + 1,
+                                "FROM REF": f"{connA.GetLocation()}-{connA.GetName()}",
+                                "FROM PIN": pinA.GetName(),
+                                "FROM PART": connA.GetAttributeValue(s_dev_attr_Part_Num),
+                                "TO REF":  f"{connB.GetLocation()}-{connB.GetName()}",
+                                "TO PIN":  pinB.GetName(),
+                                "TO PART": connB.GetAttributeValue(s_dev_attr_Part_Num),
+                                "WIRE PART": dev.GetComponentAttributeValue(s_wire_attr_Part_Num),
+                                "SINGLE":    dev.GetName(),
+                                "TWIST":  "",
+                                "SHIELD": "",
+                                "GAUGE":  core.GetCrossSectionDescription(),
+                                "COLOR":  core.GetColourDescription(),
+                                "STATUS": ""
+                            }
 
-    try:
-        selected_path = filedialog.asksaveasfilename(
-            initialdir=default_folder,
-            initialfile=default_filename,
-            defaultextension=".xlsx",
-            filetypes=[("Excel Files", "*.xlsx"), ("All Files", "*.*")]
-        )
-    except Exception:
-        root.destroy()
-        return None
+                            # Handle special "{4}" bundle condition for pinA
+                            if pinA.GetName() == "{4}":
+                                pins_bundle.SetId(pinA.GetId())
+                                pins_dev.SetId(pins_bundle.GetId())
 
-    root.destroy()
+                                row["FROM REF"] = pins_dev.GetName()
+                                row["FROM PIN"] = pins_bundle.GetName()
 
-    # Detect cancel or X
-    if not selected_path:
-        return None
+                            # Handle special "{4}" bundle condition for pinB
+                            if pinB.GetName() == "{4}":
+                                pins_bundle.SetId(pinB.GetId())
+                                pins_dev.SetId(pins_bundle.GetId())
 
-    return selected_path
+                                row["TO REF"] = pins_dev.GetName()
+                                row["TO PIN"] = pins_bundle.GetName()
 
-def write_row_from_copy(ws, ws_copy, src_row, dest_row):
-    if src_row == dest_row:
-        return   # nothing to do
+                            # Handle "wire not connected"
+                            if core.GetEndPinId(1) == 0 and core.GetEndPinId(2) == 0:
+                                row["STATUS"] = f"{dev.GetName()} - {core.GetName()}: Wire not connected"
 
-    # copy values
-    for col in range(1, ws_copy.max_column + 1):
-        ws.cell(row=dest_row, column=col).value = ws_copy.cell(row=src_row, column=col).value
-        
-def endtoend_sort_key(k):
-    # remove a single leading '-' if present
-    k = k.lstrip('-')
+                            df.loc[len(df)] = row
+                            current_row += 1
+                    
+                    bundleInfo = dev.GetBundleIds(None)
+                    bundleCount = bundleInfo[0]
+                    bundleIds = bundleInfo[1]
+                    bundleIds   = [x for x in bundleInfo[1] if x is not None]
 
-    # break into alpha + numeric chunks
-    # example: "W414.P2" -> ['W', '414', '.', 'P', '2']
-    parts = re.split(r'(\d+)', k)
+                    if bundleCount > 0:
+                        for bundleId in bundleIds:
 
-    key_parts = []
-    for p in parts:
-        if p.isdigit():
-            key_parts.append((1, int(p)))      # numeric part
+                            # Select this bundle
+                            bundle.SetId(bundleId)
+
+                            # Get cores inside the bundle
+                            coreInfo = bundle.GetCoreIds(None)
+                            coreCount = coreInfo[0]
+                            coreIds = coreInfo[1]
+                            coreIds   = [x for x in coreInfo[1] if x is not None]
+
+                            if coreCount > 0:
+                                for coreId in coreIds:
+
+                                    core.SetId(coreId)
+
+                                    pinA_id = core.GetEndPinId(1)
+                                    pinA.SetId(pinA_id)
+                                    connA.SetId(pinA.GetId())
+
+                                    pinB_id = core.GetEndPinId(2)
+                                    pinB.SetId(pinB_id)
+                                    connB.SetId(pinB.GetId())
+                                    row = {
+                                        "WIRE NO.":  current_row - s_Start_Row + 1,
+                                        "FROM REF": f"{connA.GetLocation()}-{connA.GetName()}",
+                                        "FROM PIN": pinA.GetName(),
+                                        "FROM PART": connA.GetComponentAttributeValue(s_dev_attr_Part_Num),
+                                        "TO REF":  f"{connB.GetLocation()}-{connB.GetName()}",
+                                        "TO PIN":  pinB.GetName(),
+                                        "TO PART": connB.GetComponentAttributeValue(s_dev_attr_Part_Num),
+                                        "WIRE PART": dev.GetComponentAttributeValue(s_wire_attr_Part_Num),
+                                        "SINGLE":  "",
+                                        "TWIST":  "",
+                                        "SHIELD": "",
+                                        "GAUGE":  core.GetCrossSectionDescription(),
+                                        "COLOR":  core.GetColourDescription(),
+                                        "STATUS": ""
+                                    }
+
+                                    # Handle special "{4}" bundle condition for pinA
+                                    if pinA.GetName() == "{4}":
+                                        pins_bundle.SetId(pinA.GetId())
+                                        pins_dev.SetId(pins_bundle.GetId())
+
+                                        row["FROM REF"] = pins_dev.GetName()
+                                        row["FROM PIN"] = pins_bundle.GetName()
+
+                                    # Handle special "{4}" bundle condition for pinB
+                                    if pinB.GetName() == "{4}":
+                                        pins_bundle.SetId(pinB.GetId())
+                                        pins_dev.SetId(pins_bundle.GetId())
+
+                                        row["TO REF"] = pins_dev.GetName()
+                                        row["TO PIN"] = pins_bundle.GetName()
+
+                                    parent_id = bundle.GetParentBundleId()
+                                    parent_bundle.SetId(parent_id)
+                                    if parent_id > 0 and (parent_bundle.IsTwisted or parent_bundle.IsShield):
+
+                                        # Parent bundle is SHIELDED
+                                        if parent_bundle.IsShield():
+                                            if bundle.IsShield:
+                                                row["SHIELD"] = dev.GetName()
+                                            else:
+                                                row["SHIELD"] = dev.GetName()
+
+                                        # Parent bundle is TWISTED
+                                        elif parent_bundle.IsTwisted():
+
+                                            if bundle.IsShield:
+                                                row["SHIELD"] = dev.GetName()
+
+                                            elif bundle.IsTwisted:
+                                                row["TWIST"] = dev.GetName()
+
+                                            else:
+                                                row["SHIELD"] = dev.GetName()
+
+                                    # ----------------------------------------
+                                    # No parent bundle case
+                                    # ----------------------------------------
+                                    else:
+
+                                        if bundle.IsTwisted():
+                                            row["TWIST"] = dev.GetName()
+
+                                        if bundle.IsShield():
+                                            row["SHIELD"] = dev.GetName()
+
+
+                                    # ----------------------------------------
+                                    # Disconnected wire
+                                    # ----------------------------------------
+                                    if core.GetEndPinId(1) == 0 and core.GetEndPinId(2) == 0:
+                                        row["STATUS"] = f"{dev.GetName()} - {core.GetName()}: Wire not connected"
+                                    df.loc[len(df)] = row
+                                    current_row += 1
+
+
+        app.PutMessage(f"Working...... 100%")
+
+        drawing_no = prj.GetAttributeValue(s_Drawing_Name)
+        revision_no = prj.GetAttributeValue(s_Drawing_Rev)
+        app.PutMessage("Converting data from csv to excel")
+
+        # unset objects
+        #====================================================================================================================================
+        del dev
+        del prj
+        del app
+        #====================================================================================================================================
+
+
+
+        #====================================================================================================================================
+        #================================================Running csv to excel code===========================================================
+        #====================================================================================================================================
+        csv_path = output_file_name
+        drawing_no = drawing_no
+        revision_no = revision_no
+        save_path = str(csv_path[:-4]) + ".xlsx"
+        output_path = utils.ask_save_path(save_path)
+
+        if output_path != None:
+            print("CSV file:", csv_path)
+            print("Output file: ", output_path)
+            print("Drawing number: ", drawing_no)
+            print("Revision number: ", revision_no)
+
+            df_csv = df
+
+            df_template = pd.DataFrame([[""] * len(df_csv.columns)] * (5 + len(df_csv)))
+
+            # Convert template to object dtype to avoid assignment errors
+            df_template = df_template.astype(object)
+
+            df_template.iloc[4, 0:len(df_csv.columns)] = df_csv.columns
+            df_template.iloc[5 : 5 + len(df_csv), 0:len(df_csv.columns)] = df_csv.values
+
+            # Save back to the copied template file
+            df_template.to_excel(output_path, index=False, header=False)
+
+
+            template_column_widths = {'A': 16.0, 'B': 15.0, 'C': 12.0, 'D': 15.0, 'E': 15.0, 'F': 10.0, 'G': 15.0, 'H': 15.0, 'I': 10.0, 'J': 10.0, 'K': 10.0, 'L': 10.0, 'M': 12.0, 'N': 65.0}
+            wb = load_workbook(output_path)
+            ws = wb.active
+            thick = Border(left=Side(style="thick"),right=Side(style="thick"),top=Side(style="thick"),bottom=Side(style="thick"))
+            thin = Border(left=Side(style="thin"),right=Side(style="thin"),top=Side(style="thin"),bottom=Side(style="thin"))
+
+            last_row = 5 + len(df_csv)       
+            last_col = len(df_csv.columns)       
+            last_col_letter = get_column_letter(last_col) # Convert last column number to Excel letters (A, B, C...)
+            # Apply in-place filtering across all header columns
+            ws.auto_filter.ref = f"A5:{last_col_letter}{last_row}"
+            # 1. A1:A4 merged + bold
+            ws.merge_cells("A1:A4")
+            ws["A1"].value = "BAE Systems \n SMS \n P.O. Box 1062 \n Boulder, CO 80306"
+            ws["A1"].alignment = Alignment(vertical="center", horizontal="left", wrap_text=True)
+            ws["A1"].font = Font(bold=True, size=8, name="Arial")
+
+            # 2. B1:M4 merged + bold + size 18
+            ws.merge_cells("B1:M4")
+            ws["B1"].value = "Wirelist Table"
+            ws["B1"].alignment = Alignment(horizontal="center", vertical="center")
+            ws["B1"].font = Font(bold=True, size=18, name="Arial")
+
+            # 3. N1:N4 merged + bold + thick border
+            ws.merge_cells("N1:N4")
+            ws["N1"].value = f"Drawing No: {drawing_no} \n Revision: {revision_no}"
+            ws["N1"].alignment = Alignment(horizontal="right", vertical="center", wrap_text=True)
+            ws["N1"].font = Font(bold=True, size=8, name="Arial")
+
+            # Left‑alignment object
+            left_align = Alignment(horizontal="left", vertical="center")
+            start_row = 5
+            end_row = 5 + len(df_csv)   # df_csv is your pandas CSV DataFrame
+            for row in ws.iter_rows(min_row=start_row, max_row=end_row):
+                for cell in row:
+                    cell.font = Font(name="Arial", size=8)
+                    cell.alignment = left_align
+
+            for col_letter, width in template_column_widths.items():
+                if width is not None:      # some widths may be None
+                    ws.column_dimensions[col_letter].width = width
+
+            for row in ws.iter_rows(min_row=1, max_row=4, min_col=2, max_col=13):
+                for cell in row:
+                    cell.border = thick
+            for row in ws.iter_rows(min_row=1, max_row=4, min_col=14, max_col=14):
+                for cell in row:
+                    cell.border = thick
+            for row in ws.iter_rows(min_row=5, max_row=5, min_col=1, max_col=14):
+                for cell in row:
+                    cell.border = thin
+                    cell.font = Font(bold=True)
+            for row in ws.iter_rows(min_row=6, max_row=end_row, min_col=3, max_col=3):
+                for cell in row:
+                    cell.alignment = Alignment(horizontal="center")
+            for row in ws.iter_rows(min_row=6, max_row=end_row, min_col=6, max_col=6):
+                for cell in row:
+                    cell.alignment = Alignment(horizontal="center")
+            for row in ws.iter_rows(min_row=6, max_row=end_row, min_col=11, max_col=11):
+                for cell in row:
+                    cell.alignment = Alignment(horizontal="center")
+            for row in ws.iter_rows(min_row=6, max_row=end_row, min_col=12, max_col=12):
+                for cell in row:
+                    cell.alignment = Alignment(horizontal="center")
+            for row_idx in range(6, end_row + 1):
+                ws.row_dimensions[row_idx].height = 11.25 
+
+            ws.freeze_panes = "A6"   # Everything above A6 is frozen
+
+            utils.configurePrintArea(ws)
+            
+            wb.save(output_path)
+            print("Finished writing data into:", output_path)
+            utils.open_file_with_default_app(os.path.normpath(output_path))
+
+            #====================================================================================================================================
+            app = win32.Dispatch('CT.Application')
+            app.PutMessage("Wire List Script Output Complete")
+            del app
+            #====================================================================================================================================
+            return output_path
         else:
-            key_parts.append((0, p.lower()))   # alphabetic or punctuation
-
-    return key_parts
-
-
-def cabletable_sort_key(k):
-    # TERM keys first → group = 0
-    if k.startswith("TERM"):
-        group = 0
-        term_num = int(re.search(r'TERM(\d+)', k).group(1))
-        p_num = int(re.search(r'\.P(\d+)', k).group(1))
-        return (group, term_num, p_num)
-
-    # W keys second → group = 1
-    if k.startswith("W"):
-        group = 1
-        # W404, W5-4 → grab the first number after W
-        m = re.search(r'W(\d+)', k)
-        first_num = int(m.group(1)) if m else 999999
-
-        # P number
-        m2 = re.search(r'\.P(\d+)', k)
-        p_num = int(m2.group(1)) if m2 else 999999
-
-        return (group, first_num, p_num)
-
-    # Fallback for unexpected keys
-    return (999, k)
-
-
-
-def MatedWith(conn_id, prj, app):
-    """
-    Equivalent of the VBS function MatedWith(conn_id).
-    Returns the device ID of the mated connector for PIN 1.
-    Checks all connector views to ensure there is not more than one possible mate.
-    """
-
-    # Create local COM objects
-    mw_dev1 = prj.CreateDeviceObject()
-    mw_dev2 = prj.CreateDeviceObject()
-    mw_mate_dev = prj.CreateDeviceObject()
-    mw_pin = prj.CreatePinObject()
-    mw_mate_pin = prj.CreatePinObject()
-
-    # Set initial device
-    mw_dev1.SetId(conn_id)
-
-    # Resolve original ID (VBS: If GetOriginalId <> 0 then SetId(GetOriginalId))
-    if mw_dev1.GetOriginalId() != 0:
-        mw_dev1.SetId(mw_dev1.GetOriginalId())
-
-    # -----------------------
-    # Get PIN 1 mate
-    # -----------------------
-    pinInfo = mw_dev1.GetPinIds(None)
-    pinCount = pinInfo[0]
-    pinIds = [x for x in pinInfo[1] if x is not None]
-
-    if pinCount > 0:
-        # Set pin 1
-        mw_pin.SetId(pinIds[0])
-        mw_mate_pin.SetId(mw_pin.GetConnectedPinId())
-        mw_mate_dev.SetId(mw_mate_pin.GetId())
-
-        # Return original ID if available
-        if mw_mate_dev.GetOriginalId() != 0:
-            mated_id = mw_mate_dev.GetOriginalId()
-        else:
-            mated_id = mw_mate_dev.GetId()
-    else:
-        mated_id = 0
-
-    # -----------------------
-    # Check all views (same as VBS logic)
-    # -----------------------
-    viewInfo = mw_dev1.GetViewIds(None)
-    viewCount = viewInfo[0]
-    viewIds = [x for x in viewInfo[1] if x is not None]
-
-    if viewCount > 0:
-        for viewId in viewIds:
-
-            mw_dev2.SetId(viewId)
-
-            pinInfo = mw_dev2.GetPinIds(None)
-            pinCount = pinInfo[0]
-            pinIds = [x for x in pinInfo[1] if x is not None]
-
-            if pinCount > 0:
-                mw_pin.SetId(pinIds[0])
-                mw_mate_pin.SetId(mw_pin.GetConnectedPinId())
-                mw_mate_dev.SetId(mw_mate_pin.GetId())
-
-                if mated_id == 0:
-                    # First mate found
-                    if mw_mate_dev.GetOriginalId() != 0:
-                        mated_id = mw_mate_dev.GetOriginalId()
-                    else:
-                        mated_id = mw_mate_dev.GetId()
-                else:
-                    # Detect conflicting mates
-                    mate_candidate = mw_mate_dev.GetId()
-                    mate_orig = mw_mate_dev.GetOriginalId()
-
-                    if mate_candidate != 0 and (mate_candidate != mated_id and mate_orig != mated_id):
-                        # VBS: e3.puterror 0, "Connector ... has two or more connectors mated..."
-                        app.PutError(
-                            0,
-                            f"Connector {mw_dev2.GetName()} has two or more connecors mated in different views. "
-                            f"{mated_id}, {mate_candidate}, {mate_orig}",
-                            mw_dev1.GetId()
-                        )
-
-    return mated_id
-
-def configurePrintArea(ws, is_print_labels = False):
-    ws.page_setup.orientation = ws.ORIENTATION_LANDSCAPE
-    ws.page_setup.fitToHeight = 0
-    ws.page_setup.fitToWidth = 1
-    if(not is_print_labels):
-        ws.print_title_rows = '5:5'
-    ws.print_options.gridLines = True
-    ws.sheet_properties.pageSetUpPr.fitToPage = True
+            app = win32.Dispatch('CT.Application')
+            app.PutMessage('No output file selected, nothing was saved')
+            del app
