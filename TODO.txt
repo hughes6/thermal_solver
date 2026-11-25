@@ -1,10 +1,13 @@
 Option Explicit
 
-' New layout: F = Connector Gender, G = Number of Pins.
-' The first connector block moved from H:L to I:M.
+' Block Maker worksheet macro.
+' Five columns per connector: I:M, N:R, S:W, X:AB, ...
+' K3, P3, U3, Z3, ... are the per-connector Saber Parameter 1 names.
+' F = Connector Gender; G = Number of Pins.
 Private Const BLOCK_WIDTH As Long = 5
-Private Const FIRST_COL As Long = 9         ' I (was H)
-Private Const CENTER_COL As Long = 11       ' K (was J)
+Private Const FIRST_COL As Long = 9         ' I
+Private Const CENTER_COL As Long = 11       ' K
+Private Const SABER_ROW As Long = 3
 Private Const MAX_BLOCKS As Long = 40
 Private Const LAST_ROW As Long = 307
 
@@ -33,7 +36,9 @@ Private Sub Worksheet_Change(ByVal Target As Range)
 
     Set srcHeader = Me.Range("I5:M10")
 
-    ' Determine how many connector blocks already contain data.
+    ' Determine which connector blocks were already created.
+    ' Keep this check starting at row 5: a preformatted Saber field in
+    ' row 3 alone must NOT make an uncreated connector look complete.
     maxCreated = 1
     For i = 1 To MAX_BLOCKS - 1
         If Application.WorksheetFunction.CountA( _
@@ -47,7 +52,7 @@ Private Sub Worksheet_Change(ByVal Target As Range)
         End If
     Next i
 
-    ' Create only genuinely new blocks; existing data stays untouched.
+    ' Create only genuinely new connector blocks. Existing data stays untouched.
     If n > maxCreated Then
         For i = maxCreated To n - 1
 
@@ -57,12 +62,12 @@ Private Sub Worksheet_Change(ByVal Target As Range)
 
             srcHeader.Copy Destination:=destHeader
 
-            ' Clear copied pin count in K5, P5, U5, Z5, etc.
+            ' Clear the copied pin count in K5, P5, U5, ...
             Me.Cells(5, CENTER_COL + i * BLOCK_WIDTH) _
                 .MergeArea.ClearContents
 
-            ' Clear copied user-entered constants in the pin-data area.
-            ' J:L, O:Q, T:V, Y:AA, etc.; preserve formulas.
+            ' Clear copied user-entered constants in pin-data columns;
+            ' keep formulas intact.
             Set destInput = Me.Range( _
                 Me.Cells(8, FIRST_COL + i * BLOCK_WIDTH + 1), _
                 Me.Cells(LAST_ROW, FIRST_COL + i * BLOCK_WIDTH + 3))
@@ -82,8 +87,8 @@ Private Sub Worksheet_Change(ByVal Target As Range)
         maxCreated = n
     End If
 
-    ' K6 = B7, P6 = B8, U6 = B9, etc.
-    ' K5, P5, U5, etc. find the pin count in new column G.
+    ' K6 = B7, P6 = B8, U6 = B9, ...
+    ' K5, P5, U5, ... look up the pin count in column G.
     For i = 0 To maxCreated - 1
 
         Set connectorNameCell = Me.Cells(6, CENTER_COL + i * BLOCK_WIDTH)
@@ -97,12 +102,14 @@ Private Sub Worksheet_Change(ByVal Target As Range)
             ",$B$7:$B$500,$G$7:$G$500,"""")"
     Next i
 
-    ' Repair rules on all existing generated blocks.
+    ' Repair existing generated blocks, including the new row-3 Saber field.
+    ' A previously typed Saber name in P3/U3/etc. is preserved.
     For i = 1 To maxCreated - 1
         RebuildBlockRules i
+        RebuildSaberField i
     Next i
 
-    ' Hide unused blocks without clearing their data.
+    ' Hide unused connector blocks without deleting their data, including row 3.
     For i = 0 To maxCreated - 1
         Me.Range( _
             Me.Columns(FIRST_COL + i * BLOCK_WIDTH), _
@@ -120,6 +127,45 @@ ErrHandler:
     MsgBox "Macro error " & Err.Number & ":" & vbCrLf & Err.Description
     Resume SafeExit
 
+End Sub
+
+
+Private Sub RebuildSaberField(ByVal blockIndex As Long)
+    ' Copy the full I3:M3 field layout (including merges/formatting)
+    ' to N3:R3, S3:W3, X3:AB3, ... while preserving the name already
+    ' entered in P3, U3, Z3, ... . Never copy K3's name into a new block.
+
+    Dim destRow As Range
+    Dim saberCell As Range
+    Dim existingFormula As Variant
+    Dim hasExistingName As Boolean
+
+    If blockIndex <= 0 Then Exit Sub
+
+    Set saberCell = Me.Cells(SABER_ROW, CENTER_COL + blockIndex * BLOCK_WIDTH)
+    existingFormula = saberCell.MergeArea.Cells(1, 1).Formula
+
+    If IsError(existingFormula) Then
+        hasExistingName = True
+    Else
+        hasExistingName = (Len(CStr(existingFormula)) > 0)
+    End If
+
+    Set destRow = Me.Range( _
+        Me.Cells(SABER_ROW, FIRST_COL + blockIndex * BLOCK_WIDTH), _
+        Me.Cells(SABER_ROW, FIRST_COL + blockIndex * BLOCK_WIDTH + BLOCK_WIDTH - 1))
+
+    ' Allow a newly added row-3 merged field to be propagated even if the
+    ' destination block previously used a different row-3 merge layout.
+    destRow.UnMerge
+    Me.Range("I3:M3").Copy Destination:=destRow
+
+    Set saberCell = Me.Cells(SABER_ROW, CENTER_COL + blockIndex * BLOCK_WIDTH)
+    If hasExistingName Then
+        saberCell.MergeArea.Cells(1, 1).Formula = existingFormula
+    Else
+        saberCell.MergeArea.ClearContents
+    End If
 End Sub
 
 
@@ -198,4 +244,3 @@ End Function
 Private Function ColLetter(ByVal colNum As Long) As String
     ColLetter = Split(Me.Cells(1, colNum).Address, "$")(1)
 End Function
-
