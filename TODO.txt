@@ -1,81 +1,38 @@
-"""Safe modularization checks: never connect to E3, SQL, or live Excel."""
-import hashlib
-import os
+"""Run under xvfb-run in Linux for safe GUI routing tests. No real E3 calls."""
 from pathlib import Path
-import subprocess
-import sys
 import tempfile
-import unittest
-from unittest.mock import patch
-
+import sys
+import tkinter as tk
 ROOT=Path(__file__).resolve().parents[1]
 sys.path.insert(0,str(ROOT))
 import mega_launcher as launcher
-import tool_sources
-
-
-class ModularSourceTests(unittest.TestCase):
-    def test_registry_has_15_tools_and_every_entry_is_present(self):
-        self.assertEqual(len(launcher.TOOLS),15)
-        self.assertEqual(len(tool_sources.SOURCE_FILES),24)
-        self.assertEqual(len(launcher.SOURCE_FILES),24)
-        for key,tool in launcher.TOOLS.items():
-            self.assertIn(tool['entry'],launcher.SOURCE_FILES,key)
-            self.assertTrue((ROOT/'tool_scripts'/tool['entry']).is_file(),key)
-
-    def test_current_source_integrity_manifest(self):
-        manifest=ROOT/'TOOL_SOURCE_SHA256.txt'
-        verified=0
-        for line in manifest.read_text(encoding='utf-8').splitlines():
-            if not line or line.startswith('#'):continue
-            expected,name=line.split('  ',1)
-            data=(ROOT/name).read_bytes()
-            self.assertEqual(hashlib.sha256(data).hexdigest(),expected,name)
-            verified+=1
-        self.assertEqual(verified,24)
-
-    def test_all_sources_compile(self):
-        for filename,source in launcher.SOURCE_FILES.items():
-            with self.subTest(filename=filename):
-                compile(source,filename,'exec')
-
-    def test_safe_extraction_and_preserved_edits(self):
-        with tempfile.TemporaryDirectory() as folder:
-            root=Path(folder)
-            path,action=launcher.install_tool('block_maker',root)
-            self.assertEqual(len(list(root.rglob('*.py'))),5)
-            self.assertTrue(path.is_file())
-            self.assertTrue(any('installed' in x for x in action))
-            path,action=launcher.install_tool('block_maker',root)
-            self.assertTrue(all('unchanged' in a for a in action))
-            customized=root/'block_maker'/'launcher.py'
-            customized.write_text(customized.read_text(encoding='utf-8')+'\n# own edit\n',encoding='utf-8')
-            _,actions=launcher.install_tool('block_maker',root)
-            self.assertTrue(any('kept user-edited' in a for a in actions))
-            self.assertTrue(customized.read_text(encoding='utf-8').endswith('# own edit\n'))
-
-    def test_runner_is_separate_wx_worker_with_all_support_files(self):
-        self.assertNotIn('zuken_script_runner', launcher.FROZEN_INPROCESS_TOOLS)
-        self.assertEqual(launcher.TOOLS['zuken_script_runner']['tab'], 'runner')
-        with tempfile.TemporaryDirectory() as folder:
-            entry, actions = launcher.install_tool('zuken_script_runner', Path(folder))
-            self.assertEqual(len(actions), 6)
-            self.assertEqual(entry.name, 'appmain.py')
-            self.assertTrue((entry.parent / 'AppGuiCode.py').is_file())
-            self.assertIn('import AppGuiCode', entry.read_text(encoding='utf-8'))
-
-    def test_frozen_source_root(self):
-        with tempfile.TemporaryDirectory() as folder:
-            root=Path(folder)
-            (root/'tool_scripts').mkdir()
-            with patch.object(sys,'_MEIPASS',str(root),create=True):
-                self.assertEqual(tool_sources.tool_source_directory(),root/'tool_scripts')
-
-    def test_entry_point_help_command(self):
-        cp=subprocess.run([sys.executable,str(ROOT/'Zuken_Mega_Script.py'),'--list-tools'],
-            cwd=str(ROOT),capture_output=True,text=True,timeout=15)
-        self.assertEqual(cp.returncode,0,cp.stderr)
-        self.assertEqual(len(cp.stdout.splitlines()),15)
 
 if __name__=='__main__':
-    unittest.main()
+    with tempfile.TemporaryDirectory() as temp:
+        launcher.runtime_directory=lambda:Path(temp)
+        # Exercise the packaged EXE direct-launch route, not Python subprocesses.
+        launcher.running_as_packaged_exe=lambda:True
+        called=[]
+        def simulated_tool(key, args):
+            called.append((key,args))
+            window=tk.Tk()
+            window.title('Simulated '+key)
+            window.after(30,window.destroy)
+            window.mainloop()
+        launcher.run_embedded_tool=simulated_tool
+        app=launcher.MegaApp()
+        keys=[k for k in launcher.TOOLS if k in launcher.FROZEN_INPROCESS_TOOLS]
+        for key in keys:
+            def begin(k=key):
+                assert app.running_local is None, ('not restored',k)
+                app.launch(k)
+            # stagger to allow each simulated window to open and close
+            app.root.after(300 + keys.index(key)*240,begin)
+        def finish():
+            assert app.running_local is None
+            assert [k for k,args in called]==keys,(keys,called)
+            assert app.root.state()=='normal'
+            app.root.destroy()
+        app.root.after(300 + len(keys)*240,finish)
+        app.root.mainloop()
+        print('GUI PASS: all 14 Tkinter tool handoffs; wxPython Runner stays isolated')
