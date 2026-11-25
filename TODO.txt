@@ -1,38 +1,183 @@
-"""Run under xvfb-run in Linux for safe GUI routing tests. No real E3 calls."""
-from pathlib import Path
-import tempfile
-import sys
-import tkinter as tk
-ROOT=Path(__file__).resolve().parents[1]
-sys.path.insert(0,str(ROOT))
-import mega_launcher as launcher
+import AppGuiCode
+import wx
+import wirelist
+import endtoend
+import cabletable
+import win32com.client as win32
+import os
 
-if __name__=='__main__':
-    with tempfile.TemporaryDirectory() as temp:
-        launcher.runtime_directory=lambda:Path(temp)
-        # Exercise the packaged EXE direct-launch route, not Python subprocesses.
-        launcher.running_as_packaged_exe=lambda:True
-        called=[]
-        def simulated_tool(key, args):
-            called.append((key,args))
-            window=tk.Tk()
-            window.title('Simulated '+key)
-            window.after(30,window.destroy)
-            window.mainloop()
-        launcher.run_embedded_tool=simulated_tool
-        app=launcher.MegaApp()
-        keys=[k for k in launcher.TOOLS if k in launcher.FROZEN_INPROCESS_TOOLS]
-        for key in keys:
-            def begin(k=key):
-                assert app.running_local is None, ('not restored',k)
-                app.launch(k)
-            # stagger to allow each simulated window to open and close
-            app.root.after(300 + keys.index(key)*240,begin)
-        def finish():
-            assert app.running_local is None
-            assert [k for k,args in called]==keys,(keys,called)
-            assert app.root.state()=='normal'
-            app.root.destroy()
-        app.root.after(300 + len(keys)*240,finish)
-        app.root.mainloop()
-        print('GUI PASS: all 14 Tkinter tool handoffs; wxPython Runner stays isolated')
+
+def on_generate(labels):
+
+    if "Wirelist" in labels:
+        objects["Wirelist"] = True
+
+    if "Cable Table" in labels:
+        objects["Cable Table"] = True
+
+    if "Print Labels" in labels:
+        objects["Print Labels"] = True
+
+    if "End to End" in labels:
+        objects["End to End"] = True
+
+
+#------------------------------------------------------------------------------
+# Get currently open Excel workbooks
+#------------------------------------------------------------------------------
+
+def get_open_excel_files():
+    open_files = set()
+
+    try:
+        excel = win32.GetActiveObject("Excel.Application")
+
+        for workbook in excel.Workbooks:
+            if workbook.Path:
+                path = os.path.normcase(
+                    os.path.abspath(workbook.FullName)
+                )
+                open_files.add(path)
+
+    except Exception:
+        pass
+
+    return open_files
+
+
+#------------------------------------------------------------------------------
+# Convert Excel to PDF
+#------------------------------------------------------------------------------
+
+def excel_to_pdf(excel_path, pdf_path):
+    excel = None
+    workbook = None
+
+    try:
+        # Use a separate Excel instance so the user's Excel
+        # application is not accidentally closed
+        excel = win32.DispatchEx("Excel.Application")
+        excel.Visible = False
+        excel.DisplayAlerts = False
+
+        # Open the workbook
+        workbook = excel.Workbooks.Open(
+            os.path.abspath(excel_path),
+            UpdateLinks=0,
+            ReadOnly=True
+        )
+
+        # Export as PDF (0 = PDF)
+        workbook.ExportAsFixedFormat(
+            0,
+            os.path.abspath(pdf_path)
+        )
+
+    finally:
+        # Close the workbook and quit the temporary Excel instance
+        if workbook is not None:
+            workbook.Close(False)
+
+        if excel is not None:
+            excel.Quit()
+
+
+#------------------------------------------------------------------------------
+# Generate Sheets
+#------------------------------------------------------------------------------
+
+def generate_sheets(objects):
+
+    # Remember which Excel files were open before generation
+    previously_open = get_open_excel_files()
+
+    wsheet = None
+    esheet = None
+    csheet = None
+    psheet = None
+
+    try:
+
+        if objects["Wirelist"] == True:
+            w = wirelist.WireList()
+            wsheet = w.run()
+
+        if objects["End to End"] == True:
+            e = endtoend.EndtoEnd()
+            esheet = e.run()
+
+        if objects["Cable Table"] == True and objects["Print Labels"] == True:
+            c = cabletable.CableTable(True)
+            csheet, psheet = c.run()
+
+        elif objects["Cable Table"] == True:
+            c = cabletable.CableTable(False)
+            csheet = c.run()
+
+        # Automatically convert generated sheets to PDF
+        save = [wsheet, esheet, csheet, psheet]
+
+        for sheet in save:
+            if sheet is not None:
+                folder, filename = os.path.split(sheet)
+                pdf_name = os.path.splitext(filename)[0].replace("%", " ") + ".pdf"
+                pdf_sheet = os.path.join(folder, pdf_name)
+
+                excel_to_pdf(sheet, pdf_sheet)
+
+    finally:
+
+        # --------------------------------------------------------------
+        # Reopen Excel files that were originally open
+        # --------------------------------------------------------------
+
+        currently_open = get_open_excel_files()
+        save = [wsheet, esheet, csheet, psheet]
+        for sheet in save:
+            if sheet is None:
+                continue
+
+            path = os.path.normcase(os.path.abspath(sheet))
+
+            # Only reopen if:
+            # 1. The file was open before generation
+            # 2. The file is now closed
+            # 3. The file still exists
+
+            if (
+                path in previously_open
+                and path not in currently_open
+                and os.path.exists(path)
+            ):
+                os.startfile(path)
+
+
+#------------------------------------------------------------------------------
+# GUI main
+#------------------------------------------------------------------------------
+
+if __name__ == "__main__":
+
+    try:
+
+        objects = {
+            "Wirelist": False,
+            "Cable Table": False,
+            "Print Labels": False,
+            "End to End": False,
+        }
+
+        app = wx.App(False)
+
+        frame = AppGuiCode.MainFrame(None, on_generate)
+        frame.Show(True)
+
+        app.MainLoop()
+        generate_sheets(objects)
+
+    except Exception as err:
+        # In a windowed EXE, stdout is captured by the Mega launcher.
+        # Return a nonzero status instead of silently reporting success.
+        import traceback
+        traceback.print_exc()
+        raise SystemExit(1) from err
