@@ -1,1107 +1,221 @@
-import time
-import json
+"""E3 Block Maker launcher with descriptive, copyable error popups.
+
+Run `python launcher.py` (or the packaged launcher executable).
+Runs main.py and test.py in separate processes, as in the original design.
+"""
+
 import os
-import win32com.client as win32
+import sys
+import tempfile
+import subprocess
+import traceback
+from collections import deque
+from datetime import datetime
+from pathlib import Path
 
 
-def format_current_secondary_pin_views(prj, metadata_path, modified_texts):
-    """Format the CURRENT E3 pin-view symbols, not PlacePins' stale IDs.
+ROLE_ENV = "BLOCK_MAKER_ROLE"
+METADATA_ENV = "E3_SECONDARY_BLOCK_FILE"
 
-    Based on the working Pin Arranger approach: Pin.GetViewIds and the
-    split-position text type 213. E3 may rebuild earlier END_SPLIT symbols
-    while placing later pins, invalidating the IDs returned by PlacePins.
-    If Pin.GetViewIds is unavailable, recover by inspecting the symbols on
-    the connector's actual sheet, matching designation + pin number + position.
-    This function changes TEXT ONLY; never re-places symbols or changes nets.
+
+def get_application_directory():
+    # Block Maker support modules (main.py, test.py, utils.py, error_popup.py)
+    # are installed next to launcher.py. EXE location is NOT their directory.
+    return Path(__file__).resolve().parent
+
+
+def get_child_command():
+    if (getattr(sys, "frozen", False) or os.environ.get("E3_MEGA_PACKAGED_EXE") == "1"):
+        # Both child stages run this EXE in Block Maker worker mode; the
+        # BLOCK_MAKER_ROLE environment variable selects main.py vs test.py.
+        return [sys.executable, '--run-tool', 'block_maker']
+    return [sys.executable, str(Path(__file__).resolve())]
+
+
+def run_builder_child():
+    import main  # Exceptions must propagate so subprocess returns a failure code.
+
+
+def run_formatter_child():
+    """Actually RUN the formatter, rather than only importing its module.
+
+    test.py deliberately guards its entry point with ``if __name__ ==
+    '__main__'``.  A plain ``import test`` therefore succeeds immediately
+    without formatting the connector/pin text or showing the Saber prompt.
+    Load by absolute file path to avoid collisions with another ``test``
+    module, and invoke its main() explicitly.
     """
-    import re
+    import importlib.util
 
-    if not metadata_path or not os.path.isfile(metadata_path):
-        print("PIN TEXT FORMAT: No secondary metadata available", flush=True)
-        return
-    try:
-        with open(metadata_path, "r", encoding="utf-8") as handle:
-            blocks = json.load(handle)
-    except Exception as exc:
-        print("PIN TEXT FORMAT: Could not read metadata:", repr(exc), flush=True)
-        return
+    formatter_path = get_application_directory() / 'test.py'
+    spec = importlib.util.spec_from_file_location(
+        'e3_block_maker_formatter_stage', str(formatter_path)
+    )
+    if spec is None or spec.loader is None:
+        raise RuntimeError(f'Could not load Block Maker formatter: {formatter_path}')
+    formatter = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(formatter)
+    return formatter.main()
 
-    dev_obj = prj.CreateDeviceObject()
-    pin_obj = prj.CreatePinObject()
-    sym_obj = prj.CreateSymbolObject()
-    text_obj = prj.CreateTextObject()
-    sht_obj = prj.CreateSheetObject()
 
-    def ids(result):
-        if isinstance(result, (tuple, list)):
-            if len(result) >= 2 and isinstance(result[1], (tuple, list)):
-                result = result[1]
-            elif all(type(x) is int for x in result):
-                pass
-            else:
-                return []
-            return [x for x in result if type(x) is int and x > 0]
-        return [result] if type(result) is int and result > 0 else []
+class StageFailed(Exception):
+    def __init__(self, stage, return_code, output):
+        self.stage = stage
+        self.return_code = return_code
+        self.output = output
+        super().__init__(f"{stage} exited with code {return_code}")
 
-    def call_ids(obj, method):
-        fn = getattr(obj, method, None)
-        if fn is None:
-            return []
-        for args in ((None,), ()):
-            try:
-                return ids(fn(*args))
-            except Exception:
-                pass
-        return []
 
-    def clean(value):
-        return str(value or "").strip().casefold()
-
-    def same_pin(actual, expected):
-        actual, expected = clean(actual), clean(expected)
-        return (actual == expected or
-                actual.split("-", 1)[0] == expected or
-                expected.split("-", 1)[0] == actual)
-
-    cache = {}
-
-    def snap(symbol_id):
-        if symbol_id in cache:
-            return cache[symbol_id]
+def emit(line, log_handle):
+    """Stream to both console and persistent log, without waiting for the child."""
+    log_handle.write(line)
+    log_handle.flush()
+    if sys.stdout is not None:
         try:
-            sym_obj.SetId(symbol_id)
-            library = str(sym_obj.GetSymbolTypeName() or "").strip()
-            if not library.lower().startswith("milblock"):
-                cache[symbol_id] = None
-                return None
-            items = []
-            for tid in call_ids(sym_obj, "GetTextIds"):
-                try:
-                    text_obj.SetId(tid)
-                    items.append((int(text_obj.GetType()),
-                                  str(text_obj.GetText() or "").strip(), tid))
-                except Exception:
-                    continue
-            positions = []
-            for typ, val, _ in items:
-                if typ == 213:
-                    match = re.fullmatch(r"\s*(\d+)\s*/\s*(\d+)\s*", val)
-                    if match:
-                        positions.append(int(match.group(1)))
-            data = {"id": symbol_id, "library": library, "items": items,
-                    "position": positions[0] if len(positions) == 1 else None}
-            cache[symbol_id] = data
-            return data
-        except Exception:
-            cache[symbol_id] = None
-            return None
-
-    def values(candidate, typ):
-        return [val for t, val, _ in candidate["items"] if t == typ]
-
-    def belongs(candidate, connector):
-        # E3 assigns view suffixes dynamically (#1, #2, ...) when multiple
-        # connectors share the main device view. Never hardcode #1.
-        # Compare the COMPLETE connector designation before the suffix so
-        # J1 cannot accidentally match X-J1 or another connector of the
-        # same part number. The prefix may include E3 location text.
-        expected = clean(connector)
-        for val in values(candidate, 12):
-            last = clean(val).split()[-1] if clean(val) else ""
-            match = re.fullmatch(r"(.+?)#\d+", last)
-            if match and match.group(1).lstrip("-") == expected:
-                return True
-        return False
-
-    def qualifies(candidate, connector, pin_name, position):
-        if not candidate:
-            return False
-        if candidate["position"] is not None and candidate["position"] != position:
-            return False
-        num_matches = any(same_pin(n, pin_name) for n in values(candidate, 203))
-        if not num_matches:
-            return False
-        return belongs(candidate, connector)
-
-    def pin_views(pin_id):
-        try:
-            pin_obj.SetId(pin_id)
-            return call_ids(pin_obj, "GetViewIds")
-        except Exception:
-            return []
-
-    def get_current_pin_ids(block):
-        mapping = {}
-        view_id = block.get("placed_pin_symbols", [{}])[0].get("connector_view_id")
-        if view_id:
-            try:
-                dev_obj.SetId(int(view_id))
-                for pid in call_ids(dev_obj, "GetAllPinIds"):
-                    try:
-                        pin_obj.SetId(pid)
-                        mapping[str(pin_obj.GetName()).strip()] = pid
-                    except Exception:
-                        pass
-            except Exception:
-                pass
-        return mapping
-
-    def get_sheet_symbols(sheet_id):
-        if sheet_id:
-            try:
-                sht_obj.SetId(int(sheet_id))
-                result = call_ids(sht_obj, "GetSymbolIds")
-                if result:
-                    return result
-            except Exception:
-                pass
-        return call_ids(prj, "GetSymbolIds")
-
-    def set_and_check(method, value, getter):
-        try:
-            getattr(text_obj, method)(value)
-            observed = getattr(text_obj, getter)()
-            if getter == "GetHeight":
-                return (isinstance(observed, (int, float)) and
-                        abs(float(observed) - float(value)) < 0.0001), observed
-            return observed == value, observed
-        except Exception as exc:
-            return False, repr(exc)
-
-    print("\n" + "=" * 60, flush=True)
-    print("PIN ARRANGER-STYLE CURRENT SECONDARY PIN FORMATTING", flush=True)
-    print("Resolving live views, not the original PlacePins symbol IDs", flush=True)
-    print("=" * 60, flush=True)
-
-    total_expected = total_resolved = total_failed = 0
-    total_text_success = total_text_fail = 0
-    seen_symbols = set()
-    for block in blocks:
-        connector = str(block.get("name", "")).strip()
-        entries = block.get("placed_pin_symbols", [])
-        if not entries:
-            continue
-        current_pin_ids = get_current_pin_ids(block)
-        sheet_symbols = get_sheet_symbols(block.get("sheet_id"))
-        print(f"CONNECTOR {connector}: {len(entries)} pins; sheet candidates={len(sheet_symbols)}", flush=True)
-
-        for entry in entries:
-            total_expected += 1
-            name = str(entry["pin_name"]).strip()
-            pos = int(entry["position"])
-            old_id = int(entry["symbol_id"])
-            possible_pids = [int(entry["pin_id"])]
-            for current_name, current_pid in current_pin_ids.items():
-                if same_pin(current_name, name) and current_pid not in possible_pids:
-                    possible_pids.append(current_pid)
-
-            # Try the Pin Arranger's live Pin.GetViewIds path first.
-            via_pin = []
-            for pid in possible_pids:
-                via_pin.extend(pin_views(pid))
-            via_pin = list(dict.fromkeys(via_pin))
-            matches = [snap(sid) for sid in via_pin]
-            matches = [s for s in matches if qualifies(s, connector, name, pos)]
-
-            # Some E3 builds don't return newly split symbols from GetViewIds.
-            # Enumerate placed symbols on the *same sheet* as a safe fallback.
-            if not matches:
-                matches = [snap(sid) for sid in sheet_symbols]
-                matches = [s for s in matches if qualifies(s, connector, name, pos)]
-
-            # Never silently format the wrong pin if ownership is ambiguous.
-            matches = {s["id"]: s for s in matches}.values()
-            matches = list(matches)
-            if len(matches) != 1:
-                total_failed += 1
-                print(f"  FAIL pin {name} position {pos}: found {len(matches)} current matching symbols; "
-                      f"old PlacePins ID={old_id}, Pin.GetViewIds={via_pin}", flush=True)
-                continue
-
-            current = matches[0]
-            sid = current["id"]
-            if sid in seen_symbols:
-                total_failed += 1
-                print(f"  FAIL pin {name}: current symbol {sid} already assigned to another pin", flush=True)
-                continue
-            seen_symbols.add(sid)
-            total_resolved += 1
-            print(f"  PIN {name} position {pos}: old ID {old_id} -> CURRENT {sid} "
-                  f"({current['library']})", flush=True)
-
-            # Every split-pin symbol may carry its own Location text (type 15),
-            # especially the receptacle family. Hide Location on ALL pin views.
-            required = {5, 15, 617, 203}
-            if pos == 1:
-                required.add(12)
-            present = {typ for typ, _, _ in current["items"]}
-            for missing in sorted(required - present):
-                print(f"    WARNING: expected text type {missing} not present on current symbol", flush=True)
-
-            for typ, val, tid in current["items"]:
-                if typ not in (5, 12, 15, 617, 203):
-                    continue
-                # 5: component code off on ALL pins
-                # 12: top designation visible, bold, 0.2"; others hidden
-                # 15: Location OFF on EVERY secondary pin (plug + receptacle)
-                # 617: local signal visible, black, bold, 0.15"
-                # 203: pin number visible and bold
-                desired_visibility = 0 if (typ in (5, 15) or (typ == 12 and pos != 1)) else 1
-                text_obj.SetId(tid)
-                checks = []
-                ok, actual = set_and_check("SetVisibility", desired_visibility, "GetVisibility")
-                checks.append(ok)
-                if typ == 12 and pos == 1:
-                    checks.append(set_and_check("SetStyle", 1, "GetStyle")[0])
-                    checks.append(set_and_check("SetHeight", 0.2, "GetHeight")[0])
-                    checks.append(set_and_check("SetColour", 0, "GetColour")[0])
-                elif typ == 617:
-                    checks.append(set_and_check("SetStyle", 1, "GetStyle")[0])
-                    checks.append(set_and_check("SetHeight", 0.15, "GetHeight")[0])
-                    checks.append(set_and_check("SetColour", 0, "GetColour")[0])
-                    try:
-                        text_obj.SetAlignment(3)
-                    except Exception:
-                        pass
-                elif typ == 203:
-                    checks.append(set_and_check("SetStyle", 1, "GetStyle")[0])
-
-                if all(checks):
-                    total_text_success += 1
-                else:
-                    total_text_fail += 1
-                # Readback proves the glyph, not just the logical pin, changed.
-                try:
-                    final_style = text_obj.GetStyle()
-                except Exception:
-                    final_style = "N/A"
-                try:
-                    final_height = text_obj.GetHeight()
-                except Exception:
-                    final_height = "N/A"
-                print(f"    TYPE {typ} {val!r}: visible={actual!r}/{desired_visibility} "
-                      f"style={final_style!r} height={final_height!r} "
-                      f"{'PASS' if all(checks) else 'FAIL'}", flush=True)
-                modified_texts.append({
-                    "device": connector, "pin": name, "position": pos,
-                    "view": sid, "text_id": tid, "type": typ,
-                    "value": val, "desired": desired_visibility,
-                })
-    print(f"PIN VIEW RESOLUTION: {total_resolved}/{total_expected} pins; unresolved={total_failed}", flush=True)
-    print(f"PIN TEXT READBACK: PASS={total_text_success} FAIL={total_text_fail}", flush=True)
-    if total_failed or total_text_fail:
-        print("WARNING: Some pin text was NOT verified; see lines above", flush=True)
-
-
-def format_current_main_connector_symbols(prj, metadata_path, modified_texts, text_size=0.2):
-    """Format every current FULL connector on the main drawing, not just one.
-
-    Important when there are multiple connectors: metadata `sheet_id` is the
-    SECONDARY schematic-block sheet, not necessarily the TOP-LEVEL connector
-    sheet. E3 can also replace a symbol ID while rearranging MIL views.
-
-    Resolve current FULL symbols across ALL project sheets, using their current
-    type-12 device designation and, if present, the original connector device's
-    GetSymbolIds() as ownership evidence. Never edit an ambiguous match.
-    Only text styling/visibility changes; no pin/device placement or nets.
-    """
-    if not metadata_path or not os.path.isfile(metadata_path):
-        print("MAIN CONNECTOR FORMAT: No metadata available", flush=True)
-        return
-    try:
-        with open(metadata_path, "r", encoding="utf-8") as handle:
-            blocks = json.load(handle)
-    except Exception as exc:
-        print("MAIN CONNECTOR FORMAT: Metadata read error:", repr(exc), flush=True)
-        return
-
-    sym_obj = prj.CreateSymbolObject()
-    text_obj = prj.CreateTextObject()
-    sheet_obj = prj.CreateSheetObject()
-    dev_obj = prj.CreateDeviceObject()
-
-    def ids(result):
-        if isinstance(result, (tuple, list)):
-            if len(result) >= 2 and isinstance(result[1], (list, tuple)):
-                result = result[1]
-            elif not all(type(x) is int for x in result):
-                return []
-            return [x for x in result if type(x) is int and x > 0]
-        return [result] if type(result) is int and result > 0 else []
-
-    def get_ids(obj, method):
-        func = getattr(obj, method, None)
-        if func is None:
-            return []
-        for args in ((None,), ()):
-            try:
-                return ids(func(*args))
-            except Exception:
-                continue
-        return []
-
-    def clean(s):
-        return str(s or "").strip().casefold().lstrip("-")
-
-    def name_in_designation(display, name):
-        """Match FULL connector designation, not a secondary '-J1#1' label."""
-        v = clean(display)
-        expected = clean(name)
-        if not v or not expected or "#" in v.rsplit(None, 1)[-1]:
-            return False
-        if v == expected:
-            return True
-        return v.split()[-1].lstrip("-") == expected
-
-    def text_set(text_id, setter, getter, desired):
-        text_obj.SetId(text_id)
-        try:
-            result = getattr(text_obj, setter)(desired)
-            actual = getattr(text_obj, getter)()
-            ok = (isinstance(actual, (int, float)) and
-                  abs(float(actual) - float(desired)) < 0.0001) if getter == "GetHeight" else actual == desired
-            if result is False or (type(result) is int and result < 0):
-                ok = False
-            return ok, actual
-        except Exception as exc:
-            return False, repr(exc)
-
-    # Across all sheets, because secondary-block sheet != main connector sheet.
-    sheet_ids = get_ids(prj, "GetAllSheetIds") or get_ids(prj, "GetSheetIds")
-    all_ids = set(get_ids(prj, "GetSymbolIds"))
-    for sheet_id in sheet_ids:
-        try:
-            sheet_obj.SetId(sheet_id)
-            all_ids.update(get_ids(sheet_obj, "GetSymbolIds"))
-        except Exception as exc:
-            print(f"MAIN FORMAT: cannot scan sheet {sheet_id}: {exc!r}", flush=True)
-
-    # Also include direct symbols from the connector's original DEVICE ID.
-    device_symbol_ids = {}
-    for block in blocks:
-        cname = str(block.get("name", "")).strip()
-        original_device_ids = {
-            int(x["parent_connector_id"])
-            for x in block.get("placed_pin_symbols", [])
-            if type(x.get("parent_connector_id")) is int and x["parent_connector_id"] > 0
-        }
-        associated = set()
-        for did in original_device_ids:
-            try:
-                dev_obj.SetId(did)
-                associated.update(get_ids(dev_obj, "GetSymbolIds"))
-            except Exception:
-                pass
-        device_symbol_ids[cname] = associated
-        all_ids.update(associated)
-
-    # Snapshot valid, currently placed FULL MIL connectors exactly once.
-    full = {}
-    for sid in sorted(all_ids):
-        try:
-            sym_obj.SetId(sid)
-            family = str(sym_obj.GetSymbolTypeName() or "").strip()
-            if not family.startswith("MilBlock") or "¶FULL" not in family:
-                continue
-            items = []
-            for tid in get_ids(sym_obj, "GetTextIds"):
-                try:
-                    text_obj.SetId(tid)
-                    items.append((int(text_obj.GetType()),
-                                  str(text_obj.GetText() or "").strip(), tid))
-                except Exception:
-                    continue
-            if not any(typ == 5 for typ, _, _ in items):
-                # Not a connector component-code symbol; don't touch it.
-                continue
-            full[sid] = (family, items)
-        except Exception:
-            continue
-
-    print("\n" + "=" * 60, flush=True)
-    print("MAIN CONNECTORS: MULTI-CONNECTOR CURRENT FULL SYMBOL FORMATTING", flush=True)
-    print(f"Scanned {len(sheet_ids)} sheets; found {len(full)} FULL MIL connector symbols", flush=True)
-    print("=" * 60, flush=True)
-
-    matched = 0
-    passed = failed = missing = 0
-    used_symbols = set()
-    for block in blocks:
-        name = str(block.get("name", "")).strip()
-        if not name:
-            continue
-        candidates = []
-        direct_ids = device_symbol_ids.get(name, set())
-        for sid, (family, items) in full.items():
-            designations = [val for typ, val, _ in items if typ == 12]
-            text_identity = any(name_in_designation(val, name) for val in designations)
-            device_identity = sid in direct_ids
-            if text_identity or device_identity:
-                candidates.append((sid, family, items, text_identity, device_identity))
-
-        # Device ownership is stronger than a rendered label, but never
-        # silently choose among multiple actual FULL symbols.
-        owned = [c for c in candidates if c[4]]
-        if len(owned) == 1:
-            candidates = owned
-        elif len(owned) > 1:
-            candidates = owned
-        if len(candidates) != 1:
-            missing += 1
-            print(f"MAIN {name}: SKIP; {len(candidates)} unambiguous-match candidates "
-                  f"(device-owned={len(owned)}, IDs={[c[0] for c in candidates]})", flush=True)
-            continue
-        sid, family, items, by_text, by_device = candidates[0]
-        if sid in used_symbols:
-            missing += 1
-            print(f"MAIN {name}: SKIP; FULL symbol {sid} matched more than one connector", flush=True)
-            continue
-        used_symbols.add(sid)
-        matched += 1
-        print(f"MAIN {name}: CURRENT symbol {sid} ({family}), "
-              f"match={'device' if by_device else 'designation'}", flush=True)
-
-        for typ, value, tid in items:
-            if typ not in (5, 12, 203):
-                continue
-            desired = 0 if typ == 5 else 1
-            ops = [("SetVisibility", "GetVisibility", desired)]
-            if typ == 12:
-                ops += [("SetColour", "GetColour", 0),
-                        ("SetStyle", "GetStyle", 1),
-                        ("SetHeight", "GetHeight", float(text_size))]
-            elif typ == 203:
-                ops += [("SetColour", "GetColour", 0), ("SetStyle", "GetStyle", 1)]
-            checks = [text_set(tid, *op) for op in ops]
-            ok = all(result[0] for result in checks)
-            if ok:
-                passed += 1
-            else:
-                failed += 1
-            print(f"    TYPE {typ} {value!r} ID={tid}, "
-                  f"visible={checks[0][1]!r}/{desired}, "
-                  f"{'PASS' if ok else 'FAIL'}", flush=True)
-            modified_texts.append({
-                "device": name, "pin": "MAIN", "position": 0,
-                "view": sid, "text_id": tid, "type": typ,
-                "value": value, "desired": desired,
-            })
-    print(f"MAIN CONNECTOR TEXT: matched={matched}/{len(blocks)} "
-          f"component-code/other text PASS={passed} FAIL={failed} "
-          f"unmatched={missing}", flush=True)
-    if missing or failed:
-        print("WARNING: Check MAIN connector skips/failures above", flush=True)
-
-def _sch_ids(result):
-    """Extract IDs from the E3 COM convention (count, IDs)."""
-    if isinstance(result, (tuple, list)):
-        if len(result) >= 2 and isinstance(result[1], (tuple, list)):
-            result = result[1]
-        else:
-            result = [x for x in result if type(x) is int and x > 0]
-        return [x for x in result if type(x) is int and x > 0]
-    return [result] if type(result) is int and result > 0 else []
-
-
-def _sch_role(name):
-    key = ''.join(char.lower() for char in str(name or '') if char.isalnum())
-    if key in ('saberparam1', 'saberparameter1'):
-        return 'saber'
-    if key in ('equipmentidentifacation', 'equipmentidentification'):
-        return 'equipment'
-    return None
-
-
-def inspect_schematic_header_activation(prj, metadata):
-    """READ ONLY: check actual attribute-linked text visibility on exact SCH symbols.
-
-    A text is active only after a user makes its E3 attribute text visible.
-    A present property alone is NOT evidence that its display is active.
-    """
-    sym = prj.CreateSymbolObject()
-    attr = prj.CreateAttributeObject()
-    text = prj.CreateTextObject()
-    report = []
-    for block in metadata:
-        sid = int(block['block_symbol_id'])
-        sym.SetId(sid)
-        owners = {'saber': [], 'equipment': []}
-        for aid in _sch_ids(sym.GetAttributeIds(None)):
-            attr.SetId(aid)
-            role = _sch_role(attr.GetName())
-            if role is None:
-                continue
-            linked = []
-            for tid in _sch_ids(attr.GetTextIds(None)):
-                text.SetId(tid)
-                try:
-                    active = int(text.GetVisibility()) == 1
-                except (ValueError, TypeError):
-                    active = False
-                except Exception as exc:
-                    print('SCH HEADER VISIBILITY CHECK:', sid, aid, tid, repr(exc), flush=True)
-                    active = False
-                linked.append({'id': tid, 'active': active})
-            owners[role].append({'id': aid, 'text': linked})
-
-        # Do not silently format an arbitrary copy when multiple attributes
-        # carrying the same name exist on one exact block symbol.
-        for role, group in owners.items():
-            if len(group) > 1:
-                raise RuntimeError(
-                    f'{block.get("name", "SCH block")} (symbol {sid}) has '
-                    f'{len(group)} {role} attributes. Resolve duplicates in E3.'
-                )
-
-        required_saber = bool(str(block.get('saber_parameter_1') or '').strip())
-        saber = owners['saber'][0] if owners['saber'] else None
-        equipment = owners['equipment'][0] if owners['equipment'] else None
-        saber_active = bool(saber and any(t['active'] for t in saber['text']))
-        equipment_active = bool(equipment and any(t['active'] for t in equipment['text']))
-        report.append({
-            'name': str(block.get('name', '')),
-            'symbol_id': sid,
-            'saber_required': required_saber,
-            'saber_active': saber_active,
-            'equipment_active': equipment_active,
-            'saber': saber,
-            'equipment': equipment,
-            'layout': block,
-        })
-    return report
-
-
-def read_schematic_header_activation(metadata):
-    """Reconnect briefly on a DONE click; release E3 before the user edits again."""
-    app = win32.GetActiveObject('CT.Application')
-    prj = app.CreateJobObject()
-    try:
-        return inspect_schematic_header_activation(prj, metadata)
-    finally:
-        del prj
-        del app
-
-
-def format_active_schematic_headers(prj, metadata_path, text_size):
-    """Format only manually visible SCH Saber text and (optionally) Equipment.
-
-    Never invoke DisplayAttribute or SetVisibility on an inactive attribute.
-    Saber labels appear under the designation; when enabled, Equipment is one
-    row beneath Saber. Without Saber, Equipment keeps its original row.
-    """
-    if not metadata_path or not os.path.isfile(metadata_path):
-        raise RuntimeError('Block Maker secondary metadata is missing.')
-    with open(metadata_path, 'r', encoding='utf-8') as handle:
-        blocks = json.load(handle)
-
-    status = inspect_schematic_header_activation(prj, blocks)
-    missing = [row['name'] for row in status
-               if row['saber_required'] and not row['saber_active']]
-    if missing:
-        raise RuntimeError(
-            'Saber Parameter 1 is not active for SCH block(s): '
-            + ', '.join(missing)
-            + '. Activate their attribute text in E3 and retry the formatter.'
-        )
-
-    text = prj.CreateTextObject()
-    counts = {'saber': 0, 'equipment': 0, 'equipment_skipped': 0}
-    for row in status:
-        block = row['layout']
-        x_center = float(block['x']) + float(block['width']) / 2.0
-        top = float(block['y']) + float(block['height'])
-        # Keep the Equipment-only placement (-1.1) from the old formatter.
-        positions = {'saber': top - 1.1,
-                     'equipment': top - (1.5 if row['saber_active'] else 1.1)}
-        for role in ('saber', 'equipment'):
-            if not row[role + '_active']:
-                if role == 'equipment':
-                    counts['equipment_skipped'] += 1
-                    print('SCH EQUIPMENT INACTIVE; NOT FORMATTED:', row['name'], flush=True)
-                continue
-            owner = row[role]
-            for item in owner['text']:
-                if not item['active']:
-                    continue
-                text.SetId(item['id'])
-                # Do not force visibility; this code only formats texts already ON.
-                text.SetColour(0)
-                text.SetMode(1)
-                text.SetAlignment(2)
-                text.SetStyle(1)
-                text.SetHeight(float(text_size))
-                text.SetSchemaLocation(x_center, positions[role])
-                counts[role] += 1
-                print('SCH HEADER FORMATTED:', row['name'], role,
-                      'SYMBOL:', row['symbol_id'], 'TEXT:', item['id'],
-                      'X:', x_center, 'Y:', positions[role], flush=True)
-    print('SCH HEADER SUMMARY:', counts, flush=True)
-    return counts
-
-
-def runn(secondary=False, TEXT_SIZE=0.25):
-    # ================================================
-    # CONNECT TO ACTIVE E3 PROJECT
-    # ================================================
-    app = win32.GetActiveObject("CT.Application")
-    prj = app.CreateJobObject()
-    dev = prj.CreateDeviceObject()
-    pin = prj.CreatePinObject()
-    sym = prj.CreateSymbolObject()
-    text = prj.CreateTextObject()
-    attr = prj.CreateAttributeObject()
-
-
-    # ================================================
-    # HELPERS
-    # ================================================
-    def extract_ids(result):
-        if result is None:
-            return []
-
-        if isinstance(result, (tuple, list)):
-            if len(result) >= 2 and isinstance(result[1], (tuple, list)):
-                return [x for x in result[1] if x is not None and x != 0]
-
-            return [x for x in result if isinstance(x, int) and x != 0]
-
-        if isinstance(result, int):
-            if result != 0:
-                return [result]
-
-        return []
-
-
-    def get_visibility(text_id):
-        text.SetId(text_id)
-
-        try:
-            return text.GetVisibility()
-        except Exception as e:
-            return "GET VIS ERROR: " + repr(e)
-
-
-    def get_pin_view_ids(pin_id):
-        pin.SetId(pin_id)
-
-        try:
-            result = pin.GetViewIds(None)
-            return extract_ids(result)
-        except Exception:
+            sys.stdout.write(line)
+            sys.stdout.flush()
+        except (OSError, ValueError):
             pass
 
-        try:
-            result = pin.GetViewIds()
-            return extract_ids(result)
-        except Exception as e:
-            print("GetViewIds ERROR:", pin_id, repr(e))
-            return []
 
-
-    def get_schema_location(text_id):
-        text.SetId(text_id)
-
-        xloc = [0.0]
-        yloc = [0.0]
-        grid = [""]
-        column = [""]
-        row = [""]
-
-        try:
-            text.GetSchemaLocation(xloc, yloc, grid, column, row)
-            return float(xloc[0]), float(yloc[0])
-        except Exception as e:
-            print("GET SCHEMA LOCATION ERROR:", text_id, repr(e))
-            return None, None
-
-
-    # Attribute display activation belongs to the E3 user, not to this tool.
-    # The secondary pass formats ONLY active Saber and Equipment display text.
-
-
-    # ================================================
-    # SECONDARY RUN: Do not scan pins, create missing text, or alter inactive
-    # Equipment Identification. This pass is run after the user clicks DONE.
-    # ================================================
-    if secondary:
-        print('\nSECONDARY FORMATTER: ACTIVE SCH HEADER ATTRIBUTES ONLY', flush=True)
-        return format_active_schematic_headers(
-            prj, os.environ.get('E3_SECONDARY_BLOCK_FILE'), TEXT_SIZE
-        )
-
-
-    # ================================================
-    # TRACK EVERYTHING WE MODIFY
-    # ================================================
-    modified_texts = []
-
-
-    print("")
-    print("============================================================")
-    print("E3 VISIBILITY TEST")
-    print("============================================================")
-
-
-    # ================================================
-    # GET ALL LOGICAL DEVICES
-    # ================================================
-    device_result = prj.GetAllDeviceIds(None)
-    device_ids = extract_ids(device_result)
-
-
-    for device_id in device_ids:
-        dev.SetId(device_id)
-
-        try:
-            device_name = str(dev.GetName())
-        except Exception:
-            continue
-
-        # ================================================
-        # DETECT CONNECTOR DEVICE
-        # ================================================
-        try:
-            symbol_result = dev.GetSymbolIds(None)
-            logical_symbol_ids = extract_ids(symbol_result)
-        except Exception:
-            logical_symbol_ids = []
-
-        is_connector = False
-
-        for logical_symbol_id in logical_symbol_ids:
-            sym.SetId(logical_symbol_id)
-
-            try:
-                text_result = sym.GetTextIds(None)
-                text_ids = extract_ids(text_result)
-            except Exception:
-                text_ids = []
-
-            for text_id in text_ids:
-                text.SetId(text_id)
-
-                try:
-                    text_type = text.GetType()
-                except Exception:
-                    continue
-
-                if text_type == 5:
-                    is_connector = True
-                    break
-
-            if is_connector:
-                break
-
-        if not is_connector:
-            continue
-
-        print("")
-        print("############################################################")
-        print("CONNECTOR:", device_name)
-        print("DEVICE ID:", device_id)
-        print("############################################################")
-
-        # ================================================
-        # GET LOGICAL CONNECTOR PINS
-        # ================================================
-        try:
-            pin_result = dev.GetPinIds(None)
-            logical_pin_ids = extract_ids(pin_result)
-        except Exception:
-            logical_pin_ids = []
-
-        for logical_pin_id in logical_pin_ids:
-            pin.SetId(logical_pin_id)
-
-            try:
-                pin_name = str(pin.GetName())
-            except Exception:
-                pin_name = "UNKNOWN"
-
-            pin_view_ids = get_pin_view_ids(logical_pin_id)
-
-            for pin_view_id in pin_view_ids:
-                sym.SetId(pin_view_id)
-                sym.SetBlockHatchColour(58)
-
-                try:
-                    text_result = sym.GetTextIds(None)
-                    symbol_text_ids = extract_ids(text_result)
-                except Exception:
-                    symbol_text_ids = []
-
-                # ================================================
-                # DETERMINE POSITION FROM TYPE 213
-                # ================================================
-                split_position = None
-
-                for text_id in symbol_text_ids:
-                    text.SetId(text_id)
-
-                    try:
-                        text_type = text.GetType()
-                        text_value = str(text.GetText()).strip()
-                    except Exception:
-                        continue
-
-                    if text_type == 213 and "/" in text_value and not text_value.startswith("*"):
-                        try:
-                            split_position = int(text_value.split("/")[0])
-                        except Exception:
-                            split_position = None
-
-                        break
-
-                if split_position is None:
-                    continue
-
-                print("")
-                print("PIN:", pin_name, "VIEW:", pin_view_id, "POSITION:", split_position)
-
-                # ================================================
-                # TEST EVERY RELEVANT TEXT
-                # ================================================
-                for text_id in symbol_text_ids:
-                    text.SetId(text_id)
-
-                    try:
-                        text_type = text.GetType()
-                        text_value = str(text.GetText()).strip()
-                    except Exception:
-                        continue
-
-                    # ================================================
-                    # TYPE 5 - COMPONENT CODE
-                    # ALWAYS OFF
-                    # ================================================
-                    if text_type == 5:
-                        before = get_visibility(text_id)
-                        text.SetId(text_id)
-                        result = text.SetVisibility(0)
-                        after = get_visibility(text_id)
-
-                        print("    TYPE 5")
-                        print("    TEXT ID:", text_id)
-                        print("    VALUE:", repr(text_value))
-                        print("    BEFORE:", before)
-                        print("    SET RESULT:", result)
-                        print("    AFTER:", after)
-
-                        if after == 0:
-                            print("    IMMEDIATE RESULT: PASS")
-                        else:
-                            print("    IMMEDIATE RESULT: FAIL")
-
-                        modified_texts.append({
-                            "device": device_name,
-                            "pin": pin_name,
-                            "position": split_position,
-                            "view": pin_view_id,
-                            "text_id": text_id,
-                            "type": 5,
-                            "value": text_value,
-                            "desired": 0
-                        })
-
-                    # ================================================
-                    # TYPE 12 - DEVICE DESIGNATION
-                    # ONLY TURN OFF NON-TOP PINS
-                    # ================================================
-                    elif text_type == 12 and split_position != 1:
-                        before = get_visibility(text_id)
-                        text.SetId(text_id)
-                        result = text.SetVisibility(0)
-                        after = get_visibility(text_id)
-
-                        print("    TYPE 12 NON-TOP")
-                        print("    TEXT ID:", text_id)
-                        print("    VALUE:", repr(text_value))
-                        print("    BEFORE:", before)
-                        print("    SET RESULT:", result)
-                        print("    AFTER:", after)
-
-                        if after == 0:
-                            print("    IMMEDIATE RESULT: PASS")
-                        else:
-                            print("    IMMEDIATE RESULT: FAIL")
-
-                        modified_texts.append({
-                            "device": device_name,
-                            "pin": pin_name,
-                            "position": split_position,
-                            "view": pin_view_id,
-                            "text_id": text_id,
-                            "type": 12,
-                            "value": text_value,
-                            "desired": 0
-                        })
-
-                    # ================================================
-                    # TYPE 12 TOP PIN
-                    # DO NOT TOUCH
-                    # ================================================
-                    elif text_type == 12 and split_position == 1:
-                        visibility = get_visibility(text_id)
-                        text.SetStyle(1)
-                        text.SetHeight(0.2)
-
-                        print("    TYPE 12 TOP - LEFT ALONE")
-                        print("    TEXT ID:", text_id)
-                        print("    VALUE:", repr(text_value))
-                        print("    VISIBILITY:", visibility)
-
-                    # ================================================
-                    # TYPE 617 - LOCAL SIGNAL NAME
-                    # ALWAYS ON
-                    # ================================================
-                    elif text_type == 617:
-                        before = get_visibility(text_id)
-
-                        text.SetId(text_id)
-                        result = text.SetVisibility(1)
-                        text.SetColour(0)
-                        text.SetAlignment(3)
-                        text.SetStyle(1)
-                        text.SetHeight(0.15)
-
-                        after = get_visibility(text_id)
-
-                        print("    TYPE 617 LOCAL SIGNAL")
-                        print("    TEXT ID:", text_id)
-                        print("    VALUE:", repr(text_value))
-                        print("    BEFORE:", before)
-                        print("    SET RESULT:", result)
-                        print("    AFTER:", after)
-
-                        if after == 1:
-                            print("    IMMEDIATE RESULT: PASS")
-                        else:
-                            print("    IMMEDIATE RESULT: FAIL")
-
-                        modified_texts.append({
-                            "device": device_name,
-                            "pin": pin_name,
-                            "position": split_position,
-                            "view": pin_view_id,
-                            "text_id": text_id,
-                            "type": 617,
-                            "value": text_value,
-                            "desired": 1
-                        })
-
-                    # ================================================
-                    # TYPE 203 - PIN NUMBER
-                    # ALWAYS VISIBLE AND BOLD
-                    # ================================================
-                    elif text_type == 203:
-                        before = get_visibility(text_id)
-
-                        text.SetId(text_id)
-                        result = text.SetVisibility(1)
-                        text.SetStyle(1)
-
-                        after = get_visibility(text_id)
-
-                        print("    TYPE 203 PIN NUMBER")
-                        print("    TEXT ID:", text_id)
-                        print("    VALUE:", repr(text_value))
-                        print("    BEFORE:", before)
-                        print("    SET RESULT:", result)
-                        print("    AFTER:", after)
-
-                        if after == 1:
-                            print("    IMMEDIATE RESULT: PASS")
-                        else:
-                            print("    IMMEDIATE RESULT: FAIL")
-
-                        modified_texts.append({
-                            "device": device_name,
-                            "pin": pin_name,
-                            "position": split_position,
-                            "view": pin_view_id,
-                            "text_id": text_id,
-                            "type": 203,
-                            "value": text_value,
-                            "desired": 1
-                        })
-
-
-    # ================================================
-    # FORMAT THE ACTUAL CURRENT SECONDARY PIN VIEW SYMBOLS
-    # ================================================
-    # Placing later split pins can replace earlier E3 symbol objects.
-    # The IDs returned by PlacePins and saved in the metadata can be stale.
-    # Resolve current pin views like the working Block Pin Arranger, then
-    # apply formatting to displayed text objects with immediate readback.
-    format_current_secondary_pin_views(
-        prj, os.environ.get("E3_SECONDARY_BLOCK_FILE"), modified_texts
+def run_stage(stage, command, environment, cwd, log_handle):
+    # A Block Maker stage must never fall back to the Mega Tools main menu.
+    # Both markers identify this child independently of its command line.
+    if (getattr(sys, 'frozen', False) or os.environ.get("E3_MEGA_PACKAGED_EXE") == "1"):
+        environment['E3_MEGA_TOOLS_CHILD_ID'] = 'block_maker'
+        environment['E3_MEGA_TOOLS_CHILD_ARGS_JSON'] = '[]'
+    heading = f"\n{'=' * 60}\nSTARTING {stage.upper()}\n{'=' * 60}\n"
+    emit(heading, log_handle)
+
+    # Keep a tail in memory, but persist the entire output to the log file.
+    recent_lines = deque(maxlen=400)
+    process = subprocess.Popen(
+        command,
+        cwd=str(cwd),
+        env=environment,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        bufsize=1,
     )
 
-    # Format top-level FULL MIL connectors only after E3 has placed all views.
-    # main.py may have enabled their component code; hide it here.
-    format_current_main_connector_symbols(
-        prj, os.environ.get("E3_SECONDARY_BLOCK_FILE"),
-        modified_texts, 0.2
-    )
+    assert process.stdout is not None
+    with process.stdout:
+        for line in process.stdout:
+            emit(line, log_handle)
+            recent_lines.append(line)
 
-    # Saber/Equipment are handled AFTER manual activation in E3. Do not
-    # display or format either during the first pass.
+    exit_code = process.wait()
+    if exit_code != 0:
+        raise StageFailed(stage, exit_code, "".join(recent_lines))
 
-
-    # ================================================
-    # WAIT TO SEE WHETHER E3 RESETS VISIBILITY
-    # ================================================
-    print("")
-    print("============================================================")
-    print("IMMEDIATE FORMATTING COMPLETE")
-    print("WAITING 1 SECONDS")
-    print("============================================================")
-
-    time.sleep(1.0)
+    emit(f"\n{stage.upper()} COMPLETE\n", log_handle)
 
 
-    # ================================================
-    # SECOND PASS - DO NOT MODIFY ANYTHING
-    # JUST READ VISIBILITY BACK
-    # ================================================
-    print("")
-    print("============================================================")
-    print("5 SECOND VISIBILITY VERIFICATION")
-    print("============================================================")
-
-    passed = 0
-    failed = 0
-
-    for item in modified_texts:
-        current_visibility = get_visibility(item["text_id"])
-
-        print("")
-        print("DEVICE:", item["device"])
-        print("PIN:", item["pin"])
-        print("POSITION:", item["position"])
-        print("VIEW:", item["view"])
-        print("TEXT ID:", item["text_id"])
-        print("TYPE:", item["type"])
-        print("VALUE:", repr(item["value"]))
-        print("EXPECTED VISIBILITY:", item["desired"])
-        print("ACTUAL VISIBILITY:", current_visibility)
-
-        if current_visibility == item["desired"]:
-            print("FINAL RESULT: PASS")
-            passed += 1
-        else:
-            print("FINAL RESULT: FAIL")
-            failed += 1
+def choose_workbook_before_workers():
+    """Ask once, before spawning DB-writing stages; Cancel/X is success."""
+    chosen = os.environ.get('E3_MEGA_BLOCK_MAKER_WORKBOOK', '').strip()
+    if chosen:
+        if not Path(chosen).is_file():
+            raise FileNotFoundError('Selected Block Maker workbook not found: ' + chosen)
+        return str(Path(chosen).resolve())
+    import tkinter as tk
+    from tkinter import filedialog
+    chooser = tk.Tk()
+    chooser.withdraw()
+    try:
+        chooser.attributes('-topmost', True)
+        chooser.update()
+        chosen = filedialog.askopenfilename(
+            parent=chooser,
+            title='Select Block Maker Excel workbook',
+            filetypes=[('Excel workbooks', '*.xlsm *.xlsx'), ('All files', '*.*')])
+        return str(Path(chosen).resolve()) if chosen else None
+    finally:
+        chooser.destroy()
 
 
-    # ================================================
-    # FINAL SUMMARY
-    # ================================================
-    print("")
-    print("============================================================")
-    print("FINAL SUMMARY")
-    print("============================================================")
-    print("PASS:", passed)
-    print("FAIL:", failed)
-    print("TOTAL:", len(modified_texts))
-    print("============================================================")
+def main():
+    # Children should never create their own popups. One parent-level popup
+    # handles exceptions from both stages, including those in utils.py.
+    role = os.environ.get(ROLE_ENV, "").strip().lower()
+    if role == "main":
+        run_builder_child()
+        return 0
+    if role == "formatter":
+        # Preserve the formatter's exit code instead of always reporting success.
+        return run_formatter_child()
+
+    from error_popup import show_error_dialog
+
+    # The user's Cancel/X must not be interpreted as a failed builder stage.
+    # No subprocess or E3/SQL connection is opened until a workbook is chosen.
+    try:
+        workbook = choose_workbook_before_workers()
+    except Exception as exc:
+        show_error_dialog('Workbook Selection', str(exc), '', 1)
+        return 1
+    if not workbook:
+        return 0
+    os.environ['E3_MEGA_BLOCK_MAKER_WORKBOOK'] = workbook
+
+    app_dir = get_application_directory()
+    command = get_child_command()
+    log_dir = Path(tempfile.gettempdir()) / "E3_Block_Maker_Logs"
+    log_dir.mkdir(parents=True, exist_ok=True)
+    log_path = log_dir / f"block_maker_{datetime.now():%Y%m%d_%H%M%S_%f}.log"
+
+    stage = "Launcher"
+    try:
+        with log_path.open("w", encoding="utf-8", errors="replace") as log:
+            emit(f"Block Maker log: {log_path}\n", log)
+            emit(f"Application directory: {app_dir}\n", log)
+            with tempfile.TemporaryDirectory(prefix="e3_block_maker_") as temp_dir:
+                metadata_path = str(Path(temp_dir) / "secondary_blocks.json")
+                emit(f"Metadata path: {metadata_path}\n", log)
+
+                # Each child receives its own environment. The original
+                # builder->formatter sequencing is preserved.
+                builder_env = os.environ.copy()
+                builder_env[ROLE_ENV] = "main"
+                builder_env[METADATA_ENV] = metadata_path
+                builder_env["PYTHONUNBUFFERED"] = "1"
+                stage = "Main Builder"
+                run_stage(stage, command, builder_env, app_dir, log)
+
+                if not Path(metadata_path).is_file():
+                    raise RuntimeError(
+                        "Main builder exited successfully but did not write "
+                        "the E3_SECONDARY_BLOCK_FILE metadata JSON."
+                    )
+
+                formatter_env = os.environ.copy()
+                formatter_env[ROLE_ENV] = "formatter"
+                formatter_env[METADATA_ENV] = metadata_path
+                formatter_env["PYTHONUNBUFFERED"] = "1"
+                stage = "Formatter"
+                run_stage(stage, command, formatter_env, app_dir, log)
+
+            emit("\nBLOCK MAKER COMPLETE — BOTH STAGES SUCCEEDED\n", log)
+        return 0
+
+    except StageFailed as exc:
+        # No hidden success state: a failed child stops the next stage.
+        show_error_dialog(exc.stage, exc.output, str(log_path), exc.return_code)
+        return exc.return_code if exc.return_code > 0 else 1
+
+    except Exception:
+        details = traceback.format_exc()
+        try:
+            with log_path.open("a", encoding="utf-8") as log:
+                emit(f"\nLAUNCHER/STAGE FAILURE\n{details}", log)
+        except OSError:
+            sys.stderr.write(details)
+        show_error_dialog(stage, details, str(log_path), 1)
+        return 1
+
+
+if __name__ == "__main__":
+    sys.exit(main())
