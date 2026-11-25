@@ -835,6 +835,85 @@ def choose_cable_top_additional_part_id(dev, sym, text, connector_ids):
     return chosen["text_id"]
 
 
+def full_cable_additional_part_target(dev, sym, text, connector_ids):
+    """Compute the full cable label's stable TOP-CENTER from placed E3 symbols.
+
+    The formatter-only path does not have MAIN_CONN_LOCS from the Excel run.
+    Both modes therefore use actual full connector symbol positions in E3.
+    The target never depends on the label's current position, so running the
+    formatter repeatedly cannot shift it again.
+    """
+    full_symbols = []
+    seen = set()
+
+    for connector_id in connector_ids:
+        if connector_id is None:
+            continue
+        try:
+            dev.SetId(connector_id)
+            symbol_ids = extract_e3_ids(dev.GetSymbolIds(None))
+        except Exception as exc:
+            print("WARNING: cannot scan full cable connector", connector_id, repr(exc))
+            continue
+
+        for symbol_id in symbol_ids:
+            if symbol_id in seen:
+                continue
+            seen.add(symbol_id)
+            try:
+                sym.SetId(symbol_id)
+                text_ids = extract_e3_ids(sym.GetTextIds(None))
+                # Restrict geometry to the full connector symbols that
+                # actually contain an Additional Part ID text node.
+                has_additional_part = False
+                for text_id in text_ids:
+                    try:
+                        text.SetId(text_id)
+                        if int(text.GetType()) == 1000:
+                            has_additional_part = True
+                            break
+                    except Exception:
+                        continue
+                if not has_additional_part:
+                    continue
+                result = sym.GetSchemaLocation([0.0], [0.0], [""], [""], [""])
+                if result is None or len(result) < 3:
+                    continue
+                # A zero result means E3 did not supply a placed location.
+                if isinstance(result[0], (int, float)) and result[0] == 0:
+                    continue
+                x, y = float(result[1]), float(result[2])
+                full_symbols.append((symbol_id, x, y))
+            except Exception as exc:
+                print("WARNING: full connector symbol position unavailable:",
+                      symbol_id, repr(exc))
+
+    if not full_symbols:
+        print("WARNING: no positioned full connector symbols for Add Part ID")
+        return None
+
+    xs = sorted({round(item[1], 6) for item in full_symbols})
+    if len(xs) >= 2:
+        target_x = (xs[0] + xs[-1]) / 2.0
+    else:
+        # Fallback for a connector whose E3 base view exposes only one symbol.
+        # Main pin columns, unlike spare pins, are available in both modes.
+        pin_xs = sorted({round(float(v[1]), 6)
+                         for v in globals().get("PINN_LOCS", [])})
+        if len(pin_xs) < 2:
+            print("WARNING: cannot determine both full cable sides")
+            return None
+        target_x = (pin_xs[0] + pin_xs[-1]) / 2.0
+
+    # E3's placed symbol locations are sheet coordinates, as are the text
+    # GetSchemaLocation / SetSchemaLocation coordinates used by this formatter.
+    target = (target_x, max(entry[2] for entry in full_symbols) + 0.15)
+    print("FULL CABLE LABEL TARGET: symbol locations=", full_symbols,
+          "target=", target)
+    return target
+
+
+
 def run_ct_code():
     try:
         app = win32.gencache.EnsureDispatch('CT.Application')
@@ -849,6 +928,19 @@ def run_ct_code():
         full_cable_additional_part_text_id = choose_cable_top_additional_part_id(
             dev, sym, text, CONNECTORS.values()
         )
+        # Compute once, BEFORE processing the symbols.  The coordinate scan
+        # changes E3 object's active IDs, so it must not run mid-iteration.
+        full_cable_target = (
+            full_cable_additional_part_target(
+                dev, sym, text, CONNECTORS.values()
+            )
+            if full_cable_additional_part_text_id is not None else None
+        )
+        if full_cable_additional_part_text_id is None:
+            app.PutMessage(
+                "WARNING: No main-cable Additional Part ID text was found "
+                "on the placed full connector symbols."
+            )
         # One physical cable label, even if E3 returns several schematic
         # views for the same base connector. Never offset this text twice.
         full_cable_additional_part_positioned = False
@@ -1097,46 +1189,39 @@ def run_ct_code():
                         text.SetColour(0)
                         text.SetMode(1)
                         text.SetAlignment(2)
-                        # A formatter-only pass must NEVER shift an already
-                        # positioned top-level (bulk J1) Additional Part ID.
-                        # The previous +1.5 / +0.15 adjustment was relative
-                        # to its current location, so each formatter run
-                        # moved the label farther away.  Preserve its actual
-                        # E3 location in FORMATTER_ONLY; keep the original
-                        # first-placement behavior in the full cable workflow.
-                        if (START_MODE != "FORMATTER_ONLY" and
-                                not full_cable_additional_part_positioned):
-                            xloc = [0.0]
-                            yloc = [0.0]
-                            grid = [""]
-                            column = [""]
-                            row = [""]
-                            result = text.GetSchemaLocation(xloc, yloc, grid, column, row)
-                            # Restore the original working symbol-relative
-                            # positioning.  The FULL connector symbols are
-                            # placed 3.0 inches apart in X; moving the
-                            # original J1/top-left label by half that gap
-                            # centers it between them.  Do NOT assign the
-                            # page-absolute midpoint (e.g. X=2.5) to this
-                            # text object's own E3 location coordinates.
-                            full_locations = globals().get("MAIN_CONN_LOCS", [])
-                            full_xs = sorted({float(item[1]) for item in full_locations})
-                            gap = full_xs[-1] - full_xs[0] if len(full_xs) >= 2 else 3.0
-                            new_x = float(result[1]) + gap / 2.0
-                            new_y = float(result[2]) + 0.15
-                            print(
-                                "FULL CABLE ADDITIONAL PART ID CENTER:",
-                                "previous=", (float(result[1]), float(result[2])),
-                                "gap=", gap,
-                                "target=", (new_x, new_y),
-                            )
-                            text.SetSchemaLocation(new_x, new_y)
+                        # The original +1.5/+0.15 operation only ran after a
+                        # fresh placement.  FORMATTER_ONLY previously skipped
+                        # this entirely, which is why it never fixed a label
+                        # that was already off-center.  Recompute its target
+                        # from placed E3 connector symbols on EVERY run.
+                        if not full_cable_additional_part_positioned:
+                            target = full_cable_target
+                            if target is not None:
+                                text.SetId(full_cable_additional_part_text_id)
+                                result = text.GetSchemaLocation(
+                                    [0.0], [0.0], [""], [""], [""]
+                                )
+                                current_x, current_y = float(result[1]), float(result[2])
+                                target_x, target_y = target
+                                if (abs(current_x - target_x) > 0.001 or
+                                        abs(current_y - target_y) > 0.001):
+                                    text.SetSchemaLocation(target_x, target_y)
+                                    print("FULL CABLE ADDITIONAL PART ID MOVED:",
+                                          (current_x, current_y), "->", target)
+                                else:
+                                    print("FULL CABLE ADDITIONAL PART ID ALREADY CENTERED:",
+                                          target)
+                                app.PutMessage(
+                                    "Main cable Additional Part ID centered "
+                                    f"at X={target_x:.3f}, Y={target_y:.3f}"
+                                )
+                            else:
+                                app.PutMessage(
+                                    "WARNING: Main cable Additional Part ID "
+                                    "could not be centered because the full "
+                                    "connector positions were not found."
+                                )
                             full_cable_additional_part_positioned = True
-                        else:
-                            print(
-                                "FULL cable Additional Part ID: preserving "
-                                "existing position (formatter-only or already moved)"
-                            )
 
                     elif text_type == 1000:
                         # Only the chosen actual text ID is allowed to stay
