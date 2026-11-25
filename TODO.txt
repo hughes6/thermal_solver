@@ -4573,6 +4573,22 @@ def parse_generic_pdf_table(input_text, column_count):
 # GENERAL TABLE PARSER
 # =========================================
 
+def parse_newline_cells(input_text, column_count, literal=False):
+    """Group exact row-major cells without guessing or dropping values."""
+    if not column_count or column_count < 2:
+        raise ValueError("Enter the number of columns (at least 2).")
+    text = input_text.replace("\r\n", "\n").replace("\r", "\n")
+    if literal:
+        text = text.replace(r"\n", "\n")
+    cells = text.split("\n")
+    # Remove one terminal newline only when it is an extra record terminator.
+    if cells[-1] == "" and len(cells) % column_count == 1:
+        cells.pop()
+    if len(cells) % column_count:
+        raise ValueError(f"{len(cells)} cells cannot form complete {column_count}-column rows. Check the column count or missing cells.")
+    return [cells[i:i+column_count] for i in range(0, len(cells), column_count)]
+
+
 def parse_table():
     input_text = input_box.get("1.0", "end-1c")
 
@@ -4583,6 +4599,14 @@ def parse_table():
     input_text = input_text.replace("\r", "\n")
 
     manual_columns = get_manual_column_count()
+
+    mode = table_mode_var.get()
+    if mode != "Auto / PDF":
+        try:
+            rows = parse_newline_cells(input_text, manual_columns, mode == "Literal \\n per cell")
+        except ValueError as exc:
+            return [], 0, str(exc)
+        return rows, manual_columns, "NEWLINE CELLS / EXACT"
 
     rows = []
     delimiter_name = ""
@@ -4840,7 +4864,7 @@ def detect_table():
         column_selector.set("")
 
         status_label.config(
-            text="No table data found."
+            text=delimiter_name if delimiter_name != "NONE" else "No table data found."
         )
 
         return
@@ -4915,7 +4939,7 @@ def extract_column():
 
     if len(rows) == 0:
         status_label.config(
-            text="No table data found."
+            text=delimiter_name if delimiter_name != "NONE" else "No table data found."
         )
 
         return
@@ -5008,6 +5032,7 @@ def clear_all():
     output_box.delete("1.0", tk.END)
 
     column_count_entry.delete(0, tk.END)
+    table_mode_var.set("Auto / PDF")
 
     column_selector.set("")
     column_selector["values"] = []
@@ -5083,7 +5108,7 @@ def copy_connector():
 root = tk.Tk()
 
 root.title("Excel Column Formatter")
-root.geometry("600x680")
+root.geometry("600x720")
 
 
 # =========================================
@@ -5230,6 +5255,13 @@ tk.Button(
     columnspan=2,
     pady=4
 )
+
+
+table_mode_var = tk.StringVar(value="Auto / PDF")
+tk.Label(table_frame, text="Input format:").grid(row=2, column=0, columnspan=2, pady=3)
+ttk.Combobox(table_frame, textvariable=table_mode_var,
+             values=("Auto / PDF", "Newline per cell", "Literal \\n per cell"),
+             state="readonly", width=23).grid(row=2, column=2, columnspan=2, pady=3)
 
 
 # =========================================
