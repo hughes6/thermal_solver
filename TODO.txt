@@ -1,120 +1,81 @@
-Zuken Mega Script — Modular Source Project
-This project started as a source-code refactor of the working V26 all-in-one launcher.
-It retains the original 14 tools and now includes Zuken Script Runner as a 15th tool,
-with 24 separately maintained tool modules.
-The Block Maker builder and formatter have since been updated to support
-per-SCH-symbol Saber Parameter 1 values; all other tools remain unchanged.
-Folder layout
-Zuken_Mega_Script/
-  Zuken_Mega_Script.py    # Run this; stable entry point
-  mega_launcher.py        # Main GUI, runtime installer, process dispatch
-  tool_sources.py         # Manifest of the 24 independently edited tool sources
-  build_exe.py            # Rebuild single EXE with one repeatable command
-  tool_scripts/
-    header_formatter/header_formatter.py
-    signal_mover/signal_mover.py
-    cable_pin_spacer/main.py
-    cable_maker/cable_maker.py
-    cable_placer/cable_placer.py
-    block_maker/main.py
-    block_maker/launcher.py
-    block_maker/test.py
-    block_maker/utils.py
-    block_maker/error_popup.py
-    block_pin_arranger/block_pin_arranger.py
-    block_pin_formatter/block_pin_formatter.py
-    block_signal_adder/block_signal_adder.py
-    misc_tools/excel_formatter.py
-    misc_tools/excel_diff.py
-    misc_tools/missing_number_finder.py
-    misc_tools/eicd_to_excel.py
-    misc_tools/excel_to_pdf.py
-    zuken_script_runner/appmain.py
-    zuken_script_runner/AppGuiCode.py
-    zuken_script_runner/utils.py
-    zuken_script_runner/wirelist.py
-    zuken_script_runner/endtoend.py
-    zuken_script_runner/cabletable.py
-  templates/              # Copy your four ORIGINAL Excel templates here
-Run and edit
-1. Extract the ZIP as a whole folder, rather than running only the
-   Zuken_Mega_Script.py file from the archive.
-2. Copy your four original workbook templates into templates/ (see the
-   included PLACE_ORIGINAL_TEMPLATES_HERE.txt). Their actual bytes were
-   not included in the earlier Python script.
-3. Run py Zuken_Mega_Script.py from the project directory.
-4. To change one tool, edit only its file in tool_scripts/.
-5. To check source integrity without connecting to E3 or SQL:
-   py Zuken_Mega_Script.py --self-test.
-Build a single Windows executable
-Run py build_exe.py from the project directory. This is the reusable
-command for future releases. The output is dist/Zuken_Mega_Script.exe.
+"""Safe modularization checks: never connect to E3, SQL, or live Excel."""
+import hashlib
+import os
+from pathlib import Path
+import subprocess
+import sys
+import tempfile
+import unittest
+from unittest.mock import patch
 
-The reusable build script bundles all tool_scripts/ files and now collects
-wxPython (wx) and pandas for Zuken Script Runner. Install those packages
-in the Python environment that builds the EXE before calling py build_exe.py:
-py -m pip install wxPython pandas
-The fixed output name is always dist/Zuken_Mega_Script.exe. The other
-pdfplumber, pdfminer, Tkinter, E3, pyodbc, openpyxl and win32com build
-settings are unchanged.
+ROOT=Path(__file__).resolve().parents[1]
+sys.path.insert(0,str(ROOT))
+import mega_launcher as launcher
+import tool_sources
 
-The launcher still extracts only the requested tool to the existing stable
-E3_Mega_Runtime_V26 folder, and honors its hash/backup mechanism for
-user-edited runtime copies. Saved workbook selections remain in the same per-user settings location.
-The Templates tab provides only Download; it no longer imports or overrides originals.
 
-Important: If you previously edited source files under your local
-E3_Mega_Runtime_V26 folder, they will take precedence over newly edited
-files in tool_scripts/ (by design). To apply new bundled changes, first
-back up your modifications; only then update the matching runtime copy.
-Scope of verification
-The project validates compilation and byte-for-byte identity of all tool
-sources against V26. Actual PyInstaller, E3 COM, SQL, and Microsoft Excel
-interop must be exercised on your Windows workstation.
-Block Maker — SCH Saber Parameter 1 (2026-11-25)
-The Block Maker workbook may now have a Saber Parameter 1 name in row 3
-for each repeating connector group: K3, P3, U3, Z3, ... (five-column pitch).
-Blank entries are skipped. Use your updated Block Maker workbook; the ZIP does
-not contain the user's modified original Excel template.
+class ModularSourceTests(unittest.TestCase):
+    def test_registry_has_15_tools_and_every_entry_is_present(self):
+        self.assertEqual(len(launcher.TOOLS),15)
+        self.assertEqual(len(tool_sources.SOURCE_FILES),24)
+        self.assertEqual(len(launcher.SOURCE_FILES),24)
+        for key,tool in launcher.TOOLS.items():
+            self.assertIn(tool['entry'],launcher.SOURCE_FILES,key)
+            self.assertTrue((ROOT/'tool_scripts'/tool['entry']).is_file(),key)
 
-The builder stores each nonblank name as the symbol-level E3 attribute
-saberParam1 on the exact corresponding SCH CABBLOCK. It does not display
-or format that attribute in the builder. Equipment Identification remains
-created with its historical E3 spelling Equipment Identifacation but is
-not automatically activated or formatted.
+    def test_current_source_integrity_manifest(self):
+        manifest=ROOT/'TOOL_SOURCE_SHA256.txt'
+        verified=0
+        for line in manifest.read_text(encoding='utf-8').splitlines():
+            if not line or line.startswith('#'):continue
+            expected,name=line.split('  ',1)
+            data=(ROOT/name).read_bytes()
+            self.assertEqual(hashlib.sha256(data).hexdigest(),expected,name)
+            verified+=1
+        self.assertEqual(verified,24)
 
-After the first existing formatter pass, a dialog pauses for the operator to
-turn on Saber Parameter 1 attribute text for each populated SCH block in
-E3. Equipment Identification is optional: enable it only on the blocks
-where you want its text formatted. Click DONE to verify the required Saber
-text is active. If any required Saber text is not yet visible, the dialog
-remains open so you can activate it and retry; Cancel exits without the
-second pass. No automatic DisplayAttribute() operation is done for these
-SCH header attributes.
+    def test_all_sources_compile(self):
+        for filename,source in launcher.SOURCE_FILES.items():
+            with self.subTest(filename=filename):
+                compile(source,filename,'exec')
 
-Once ready, the second formatter pass formats the active Saber and optional
-Equipment text in black, bold, centered, with the workbook-defined text size.
-Saber is at top - 1.1; Equipment is top - 1.5 when Saber is visible,
-or keeps the former top - 1.1 position for an Equipment-only block.
-No inactive Equipment Identification text is formatted or made visible.
+    def test_safe_extraction_and_preserved_edits(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root=Path(folder)
+            path,action=launcher.install_tool('block_maker',root)
+            self.assertEqual(len(list(root.rglob('*.py'))),5)
+            self.assertTrue(path.is_file())
+            self.assertTrue(any('installed' in x for x in action))
+            path,action=launcher.install_tool('block_maker',root)
+            self.assertTrue(all('unchanged' in a for a in action))
+            customized=root/'block_maker'/'launcher.py'
+            customized.write_text(customized.read_text(encoding='utf-8')+'\n# own edit\n',encoding='utf-8')
+            _,actions=launcher.install_tool('block_maker',root)
+            self.assertTrue(any('kept user-edited' in a for a in actions))
+            self.assertTrue(customized.read_text(encoding='utf-8').endswith('# own edit\n'))
 
-Testing: A synthetic E3 COM test suite checks correct Excel cell offsets,
-per-symbol attribute creation/readback, active text formatting, optional
-Equipment behavior, and waiting for missing Saber text. These tests do not
-replace validation in a real Windows E3 project.
-Zuken Script Runner tab (2026-11-25)
-Open the dedicated Zuken Script Runner tab and click Open. The original
-wxPython checklist appears in a separate process. Select Wirelist, Cable Table,
-End to End, or All. For Print Labels, also select Cable Table. The runner
-reads the currently open Zuken E3 project, writes the selected Excel reports,
-and exports saved reports as PDFs using Microsoft Excel COM. Closing the
-checklist without generating makes no changes to the E3 project.
+    def test_runner_is_separate_wx_worker_with_all_support_files(self):
+        self.assertNotIn('zuken_script_runner', launcher.FROZEN_INPROCESS_TOOLS)
+        self.assertEqual(launcher.TOOLS['zuken_script_runner']['tab'], 'runner')
+        with tempfile.TemporaryDirectory() as folder:
+            entry, actions = launcher.install_tool('zuken_script_runner', Path(folder))
+            self.assertEqual(len(actions), 6)
+            self.assertEqual(entry.name, 'appmain.py')
+            self.assertTrue((entry.parent / 'AppGuiCode.py').is_file())
+            self.assertIn('import AppGuiCode', entry.read_text(encoding='utf-8'))
 
-The six runner files live together under tool_scripts/zuken_script_runner/.
-AppGuiCode.py is capitalized exactly as imported by appmain.py, avoiding
-case-sensitive import failures. The EXE routes this wxPython tool through
---run-tool zuken_script_runner in a separate worker so it cannot collide
-with the Tkinter launcher. Errors are written to its runtime
-launcher_output.log; the worker returns nonzero rather than silently
-reporting success. The runner was tested with mocked E3/wxPython dependencies,
-not actual Windows COM, Excel or a live E3 project.
+    def test_frozen_source_root(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root=Path(folder)
+            (root/'tool_scripts').mkdir()
+            with patch.object(sys,'_MEIPASS',str(root),create=True):
+                self.assertEqual(tool_sources.tool_source_directory(),root/'tool_scripts')
+
+    def test_entry_point_help_command(self):
+        cp=subprocess.run([sys.executable,str(ROOT/'Zuken_Mega_Script.py'),'--list-tools'],
+            cwd=str(ROOT),capture_output=True,text=True,timeout=15)
+        self.assertEqual(cp.returncode,0,cp.stderr)
+        self.assertEqual(len(cp.stdout.splitlines()),15)
+
+if __name__=='__main__':
+    unittest.main()
