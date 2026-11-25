@@ -1,83 +1,211 @@
-# -*- coding: utf-8 -*-
+import os
+import sys
+import subprocess
+import platform
+import re
+import os
+import os
+import sys
+import re
+import platform
+import subprocess
 
-###########################################################################
-## Python code generated with wxFormBuilder (version 4.2.1-115-g11c2dec8-dirty)
-## http://www.wxformbuilder.org/
-##
-## PLEASE DO *NOT* EDIT THIS FILE!
-###########################################################################
-
-import wx
-import wx.xrc
-import wirelist
-
-import gettext
-_ = gettext.gettext
-
-###########################################################################
-## Class MyFrame1
-###########################################################################
-
-class MainFrame ( wx.Frame ):
-
-    def __init__( self, parent, on_generate_callback ):
-        wx.Frame.__init__ ( self, parent, id = wx.ID_ANY, title = wx.EmptyString, pos = wx.DefaultPosition, size = wx.Size( 229,203 ), style = wx.DEFAULT_FRAME_STYLE|wx.TAB_TRAVERSAL )
-
-        self.SetSizeHints( wx.DefaultSize, wx.DefaultSize )
-
-        bSizer1 = wx.BoxSizer( wx.VERTICAL )
-
-        m_checkList1Choices = [_(u"Wirelist"), _(u"Cable Table"), _(u"Print Labels"), _(u"End to End"), _(u"All")]
-        self.m_checkList1 = wx.CheckListBox( self, wx.ID_ANY, wx.DefaultPosition, wx.Size( 150,125 ), m_checkList1Choices, 0 )
-        self.m_checkList1.SetFont( wx.Font( 14, wx.FONTFAMILY_SWISS, wx.FONTSTYLE_NORMAL, wx.FONTWEIGHT_BOLD, False, "Arial" ) )
-        self.m_checkList1.SetForegroundColour( wx.SystemSettings.GetColour( wx.SYS_COLOUR_BTNTEXT ) )
-        self.m_checkList1.SetBackgroundColour( wx.SystemSettings.GetColour( wx.SYS_COLOUR_BTNFACE ) )
-
-        bSizer1.Add( self.m_checkList1, 0, wx.ALL|wx.ALIGN_CENTER_HORIZONTAL, 5 )
-
-        self.m_button1 = wx.Button( self, wx.ID_ANY, _(u"Generate"), wx.DefaultPosition, wx.DefaultSize, 0 )
-        bSizer1.Add( self.m_button1, 0, wx.ALL|wx.ALIGN_CENTER_HORIZONTAL, 5 )
-
-        self.on_generate_callback = on_generate_callback
-        self.SetSizer( bSizer1 )
-        self.Layout()
-
-        self.Centre( wx.BOTH )
-
-        # Connect Events
-        self.m_checkList1.Bind(wx.EVT_CHECKLISTBOX, self.OnCheck)
-        self.Bind( wx.EVT_ACTIVATE, self.OnActivate_Main )
-        self.Bind( wx.EVT_CLOSE, self.OnClose_Main )
-        self.m_button1.Bind( wx.EVT_BUTTON, self.Generate )
-
-    def __del__( self ):
-        pass
+def open_file_with_default_app(path):
+    try:
+        if sys.platform.startswith("win"):
+            os.startfile(path)
+        elif platform.system() == "Darwin":  # macOS
+            subprocess.run(['open', path], check=True)
+        else:  # Linux and other Unix-like systems
+            subprocess.run(['xdg-open', path], check=True)
+    except FileNotFoundError as e:
+        print(f"Error: Command not found - {e}")
+    except PermissionError as e:
+        print(f"Error: Permission denied - {e}")
+        
+    except subprocess.CalledProcessError as e:
+        print(f"Error: Failed to open file - {e}")
+    except Exception as e:
+        print(f"Unexpected error: {e}")
 
 
-    # Virtual event handlers, override them in your derived class
-    def OnActivate_Main( self, event ):
-        event.Skip()
+def ask_save_path(default_full_path):
+    import os
+    import tkinter as tk
+    from tkinter import filedialog
 
-    def OnClose_Main( self, event ):
-        event.Skip()
+    default_folder = os.path.dirname(default_full_path)
+    default_filename = os.path.basename(default_full_path)
 
-    def Generate( self, event ):
-        checked = self.m_checkList1.GetCheckedItems()
-        labels = [self.m_checkList1.GetString(i) for i in checked]
-        # send labels checked back to main
-        self.on_generate_callback(labels)
-        self.Close()
+    # Create Tk root
+    root = tk.Tk()
+    root.withdraw()
 
-    def OnCheck(self, event):
-        idx = event.GetInt()                 # which item was clicked
-        label = self.m_checkList1.GetString(idx)
+    # Force window to front
+    root.attributes("-topmost", True)
+    root.update()
 
-        if label == "All":
-            is_checked = self.m_checkList1.IsChecked(idx)
+    try:
+        selected_path = filedialog.asksaveasfilename(
+            initialdir=default_folder,
+            initialfile=default_filename,
+            defaultextension=".xlsx",
+            filetypes=[("Excel Files", "*.xlsx"), ("All Files", "*.*")]
+        )
+    except Exception:
+        root.destroy()
+        return None
 
-            # For all items *except* "All", set their check state to match
-            count = self.m_checkList1.GetCount()
-            for i in range(count - 1):       # last item is "All"
-                self.m_checkList1.Check(i, is_checked)
+    root.destroy()
 
-        event.Skip() 
+    # Detect cancel or X
+    if not selected_path:
+        return None
+
+    return selected_path
+
+def write_row_from_copy(ws, ws_copy, src_row, dest_row):
+    if src_row == dest_row:
+        return   # nothing to do
+
+    # copy values
+    for col in range(1, ws_copy.max_column + 1):
+        ws.cell(row=dest_row, column=col).value = ws_copy.cell(row=src_row, column=col).value
+        
+def endtoend_sort_key(k):
+    # remove a single leading '-' if present
+    k = k.lstrip('-')
+
+    # break into alpha + numeric chunks
+    # example: "W414.P2" -> ['W', '414', '.', 'P', '2']
+    parts = re.split(r'(\d+)', k)
+
+    key_parts = []
+    for p in parts:
+        if p.isdigit():
+            key_parts.append((1, int(p)))      # numeric part
+        else:
+            key_parts.append((0, p.lower()))   # alphabetic or punctuation
+
+    return key_parts
+
+
+def cabletable_sort_key(k):
+    # TERM keys first → group = 0
+    if k.startswith("TERM"):
+        group = 0
+        term_num = int(re.search(r'TERM(\d+)', k).group(1))
+        p_num = int(re.search(r'\.P(\d+)', k).group(1))
+        return (group, term_num, p_num)
+
+    # W keys second → group = 1
+    if k.startswith("W"):
+        group = 1
+        # W404, W5-4 → grab the first number after W
+        m = re.search(r'W(\d+)', k)
+        first_num = int(m.group(1)) if m else 999999
+
+        # P number
+        m2 = re.search(r'\.P(\d+)', k)
+        p_num = int(m2.group(1)) if m2 else 999999
+
+        return (group, first_num, p_num)
+
+    # Fallback for unexpected keys
+    return (999, k)
+
+
+
+def MatedWith(conn_id, prj, app):
+    """
+    Equivalent of the VBS function MatedWith(conn_id).
+    Returns the device ID of the mated connector for PIN 1.
+    Checks all connector views to ensure there is not more than one possible mate.
+    """
+
+    # Create local COM objects
+    mw_dev1 = prj.CreateDeviceObject()
+    mw_dev2 = prj.CreateDeviceObject()
+    mw_mate_dev = prj.CreateDeviceObject()
+    mw_pin = prj.CreatePinObject()
+    mw_mate_pin = prj.CreatePinObject()
+
+    # Set initial device
+    mw_dev1.SetId(conn_id)
+
+    # Resolve original ID (VBS: If GetOriginalId <> 0 then SetId(GetOriginalId))
+    if mw_dev1.GetOriginalId() != 0:
+        mw_dev1.SetId(mw_dev1.GetOriginalId())
+
+    # -----------------------
+    # Get PIN 1 mate
+    # -----------------------
+    pinInfo = mw_dev1.GetPinIds(None)
+    pinCount = pinInfo[0]
+    pinIds = [x for x in pinInfo[1] if x is not None]
+
+    if pinCount > 0:
+        # Set pin 1
+        mw_pin.SetId(pinIds[0])
+        mw_mate_pin.SetId(mw_pin.GetConnectedPinId())
+        mw_mate_dev.SetId(mw_mate_pin.GetId())
+
+        # Return original ID if available
+        if mw_mate_dev.GetOriginalId() != 0:
+            mated_id = mw_mate_dev.GetOriginalId()
+        else:
+            mated_id = mw_mate_dev.GetId()
+    else:
+        mated_id = 0
+
+    # -----------------------
+    # Check all views (same as VBS logic)
+    # -----------------------
+    viewInfo = mw_dev1.GetViewIds(None)
+    viewCount = viewInfo[0]
+    viewIds = [x for x in viewInfo[1] if x is not None]
+
+    if viewCount > 0:
+        for viewId in viewIds:
+
+            mw_dev2.SetId(viewId)
+
+            pinInfo = mw_dev2.GetPinIds(None)
+            pinCount = pinInfo[0]
+            pinIds = [x for x in pinInfo[1] if x is not None]
+
+            if pinCount > 0:
+                mw_pin.SetId(pinIds[0])
+                mw_mate_pin.SetId(mw_pin.GetConnectedPinId())
+                mw_mate_dev.SetId(mw_mate_pin.GetId())
+
+                if mated_id == 0:
+                    # First mate found
+                    if mw_mate_dev.GetOriginalId() != 0:
+                        mated_id = mw_mate_dev.GetOriginalId()
+                    else:
+                        mated_id = mw_mate_dev.GetId()
+                else:
+                    # Detect conflicting mates
+                    mate_candidate = mw_mate_dev.GetId()
+                    mate_orig = mw_mate_dev.GetOriginalId()
+
+                    if mate_candidate != 0 and (mate_candidate != mated_id and mate_orig != mated_id):
+                        # VBS: e3.puterror 0, "Connector ... has two or more connectors mated..."
+                        app.PutError(
+                            0,
+                            f"Connector {mw_dev2.GetName()} has two or more connecors mated in different views. "
+                            f"{mated_id}, {mate_candidate}, {mate_orig}",
+                            mw_dev1.GetId()
+                        )
+
+    return mated_id
+
+def configurePrintArea(ws, is_print_labels = False):
+    ws.page_setup.orientation = ws.ORIENTATION_LANDSCAPE
+    ws.page_setup.fitToHeight = 0
+    ws.page_setup.fitToWidth = 1
+    if(not is_print_labels):
+        ws.print_title_rows = '5:5'
+    ws.print_options.gridLines = True
+    ws.sheet_properties.pageSetUpPr.fitToPage = True
