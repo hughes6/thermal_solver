@@ -1502,6 +1502,77 @@ def normalize_connector_token(value):
     return text
 
 
+# Connector gender is optional: older cable worksheets have no values in E3:E14.
+# Use the same receptacle pin graphics as before unless the user explicitly
+# enters PLUG.  These names are the cable-library families, not Block Maker's
+# similarly named MilBlock* symbol families.
+CABLE_RECEPTACLE_SYMBOL_FAMILY = "MilSymbolReceptacle"
+CABLE_PLUG_SYMBOL_FAMILY = "MilSymbolPlug"
+
+
+def normalize_cable_connector_gender(value):
+    """Return PLUG / RECEPTACLE or None (legacy behavior for other values)."""
+    label = clean_excel_value(value).strip().upper()
+    if label == "PLUG":
+        return "PLUG"
+    if label in ("RECEPT", "RECEPTACLE", "RECEPTICLE"):
+        return "RECEPTACLE"
+    return None
+
+
+def cable_connector_symbol_family(designation):
+    """Select the symbol family for one canonical cable connector designation."""
+    designation = normalize_connector_token(designation)
+    selected = CABLE_PIN_SYMBOL_FAMILIES.get(designation)
+    if selected:
+        return selected
+    if CONNECTOR_GENDER_MAP.get(designation) == "PLUG":
+        return CABLE_PLUG_SYMBOL_FAMILY
+    return CABLE_RECEPTACLE_SYMBOL_FAMILY
+
+
+def place_cable_connector_pins(symbol, pin_ids, designation, piece, version,
+                               sheet_id, x, y, rotation, scale=1.0):
+    """Place the requested pin graphic; fall back to legacy receptacle on failure.
+
+    Fallback is only needed when the user requests PLUG but its library symbol
+    cannot be used.  Old workbooks always take the original single-call path.
+    Once a FULL symbol falls back, its split/spare views keep that same family.
+    """
+    designation = normalize_connector_token(designation)
+    requested_family = cable_connector_symbol_family(designation)
+    families = [requested_family]
+    if requested_family != CABLE_RECEPTACLE_SYMBOL_FAMILY:
+        families.append(CABLE_RECEPTACLE_SYMBOL_FAMILY)
+
+    for family in families:
+        name = f"{family}¶{piece}"
+        try:
+            result = symbol.PlacePins(
+                pin_ids, name, version, sheet_id, x, y, rotation, scale
+            )
+        except Exception as error:
+            if family == CABLE_RECEPTACLE_SYMBOL_FAMILY:
+                raise
+            print(f"WARNING: {designation} could not place {name}: {error!r}")
+            continue
+
+        if result != 0:
+            if family != requested_family:
+                print(
+                    f"WARNING: {designation}: {requested_family}¶{piece} was "
+                    f"unavailable; used original {name} symbol instead."
+                )
+            if piece == "FULL":
+                CABLE_PIN_SYMBOL_FAMILIES[designation] = family
+            return result, name
+
+        if family != CABLE_RECEPTACLE_SYMBOL_FAMILY:
+            print(f"WARNING: {designation}: {name} returned 0; trying receptacle")
+
+    return 0, f"{CABLE_RECEPTACLE_SYMBOL_FAMILY}¶{piece}"
+
+
 def connector_base_name(connector_token):
     connector = normalize_connector_token(connector_token)
 
@@ -3498,6 +3569,16 @@ CONNECTOR_PARTS = [
     and str(ws[f"B{r}"].value).strip() != ""
 ]
 
+# E3:E14 describes the same connector rows as B3:B14.  Include only rows
+# with a populated B cell, so blank connector slots cannot shift the genders.
+# Unrecognized/blank genders leave the old receptacle-only placement intact.
+CONNECTOR_GENDERS = [
+    normalize_cable_connector_gender(ws[f"E{r}"].value)
+    for r in range(3, 15)
+    if ws[f"B{r}"].value is not None
+    and str(ws[f"B{r}"].value).strip() != ""
+]
+
 LEFT_CONNECTOR_LAYOUT = [
     placer_connector_designation(ws[f"W{r}"].value)
     for r in range(4, 12)
@@ -3539,6 +3620,11 @@ if len(set(CONNECTOR_LAYOUT)) != len(CONNECTOR_LAYOUT):
     )
 
 CONNECTOR_PART_MAP = dict(zip(CONNECTOR_LAYOUT, CONNECTOR_PARTS))
+CONNECTOR_GENDER_MAP = dict(zip(CONNECTOR_LAYOUT, CONNECTOR_GENDERS))
+# Populated on successful FULL placements; keeps split/spare views consistent
+# when the plug symbol is missing from the user's E3 library.
+CABLE_PIN_SYMBOL_FAMILIES = {}
+
 
 LAYOUT = [
     LEFT_CONNECTOR_LAYOUT,
@@ -3551,7 +3637,8 @@ print("CONNECTOR ASSIGNMENT ORDER (B3:B14 -> W4:W11 then Z4:Z11):")
 for connector_designation in CONNECTOR_LAYOUT:
     print(
         f"  {connector_designation} -> "
-        f"{CONNECTOR_PART_MAP[connector_designation]}"
+        f"{CONNECTOR_PART_MAP[connector_designation]} "
+        f"(pin gender: {CONNECTOR_GENDER_MAP[connector_designation] or 'legacy receptacle'})"
     )
 
 
@@ -3857,7 +3944,6 @@ for i, (connector, conn_id) in enumerate(CONNECTORS.items()):
                             ids.append(value)
                     break
 
-            symname = "MilSymbolReceptacle¶FULL"
             p = connector_designation_from_device_name(connector_loop)
             for c in MAIN_CONN_LOCS:
                 if str(c[0]) == p:
@@ -3870,7 +3956,10 @@ for i, (connector, conn_id) in enumerate(CONNECTORS.items()):
                 flip = 0
 
             print("bulk: ", connector_loop, " conn_id: ", conn_id_loop, " pins: ", ids, " x: ", x, " y: ", y, " flip: ", flip, "\n")
-            res = sym.PlacePins(ids, symname, ver, sheet_1_id, x, y, flip, 1.0)
+            res, symname = place_cable_connector_pins(
+                sym, ids, p, "FULL", ver, sheet_1_id, x, y, flip, 1.0
+            )
+            print("BULK SYMBOL PLACED:", p, symname, "RESULT:", res)
             time.sleep(1)
 
             if res == 0:
@@ -3971,21 +4060,23 @@ for i, (connector, conn_id) in enumerate(CONNECTORS.items()):
     else:
         pflip = 0
 
-    symname = "MilSymbolReceptacle¶END_SPLIT"
+    pin_piece = "END_SPLIT"
     for key, value in ordered_pin_ids.items():
         pin_key = (str(p), str(key))
         if pin_key not in PIN_Y:
             app.PutMessage(f"WARNING: No aligned Y position found forConnector {p} Pin {key}")
             continue
         pin_y = PIN_Y[pin_key]
-        res = sym.PlacePins(value, symname, ver,  sheet_1_id, xp, pin_y, pflip, 1.0)
+        res, symname = place_cable_connector_pins(
+            sym, value, p, pin_piece, ver, sheet_1_id, xp, pin_y, pflip, 1.0
+        )
         app.PutMessage(f"placing pin: {key} id: {value} symbol: {symname} y: {pin_y} x: {xp}, rot: {pflip} conn: {p}")
-        symname = "MilSymbolReceptacle¶SPLIT_BOTTOM"
+        pin_piece = "SPLIT_BOTTOM"
         time.sleep(0.5)
 
     connector_spares = SPARES.get(connector, {})
     if connector_spares:
-        symname = "MilSymbolReceptacle¶END_SPLIT"
+        pin_piece = "END_SPLIT"
         app.PutMessage(f"placing {len(connector_spares)} spare pins for connector {connector}")
         for spare_pin_name in connector_spares.keys():
             # IMPORTANT: Use the pin ID from the NEW DEVICE VIEW, not the original connector pin ID.
@@ -3993,12 +4084,15 @@ for i, (connector, conn_id) in enumerate(CONNECTORS.items()):
             if spare_pin_id is None:
                 app.PutMessage(f"WARNING: Could not find spare pin {spare_pin_name} in new view for {connector}")
                 continue
-            res = sym.PlacePins(spare_pin_id, symname, ver, sheet_1_id, SPARE_X, SPARE_Y, 0, 1.0)
+            res, symname = place_cable_connector_pins(
+                sym, spare_pin_id, p, pin_piece, ver,
+                sheet_1_id, SPARE_X, SPARE_Y, 0, 1.0
+            )
             app.PutMessage(f"placing spare pin: {spare_pin_name} id: {spare_pin_id} symbol: {symname} y: {SPARE_Y} x: {SPARE_X}, rot: {0} conn: {connector}")
             if res == 0:
                 app.PutMessage(f"WARNING: Spare pin placement failed for {connector} pin {spare_pin_name} id {spare_pin_id}")
             SPARE_Y -= SPARE_PIN_SPACING
-            symname = "MilSymbolReceptacle¶SPLIT_BOTTOM"
+            pin_piece = "SPLIT_BOTTOM"
             time.sleep(0.55)
             app.PutMessage(f"Result: {res}")
         SPARE_Y -= SPARE_CONN_GAP
