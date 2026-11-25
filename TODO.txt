@@ -796,33 +796,42 @@ def choose_cable_top_additional_part_id(dev, sym, text, connector_ids):
         print("WARNING: no FULL cable Additional Part ID text found")
         return None
 
-    # Position of the top-left full cable connector that was actually placed.
+    # Preserve the original proven FULL-cable owner: the J1 label.  The
+    # Plug/Receptacle symbol variants do not all use that exact symbol name,
+    # so fall back to the label on the top-left full connector if needed.
+    # Picking a different symbol is important here: text locations are
+    # symbol-relative in E3, so the same numeric X is not interchangeable
+    # between a left connector and a right connector.
+    named_j1 = [c for c in candidates if c["symbol_name"] == "J1"]
+    if named_j1:
+        named_j1.sort(key=lambda c: (not c["visible"], c["order"]))
+        chosen = named_j1[0]
+        print("FULL CABLE ADDITIONAL PART ID OWNER (J1):", chosen)
+        return chosen["text_id"]
+
     positions = globals().get("MAIN_CONN_LOCS", [])
     if positions:
         top_y = max(float(item[2]) for item in positions)
-        top_connectors = [item for item in positions if abs(float(item[2]) - top_y) < 0.01]
-        top_left_x = min(float(item[1]) for item in top_connectors)
+        top_left_x = min(
+            float(item[1]) for item in positions
+            if abs(float(item[2]) - top_y) < 0.01
+        )
         positioned = [c for c in candidates if c["x"] is not None and c["y"] is not None]
         if positioned:
-            positioned.sort(key=lambda c: (
+            chosen = min(positioned, key=lambda c: (
                 abs(c["x"] - top_left_x) + abs(c["y"] - top_y),
-                c["symbol_name"] != "J1",
-                not c["visible"],
+                not c["visible"], c["order"],
             ))
-            chosen = positioned[0]
-            print("FULL CABLE ADDITIONAL PART ID OWNER:", chosen)
+            print("FULL CABLE ADDITIONAL PART ID OWNER (top left):", chosen)
             return chosen["text_id"]
 
-    # In formatter-only mode there may be no new MAIN_CONN_LOCS.  Keep the
-    # historical J1 text when present, then prefer an already-visible label.
     candidates.sort(key=lambda c: (
-        c["symbol_name"] != "J1",
+        c["order"],
         not c["visible"],
         -(c["y"] if c["y"] is not None else -1e10),
-        c["order"],
     ))
     chosen = candidates[0]
-    print("FULL CABLE ADDITIONAL PART ID OWNER:", chosen)
+    print("FULL CABLE ADDITIONAL PART ID OWNER (fallback):", chosen)
     return chosen["text_id"]
 
 
@@ -840,6 +849,9 @@ def run_ct_code():
         full_cable_additional_part_text_id = choose_cable_top_additional_part_id(
             dev, sym, text, CONNECTORS.values()
         )
+        # One physical cable label, even if E3 returns several schematic
+        # views for the same base connector. Never offset this text twice.
+        full_cable_additional_part_positioned = False
 
         # =====================================================
         # SCHEMATIC-VIEW ADDITIONAL PART ID
@@ -1092,30 +1104,38 @@ def run_ct_code():
                         # moved the label farther away.  Preserve its actual
                         # E3 location in FORMATTER_ONLY; keep the original
                         # first-placement behavior in the full cable workflow.
-                        if START_MODE != "FORMATTER_ONLY":
+                        if (START_MODE != "FORMATTER_ONLY" and
+                                not full_cable_additional_part_positioned):
                             xloc = [0.0]
                             yloc = [0.0]
                             grid = [""]
                             column = [""]
                             row = [""]
                             result = text.GetSchemaLocation(xloc, yloc, grid, column, row)
-                            # Absolute horizontal center of the FULL cable view.
-                            # The old relative +1.5 could place the label off
-                            # center if a different symbol became its owner.
+                            # Restore the original working symbol-relative
+                            # positioning.  The FULL connector symbols are
+                            # placed 3.0 inches apart in X; moving the
+                            # original J1/top-left label by half that gap
+                            # centers it between them.  Do NOT assign the
+                            # page-absolute midpoint (e.g. X=2.5) to this
+                            # text object's own E3 location coordinates.
                             full_locations = globals().get("MAIN_CONN_LOCS", [])
                             full_xs = sorted({float(item[1]) for item in full_locations})
-                            if len(full_xs) >= 2:
-                                new_x = (full_xs[0] + full_xs[-1]) / 2.0
-                            elif len(full_xs) == 1:
-                                new_x = full_xs[0] + 1.5
-                            else:
-                                new_x = float(result[1]) + 1.5
+                            gap = full_xs[-1] - full_xs[0] if len(full_xs) >= 2 else 3.0
+                            new_x = float(result[1]) + gap / 2.0
                             new_y = float(result[2]) + 0.15
+                            print(
+                                "FULL CABLE ADDITIONAL PART ID CENTER:",
+                                "previous=", (float(result[1]), float(result[2])),
+                                "gap=", gap,
+                                "target=", (new_x, new_y),
+                            )
                             text.SetSchemaLocation(new_x, new_y)
+                            full_cable_additional_part_positioned = True
                         else:
                             print(
-                                "FORMATTER ONLY: keeping top-level Additional "
-                                "Part ID at its existing schematic location"
+                                "FULL cable Additional Part ID: preserving "
+                                "existing position (formatter-only or already moved)"
                             )
 
                     elif text_type == 1000:
