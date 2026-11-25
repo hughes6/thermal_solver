@@ -684,6 +684,87 @@ def wait_for_connection_lines():
     return result["continue"]
 
 
+
+def choose_cable_top_additional_part_id(dev, sym, text, connector_ids):
+    """Pick one real Additional Part ID text on the placed FULL cable symbols.
+
+    Previous code assumed the symbol's name was literally ``J1``. That no
+    longer holds for all Plug/Receptacle symbol variants. Prefer an existing
+    visible label, otherwise the old J1 owner, then the uppermost full symbol.
+    Returns the TEXT ID, not the symbol name, so other symbols cannot
+    accidentally suppress it while the formatter loops over connectors.
+    """
+    candidates = []
+
+    for connector_order, device_id in enumerate(connector_ids):
+        if device_id is None:
+            continue
+        dev.SetId(device_id)
+        try:
+            symbol_ids = extract_e3_ids(dev.GetSymbolIds(None))
+        except Exception as error:
+            print("WARNING: cannot scan FULL cable symbols:", device_id, repr(error))
+            continue
+
+        for symbol_id in symbol_ids:
+            sym.SetId(symbol_id)
+            try:
+                symbol_name = str(sym.GetName()).strip().upper()
+            except Exception:
+                symbol_name = ""
+            try:
+                ids = extract_e3_ids(sym.GetTextIds(None))
+            except Exception:
+                continue
+
+            y_coord = None
+            try:
+                result = sym.GetSchemaLocation([0.0], [0.0], [""], [""], [""])
+                if isinstance(result, tuple) and len(result) >= 3:
+                    y_coord = float(result[2])
+            except Exception:
+                pass
+
+            for text_id in ids:
+                text.SetId(text_id)
+                try:
+                    if int(text.GetType()) != 1000:
+                        continue
+                except Exception:
+                    continue
+
+                try:
+                    visible = int(text.GetVisibility()) != 0
+                except Exception:
+                    visible = False
+
+                candidates.append({
+                    "text_id": text_id,
+                    "symbol_id": symbol_id,
+                    "symbol_name": symbol_name,
+                    "visible": visible,
+                    "y": y_coord,
+                    "order": connector_order,
+                })
+
+    if not candidates:
+        print("WARNING: no FULL cable Additional Part ID text found")
+        return None
+
+    # A label that is already enabled must not be replaced by an arbitrary
+    # symbol selected from another connector.  Among visible labels, keep
+    # the historical J1 owner if that exists.
+    candidates.sort(key=lambda c: (
+        not c["visible"],
+        c["symbol_name"] != "J1",
+        -(c["y"] if c["y"] is not None else -1e10),
+        c["order"],
+    ))
+    chosen = candidates[0]
+    print("FULL CABLE ADDITIONAL PART ID OWNER:", chosen)
+    return chosen["text_id"]
+
+
 def run_ct_code():
     try:
         app = win32.gencache.EnsureDispatch('CT.Application')
@@ -691,6 +772,13 @@ def run_ct_code():
         text = prj.CreateTextObject()
         dev = prj.CreateDeviceObject()
         sym = prj.CreateSymbolObject()
+
+        # Select the owner's actual text ID *before* processing any views.
+        # Never rely on the placed symbol's name being exactly "J1": Plug
+        # and Receptacle libraries do not necessarily use that name.
+        full_cable_additional_part_text_id = choose_cable_top_additional_part_id(
+            dev, sym, text, CONNECTORS.values()
+        )
 
         # =====================================================
         # SCHEMATIC-VIEW ADDITIONAL PART ID
@@ -857,7 +945,9 @@ def run_ct_code():
                         text_type
                     )
 
-                    if text_type == 5:
+                    # Type 5 is Component Code. Type 12 is Device Designation.
+                    # Both are hidden on the split schematic cable pin views.
+                    if text_type in (5, 12):
                         text.SetVisibility(0)
 
                     elif text_type == 1000:
@@ -887,9 +977,6 @@ def run_ct_code():
                             # including the previous top-right one, is hidden.
                             text.SetVisibility(0)
 
-                    if text_type == 12:
-                        text.SetStyle(1)
-
             connector_id = CONNECTORS.get(connector)
             print("CONNECTOR:",  connector, "ID:",  connector_id)
 
@@ -914,12 +1001,14 @@ def run_ct_code():
                 for assydevsymboltext_id in assydevsymboltextids:
                     text.SetId(assydevsymboltext_id)
                     print("name:", sym.GetName(), "| text:", text.GetText(), "| type:", text.GetType())
-                    if text.GetType() == 5:
+                    text_type = text.GetType()
+                    # Hide Component Code and Device Designation on FULL cable
+                    # connector symbols as well as the split schematic views.
+                    if text_type in (5, 12):
                         text.SetVisibility(0)
-                    if text.GetType() == 12:
-                        text.SetStyle(1)
-                    if (text.GetType() == 1000 and sym.GetName() == "J1"):
-                        app.PutMessage("Configuring text")
+                    if (text_type == 1000 and
+                            assydevsymboltext_id == full_cable_additional_part_text_id):
+                        app.PutMessage("Configuring single FULL cable Additional Part ID")
                         text.SetVisibility(1)
                         text.SetStyle(1)
                         text.SetHeight(0.2)
@@ -949,8 +1038,12 @@ def run_ct_code():
                                 "Part ID at its existing schematic location"
                             )
 
-                    elif text.GetType() == 1000:
-                        text.SetVisibility(0)
+                    elif text_type == 1000:
+                        # Only the chosen actual text ID is allowed to stay
+                        # visible. If no owner could be identified, do not
+                        # unexpectedly hide an already-visible label.
+                        if full_cable_additional_part_text_id is not None:
+                            text.SetVisibility(0)
 
         del text
         del sym
@@ -4108,10 +4201,10 @@ for i, (connector, conn_id) in enumerate(CONNECTORS.items()):
         text_ids = [x for x in texinfo[1] if x is not None]
         for t_id in text_ids:
             text.SetId(t_id)
-            if text.GetType() == 5:
+            if text.GetType() in (5, 12):
+                # Hide component code and device designation, consistently
+                # with the formatter's final pass.
                 text.SetVisibility(0)
-            if text.GetType() == 12:
-                text.SetStyle(1) # bold
             
 
     dev.SetId(dev.GetAssemblyId())
@@ -4128,10 +4221,8 @@ for i, (connector, conn_id) in enumerate(CONNECTORS.items()):
                 assydevsymboltextids = [x for x in assydevsymboltextinfo[1] if x is not None]
                 for assydevsymboltext_id in assydevsymboltextids:
                     text.SetId(assydevsymboltext_id)
-                    if text.GetType() == 5:
+                    if text.GetType() in (5, 12):
                         text.SetVisibility(0)
-                    if text.GetType() == 12:
-                        text.SetStyle(1)
 
 
     j += 1
