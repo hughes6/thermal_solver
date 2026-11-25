@@ -1,65 +1,80 @@
-"""Read the separately maintained tool sources in Python and bundled EXE modes.
+"""Build the modular Zuken Mega Script as ONE Windows EXE.
 
-The canonical source of each tool is its .py file under tool_scripts/. No
-code generation, eval, or hidden executable is used to restore its contents.
-The main launcher uses SOURCE_FILES as a compatibility interface so the
-existing runtime installation, hash, backup, and worker logic stay unchanged.
+Place the four original Excel templates in ./templates before building.
+Run: py build_exe.py
 """
 from __future__ import annotations
 
 from pathlib import Path
+import subprocess
 import sys
+import os
+from importlib.util import find_spec
 
-TOOL_SOURCE_PATHS = (
-    'header_formatter/header_formatter.py',
-    'signal_mover/signal_mover.py',
-    'cable_pin_spacer/main.py',
-    'cable_maker/cable_maker.py',
-    'cable_placer/cable_placer.py',
-    'block_maker/main.py',
-    'block_maker/launcher.py',
-    'block_maker/test.py',
-    'block_maker/utils.py',
-    'block_maker/error_popup.py',
-    'block_pin_arranger/block_pin_arranger.py',
-    'block_pin_formatter/block_pin_formatter.py',
-    'block_signal_adder/block_signal_adder.py',
-    'misc_tools/excel_formatter.py',
-    'misc_tools/excel_diff.py',
-    'misc_tools/missing_number_finder.py',
-    'misc_tools/eicd_to_excel.py',
-    'misc_tools/excel_to_pdf.py',
-    'zuken_script_runner/appmain.py',
-    'zuken_script_runner/AppGuiCode.py',
-    'zuken_script_runner/utils.py',
-    'zuken_script_runner/cabletable.py',
-    'zuken_script_runner/wirelist.py',
-    'zuken_script_runner/endtoend.py',
+ROOT = Path(__file__).resolve().parent
+EXPECTED_TEMPLATES = (
+    "Cable_Template.xlsx",
+    "Block_Maker_Template.xlsm",
+    "Block_Pin_Arranger_Template.xlsm",
+    "Block_Signal_Adder_Template.xlsm",
 )
 
-def tool_source_directory() -> Path:
-    """Use PyInstaller's extracted data root, or the development project."""
-    frozen_root = getattr(sys, "_MEIPASS", None)
-    if frozen_root:
-        return Path(frozen_root) / "tool_scripts"
-    return Path(__file__).resolve().parent / "tool_scripts"
 
-def load_sources() -> dict[str, str]:
-    base = tool_source_directory()
-    files = {}
-    missing = []
-    for relative in TOOL_SOURCE_PATHS:
-        filename = base / relative
-        if not filename.is_file():
-            missing.append(relative)
-            continue
-        files[relative] = filename.read_text(encoding="utf-8")
+def main() -> int:
+    if sys.platform != "win32":
+        print("This project's E3/COM executable must be built on Windows.", file=sys.stderr)
+        return 1
+    if not (ROOT / "Zuken_Mega_Script.py").is_file():
+        print("Missing launcher entry point.", file=sys.stderr)
+        return 1
+    # These imports are inside tool_scripts/ data files, not ordinary Python
+    # imports that PyInstaller can discover from the entry point. Refuse to
+    # silently build an EXE without the Runner's GUI/report dependencies.
+    missing_modules = [package for module, package in
+                       (("wx", "wxPython"), ("pandas", "pandas"))
+                       if find_spec(module) is None]
+    if missing_modules:
+        print("Missing Zuken Script Runner build dependencies: " +
+              ", ".join(missing_modules), file=sys.stderr)
+        print("Install with: py -m pip install " +
+              " ".join(missing_modules), file=sys.stderr)
+        return 1
+    missing = [p for p in EXPECTED_TEMPLATES if not (ROOT / "templates" / p).is_file()]
     if missing:
-        raise FileNotFoundError(
-            "Missing tool source files under " + str(base) + ": " + ", ".join(missing)
-            + ". Keep the entire project folder together during development; "
-            + "when building the EXE, include --add-data tool_scripts;tool_scripts."
-        )
-    return files
+        print("WARNING: Missing original workbook templates:")
+        for name in missing:
+            print(" -", name)
+        print("Build can proceed, but Downloads for these templates won't be bundled.")
+        print("Copy your originals into templates/ before building to include them.\n")
+    sep = os.pathsep  # ';' for PyInstaller --add-data on Windows
+    args = [
+        sys.executable, "-m", "PyInstaller",
+        "--noconfirm", "--clean", "--onefile", "--windowed",
+        "--name", "Zuken_Mega_Script",
+        "--add-data", "templates" + sep + "templates",
+        "--add-data", "tool_scripts" + sep + "tool_scripts",
+        "--collect-all", "pdfplumber",
+        "--collect-submodules", "pdfminer",
+        # Zuken Script Runner source is bundled as data: PyInstaller cannot
+        # statically see its wxPython GUI or pandas report generators.
+        "--collect-all", "wx",
+        "--collect-all", "pandas",
+        "--hidden-import", "tkinter.ttk",
+        "--hidden-import", "tkinter.scrolledtext",
+        "--collect-submodules", "tkinter",
+        "--hidden-import", "pythoncom",
+        "--hidden-import", "pywintypes",
+        "--hidden-import", "pyodbc",
+        "--hidden-import", "win32timezone",
+        "--hidden-import", "win32com.client",
+        "--hidden-import", "e3series",
+        "--collect-submodules", "openpyxl",
+        "--collect-submodules", "win32com",
+        "--collect-submodules", "e3series",
+        "Zuken_Mega_Script.py",
+    ]
+    print("Building dist/Zuken_Mega_Script.exe from the separate tool .py files...")
+    return subprocess.call(args, cwd=str(ROOT))
 
-SOURCE_FILES = load_sources()
+if __name__ == "__main__":
+    raise SystemExit(main())
