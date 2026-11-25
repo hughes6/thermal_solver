@@ -1,246 +1,96 @@
-Option Explicit
+# Block maker placement update, 2026-11-18:
+# - Top-level connector origin at block edge, not inset 0.3
+# - Secondary pin-view origin at block edge, right side, flip 0
+# - One view pin ID per PlacePins call, passed as a one-element list
+# - Choose secondary internal plug/receptacle symbol family from actual top
+# - Keep E3's automatic MIL top-level symbol and its split characteristics
+# - Text formatter in utils.py / test.py remains unchanged
+# Run via existing launcher.py in a COPY of your E3 project.
 
-' Block Maker worksheet macro.
-' Five columns per connector: I:M, N:R, S:W, X:AB, ...
-' K3, P3, U3, Z3, ... are the per-connector Saber Parameter 1 names.
-' F = Connector Gender; G = Number of Pins.
-Private Const BLOCK_WIDTH As Long = 5
-Private Const FIRST_COL As Long = 9         ' I
-Private Const CENTER_COL As Long = 11       ' K
-Private Const SABER_ROW As Long = 3
-Private Const MAX_BLOCKS As Long = 40
-Private Const LAST_ROW As Long = 307
-
-Private Sub Worksheet_Change(ByVal Target As Range)
-
-    Dim n As Long
-    Dim i As Long
-    Dim j As Long
-    Dim maxCreated As Long
-
-    Dim srcHeader As Range
-    Dim destHeader As Range
-    Dim destInput As Range
-    Dim pinCountCell As Range
-    Dim connectorNameCell As Range
-
-    If Intersect(Target, Me.Range("C5")) Is Nothing Then Exit Sub
-
-    On Error GoTo ErrHandler
-    Application.EnableEvents = False
-    Application.ScreenUpdating = False
-
-    n = CLng(Me.Range("C5").Value)
-    If n < 1 Then n = 1
-    If n > MAX_BLOCKS Then n = MAX_BLOCKS
-
-    Set srcHeader = Me.Range("I5:M10")
-
-    ' Determine which connector blocks were already created.
-    ' Keep this check starting at row 5: a preformatted Saber field in
-    ' row 3 alone must NOT make an uncreated connector look complete.
-    maxCreated = 1
-    For i = 1 To MAX_BLOCKS - 1
-        If Application.WorksheetFunction.CountA( _
-            Me.Range( _
-                Me.Cells(5, FIRST_COL + i * BLOCK_WIDTH), _
-                Me.Cells(LAST_ROW, FIRST_COL + i * BLOCK_WIDTH + 4) _
-            )) > 0 Then
-            maxCreated = i + 1
-        Else
-            Exit For
-        End If
-    Next i
-
-    ' Create only genuinely new connector blocks. Existing data stays untouched.
-    If n > maxCreated Then
-        For i = maxCreated To n - 1
-
-            Set destHeader = Me.Range( _
-                Me.Cells(5, FIRST_COL + i * BLOCK_WIDTH), _
-                Me.Cells(10, FIRST_COL + i * BLOCK_WIDTH + 4))
-
-            srcHeader.Copy Destination:=destHeader
-
-            ' Clear the copied pin count in K5, P5, U5, ...
-            Me.Cells(5, CENTER_COL + i * BLOCK_WIDTH) _
-                .MergeArea.ClearContents
-
-            ' Clear copied user-entered constants in pin-data columns;
-            ' keep formulas intact.
-            Set destInput = Me.Range( _
-                Me.Cells(8, FIRST_COL + i * BLOCK_WIDTH + 1), _
-                Me.Cells(LAST_ROW, FIRST_COL + i * BLOCK_WIDTH + 3))
-
-            On Error Resume Next
-            destInput.SpecialCells(xlCellTypeConstants).ClearContents
-            On Error GoTo ErrHandler
-
-            For j = 0 To BLOCK_WIDTH - 1
-                Me.Columns(FIRST_COL + i * BLOCK_WIDTH + j).ColumnWidth = _
-                    Me.Columns(FIRST_COL + j).ColumnWidth
-            Next j
-
-            RebuildBlockRules i
-        Next i
-
-        maxCreated = n
-    End If
-
-    ' K6 = B7, P6 = B8, U6 = B9, ...
-    ' K5, P5, U5, ... look up the pin count in column G.
-    For i = 0 To maxCreated - 1
-
-        Set connectorNameCell = Me.Cells(6, CENTER_COL + i * BLOCK_WIDTH)
-        connectorNameCell.MergeArea.Cells(1, 1).Formula = _
-            "=$B$" & (7 + i)
-
-        Set pinCountCell = Me.Cells(5, CENTER_COL + i * BLOCK_WIDTH)
-        pinCountCell.MergeArea.Cells(1, 1).Formula2 = _
-            "=XLOOKUP(" & _
-            connectorNameCell.MergeArea.Cells(1, 1).Address(False, False) & _
-            ",$B$7:$B$500,$G$7:$G$500,"""")"
-    Next i
-
-    ' Repair existing generated blocks, including the new row-3 Saber field.
-    ' A previously typed Saber name in P3/U3/etc. is preserved.
-    For i = 1 To maxCreated - 1
-        RebuildBlockRules i
-        RebuildSaberField i
-    Next i
-
-    ' Hide unused connector blocks without deleting their data, including row 3.
-    For i = 0 To maxCreated - 1
-        Me.Range( _
-            Me.Columns(FIRST_COL + i * BLOCK_WIDTH), _
-            Me.Columns(FIRST_COL + i * BLOCK_WIDTH + 4) _
-        ).EntireColumn.Hidden = (i >= n)
-    Next i
-
-SafeExit:
-    Application.CutCopyMode = False
-    Application.ScreenUpdating = True
-    Application.EnableEvents = True
-    Exit Sub
-
-ErrHandler:
-    MsgBox "Macro error " & Err.Number & ":" & vbCrLf & Err.Description
-    Resume SafeExit
-
-End Sub
+from openpyxl import load_workbook
+import time
+import pyodbc
+import win32com.client as win32
+import tkinter as tk
+import gc
+import json
+import os
 
 
-Private Sub RebuildSaberField(ByVal blockIndex As Long)
-    ' Copy the full I3:M3 field layout (including merges/formatting)
-    ' to N3:R3, S3:W3, X3:AB3, ... while preserving the name already
-    ' entered in P3, U3, Z3, ... . Never copy K3's name into a new block.
+# ================================================
+# HELPER FXN
+# ================================================
+def ask_save_path(default_full_path=""):
+    # Optional E3 Mega Tools workbook selection. Fall back to this tool's own picker.
+    import os as _mega_os
+    _mega_excel = _mega_os.environ.get("E3_MEGA_BLOCK_MAKER_WORKBOOK", "").strip()
+    if _mega_excel:
+        if not _mega_os.path.isfile(_mega_excel):
+            raise FileNotFoundError(f"Selected Block Maker workbook no longer exists: {_mega_excel}")
+        return _mega_os.path.abspath(_mega_excel)
 
-    Dim destRow As Range
-    Dim saberCell As Range
-    Dim existingFormula As Variant
-    Dim hasExistingName As Boolean
+    import os
+    import tkinter as tk
+    from tkinter import filedialog
 
-    If blockIndex <= 0 Then Exit Sub
+    default_folder = os.path.dirname(default_full_path)
 
-    Set saberCell = Me.Cells(SABER_ROW, CENTER_COL + blockIndex * BLOCK_WIDTH)
-    existingFormula = saberCell.MergeArea.Cells(1, 1).Formula
+    # Create Tk root
+    root = tk.Tk()
+    root.withdraw()
+    root.attributes("-topmost", True)
+    root.update()
 
-    If IsError(existingFormula) Then
-        hasExistingName = True
-    Else
-        hasExistingName = (Len(CStr(existingFormula)) > 0)
-    End If
+    try:
+        # Let user PICK an existing Excel file
+        selected_path = filedialog.askopenfilename(
+            initialdir=default_folder,
+            filetypes=[("Excel Files", "*.xlsm"), ("All Files", "*.*")]
+        )
+    except Exception:
+        return None
 
-    Set destRow = Me.Range( _
-        Me.Cells(SABER_ROW, FIRST_COL + blockIndex * BLOCK_WIDTH), _
-        Me.Cells(SABER_ROW, FIRST_COL + blockIndex * BLOCK_WIDTH + BLOCK_WIDTH - 1))
+    # Cancel or X
+    if not selected_path:
+        root.destroy()
+        return None
+    root.destroy()
+    # Return ONLY the file name (not full path)
+    return os.path.abspath(selected_path)
 
-    ' Allow a newly added row-3 merged field to be propagated even if the
-    ' destination block previously used a different row-3 merge layout.
-    destRow.UnMerge
-    Me.Range("I3:M3").Copy Destination:=destRow
+def generate_master_schematic_layout(PIN_SIGNAL_INFO,x_block,main_block_width):
+    SHEET_DICT = {1:sheet_1_id}
 
-    Set saberCell = Me.Cells(SABER_ROW, CENTER_COL + blockIndex * BLOCK_WIDTH)
-    If hasExistingName Then
-        saberCell.MergeArea.Cells(1, 1).Formula = existingFormula
-    Else
-        saberCell.MergeArea.ClearContents
-    End If
-End Sub
+    # PAGE BOUNDS
+    TOP_OF_PAGE = 32.9
+    BOTTOM_OF_PAGE = 0.0
+    LEFT_OF_PAGE = 0.0
+    RIGHT_OF_PAGE = 42.9
 
+    # PAGE MARGINS
+    TOP_MARGIN = 1.0
+    BOTTOM_MARGIN = 1.0
+    LEFT_MARGIN = 1.0
+    RIGHT_MARGIN = 1.0
 
-Private Sub RebuildBlockRules(ByVal blockIndex As Long)
+    # BLOCK SPACING
+    BLOCK_X_SPACING = 1.0
+    BLOCK_Y_SPACING = 1.0
+    SCHEMATIC_BLOCK_WIDTH = 3.0
+    PIN_SPACING = 0.2
+    PIN_START_OFFSET = 2.25
 
-    Dim colOffset As Long
-    Dim srcRange As Range
-    Dim destRange As Range
-    Dim fc As FormatCondition
-    Dim f As String
+    # USABLE PAGE LIMITS
+    PAGE_TOP = TOP_OF_PAGE - TOP_MARGIN
+    PAGE_BOTTOM = BOTTOM_OF_PAGE + BOTTOM_MARGIN
+    PAGE_LEFT = LEFT_OF_PAGE + LEFT_MARGIN
+    PAGE_RIGHT = RIGHT_OF_PAGE - RIGHT_MARGIN
+    USABLE_PAGE_HEIGHT = PAGE_TOP - PAGE_BOTTOM
 
-    colOffset = blockIndex * BLOCK_WIDTH
+    # OUTPUT
+    SPACING_DICT = []
+    sheet = 1
+    # On sheet 1, start to the RIGHT of the main block
+    current_x = (x_block + main_block_width + BLOCK_X_SPACING)
 
-    Set srcRange = Me.Range("I5:M" & LAST_ROW)
-    Set destRange = Me.Range( _
-        Me.Cells(5, FIRST_COL + colOffset), _
-        Me.Cells(LAST_ROW, FIRST_COL + colOffset + 4))
-
-    destRange.FormatConditions.Delete
-
-    ' Copy source formatting and conditional formatting.
-    srcRange.Copy
-    destRange.PasteSpecial Paste:=xlPasteFormats
-    Application.CutCopyMode = False
-
-    ' Examples for block 2:
-    ' $I8 -> $N8, $J8 -> $O8, $K$5 -> $P$5,
-    ' $L8 -> $Q8, $M8 -> $R8.
-    For Each fc In destRange.FormatConditions
-        If fc.Type = xlExpression Then
-            f = fc.Formula1
-            f = TranslateBlockFormula(f, FIRST_COL, FIRST_COL + colOffset)
-            If f <> fc.Formula1 Then
-                fc.Modify Type:=xlExpression, Formula1:=f
-            End If
-        End If
-    Next fc
-
-    ' Copy data validation / dropdowns.
-    srcRange.Copy
-    On Error Resume Next
-    destRange.PasteSpecial Paste:=xlPasteValidation
-    On Error GoTo 0
-    Application.CutCopyMode = False
-
-End Sub
-
-
-Private Function TranslateBlockFormula( _
-    ByVal formulaText As String, _
-    ByVal sourceStartCol As Long, _
-    ByVal destStartCol As Long) As String
-
-    Dim i As Long
-    Dim f As String
-    Dim sourceLetter As String
-    Dim destLetter As String
-
-    f = formulaText
-
-    ' Placeholder pass avoids cascading substitutions.
-    For i = 0 To BLOCK_WIDTH - 1
-        sourceLetter = ColLetter(sourceStartCol + i)
-        f = Replace(f, "$" & sourceLetter, "{BLOCKCOL" & CStr(i) & "}")
-    Next i
-
-    For i = 0 To BLOCK_WIDTH - 1
-        destLetter = ColLetter(destStartCol + i)
-        f = Replace(f, "{BLOCKCOL" & CStr(i) & "}", "$" & destLetter)
-    Next i
-
-    TranslateBlockFormula = f
-End Function
-
-
-Private Function ColLetter(ByVal colNum As Long) As String
-    ColLetter = Split(Me.Cells(1, colNum).Address, "$")(1)
-End Function
+    # Current Y is the TOP edge available for placement
